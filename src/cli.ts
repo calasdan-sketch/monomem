@@ -506,8 +506,8 @@ async function doctor(): Promise<void> {
       warn(`unfinished pre-upgrade copy ${b.path} (${mb} MB, ${b.age_days} day(s) old): a copy that was interrupted. It is safe to delete (monomem backup --prune-premigration).`);
       continue;
     }
-    warn(
-      `pre-upgrade copy ${b.path} (${mb} MB, ${b.age_days} day(s) old). It still holds notes you may since have deleted or encrypted. ` +
+    console.log(
+      `  [info] pre-upgrade copy ${b.path} (${mb} MB, ${b.age_days} day(s) old). It still holds notes you may since have deleted or encrypted. ` +
         "Keep it until you have checked the upgrade, then remove it: monomem backup --prune-premigration"
     );
   }

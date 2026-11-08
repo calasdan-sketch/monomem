@@ -14,6 +14,7 @@ import { auditPath as defaultAuditPath, printable, verifyAuditChain } from "./se
 import { Store } from "./store.js";
 import { embeddingsConfig } from "./embeddings.js";
 import { acceptLegacyHeartbeats } from "./liveness.js";
+import { scanPii } from "./pii.js";
 
 /** info: a fact worth showing that never lowers the grade. */
 export type Status = "ok" | "warn" | "fail" | "info";
@@ -214,6 +215,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
 
   let notes = 0, held = 0, distrust = 0, marked = 0, dbOk = false;
   let meterText = "meter unavailable";
+  let piiNotes = 0, privateNotes = 0, labelledNotes = 0;
   let audit: Result | undefined;
   if (existsSync(dbPath)) {
     try {
@@ -223,7 +225,11 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
         held = s.listQuarantine({ limit: 500 }).length;
         distrust = s.distrustRules().length;
         // ponytail: loads every live note to count markers; use SQL if a store gets big enough for this to show up in the runtime
-        marked = s.exportAll({ live: true }).filter((n) => /\[REDACTED:/.test(`${n.title}\n${n.body}`)).length; // gate-ok: operator CLI, counts redaction markers only; no note content is returned or printed
+        const live = s.exportAll({ live: true }); // gate-ok: operator CLI, counts only; no note content is returned or printed
+        marked = live.filter((n) => /\[REDACTED:/.test(`${n.title}\n${n.body}`)).length;
+        piiNotes = scanPii(live, 200).suggestions.length;
+        privateNotes = live.filter((n) => n.sensitivity === "private").length;
+        labelledNotes = live.filter((n) => n.sensitivity !== undefined).length;
         const m = meterStats(s);
         meterText = `${plural(notes, "note")}, database ${(m.db_bytes / 1048576).toFixed(1)} MB; the meter counts ~${m.totals.saved_tokens} tokens saved over ${plural(m.totals.sessions, "session")} (estimate, ~4 characters a token)`;
         try {
@@ -246,7 +252,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
   else if (pluginInstalled(o.pluginsPath ?? join(homedir(), ".claude", "plugins", "installed_plugins.json"), settingsPath)) add("hooks", "Hooks", "ok", "the monomem Claude Code plugin is installed (its SessionStart hook comes with it)");
   else if (!existsSync(dirname(settingsPath))) add("hooks", "Hooks", "info", "Claude Code does not seem to be installed here (no ~/.claude folder), so there is no Claude Code hook to check");
   else if (existsSync(join(o.dataDir ?? DATA_DIR, HOOKS_DECLINED_FILE))) add("hooks", "Hooks", "info", "you chose no Claude Code hook when you ran setup, so Claude Code gets no memory at session start (run monomem setup --hook to add it)");
-  else add("hooks", "Hooks", "warn", "no monomem SessionStart hook in ~/.claude/settings.json and no monomem plugin in Claude Code's plugin list, so Claude Code gets no memory at session start");
+  else add("hooks", "Hooks", "info", "optional: no monomem SessionStart hook in ~/.claude/settings.json and no monomem plugin in Claude Code's plugin list, so Claude Code does not get your notes at session start (add it with monomem setup --hook)");
 
   const sec = await securityFindings(o.dataDir ?? DATA_DIR, o.bindHost ?? BIND_HOST);
   if (sec.length) for (const f of sec) add(`security:${f.id}`, f.label, f.status, `${f.short} (monomem doctor has the detail)`);
@@ -261,6 +267,37 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
       add("drill", "Drill", "warn", `could not run: ${(e as Error).message}`);
     }
   } else add("drill", "Drill", "info", "not run: there is no database to replay the attacks against yet");
+
+  if (dbOk) {
+    // Exposure: reasons the notes are more reachable than the labels suggest. One check, so it costs at most one grade step however many reasons it lists.
+    const reasons: string[] = [];
+    try {
+      const { resolveTokens } = await import("./config.js");
+      const open = resolveTokens().filter((t) => t.label !== "primary" && t.max_sensitivity === undefined && t.scope !== "admin");
+      if (open.length && labelledNotes > 0) reasons.push(`${plural(open.length, "app key")} with no limit can read your private notes (${open.map((t) => `"${t.label || "unnamed"}"`).slice(0, 3).join(", ")}; monomem token add <name> --max internal)`);
+    } catch {
+      /* tokens unreadable: the other checks say so */
+    }
+    if (piiNotes > 0) reasons.push(`${plural(piiNotes, "note")} may hold personal data and ${piiNotes === 1 ? "is" : "are"} not labelled private (monomem pii scan)`);
+    if (privateNotes > 0) {
+      try {
+        const { detectClients, realEnv } = await import("./setup.js");
+        const { PACKAGE_VERSION } = await import("./config.js");
+        const { fileURLToPath } = await import("node:url");
+        const wired = detectClients(realEnv(PACKAGE_VERSION, fileURLToPath(import.meta.url))).filter((c) => {
+          try {
+            return c.exists && /"monomem"|\[mcp_servers\.monomem\]/.test(readFileSync(c.file, "utf8")) && !/Authorization/i.test(readFileSync(c.file, "utf8"));
+          } catch {
+            return false;
+          }
+        });
+        if (wired.length) reasons.push(`${wired.map((c) => c.label).join(", ")} connect${wired.length === 1 ? "s" : ""} without a key, so a limit does not apply to ${wired.length === 1 ? "it" : "them"} (monomem connect <app> --max internal)`);
+      } catch {
+        /* client config unreadable: skip */
+      }
+    }
+    add("exposure", "Exposure", reasons.length ? "warn" : "ok", reasons.length ? reasons.join("; ") + " (counts as one warning)" : "no unlimited app keys, unlabelled personal data or keyless apps found");
+  }
 
   if (audit) add("audit", "Audit chain", audit.status, audit.text);
   else {
