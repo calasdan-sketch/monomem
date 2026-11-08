@@ -308,7 +308,8 @@ export async function injectContext(store: Store, opts: InjectOptions = {}): Pro
     ).b
   );
   const body = parts.join("\n\n");
-  const fullChars = shown.reduce((a, n) => a + n.title.length + n.body.length, 0) + captured;
+  const notesChars = shown.reduce((a, n) => a + n.title.length + n.body.length, 0);
+  const fullChars = notesChars + captured;
   const ids = shown.slice(0, 20).map((n) => n.id);
   const shownTok = Math.ceil(body.length / CHARS_PER_TOKEN);
   const rawTok = Math.ceil(fullChars / CHARS_PER_TOKEN);
@@ -324,7 +325,10 @@ export async function injectContext(store: Store, opts: InjectOptions = {}): Pro
   store.logAccess({ tool: "hook:recall", namespaces: ns !== undefined ? [ns] : [], results: shown.length });
   if (opts.sessionId) {
     const injected = Math.ceil(out.length / CHARS_PER_TOKEN);
-    meterAdd(store, opts.sessionId, ns ?? "", { injected, saved: Math.max(0, Math.ceil(fullChars / CHARS_PER_TOKEN) - injected) });
+    // "Saved" = full text of the notes shown minus what was injected. Not the capture log: that is the whole history of
+    // the namespace, so adding it on every injection counted the same captured work again in every session (1.2.x meters
+    // reached ~1.27 billion tokens over 119 sessions that way).
+    meterAdd(store, opts.sessionId, ns ?? "", { injected, saved: Math.max(0, Math.ceil(notesChars / CHARS_PER_TOKEN) - injected) });
     // Receipt: ids, why-tags, rank and size only (receipts.ts); titles and text stay in the store.
     receiptAdd(store, { sessionId: opts.sessionId, namespace: ns ?? "", client: currentWriter(), shown: shown.map((n) => ({ id: n.id, why: tagOf(n), tokens: tokensOf(n) })) });
   }

@@ -248,7 +248,7 @@ Monomem makes **no hidden model calls**. The only models it ever talks to are th
 receives note and search text, defaults to a local Ollama, and is a remote host if you set `MONOMEM_EMBED_URL` to one). The meter shows the rest, as aggregate numbers only (no
 prompt or note text is recorded):
 
-- tokens injected at session start, per session and in total, and the tokens of captured work they stood in for;
+- tokens injected at session start, per session and in total, and the tokens of full note text they stood in for;
 - tokens the local summarizer used (0 while it is off);
 - capture events recorded and the database size on disk.
 

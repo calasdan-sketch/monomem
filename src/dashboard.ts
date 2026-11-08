@@ -790,7 +790,7 @@ function loadMeter(){
     }).join("");
     $("list").innerHTML = "<div class='card'><h3>Totals</h3><div>"+
       "~"+num(t.injected_tokens)+" tokens injected at session start ("+num(t.injections)+(Number(t.injections) === 1 ? " time" : " times")+")<br>"+
-      "~"+num(t.saved_tokens)+" tokens saved (estimate): the captured work the injected notes stood in for, minus the tokens injected<br>"+
+      "~"+num(t.saved_tokens)+" tokens saved (estimate): the full text of the notes shown, minus the tokens injected<br>"+
       num(t.llm_tokens)+" local-model tokens (0 = the optional summarizer is off)<br>"+
       num(m.capture_events)+" capture events recorded<br>"+
       "database "+(Number(m.db_bytes||0)/1048576).toFixed(1)+" MB on disk</div>"+

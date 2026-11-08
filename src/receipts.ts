@@ -184,7 +184,7 @@ export function renderCard(t: MeterTotals): string {
     stat(40, t.sessions, Number(t.sessions) === 1 ? "session" : "sessions") +
     stat(230, t.injected_tokens, "tokens injected") +
     stat(430, t.saved_tokens, "est. tokens saved") +
-    `<text x="40" y="256" font-size="13" fill="${SLATE}"><tspan x="40">estimate, ~4 chars/token. Saved = captured work the injected memory</tspan><tspan x="40" dy="18">stood in for, minus the tokens injected.</tspan></text>` +
+    `<text x="40" y="256" font-size="13" fill="${SLATE}"><tspan x="40">estimate, ~4 chars/token. Saved = full text of the notes shown, minus</tspan><tspan x="40" dy="18">the tokens injected.</tspan></text>` +
     `<text x="40" y="312" font-size="15" font-weight="600" fill="#F0C171">No network calls by Monomem by default</text>` +
     cardFooter() +
     `</svg>\n`

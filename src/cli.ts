@@ -468,16 +468,18 @@ async function doctor(): Promise<void> {
   let hasPrivate = false;
   try {
     const s = new Store(DB_PATH);
-    const r = s.list({ limit: 1 });
+    // The same count `monomem health` shows: every namespace and every kind. list() counts only hand-written notes
+    // (kind "note"), so a store full of captured observations and session summaries read as a handful of notes.
+    const total = s.countAll();
     const edges = s.edgeCount();
-    const sample = edges === 0 && r.total >= 2 ? s.list({ limit: 60 }).notes : [];
+    const sample = edges === 0 && total >= 2 ? s.list({ limit: 60 }).notes : [];
     hasLabelled = s.labelledAboveDefault() > 0;
     hasPrivate = s.hasPrivateNotes();
     distrustCount = s.distrustRules().length;
     const { meterStats, meterLine } = await import("./meter.js");
     const footprint = meterLine(meterStats(s));
     s.close();
-    ok(`database OK at ${DB_PATH} (${r.total} notes)`);
+    ok(`database OK at ${DB_PATH} (${total} notes)`);
     ok(footprint);
     // Migration v4 adds the similarity-edge table but does not score
     // existing notes: a store upgraded from 1.0.0 has notes and no edges

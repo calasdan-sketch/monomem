@@ -1057,7 +1057,7 @@ export function createMcpServer(
       title: "Memory access statistics",
       annotations: { readOnlyHint: true },
       description:
-        "Read-only access-tracking stats for the shared state store: total notes, total reads, the most-read notes, how many notes were never read (dead-memory candidates for future cleanup), and how many notes are stale (older than the configured staleness thresholds). `meter`: what Monomem costs (estimated tokens injected at session start and the captured work they stood in for, local-model tokens, capture events, database size), aggregate numbers only." +
+        "Read-only access-tracking stats for the shared state store: total notes, total reads, the most-read notes, how many notes were never read (dead-memory candidates for future cleanup), and how many notes are stale (older than the configured staleness thresholds). `meter`: what Monomem costs (estimated tokens injected at session start and the full note text they stood in for, local-model tokens, capture events, database size), aggregate numbers only." +
         (nsActive
           ? " SERVER-RESOLVED NAMESPACE: stats are scoped to the namespaces this server may read."
           : ""),
