@@ -3359,7 +3359,7 @@ export class Store {
       .get(...params, ...hideParams) as { n: number; accesses: number; never: number };
     const top = this.db
       .prepare(
-        `SELECT id, title, access_count FROM notes ${where}${ceil}${dis.sql}
+        `SELECT id, title, access_count FROM notes ${where}${ceil}${dis.sql} AND access_count > 0
          ORDER BY access_count DESC, id ASC LIMIT 10`
       )
       .all(...params, ...dis.params) as Array<{ id: number; title: string; access_count: number }>;

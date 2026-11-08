@@ -93,3 +93,41 @@ describe("everyday commands", () => {
     }
   });
 });
+
+describe("search, relevant and recall polish", () => {
+  test("relevant shows a snippet; --help lists real options; recall --text is human text while the hook output stays JSON", () => {
+    const dir = mkdtempSync(join(tmpdir(), "om-everyday-"));
+    try {
+      run(dir, ["add", "The deploy target is fly.io for production", "--title", "Deploy target"]);
+      const r = run(dir, ["relevant", "where do we deploy"]);
+      assert.match(r.stdout, /#1 \[default\] Deploy target/);
+      assert.match(r.stdout, /The deploy target is fly\.io/);
+      const h = run(dir, ["search", "--help"]);
+      assert.equal(h.status, 0);
+      assert.match(h.stdout, /--namespace/);
+      assert.match(h.stdout, /--as-of/);
+      assert.match(h.stdout, /--mode keyword\|semantic\|hybrid/);
+      const hook = run(dir, ["recall"]);
+      assert.equal(JSON.parse(hook.stdout).hookSpecificOutput.hookEventName, "SessionStart", "piped output (the hook) is unchanged JSON");
+      const txt = run(dir, ["recall", "--text"]);
+      assert.ok(!txt.stdout.trim().startsWith("{"), txt.stdout);
+      assert.match(txt.stdout, /Deploy target/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("semantic search without an embedding service says so; keyword results are unchanged", () => {
+    const dir = mkdtempSync(join(tmpdir(), "om-everyday-"));
+    try {
+      run(dir, ["add", "zebra crossing notes", "--title", "Zebra"]);
+      const plain = run(dir, ["search", "zebra", "--mode", "keyword"]);
+      assert.ok(!/semantic search is not set up/.test(plain.stdout));
+      const sem = run(dir, ["search", "zebra", "--mode", "semantic"]);
+      assert.match(sem.stdout, /semantic search is not set up; showing keyword results/);
+      assert.match(sem.stdout, /#1 \[default\] Zebra/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

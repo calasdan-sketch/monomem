@@ -43,6 +43,13 @@ export async function maybeEmbed(store: Store, note: NoteRecord): Promise<void> 
   }
 }
 
+/** Said when someone asks for semantic or hybrid search but no embedding service is set up: the results are keyword results. Undefined when nothing needs saying. */
+export const SEMANTIC_NOTICE = "semantic search is not set up; showing keyword results. See docs/search.md (needs MONOMEM_EMBEDDINGS=on and a local Ollama).";
+export function semanticNotice(raw: string | undefined | null): string | undefined {
+  const m = (raw || "").trim().toLowerCase();
+  return (m === "semantic" || m === "hybrid") && !embeddingsEnabled() ? SEMANTIC_NOTICE : undefined;
+}
+
 export function parseMode(raw: string | undefined | null): SearchMode {
   const m = (raw || "").trim().toLowerCase();
   if (m === "semantic" || m === "hybrid" || m === "keyword") return m;

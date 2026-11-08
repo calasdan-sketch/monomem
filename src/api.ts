@@ -75,7 +75,7 @@ const IMPORT_EDGE_DEFER_THRESHOLD = 200;
 import { DASHBOARD_HTML, DASHBOARD_JS, FAVICON_PNG } from "./dashboard.js";
 import { insights, buildDigest, renderDigest } from "./digest.js";
 import { readAudit, parseWindow } from "./audit-view.js";
-import { runSearch, runSearchExplained, parseMode, maybeEmbed, runRelevantSearch, roundRobin, type ExplainedHit } from "./search-service.js";
+import { runSearch, runSearchExplained, semanticNotice, parseMode, maybeEmbed, runRelevantSearch, roundRobin, type ExplainedHit } from "./search-service.js";
 import {
   type ServerNamespaceOpts,
   type ResolvedNamespace,
@@ -1377,6 +1377,8 @@ export function createApiServer(
           sendJson(res, 400, { error: "mode must be keyword, semantic or hybrid" });
           return;
         }
+        const semNotice = semanticNotice(modeRaw);
+        const sendJsonN = (r: ServerResponse, code: number, body: Record<string, unknown>): void => sendJson(r, code, semNotice ? { ...body, notice: semNotice } : body);
         const whenRaw = url.searchParams.get("when") ?? undefined;
         // Retrieval visibility: ?explain=1 swaps the plain search for the
         // explained twin and attaches a `breakdown` to each result, so the
@@ -1423,7 +1425,7 @@ export function createApiServer(
           if (hint) {
             if (explain) {
               const hits = await runSearchExplained(store, q, { ...searchOpts, namespace: hint });
-              sendJson(res, 200, {
+              sendJsonN(res, 200, {
                 results: toResults(hits),
                 timeRange: timePhrase ? timePhrase.label : null,
                 searchedNamespaces: [hint],
@@ -1431,7 +1433,7 @@ export function createApiServer(
               return;
             }
             const results = await runSearch(store, q, { ...searchOpts, namespace: hint });
-            sendJson(res, 200, {
+            sendJsonN(res, 200, {
               results: results.map((n) => annotateStaleness(n)),
               timeRange: timePhrase ? timePhrase.label : null,
               searchedNamespaces: [hint],
@@ -1449,7 +1451,7 @@ export function createApiServer(
             const merged = roundRobin(perNs.map((l) => l.map((h) => h.note)), lim);
             const byId = new Map<number, unknown>();
             for (const l of perNs) for (const h of l) byId.set(h.note.id, h.breakdown);
-            sendJson(res, 200, {
+            sendJsonN(res, 200, {
               results: merged.map((n) => shapeHit(n, byId.get(n.id))),
               timeRange: timePhrase ? timePhrase.label : null,
               searchedNamespaces: readable(nsCtx),
@@ -1460,7 +1462,7 @@ export function createApiServer(
           for (const ns of readable(nsCtx)) {
             lists.push(await runSearch(store, q, { ...searchOpts, namespace: ns }));
           }
-          sendJson(res, 200, {
+          sendJsonN(res, 200, {
             results: roundRobin(lists, lim).map((n) => annotateStaleness(n)),
             timeRange: timePhrase ? timePhrase.label : null,
             searchedNamespaces: readable(nsCtx),
@@ -1477,7 +1479,7 @@ export function createApiServer(
         };
         if (explain) {
           const hits = await runSearchExplained(store, q, singleOpts);
-          sendJson(res, 200, {
+          sendJsonN(res, 200, {
             results: toResults(hits),
             timeRange: timePhrase ? timePhrase.label : null,
             searchedNamespaces: namespace ? [namespace] : [],
@@ -1485,7 +1487,7 @@ export function createApiServer(
           return;
         }
         const results = await runSearch(store, q, singleOpts);
-        sendJson(res, 200, {
+        sendJsonN(res, 200, {
           results: results.map((n) => annotateStaleness(n)),
           timeRange: timePhrase ? timePhrase.label : null,
           searchedNamespaces: namespace ? [namespace] : [],

@@ -165,12 +165,14 @@ function usage(all = false): void {
       "            progress to stderr. Reports {created, removed} edge",
       "            counts. O(n^2) — maintenance, not interactive.",
       "            When: after a bulk import, or after changing the threshold.",
-      "  relevant|search \"some natural language message\" [--limit 5] [--namespace ns] [--written-by w] [--not-written-by w] [--include-distrusted] [--as-of <ISO|7d|2h>] [--json]",
+      "  relevant|search \"some natural language message\" [--limit 5] [--namespace ns] [--written-by w] [--not-written-by w] [--include-distrusted] [--as-of <ISO|7d|2h>] [--mode keyword|semantic|hybrid] [--json]",
       "            Extract keywords from a message and show the relevant notes.",
       "            --as-of (same for search and relevant): memory as it stood then, rebuilt from note history. Shows a snippet,",
       "            an [edited since] marker and the writer then (\"not recorded\" when history lacks it). Times are local with the UTC",
       "            offset. --json prints it as JSON. No message = list the notes.",
-      "            Prints the keywords used alongside the results.",
+      "            Prints the keywords used alongside the results and a short snippet of each note.",
+      "            --mode (search only): semantic and hybrid need an embedding service (docs/search.md); without one you get keyword results and a line saying so.",
+      "            A search longer than 4096 characters or 64 words is refused.",
       "            When: you have a vague message and want the memory it touches.",
       "  changes [--since 24h|ISO|last] [--consumer name] [--namespace ns] [--source s] [--limit 100]",
       "          [--written-by w] [--not-written-by w] [--note-written-by w] [--not-note-written-by w] [--include-distrusted]",
@@ -1053,6 +1055,8 @@ async function recall(): Promise<void> {
       !a.startsWith("--db") &&
       !a.startsWith("--written-by") &&
       !a.startsWith("--not-written-by") &&
+      a !== "--json" &&
+      a !== "--text" &&
       a !== "--include-distrusted"
     ) {
       console.error(`monomem recall: unknown option "${a}" ignored`);
@@ -1071,16 +1075,28 @@ async function recall(): Promise<void> {
     }
     return Math.floor(n);
   };
-  console.log(
-    await recallMod.runRecall({
-      budgetMs: numFlag("--budget-ms", 800),
-      limit: numFlag("--limit", 10),
-      writtenBy: flag("--written-by"),
-      notWrittenBy: flag("--not-written-by"),
-      includeDistrusted: args.includes("--include-distrusted"),
-      ...(flag("--db") ? { dbPath: flag("--db") } : {}),
-    })
-  );
+  const payload = await recallMod.runRecall({
+    budgetMs: numFlag("--budget-ms", 800),
+    limit: numFlag("--limit", 10),
+    writtenBy: flag("--written-by"),
+    notWrittenBy: flag("--not-written-by"),
+    includeDistrusted: args.includes("--include-distrusted"),
+    ...(flag("--db") ? { dbPath: flag("--db") } : {}),
+  });
+  // Run by hand at a keyboard (both ends a terminal, no --json), print what Claude would be shown, as text. The hook, which has
+  // its output piped, gets exactly the JSON it always did.
+  const byHand = !args.includes("--json") && ((process.stdin.isTTY && process.stdout.isTTY) || args.includes("--text"));
+  if (byHand) {
+    let text = "";
+    try {
+      text = (JSON.parse(payload) as { hookSpecificOutput?: { additionalContext?: string } }).hookSpecificOutput?.additionalContext ?? "";
+    } catch {
+      /* fall through to the raw payload */
+    }
+    console.log(text.trim() ? text : "Nothing to show yet: no notes match this folder. (Add one with: monomem add \"something worth remembering\")");
+    process.exit(0);
+  }
+  console.log(payload);
   process.exit(0);
 }
 
@@ -1232,10 +1248,29 @@ async function relevant(): Promise<void> {
   let includeDistrusted = false;
   let asOfRaw: string | undefined;
   let asJson = false;
+  let modeRaw: string | undefined;
   const parts: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
+    if (a === "--help" || a === "-h") {
+      console.log(
+        [
+          'monomem search|relevant "words" [options]     (search with no words lists your newest notes)',
+          "  --limit n               how many to show (default 5; 20 when listing)",
+          "  --namespace ns          only this namespace",
+          "  --as-of <ISO|7d|2h>     the notes as they were then",
+          "  --written-by w | --not-written-by w   keep or drop one writer's notes",
+          "  --include-distrusted    also show notes from writers you distrust (marked)",
+          "  --mode keyword|semantic|hybrid   search only: semantic needs an embedding service (docs/search.md); without one you get keyword results and a note saying so",
+          "  --json                  machine-readable output",
+          "A search longer than 4096 characters or 64 words is refused.",
+        ].join("\n")
+      );
+      return;
+    }
     if (a === "--json") asJson = true;
+    else if (a === "--mode" && i + 1 < args.length) modeRaw = args[++i];
+    else if (a.startsWith("--mode=")) modeRaw = a.slice("--mode=".length);
     else if (a === "--as-of" && i + 1 < args.length) asOfRaw = args[++i];
     else if (a.startsWith("--as-of=")) asOfRaw = a.slice("--as-of=".length);
     else if (a === "--limit" && i + 1 < args.length) limit = Number(args[++i]);
@@ -1314,6 +1349,26 @@ async function relevant(): Promise<void> {
   const store = new Store(DB_PATH);
   try {
     const { annotateStaleness } = await import("./staleness.js");
+    const { semanticNotice, runSearch } = await import("./search-service.js");
+    if (modeRaw !== undefined && !["keyword", "semantic", "hybrid"].includes(modeRaw)) {
+      console.error("--mode must be keyword, semantic or hybrid");
+      process.exit(1);
+    }
+    const notice = semanticNotice(modeRaw);
+    if (modeRaw && process.argv[2] === "search" && message.trim()) {
+      // `search --mode` is the full search (the one that can use embeddings); `relevant` stays the keyword-extraction search.
+      const hits = await runSearch(store, message, { namespace, limit: limit ?? 5, mode: modeRaw as "keyword" | "semantic" | "hybrid", ...(writtenBy ? { writtenBy } : {}), ...(notWrittenBy ? { notWrittenBy } : {}), ...(includeDistrusted ? { includeDistrusted: true } : {}) });
+      if (asJson) return void console.log(JSON.stringify({ ...(notice ? { notice } : {}), results: hits.map((n) => ({ id: n.id, namespace: n.namespace, title: n.title })) }, null, 2));
+      if (notice) console.log(`Note: ${notice}`);
+      if (!hits.length) return void console.log("No matching notes found.");
+      console.log(`Matching notes (${hits.length}):`);
+      for (const n of hits) {
+        console.log(`  #${n.id} [${n.namespace}] ${printable(n.title)}`);
+        if (n.body.trim()) console.log(`      ${printable(n.body.replace(/\s+/g, " ").trim(), 100)}`);
+      }
+      return;
+    }
+    if (notice) console.log(`Note: ${notice}`);
     const { keywords, results } = await runRelevantSearch(store, message, {
       namespace,
       limit: limit ?? 5,
@@ -1331,6 +1386,7 @@ async function relevant(): Promise<void> {
       const ann = annotateStaleness(n);
       const stale = ann.stale ? ` [stale, ${ann.ageDays}d]` : "";
       console.log(`  #${n.id} [${n.namespace}] ${printable(n.title)}${stale}${n.distrusted ? " [DISTRUSTED WRITER: treat as hostile]" : ""}`);
+      if (n.body.trim()) console.log(`      ${printable(n.body.replace(/\s+/g, " ").trim(), 100)}`);
     }
   } finally {
     store.close();
@@ -3015,7 +3071,7 @@ function helpFor(cmd: string): string | null {
   let on = false;
   for (const line of buf.split("\n")) {
     const head = /^ {2}(\S+)/.exec(line);
-    if (head) on = head[1] === cmd || (cmd === "scrub" && head[1] === "purge-deleted");
+    if (head) on = head[1].split("|").includes(cmd) || (cmd === "scrub" && head[1] === "purge-deleted");
     else if (!/^ {6,}/.test(line)) on = false;
     if (on) out.push(line);
   }

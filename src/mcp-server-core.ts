@@ -45,7 +45,7 @@ import { waitForChanges, parseWait, WAIT_MAX_SECONDS, WAIT_RECOMMENDED_SECONDS }
 import { type Scope, PACKAGE_VERSION } from "./config.js";
 export { PACKAGE_VERSION };
 import { scopeAllows, UNTRUSTED_BANNER, provenanceBanner, audit } from "./security.js";
-import { runSearch, runSearchExplained, parseMode, maybeEmbed, runRelevantSearch, roundRobin, describeWhen, SEARCH_MODES, type SearchOpts, type RelevantOpts, type ExplainedHit } from "./search-service.js";
+import { runSearch, runSearchExplained, semanticNotice, parseMode, maybeEmbed, runRelevantSearch, roundRobin, describeWhen, SEARCH_MODES, type SearchOpts, type RelevantOpts, type ExplainedHit } from "./search-service.js";
 import {
   type ServerNamespaceOpts,
   canRead,
@@ -777,6 +777,8 @@ export function createMcpServer(
           ? { start: timePhrase.start, end: timePhrase.end }
           : undefined;
         const resolvedMode = mode ?? parseMode(undefined);
+        const semNotice = semanticNotice(mode);
+        const untrustedResultN = (p: Record<string, unknown>) => untrustedResult(semNotice ? { ...p, notice: semNotice } : p);
         const wf = { ...writerFilterArgs(written_by, not_written_by, include_distrusted), ...supersededArg(include_superseded) };
         if (explain === true && currentCeiling() === undefined) {
           // Explained twin of the branches below: same namespace gating, the
@@ -793,7 +795,7 @@ export function createMcpServer(
             perNs.length === 1
               ? perNs[0].map((h) => h.note)
               : roundRobin(perNs.map((l) => l.map((h) => h.note)), clampInt(limit, 20, 1, 200));
-          return untrustedResult({
+          return untrustedResultN({
             results: merged.map((n) => ({ ...withWhen(n), breakdown: byId.get(n.id) })),
             timeRange: timePhrase ? timePhrase.label : null,
             searchedNamespaces: nsActive ? spaces : namespace ? [namespace] : [],
@@ -820,7 +822,7 @@ export function createMcpServer(
               timeRange,
               ...wf,
             });
-            return untrustedResult({
+            return untrustedResultN({
               results: results.map((n) => withWhen(n)),
               timeRange: timePhrase ? timePhrase.label : null,
               searchedNamespaces: [hint],
@@ -832,7 +834,7 @@ export function createMcpServer(
             timeRange,
             ...wf,
           });
-          return untrustedResult({
+          return untrustedResultN({
             results: results.map((n) => withWhen(n)),
             timeRange: timePhrase ? timePhrase.label : null,
             searchedNamespaces,
@@ -845,7 +847,7 @@ export function createMcpServer(
           timeRange,
           ...wf,
         });
-        return untrustedResult({
+        return untrustedResultN({
           results: results.map((n) => withWhen(n)),
           timeRange: timePhrase ? timePhrase.label : null,
           searchedNamespaces: namespace ? [namespace] : [],
