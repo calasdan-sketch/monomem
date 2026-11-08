@@ -1,5 +1,5 @@
 <!-- Image URLs are absolute on purpose: GitHub resolves relative paths, npm does not. -->
-![Monomem: Shared memory for AI agents that holds poisoned writes.](https://raw.githubusercontent.com/calasdan-sketch/monomem/main/docs/brand/monomem-banner.png)
+![Monomem: Shared memory for AI agents that holds writes that match known attack patterns.](https://raw.githubusercontent.com/calasdan-sketch/monomem/main/docs/brand/monomem-banner.png)
 
 **Shared memory for your AI coding agents that records who wrote each note and holds suspicious writes for your review.**
 
@@ -7,9 +7,17 @@
 npx monomem setup
 ```
 
-Needs Node 22.16 or newer (check with `node -v`). On an older Node, use [Docker](#docker).
+Needs Node 22.16 or newer (check with `node -v`). No new enough Node? One command instead (needs Docker; put a long random `MONOMEM_TOKEN` in `.env` first):
 
-![A poisoned write is held, a second agent's search never sees it, and the dashboard rejects it](https://raw.githubusercontent.com/calasdan-sketch/monomem/main/docs/monomem-demo.gif)
+```bash
+git clone https://github.com/calasdan-sketch/monomem && cd monomem && cp .env.example .env && docker compose up -d
+```
+
+(More: [Docker](#docker).)
+
+**What it does not do:** it holds writes that match known attack patterns and records who wrote each note. It only covers what goes through Monomem: anything that can run shell commands or open `~/.monomem/state.db` itself can read or change your notes directly, and a reworded attack the pattern check does not know can still get through. Sensitivity limits apply to apps that connect with their own key. See [Known limits](#known-limits).
+
+![A write that matches a known attack pattern is held, a second agent's search never sees it, and the dashboard rejects it](https://raw.githubusercontent.com/calasdan-sketch/monomem/main/docs/monomem-demo.gif)
 
 *Recorded from a real run against a throwaway store ([transcript](https://github.com/calasdan-sketch/monomem/blob/main/docs/brand/demo-transcript.txt)): a write containing an injected instruction is held and never reaches the other agent's search, then rejected from the real dashboard. The two terminal panes are drawn from the real REST responses; the dashboard is a screen recording. Nothing sped up.*
 
@@ -507,8 +515,30 @@ writing a small adapter (write, update, delete, search, plus the actor: writer a
 stop appearing in search, then a confirm with the preview's one-time code. Nothing is deleted, undo is one command, and every
 edit keeps the text it replaces. See [docs/replacing-memories.md](./docs/replacing-memories.md).
 
-**Known gaps:** none open. Scenarios for behaviour Monomem lacks are kept and marked rather than deleted; the history of
-each one and how it was fixed is in [docs/BENCHMARK.md](./docs/BENCHMARK.md#known-gaps-history), with the provenance-field breakdown.
+## Known limits
+
+- The write check is pattern matching. A reworded attack it does not know passes; `monomem drill` replays the attacks it does know.
+- Monomem guards what goes through it. A program that can run shell commands, or open the database file itself, is not stopped.
+- Local apps connected over stdio have no key, so a limit on other apps does not apply to them. A note marked `private` is hidden from
+  apps given a limit; apps with no limit (including your main Claude connection) still see it.
+- The writer name of a local app comes from its config file: it tells your apps apart, but it is not proof.
+- Keyword search finds words, not meaning. Semantic search needs a local embedding service (Ollama); without one you get keyword results.
+- Upgrading the database is one way (older versions refuse a newer file). A backup copy is made first and `monomem restore` goes back.
+- Needs Node 22.16 or newer, because it uses Node's built-in SQLite (Node 20 does not have it; checked). Docker is the way around that.
+- Lowering a note's label does not rewrite its older saved versions.
+
+The benchmark has no open known-gap scenarios: scenarios for behaviour Monomem lacks are kept and marked rather than deleted, and the history
+of each one and how it was fixed is in [docs/BENCHMARK.md](./docs/BENCHMARK.md#known-gaps-history), with the provenance-field breakdown.
+
+## Honest numbers
+
+- **Finding a note again (keyword search only, top 5 results, from a QA pass).** Questions that use the note's own words: the right note was
+  in the top 5 about **95%** of the time. Reworded questions that share few words with the note: about **50%**. Semantic search
+  (`MONOMEM_EMBEDDINGS=on`, needs a local Ollama) helps with the reworded ones; without it Monomem does not understand meaning. These come
+  from a QA pass, not from the benchmark below: treat them as a rough guide and test on your own notes.
+- **What it adds at the start of a session.** A store of 60 short notes at the default setting (`MONOMEM_RECALL_TOKENS` = 1,500) produced
+  about 7,100 characters, roughly **1,800 tokens** (estimated at 4 characters a token), listing 57 of the 60 notes. The block is capped at
+  8,000 characters. `monomem meter` shows what yours actually costs and saves, as estimates.
 
 ## Security in one paragraph
 
@@ -564,6 +594,7 @@ remove it: [docs/footprint.md](./docs/footprint.md).
 | [docs/team.md](./docs/team.md) | shared memory for a team: one server, one token per person, namespaces, approve-first, sync, backups |
 | [docs/sensitivity-labels.md](./docs/sensitivity-labels.md) | public / internal / private labels and per-token ceilings; what a hidden note looks like |
 | [docs/give-an-app-limited-access.md](./docs/give-an-app-limited-access.md) | give one app its own key and a limit, step by step |
+| [docs/two-developers-one-server.md](./docs/two-developers-one-server.md) | two people, one Docker server, a key each, private notes kept apart |
 | [docs/checkups.md](./docs/checkups.md) | `pii scan`, `digest`, `scrub`, `safety-report`, `audit` |
 | [docs/token-namespaces.md](./docs/token-namespaces.md) | per-token namespace permissions — one shared bridge, isolated agents |
 | [docs/replacing-memories.md](./docs/replacing-memories.md) | replacing a note in two steps, undo, version history and restore, confidence, the trust guard |

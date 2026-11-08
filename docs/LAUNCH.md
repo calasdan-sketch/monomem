@@ -27,10 +27,38 @@ can be prepared in the repository are marked **done** (they exist and are checke
 | PulseMCP | needs Dan | Their site lists servers from the official registry; submit through their form if it does not appear. Check their current instructions |
 | mcp.so | needs Dan | Submit through their site (sign-in). Check their current instructions |
 | awesome-mcp-servers | needs Dan | Open a pull request adding one line to the list; read that repository's CONTRIBUTING file first for the exact format and category |
-| Show HN | needs Dan | Read the Show HN rules first (news.ycombinator.com/showhn.html): it has to be something people can try, no sign-up wall, and you answer questions yourself. Do not ask friends to upvote |
-| Reddit | needs Dan | Each subreddit has its own self-promotion rule (often a limit such as one self-promo post per ten others, or a weekly thread). Read the rules of the exact subreddit before posting and disclose that you built it |
+| Show HN | needs Dan | Read the Show HN rules first (news.ycombinator.com/showhn.html): it has to be something people can try, no sign-up wall, and you answer questions yourself. Do not ask friends to upvote or comment |
+| r/opensource | needs Dan, likely blocked | Reported by the Round 4 launch review (Nov 2026): the subreddit bans AI-built projects since Oct 2026 and wants projects at least a year old. Monomem is AI-assisted and months old, so assume a post is removed. Re-read the sidebar before deciding |
+| r/ClaudeAI | needs Dan | Reported by the same review: showcases go in the "Built with Claude" megathread, and a normal feed post needs 50+ karma. Use the megathread |
+| r/selfhosted | needs Dan | Reported by the same review: projects under 3 months old go in the New Project Megathread, not as a post of their own |
+| r/mcp, r/cursor, r/LocalLLaMA, r/OpenSourceAI | UNVERIFIED | Nobody has read these rules. Read each sidebar first; do not post on a guess |
 
-None of the "check their current instructions" rows were fetched or verified when this was written; rules on those sites change.
+The Reddit rows come from a review, not from reading each sidebar today: rules change, so open the sidebar and the rules page of the exact
+subreddit before you post. The other rows ("check their current instructions") were not fetched or verified when this was written.
+
+### What gets a post removed, in general
+
+Posting the same link in several communities in a row, hiding that you built it, a brand-new account with no history, asking for votes,
+a post that is mostly a link with no explanation of what it does or does not do, and claims you cannot back up. Disclose that you built it,
+and that parts were written with an AI assistant.
+
+### Safe wording for the download
+
+Say what a person does and what it needs, not what it guarantees. For example: "Free, MIT licence, runs on your own computer. Needs Node
+22.16 or newer, or Docker. Install: `npx monomem setup` (it shows every change and asks first)". Link the repository and the npm page.
+Do not offer a download from anywhere else.
+
+### DO NOT CLAIM
+
+- "Secure", "safe", "protects against prompt injection" or "stops poisoning". It holds writes that match known patterns; a reworded
+  attack can pass (README, Known limits).
+- "Private" without the rest of the sentence: limited apps cannot see a `private` note; apps with no limit still can.
+- "Works with every AI app" or any named app you have not tried yourself.
+- "Understands meaning" or any search-quality number as a promise. The honest numbers are in the README and come from a QA pass.
+- "Your data never leaves your machine" while embeddings point at a remote URL, or if a tunnel or sync folder is in use.
+- "Audited", "certified", "compliant", "enterprise-ready", "production-ready".
+- Download counts, stars or users you have not just looked up.
+- That the tests prove it secure: they prove the checks it has behave as written.
 
 ## Before any post
 

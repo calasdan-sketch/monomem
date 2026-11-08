@@ -66,6 +66,7 @@ Monomem part. An entry setup did not add (one you wrote by hand) is listed, not 
 | Runner `--post` (`src/runner-sign.ts`) | `MONOMEM_URL` and `MONOMEM_TOKEN` | your own Monomem server |
 | Dashboard page (`src/dashboard.ts`) | opening the dashboard | the Monomem server that served the page (API calls, and the one-time sign-in code that `monomem open` hands over) |
 | `monomem open` (`src/cli.ts`) | running the command | `http://127.0.0.1:<api port>/health`, to see whether your own server is up |
+| `monomem restore` (`src/cli.ts`) | running the command | `http://127.0.0.1:<api port>/health`, to refuse restoring while your own server is running |
 
 Not Monomem's own calls: `npx monomem` downloads the package from npm, and `sync --git` runs `git`, which pushes where your
 repository's remote points.
