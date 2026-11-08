@@ -78,7 +78,7 @@ describe("read access log", () => {
   test("the preview is one line of at most 120 characters, and a failed read is not logged", async () => {
     const store = new Store(":memory:");
     const c = await connect(store, { label: "bot-a", authed: true });
-    await c.callTool({ name: "state_search", arguments: { query: "a\nb ".repeat(200) } });
+    await c.callTool({ name: "state_search", arguments: { query: "abcdefghi\nb ".repeat(25) } });
     assert.equal(store.accessLog()[0].query.length, 120);
     assert.ok(!store.accessLog()[0].query.includes("\n"));
     const bad: any = await c.callTool({ name: "state_read", arguments: { id: 999 } });

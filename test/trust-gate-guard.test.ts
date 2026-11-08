@@ -99,7 +99,7 @@ export function rawSites(text: string): Array<[number, string]> {
 }
 
 /** Unconditional `includeDistrusted: true` (not behind a `? { includeDistrusted: true } : {}` pass-through of an admin-gated flag), per file. */
-const INTERNAL_OPT_IN: Record<string, number> = { "api.ts": 1, "cli.ts": 1, "liveness.ts": 2, "mcp-server-core.ts": 1, "runner.ts": 2, "tasks.ts": 2 };
+const INTERNAL_OPT_IN: Record<string, number> = { "api.ts": 1, "cli.ts": 1, "everyday-cli.ts": 2, /* show/edit: the local shell is the owner, as in label */ "liveness.ts": 2, "mcp-server-core.ts": 1, "runner.ts": 2, "tasks.ts": 2 };
 
 describe("B: one gate for reading a note", () => {
   test("the scanner itself: it matches aliased receivers and ignores comments (positive control)", () => {
@@ -143,8 +143,9 @@ describe("B: one gate for reading a note", () => {
       const n = t.split("\n").filter((l) => /includeDistrusted: ?true/.test(l) && !/\? \{ includeDistrusted: true \} : \{\}/.test(l) && !/^\s*\/\//.test(l)).length;
       if (n) optIn[f] = n;
     }
-    // backup.ts only counts the notes of the COPY it just made.
-    assert.deepEqual(sql.sort(), ["backup.ts"], "SQL on the notes table belongs in store.ts, behind the gate");
+    // backup.ts only counts the notes of the COPY it just made; restore.ts only counts (and checks for encryption) the BACKUP FILE it is about to put
+    // in place, before any store opens it: neither reads a note into a response.
+    assert.deepEqual(sql.sort(), ["backup.ts", "restore.ts"], "SQL on the notes table belongs in store.ts, behind the gate");
     assert.deepEqual(optIn, INTERNAL_OPT_IN, "an unconditional includeDistrusted: true was added or removed: review it, then update INTERNAL_OPT_IN");
   });
 

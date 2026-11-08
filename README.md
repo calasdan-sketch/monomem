@@ -515,6 +515,11 @@ writing a small adapter (write, update, delete, search, plus the actor: writer a
 stop appearing in search, then a confirm with the preview's one-time code. Nothing is deleted, undo is one command, and every
 edit keeps the text it replaces. See [docs/replacing-memories.md](./docs/replacing-memories.md).
 
+**Known gaps in the benchmark:** none open. Scenarios for behaviour Monomem lacks are kept and marked rather than deleted, and the history
+of each one and how it was fixed is in [docs/BENCHMARK.md](./docs/BENCHMARK.md#known-gaps-history), with the provenance-field breakdown.
+
+Limits no scenario can show (what the benchmark cannot see) are listed next, under Known limits.
+
 ## Known limits
 
 - The write check is pattern matching. A reworded attack it does not know passes; `monomem drill` replays the attacks it does know.
@@ -526,9 +531,6 @@ edit keeps the text it replaces. See [docs/replacing-memories.md](./docs/replaci
 - Upgrading the database is one way (older versions refuse a newer file). A backup copy is made first and `monomem restore` goes back.
 - Needs Node 22.16 or newer, because it uses Node's built-in SQLite (Node 20 does not have it; checked). Docker is the way around that.
 - Lowering a note's label does not rewrite its older saved versions.
-
-The benchmark has no open known-gap scenarios: scenarios for behaviour Monomem lacks are kept and marked rather than deleted, and the history
-of each one and how it was fixed is in [docs/BENCHMARK.md](./docs/BENCHMARK.md#known-gaps-history), with the provenance-field breakdown.
 
 ## Honest numbers
 

@@ -225,7 +225,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
         held = s.listQuarantine({ limit: 500 }).length;
         distrust = s.distrustRules().length;
         // ponytail: loads every live note to count markers; use SQL if a store gets big enough for this to show up in the runtime
-        const live = s.exportAll({ live: true }); // gate-ok: operator CLI, counts only; no note content is returned or printed
+        const live = s.exportAll({ live: true }); // gate-ok: operator CLI, counts redaction markers only; no note content is returned or printed
         marked = live.filter((n) => /\[REDACTED:/.test(`${n.title}\n${n.body}`)).length;
         piiNotes = scanPii(live, 200).suggestions.length;
         privateNotes = live.filter((n) => n.sensitivity === "private").length;

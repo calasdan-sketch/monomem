@@ -112,7 +112,7 @@ describe("health hook wording", () => {
     return { dir, opts: { dbPath, dataDir: dir, bindHost: "127.0.0.1", settingsPath, pluginsPath: join(dir, "p.json"), auditPath: join(dir, "audit.log"), now: new Date("2026-11-05T12:00:00Z"), drill: async () => ({ notes: 0, attacks: 1, rows: [], reached: [], unexpected: [], ok: true, elapsed_ms: 1, approve_first: false }) } };
   }
   const hooks = (r: Awaited<ReturnType<typeof runHealth>>) => r.checks.find((c) => c.id === "hooks")!;
-  test("Claude Code installed, hook missing, never declined: warn", async () => assert.equal(hooks(await runHealth(hsetup(true).opts)).status, "warn"));
+  test("Claude Code installed, hook missing, never declined: info (optional, same as doctor)", async () => assert.equal(hooks(await runHealth(hsetup(true).opts)).status, "info"));
   test("no Claude Code folder: info", async () => assert.equal(hooks(await runHealth(hsetup(false).opts)).status, "info"));
   test("setup recorded a declined hook: info", async () => {
     const h = hsetup(true);

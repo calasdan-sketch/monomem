@@ -179,10 +179,10 @@ describe("access tracking: accessStats", () => {
     assert.equal(stats.totalNotes, 3);
     assert.equal(stats.totalAccesses, 7);
     assert.equal(stats.neverAccessed, 1);
-    assert.equal(stats.mostAccessed.length, 3);
+    assert.equal(stats.mostAccessed.length, 2, "a note nobody has read is not 'most accessed'");
     assert.deepEqual(stats.mostAccessed[0], { id: a.id, title: "hot", access_count: 5 });
     assert.deepEqual(stats.mostAccessed[1], { id: b.id, title: "warm", access_count: 2 });
-    assert.deepEqual(stats.mostAccessed[2], { id: c.id, title: "cold", access_count: 0 });
+    assert.ok(!stats.mostAccessed.some((m) => m.id === c.id));
     // mostAccessed leaks no bodies.
     for (const m of stats.mostAccessed) {
       assert.deepEqual(Object.keys(m).sort(), ["access_count", "id", "title"]);
