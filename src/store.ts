@@ -1585,7 +1585,8 @@ export class Store {
       }
       throw new Error(
         `monomem: this database is at schema version ${found}, newer than this build supports ` +
-          `(${SCHEMA_VERSION}). Upgrade monomem (npm i -g monomem@latest) instead of opening it with an older version.`
+          `(${SCHEMA_VERSION}). Upgrade monomem (npm i -g monomem@latest) instead of opening it with an older version. ` +
+          `To go back to the older version on purpose, restore the copy the upgrade left beside the database (${this.dbPath}.pre-v${found}-backup) with a build that supports it: monomem restore <that file> (docs/upgrading.md).`
       );
     }
     if (found >= SCHEMA_VERSION) {

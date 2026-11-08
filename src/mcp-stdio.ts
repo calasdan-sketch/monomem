@@ -19,7 +19,14 @@ prepareDataDir();
 const stdio = stdioWriter();
 if (stdio.warning) process.stderr.write(`[monomem] ${stdio.warning}\n`);
 setProcessWriter(stdio.writer);
-const store = new Store(DB_PATH);
+let store: Store;
+try {
+  store = new Store(DB_PATH);
+} catch (e) {
+  // A person reads this in an app's log: one plain line, not a stack trace.
+  process.stderr.write(`[monomem] cannot open the database: ${((e as Error).message ?? String(e)).replace(/\s+/g, " ")}\n`);
+  process.exit(1);
+}
 // Most people never run the HTTP server (which sweeps hourly), so expired notes are archived here too:
 // at startup and then hourly, idempotent, and a failure never stops the MCP server.
 const sweepExpired = (): void => {

@@ -267,6 +267,9 @@ function usage(all = false): void {
       "            Also runs on its own in the expiry sweep and at the end of a captured session.",
       "  archive <id> | restore <id>",
       "            Soft-archive a note, or bring an archived one back (the undo for decay and archive).",
+      "  restore <backup folder | state.db file> [--yes]",
+      "            Put a backup back as your database. Refuses while Monomem or an app is using it; copies the current database aside first",
+      "            (state.db.before-restore-<time>), removes the stale -wal/-shm files and checks the result. Also works with state.db.pre-vNN-backup.",
       "  add \"text\" [--title T] [--ns work] [--tag a,b] [--private | --sens public|internal|private]",
       "            Save a note from the shell (\"-\" reads a pipe). Same linter, secret refusal and quarantine as any other writer; written as \"cli\".",
       "  show <id> | ls [--ns x] [--limit 20] | edit <id> | forget <id>",
@@ -2726,6 +2729,55 @@ async function deleteCmd(): Promise<void> {
 }
 
 // `monomem archive <id>` / `monomem restore <id>`: the same soft archive and restore as POST /notes/:id/archive|restore.
+// `monomem restore <backup folder | state.db>`: put a backup back as the live database (a number is a note id: that is the other restore).
+async function restoreBackupCmd(): Promise<void> {
+  const { DB_PATH, API_PORT } = await import("./config.js");
+  const { inspectBackup, dbBusy, applyRestore, RestoreError } = await import("./restore.js");
+  const args = process.argv.slice(3);
+  const yes = args.includes("--yes");
+  const target = args.find((a) => !a.startsWith("--"))!;
+  try {
+    const plan = inspectBackup(target);
+    console.log(`Backup: ${plan.source}`);
+    console.log(`  ${plan.notes} note(s), database version ${plan.schema}${plan.schema < (await import("./store.js")).SCHEMA_VERSION ? " (older; it is upgraded the next time Monomem opens it, and a .pre-vNN-backup copy is kept)" : ""}.`);
+    if (plan.encrypted) console.log("  Its notes are encrypted: you also need the key that went with it (the .key file), or they cannot be read.");
+    let up = false;
+    try {
+      up = (await fetch(`http://127.0.0.1:${API_PORT}/health`, { signal: AbortSignal.timeout(1000) })).ok;
+    } catch {
+      up = false;
+    }
+    if (up || dbBusy(DB_PATH)) {
+      console.error("Monomem looks like it is running (or an app is using the database). Close Claude Code, Claude Desktop and any other app that uses Monomem, stop the server, then run this again. Nothing was changed.");
+      process.exit(1);
+    }
+    if (!yes) {
+      console.log(`\nThis replaces ${DB_PATH}. Your current database is copied aside first (${DB_PATH}.before-restore-<time>).`);
+      if (!process.stdin.isTTY) {
+        console.log("Nothing was changed. Run it again with --yes to go ahead.");
+        process.exit(2);
+      }
+      const rl = (await import("node:readline/promises")).createInterface({ input: process.stdin, output: process.stdout });
+      const a = (await rl.question("Go ahead? [y/N] ")).trim().toLowerCase();
+      rl.close();
+      if (a !== "y" && a !== "yes") {
+        console.log("Nothing was changed.");
+        return;
+      }
+    }
+    const r = applyRestore(plan, DB_PATH);
+    console.log(`Restored ${plan.notes} note(s).`);
+    if (r.keptCurrentAt) console.log(`Your previous database is kept at ${r.keptCurrentAt}. To go back: monomem restore ${r.keptCurrentAt} --yes`);
+    console.log("Start Monomem again, then run: monomem doctor");
+  } catch (e) {
+    if (e instanceof RestoreError) {
+      console.error(e.message);
+      process.exit(1);
+    }
+    throw e;
+  }
+}
+
 async function archiveCmd(action: "archive" | "restore"): Promise<void> {
   const { DB_PATH } = await import("./config.js");
   const { Store, ValidationError } = await import("./store.js");
@@ -3226,6 +3278,10 @@ async function main(): Promise<void> {
     case "forget":
     case "archive":
     case "restore":
+      if (cmd === "restore" && process.argv[3] && !/^\d+$/.test(process.argv[3])) {
+        await restoreBackupCmd();
+        break;
+      }
       if (cmd === "forget" && process.stdin.isTTY && !process.argv.includes("--yes")) {
         const rl = (await import("node:readline/promises")).createInterface({ input: process.stdin, output: process.stdout });
         const a = (await rl.question(`Forget note #${process.argv[3]}? It is archived, not deleted, and "monomem restore ${process.argv[3]}" brings it back. [y/N] `)).trim().toLowerCase();
