@@ -1710,6 +1710,10 @@ async function labelCmd(): Promise<void> {
     try {
       const next = store.update(id, { sensitivity: args[1] }, { keepWriter: true });
       console.log(`#${id} is now ${next?.sensitivity ?? DEFAULT_SENSITIVITY}`);
+      if (next?.sensitivity === "private") {
+        console.log("Limited apps cannot see this; apps with no limit (including your main Claude connection) still can.");
+        console.log("Next step: monomem connect <app> --max internal   (for the session hook: set MONOMEM_RECALL_MAX_SENSITIVITY=internal)");
+      }
     } catch (e) {
       if (!(e instanceof ValidationError)) throw e;
       console.error(e.message);

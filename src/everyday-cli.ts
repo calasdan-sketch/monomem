@@ -63,7 +63,7 @@ export async function addCmd(args: string[]): Promise<void> {
   try {
     const n = store.create({ title, body: text, ...(namespace ? { namespace } : {}), ...(tags ? { tags } : {}), ...(sens ? { sensitivity: sens } : {}), source: "cli" });
     console.log(`Saved #${n.id} "${n.title}" in ${n.namespace}${n.sensitivity === "private" ? " (private)" : ""}.`);
-    if (n.sensitivity === "private") console.log("Private: apps with a limit cannot see it. Apps with no limit (including your main Claude connection) still can.");
+    if (n.sensitivity === "private") console.log("Limited apps cannot see this; apps with no limit (including your main Claude connection) still can.\nNext step: monomem connect <app> --max internal   (for the session hook: set MONOMEM_RECALL_MAX_SENSITIVITY=internal)");
   } catch (e) {
     if (e instanceof QuarantinedError) {
       console.log(`Held, not saved: ${e.message}. Review it with: monomem quarantine`);

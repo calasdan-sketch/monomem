@@ -79,4 +79,17 @@ describe("everyday commands", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("label private says plainly who can still see it, with a next step", () => {
+    const dir = mkdtempSync(join(tmpdir(), "om-everyday-"));
+    try {
+      run(dir, ["add", "hello there"]);
+      const r = run(dir, ["label", "1", "private"]);
+      assert.match(r.stdout, /apps with no limit \(including your main Claude connection\) still can/);
+      assert.match(r.stdout, /monomem connect <app> --max internal/);
+      assert.match(r.stdout, /MONOMEM_RECALL_MAX_SENSITIVITY/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

@@ -162,7 +162,7 @@ export const DASHBOARD_HTML = `<!doctype html>
       <input id="n_title" class="grow" aria-label="Title" placeholder="Title">
       <input id="n_ns" class="grow" aria-label="Namespace (optional)" placeholder="namespace (optional)">
       <input id="n_tags" class="grow" aria-label="Tags, comma separated" placeholder="tags, comma, separated">
-      <select id="n_lvl" aria-label="Who can see this note"><option value="internal">internal (normal)</option><option value="public">public (anyone)</option><option value="private">private (only fully trusted apps)</option></select>
+      <select id="n_lvl" aria-label="Who can see this note"><option value="internal">internal (normal)</option><option value="public">public (anyone)</option><option value="private">private (limited apps cannot see it; unlimited apps still can)</option></select>
     </div>
     <textarea id="n_body" aria-label="Body" placeholder="Body..."></textarea>
     <div class="row" style="margin-top:10px">
@@ -391,7 +391,7 @@ function render(notes){
 var LVL_TEXT = { "public":"public", "internal":"internal", "private":"private" };
 function lvlBadge(l){
   l = LVL_TEXT[l] ? l : "internal";
-  var tip = { "public":"Anyone who can connect may see this note.", "internal":"The normal level: apps allowed to see internal notes can read it.", "private":"Only apps with no limit can read this note." }[l];
+  var tip = { "public":"Anyone who can connect may see this note.", "internal":"The normal level: apps allowed to see internal notes can read it.", "private":"Limited apps cannot see this; apps with no limit (including your main Claude connection) still can. Next: monomem connect <app> --max internal." }[l];
   return "<span class='lvl lvl-"+l+"' title='"+esc(tip)+"'>"+l+"</span>";
 }
 function lvlSelect(n){

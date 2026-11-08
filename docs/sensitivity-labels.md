@@ -6,8 +6,10 @@ that holds a token can read everything in its namespace.
 
 Labels, lowest to highest: `public` < `internal` < `private`.
 
+**What `private` means, plainly:** limited apps cannot see a private note; apps with no limit (including your main Claude connection) still can. Next step to keep an app away: `monomem connect <app> --max internal` (for the session-start hook, set `MONOMEM_RECALL_MAX_SENSITIVITY=internal`).
+
 - A note with no label is `internal`. Existing notes became `internal` when the database upgraded
-  (schema 17).
+  (schema 19).
 - A token with no `max_sensitivity` behaves as it always did: it sees every label. Setting one is
   recommended for any token you hand to an app you do not fully trust.
 
