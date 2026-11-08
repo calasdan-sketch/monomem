@@ -9,7 +9,8 @@
 // state store, not a mock or a second copy.
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { actorStore } from "./actor.js";
+import { actorStore, currentCeiling } from "./actor.js";
+import { type Sensitivity, SENSITIVITY_LEVELS } from "./sensitivity.js";
 import { z } from "zod";
 import { memoryIndex, memoryTimeline, memoryGet, sessionList, sessionGet, GET_MAX_IDS, type ReadScope } from "./progressive.js";
 import {
@@ -169,6 +170,7 @@ function quarantinedResult(e: QuarantinedError) {
       // a plain install this told the assistant to call a tool it had not been
       // given -- the user was asked for an action nobody could take. Point at
       // the surfaces that always exist instead.
+      next: "The write was held, not lost. An administrator can approve or reject it in the dashboard, or with: monomem quarantine list",
       message:
         (e.findings.some((f) => f.category === "approval")
           ? "This write was held for admin review because its namespace requires approval (approve-first), and is not stored as a note yet. "
@@ -230,6 +232,8 @@ export interface ConnectionCtx {
    * operator sets MONOMEM_STDIO_ADMIN_TOOLS=1.
    */
   local?: boolean;
+  /** The token's sensitivity ceiling (config `max_sensitivity`); the store hides every note above it from this connection. */
+  maxSensitivity?: Sensitivity;
 }
 
 /**
@@ -297,6 +301,7 @@ const stdioAdminToolsAllowed = (env: NodeJS.ProcessEnv = process.env): boolean =
  * MONOMEM_TOOLS but is not worth the context it costs on every single turn
  * of every session.
  */
+
 export const DEFAULT_TOOLS: readonly string[] = [
   "state_write",
   "state_read",
@@ -378,9 +383,16 @@ export function createMcpServer(
           `include_distrusted is honoured only for this connection's own namespace ("${ownNs}"): pass namespace "${ownNs}". The namespaces it can only read are governed by their own admins.`
         );
       }
-      return actorStore.run({ label: conn.label ?? "", authed: conn.authed === true }, () => {
-        const out = (handler as (...x: unknown[]) => unknown)(...args);
-        return READ_TOOLS.has(name as string) ? logRead(name as string, args[0] as Record<string, unknown> | undefined, out) : out;
+      return actorStore.run(
+        {
+          label: conn.label ?? "",
+          authed: conn.authed === true,
+          ...(conn.maxSensitivity !== undefined ? { maxSensitivity: conn.maxSensitivity } : {}),
+          canDeclassify: scopeAllows(scope, "admin"),
+        },
+        () => {
+          const out = (handler as (...x: unknown[]) => unknown)(...args);
+          return READ_TOOLS.has(name as string) ? logRead(name as string, args[0] as Record<string, unknown> | undefined, out) : out;
       });
     });
   };
@@ -407,7 +419,12 @@ export function createMcpServer(
   };
 
   const denyIfUnder = (need: Scope): string | null =>
-    scopeAllows(scope, need) ? null : `this token lacks the required '${need}' scope`;
+    scopeAllows(scope, need)
+      ? null
+      : `this token lacks the required '${need}' scope. ` +
+        (need === "admin"
+          ? "Deleting and managing need an administrator key (the person can make one with: monomem token add <name> --admin)."
+          : "This app's key can only read; a key that can also write is made with: monomem token add <name> --scope write.");
 
   // Server-side namespace resolution, active only when the entry point
   // resolved a namespace at startup (see resolveStartupNamespace).
@@ -507,7 +524,7 @@ export function createMcpServer(
           .string()
           .optional()
           .describe(
-            "Provenance CLAIM: who/what you say wrote this note (an agent or user label). Advisory only -- anyone can claim anything here. The server separately stamps the authenticated writer as `written_by` (cannot be set by you)."
+            "Optional: who or what you CLAIM this note came from (not checked). The server records who really wrote it separately."
           ),
         if_rev: z
           .number()
@@ -532,9 +549,15 @@ export function createMcpServer(
           .describe(
             "Optional CLAIM, 0 to 1, of how sure you are of this note (0 = a guess, 1 = certain). It is only your claim: the server stores it next to your name, shows it to readers as a claim, and never uses it to rank notes or to override who is trusted. On update, null removes it."
           ),
+        sensitivity: z
+          .preprocess((v) => (typeof v === "string" ? v.trim().toLowerCase() : v), z.enum(SENSITIVITY_LEVELS))
+          .optional()
+          .describe(
+            "Who may read this note: public, internal (default) or private. A connection with a ceiling cannot read, write or relabel above it; lowering a label needs an admin."
+          ),
       },
     },
-    async ({ id, namespace, title, body, tags: plainTags, facts, source, if_rev, forget_after, confidence }) => {
+    async ({ id, namespace, title, body, tags: plainTags, facts, source, if_rev, forget_after, confidence, sensitivity }) => {
       const warnings: LintFinding[] = [];
       let tags = plainTags;
       try {
@@ -563,8 +586,8 @@ export function createMcpServer(
           }
           if (facts !== undefined) tags = withFacts(plainTags, facts, target.tags);
           const patch = nsActive
-            ? { title, body, tags, source, forget_after, confidence }
-            : { namespace, title, body, tags, source, forget_after, confidence };
+            ? { title, body, tags, source, forget_after, confidence, sensitivity }
+            : { namespace, title, body, tags, source, forget_after, confidence, sensitivity };
           const updated = store.update(id, patch, { ifRev: if_rev, lintWarnings: warnings });
           if (!updated) return errorResult(`no note with id ${id}`);
           await maybeEmbed(store, updated);
@@ -580,8 +603,8 @@ export function createMcpServer(
         tags = withFacts(plainTags, facts);
         const created = store.create(
           nsActive
-            ? { namespace: ownNs, title, body, tags, source, forget_after, ...(typeof confidence === "number" ? { confidence } : {}) }
-            : { namespace, title, body, tags, source, forget_after, ...(typeof confidence === "number" ? { confidence } : {}) },
+            ? { namespace: ownNs, title, body, tags, source, forget_after, sensitivity, ...(typeof confidence === "number" ? { confidence } : {}) }
+            : { namespace, title, body, tags, source, forget_after, sensitivity, ...(typeof confidence === "number" ? { confidence } : {}) },
           { lintWarnings: warnings }
         );
         await maybeEmbed(store, created);
@@ -598,10 +621,7 @@ export function createMcpServer(
     {
       title: "Read shared state",
       description:
-        "Read a single note from the shared state store by id. Pass " +
-        "`neighbors: true` to also attach up to 10 similar notes (same " +
-        "namespace) with their similarity scores -- the note's neighborhood " +
-        "in the similarity graph.",
+        "Open one note from memory by its id. Pass `neighbors: true` to also get up to 10 similar notes.",
       inputSchema: {
         id: z.number().int().describe("Id of the note to read."),
         neighbors: z
@@ -758,7 +778,7 @@ export function createMcpServer(
           : undefined;
         const resolvedMode = mode ?? parseMode(undefined);
         const wf = { ...writerFilterArgs(written_by, not_written_by, include_distrusted), ...supersededArg(include_superseded) };
-        if (explain === true) {
+        if (explain === true && currentCeiling() === undefined) {
           // Explained twin of the branches below: same namespace gating, the
           // per-namespace lists merge round-robin, each hit keeps its breakdown.
           const hint = nsActive ? trustedHint(namespace) : namespace;
@@ -934,7 +954,7 @@ export function createMcpServer(
     {
       title: "List shared state",
       description:
-        "List notes in the shared state store, optionally filtered by namespace." +
+        "List the notes in memory, newest first. Optionally only one namespace (a named space)." +
         (nsActive
           ? " The `namespace` parameter is an untrusted hint: only namespaces this server may read are listed."
           : ""),
@@ -1067,7 +1087,7 @@ export function createMcpServer(
         // mostAccessed carries note titles -- attacker-writable content
         // returned pre-prompt -- so the untrusted-data banner applies, like
         // every other tool that echoes stored note content.
-        return untrustedResult({ ...store.accessStats(namespaces, { hideDistrusted: !scopeAllows(scope, "admin") }), meter: meterStats(store, namespaces) });
+        return untrustedResult({ ...store.accessStats(namespaces, { hideDistrusted: !scopeAllows(scope, "admin") }), ...(currentCeiling() === undefined ? { meter: meterStats(store, namespaces) } : {}) });
       } catch (e) {
         return errorFor(e);
       }
@@ -1342,6 +1362,9 @@ export function createMcpServer(
       try {
         const denied = denyIfUnder("admin");
         if (denied) return errorResult(denied);
+        if (currentCeiling() !== undefined) {
+          return errorResult("rebuilding the similarity graph covers every note; it needs a token with no sensitivity ceiling");
+        }
         // BLOCKER 1: price the O(n^2) work before doing it. Above the
         // confirmation threshold the tool refuses unless the caller passes
         // confirm: true -- one admin tool call must not silently kick off a

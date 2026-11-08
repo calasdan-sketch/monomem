@@ -10,6 +10,9 @@
 // prints nothing.
 import { existsSync } from "node:fs";
 import type { HookOptions } from "./hook.js";
+import type { NoteRecord } from "./store.js";
+import { actorStore } from "./actor.js";
+import { recallCeilingFromEnv } from "./sensitivity.js";
 
 /** At most this many memories are listed for one file. */
 const MAX_ROWS = 5;
@@ -46,17 +49,21 @@ async function fileContext(payload: Record<string, unknown>, opts: HookOptions):
   const { Store, NOTE_KINDS } = await import("./store.js");
   const { NEVER_SHOW_TAG } = await import("./reserved-tags.js");
   const { normPath } = await import("./extract.js");
+  const cap = recallCeilingFromEnv();
+  if (cap === null) return ""; // MONOMEM_RECALL_MAX_SENSITIVITY is set to something that is not a label: say nothing
   const store = new Store(dbPath, { noMigrate: true, busyTimeoutMs: BUSY_MS });
   try {
     // note_files holds the path relative to the session folder when it is inside it, otherwise forward-slashed as given.
     const rel = normPath(file, cwd);
     const paths = [...new Set([rel, file.replace(/\\/g, "/")])];
     const seen = new Set<number>();
-    const notes = paths
-      .flatMap((p) => store.list({ namespace, kinds: NOTE_KINDS, filePath: p, limit: MAX_ROWS, order: "created_desc", withoutTags: [NEVER_SHOW_TAG] }).notes)
-      .filter((n) => !seen.has(n.id) && seen.add(n.id))
-      .sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : b.id - a.id))
-      .slice(0, MAX_ROWS);
+    const find = (): NoteRecord[] =>
+      paths
+        .flatMap((p) => store.list({ namespace, kinds: NOTE_KINDS, filePath: p, limit: MAX_ROWS, order: "created_desc", withoutTags: [NEVER_SHOW_TAG] }).notes)
+        .filter((n) => !seen.has(n.id) && seen.add(n.id))
+        .sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : b.id - a.id))
+        .slice(0, MAX_ROWS);
+    const notes = cap ? actorStore.run({ label: "", maxSensitivity: cap, canDeclassify: false }, find) : find();
     if (!notes.length) return "";
     const claimed = store.captureDb().prepare("INSERT OR IGNORE INTO file_context_seen (session_id, path) VALUES (?, ?)").run(sessionId, rel).changes;
     if (Number(claimed) !== 1) return "";

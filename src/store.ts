@@ -17,6 +17,7 @@ import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from
 import { dirname, basename, join } from "node:path";
 import { checkSizes, audit } from "./security.js";
 import { chmodQuiet } from "./config.js";
+import { SECRET_ASSIGN_LABEL } from "./security.js";
 import { lintContent, lintPolicy, describeFindings, type LintFinding, type LintAction, type LintCategory } from "./lint.js";
 // Reuses consolidate.ts's zero-dependency text similarity for the note
 // similarity graph. This is a module cycle (consolidate.ts imports Store
@@ -39,8 +40,18 @@ import { isStale, stalenessConfig, annotateStaleness } from "./staleness.js";
 // At-rest encryption for note bodies. No module cycle: crypto.ts imports
 // only node: builtins, never store.ts.
 import { encrypt, decryptIfEncrypted, isEncrypted, loadKey, keyPath, noteAad, captureAad } from "./crypto.js";
-import { currentActor, currentWriter, cleanWriter } from "./actor.js";
+import { currentActor, currentWriter, cleanWriter, currentCeiling, actorStore } from "./actor.js";
 import { redact } from "./redact.js";
+import {
+  type Sensitivity,
+  DEFAULT_SENSITIVITY,
+  SENSITIVITY_HELP,
+  isSensitivity,
+  levelsAtOrBelow,
+  parseSensitivity,
+  sensitivityRank,
+  sensitivityVisible,
+} from "./sensitivity.js";
 import {
   ALL_NAMESPACES,
   MAX_DISTRUST_RULES,
@@ -308,7 +319,10 @@ function applyLintPolicy(findings: LintFinding[], opts: LintOpts): "quarantine" 
     // Keep the 1.0 wording for secrets: callers and docs match on it.
     if (secret) {
       throw new ValidationError(
-        `refusing to store what looks like a ${secret.label}; remove the secret or store a reference to it instead`
+        `refusing to store what looks like a ${secret.label}; remove the secret or store a reference to it instead` +
+          (secret.label === SECRET_ASSIGN_LABEL
+            ? ` (the note has something like "password: ..." in it, and every app you connect can read your notes. If it is not really a password, reword it; to store such notes on purpose, an administrator can set MONOMEM_LINT=secrets=warn)`
+            : "")
       );
     }
     throw new ValidationError(
@@ -381,6 +395,11 @@ export interface NoteInput {
    * shown next to the note, and never used to rank, to override the trust policy or to decide who wins a replacement.
    */
   confidence?: number;
+  /**
+   * Sensitivity label: "public", "internal" (the default) or "private". A token with a ceiling cannot write above it.
+   * Anything else is rejected. See docs/sensitivity-labels.md.
+   */
+  sensitivity?: string;
 }
 
 /**
@@ -562,7 +581,7 @@ export const CHANGE_LOG_RETENTION_DAYS = 90;
 const FTS_PREFIX_OPT = "prefix='1'";
 
 /** Current schema version (PRAGMA user_version). See Store.migrate. */
-export const SCHEMA_VERSION = 18;
+export const SCHEMA_VERSION = 19;
 
 /**
  * Notes fetched per page by exportBatch(), which both streaming export
@@ -609,11 +628,18 @@ export interface NotePatch {
   forget_after?: number;
   /** A claim of how sure the writer is (0 to 1); null removes it. */
   confidence?: number | null;
+  /** Relabel the note ("public" | "internal" | "private"). Never above the caller's ceiling; lowering a label needs an admin. */
+  sensitivity?: string;
 }
 
 export interface NoteRecord {
   /** Set only by a tolerant export for a row whose body could not be decrypted. */
   unreadable?: true;
+  /**
+   * The note's sensitivity label. Present only when it is not the default ("internal"), so an unlabelled note keeps
+   * exactly the shape it always had; absent means "internal".
+   */
+  sensitivity?: Sensitivity;
   id: number;
   namespace: string;
   title: string;
@@ -767,6 +793,8 @@ interface NoteRow {
   session_id?: string | null;
   obs_type?: string | null;
   pinned?: number | null;
+  /** v19. NOT NULL in the table; optional here only because a few narrow projections do not select it. */
+  sensitivity?: string | null;
 }
 
 export const DEFAULT_NAMESPACE = "default";
@@ -817,6 +845,7 @@ function rowToRecord(row: NoteRow, serverId = ""): NoteRecord {
           ...(row.superseded_by_writer ? { superseded_by_writer: row.superseded_by_writer } : {}),
         }
       : {}),
+    ...(row.sensitivity && row.sensitivity !== DEFAULT_SENSITIVITY ? { sensitivity: row.sensitivity as Sensitivity } : {}),
     created_at: row.created_at,
     updated_at: row.updated_at,
     access_count: row.access_count ?? 0,
@@ -1028,6 +1057,25 @@ export function accessFlushMs(): number {
   const v = process.env.MONOMEM_ACCESS_FLUSH_MS;
   const n = Number(v);
   return v !== undefined && v.trim() !== "" && Number.isFinite(n) && n >= 0 ? n : 5000;
+}
+
+/**
+ * Building a namespace's edge index tokenizes every note in it. Done inside a write that froze the whole server (measured:
+ * 2.6 s at 50,000 notes, 41 s at 200,000). So a namespace with more than `syncMax` notes (MONOMEM_EDGE_SYNC_MAX, default
+ * 5,000) is indexed in the background in short slices while the server keeps answering, and a namespace with more than
+ * `autoMax` (MONOMEM_EDGE_AUTO_MAX_NOTES, default 100,000) is not indexed automatically at all: new notes there get no
+ * automatic similarity links until `monomem rebuild-edges` is run.
+ */
+export function edgeBuildLimits(): { syncMax: number; autoMax: number; sliceMs: number } {
+  const num = (v: string | undefined, def: number): number => {
+    const n = Number(v);
+    return v !== undefined && v.trim() !== "" && Number.isFinite(n) && n >= 0 ? n : def;
+  };
+  return {
+    syncMax: num(process.env.MONOMEM_EDGE_SYNC_MAX, 5_000),
+    autoMax: num(process.env.MONOMEM_EDGE_AUTO_MAX_NOTES, 100_000),
+    sliceMs: num(process.env.MONOMEM_EDGE_SLICE_MS, 15),
+  };
 }
 
 export function edgeIndexLimits(): { idleMs: number; maxNotes: number } {
@@ -1369,6 +1417,11 @@ export class Store {
   private readonly dbPath: string;
   /** Per-namespace edge-scoring index (see NsEdgeIndex). */
   private edgeIndexes = new Map<string, NsEdgeIndex>();
+  /** Namespaces whose index is being built in the background, with the notes written meanwhile (linked when it is ready). */
+  private edgeBuilds = new Map<string, Set<number>>();
+  /** Recent live-note counts per namespace, so a write does not recount a big namespace every time. */
+  private edgeSizes = new Map<string, { at: number; n: number }>();
+  private closed = false;
   /** Single-flight guard: at most one rebuildEdgesCooperative per Store. */
   private rebuildRunning = false;
   /**
@@ -1740,7 +1793,7 @@ export class Store {
 
   /**
    * Before the first upgrade of a non-empty file (any older version -> the current one), keep one
-   * copy of the pre-upgrade database next to it: `<db>.pre-v18-backup` (named after the schema it upgrades to). It is a
+   * copy of the pre-upgrade database next to it: `<db>.pre-v19-backup` (named after the schema it upgrades to). It is a
    * consistent snapshot (VACUUM INTO) still at the OLD schema version, so an
    * older monomem can open it (rollback = stop everything, put this file
    * back as the database, delete the -wal and -shm files beside it, install the older version). Never overwrites an
@@ -2527,18 +2580,39 @@ export class Store {
       //    write lock) creates it once and a failure aborts the upgrade instead of being swallowed.
       this.createArchiveLog();
     }
+    if (v < 19) {
+      // v19: per-memory sensitivity labels (public < internal < private; see src/sensitivity.ts).
+      //  - notes.sensitivity: every existing note becomes "internal" (the default), so nothing changes for anyone until a
+      //    label is set. The column is NOT NULL, so a row can never be "unlabelled"; an unknown value is hidden from every
+      //    token that has a ceiling.
+      //  - change_log.note_sensitivity: the label a note had when it was deleted (the delete row outlives the note, and the
+      //    change feed must be able to hide it from a restricted token). Older delete rows read "internal".
+      //  - quarantine.sensitivity: the label a held write carries, so approving it does not quietly relabel the note.
+      // An older build refuses a v19 file ("newer than this build supports") instead of opening it and ignoring the labels.
+      this.addColumn("notes", "sensitivity", `TEXT NOT NULL DEFAULT '${DEFAULT_SENSITIVITY}'`);
+      this.addColumn("change_log", "note_sensitivity", `TEXT NOT NULL DEFAULT '${DEFAULT_SENSITIVITY}'`);
+      this.addColumn("quarantine", "sensitivity", `TEXT NOT NULL DEFAULT '${DEFAULT_SENSITIVITY}'`);
+      this.db.exec("CREATE INDEX IF NOT EXISTS idx_notes_ns_sensitivity ON notes(namespace, sensitivity)");
+      // The default list (newest first inside one namespace) read and sorted the whole namespace; this index serves it in order.
+      this.db.exec("CREATE INDEX IF NOT EXISTS idx_notes_ns_updated ON notes(namespace, updated_at DESC, id DESC)");
+      this.db.exec("CREATE INDEX IF NOT EXISTS idx_notes_live_updated ON notes(archived_at, updated_at DESC, id DESC)");
+      this.createDeleteTrigger();
+    }
   }
 
   /** The delete log row also remembers the deleted note's writers (v14). Caller holds the write lock. */
   private createDeleteTrigger(): void {
+    // v17 also records the deleted note's label. A migration still below v17 (the v14 step) has no such columns yet, and
+    // v17 recreates this trigger once it has added them.
+    const labelled = this.hasColumn("notes", "sensitivity") && this.hasColumn("change_log", "note_sensitivity");
     this.db.exec(`
       DROP TRIGGER IF EXISTS notes_log_ad;
       CREATE TRIGGER notes_log_ad AFTER DELETE ON notes BEGIN
         UPDATE change_log SET title = '' WHERE note_id = old.id AND title <> '';
         INSERT INTO change_log (note_id, kind, namespace, title, source, rev, changed_at,
-                                note_written_by, note_attested_writer, note_attested_by, note_merged_from)
+                                note_written_by, note_attested_writer, note_attested_by, note_merged_from${labelled ? ", note_sensitivity" : ""})
         VALUES (old.id, 'deleted', old.namespace, '', old.source, NULL, ${SQL_NOW},
-                old.written_by, old.attested_writer, old.attested_by, old.merged_from_writers);
+                old.written_by, old.attested_writer, old.attested_by, old.merged_from_writers${labelled ? ", old.sensitivity" : ""});
       END;
     `);
   }
@@ -2684,12 +2758,14 @@ export class Store {
     validateSizes(input);
     validateForgetAfter(input.forget_after);
     validateConfidence(input.confidence);
+    const sensitivity = this.labelForNew(input.sensitivity);
     const findings = lintFor(input, opts.lint ?? "full");
     const linted = applyLintPolicy(findings, opts);
     if (!isOperatorWrite(opts.lint ?? "full") && this.isApproveFirst(input.namespace?.trim() || DEFAULT_NAMESPACE)) findings.push(APPROVAL_FINDING);
     if (linted === "quarantine" || findings.includes(APPROVAL_FINDING)) {
       const qid = this.quarantineWrite({
         op: "create",
+        sensitivity,
         namespace: input.namespace?.trim() || DEFAULT_NAMESPACE,
         title: input.title,
         body: input.body ?? "",
@@ -2757,8 +2833,8 @@ export class Store {
           `INSERT INTO notes (namespace, title, body, tags, source, written_by, created_by, imported_written_by,
                               imported_created_by, attested_writer, attested_by, merged_from_writers,
                               created_at, updated_at, rev, body_enc, expires_at, archived_at, imported_unverified,
-                              confidence, confidence_by, kind, session_id, obs_type)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)`
+                              confidence, confidence_by, kind, session_id, obs_type, sensitivity)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           namespace,
@@ -2783,7 +2859,8 @@ export class Store {
           typeof input.confidence === "number" ? writer : "",
           opts.kind ?? "note",
           opts.sessionId ?? "",
-          opts.obsType ?? ""
+          opts.obsType ?? "",
+          sensitivity
         );
       id = Number(result.lastInsertRowid);
       if (encrypting) {
@@ -2819,11 +2896,12 @@ export class Store {
     // pass nothing and leave the counters alone, so system churn never
     // inflates importance. Touch first so the returned record already
     // reflects the bumped count.
-    if (opts.trackAccess) this.touch(id);
     const row = this.db
       .prepare("SELECT * FROM notes WHERE id = ?")
       .get(id) as NoteRow | undefined;
-    if (!row) return null;
+    // A note above the caller's sensitivity ceiling reads exactly like a note that does not exist (and is not counted as read).
+    if (!row || this.hiddenByCeiling(row)) return null;
+    if (opts.trackAccess) this.touch(id);
     const record = this.rec(row);
     if (!opts.withNeighbors) return record;
     // The `neighbors` key is only present when requested: existing callers
@@ -2879,7 +2957,7 @@ export class Store {
       where.push(f.sql);
       params.push(...f.params);
     }
-    const rows = this.db.prepare(`SELECT * FROM notes WHERE ${where.join(" AND ")} ORDER BY id DESC LIMIT ${namespace === undefined ? 5000 : 500}`).all(...params) as unknown as NoteRow[];
+    const rows = this.db.prepare(`SELECT * FROM notes WHERE ${where.join(" AND ")}${this.ceilingSql()} ORDER BY id DESC LIMIT ${namespace === undefined ? 5000 : 500}`).all(...params) as unknown as NoteRow[];
     // newest kept when over the cap, handed back oldest first
     return this.filterVisible(rows.reverse().map((r) => this.rec(r)));
   }
@@ -2891,7 +2969,7 @@ export class Store {
   liveFactNotes(namespace: string, key: string, exceptId: number): NoteRecord[] {
     const pattern = `%"fact:${key.replace(/_/g, "\\_")}=%`;
     const rows = this.db
-      .prepare("SELECT * FROM notes WHERE archived_at IS NULL AND superseded_at IS NULL AND namespace = ? AND id <> ? AND tags LIKE ? ESCAPE '\\' AND tags NOT LIKE '%\"never-show\"%'")
+      .prepare(`SELECT * FROM notes WHERE archived_at IS NULL AND superseded_at IS NULL AND namespace = ? AND id <> ? AND tags LIKE ? ESCAPE '\\' AND tags NOT LIKE '%"never-show"%'${this.ceilingSql()}`)
       .all(namespace, exceptId, pattern) as unknown as NoteRow[];
     return this.filterVisible(rows.map((r) => this.rec(r)));
   }
@@ -3052,6 +3130,12 @@ export class Store {
       } catch (e) {
         throw new NoteUnreadableError(row.id, (e as Error).message);
       }
+    }
+    // A visible note that was replaced by a note the caller may not see must not name that note (id, time, writer).
+    if (r.superseded_by !== undefined && currentCeiling() !== undefined && this.idHidden(r.superseded_by)) {
+      delete r.superseded_by;
+      delete r.superseded_at;
+      delete r.superseded_by_writer;
     }
     const p = this.pendingAccess.get(r.id);
     if (p) {
@@ -3242,6 +3326,8 @@ export class Store {
         ? `WHERE archived_at IS NULL AND kind = 'note' AND namespace IN (${namespaces.map(() => "?").join(",")})`
         : "WHERE archived_at IS NULL AND kind = 'note'";
     const params: string[] = namespaces && namespaces.length > 0 ? [...namespaces] : [];
+    // Titles are note content, and a count is a fact about them: notes above the caller's sensitivity ceiling are in neither.
+    const ceil = this.ceilingSql();
     // Titles are note content: a distrusted writer's notes are never listed. The counts include them unless the
     // caller (any non-admin surface) asks for `hideDistrusted`, so a reader cannot learn that hidden notes exist.
     const dis = this.distrustFragment(NOTE_COLUMNS, namespaces && namespaces.length > 0 ? namespaces : undefined);
@@ -3252,12 +3338,12 @@ export class Store {
         `SELECT COUNT(*) AS n,
                 COALESCE(SUM(access_count), 0) AS accesses,
                 COALESCE(SUM(CASE WHEN last_accessed IS NULL THEN 1 ELSE 0 END), 0) AS never
-         FROM notes ${where}${hideSql}`
+         FROM notes ${where}${ceil}${hideSql}`
       )
       .get(...params, ...hideParams) as { n: number; accesses: number; never: number };
     const top = this.db
       .prepare(
-        `SELECT id, title, access_count FROM notes ${where}${dis.sql}
+        `SELECT id, title, access_count FROM notes ${where}${ceil}${dis.sql}
          ORDER BY access_count DESC, id ASC LIMIT 10`
       )
       .all(...params, ...dis.params) as Array<{ id: number; title: string; access_count: number }>;
@@ -3288,7 +3374,7 @@ export class Store {
     const params: string[] = namespaces && namespaces.length > 0 ? [...namespaces] : [];
     const dis = opts.hideDistrusted ? this.distrustFragment(NOTE_COLUMNS, namespaces && namespaces.length > 0 ? namespaces : undefined) : { sql: "", params: [] as string[] };
     const rows = this.db
-      .prepare(`SELECT tags, updated_at FROM notes ${where}${dis.sql}`)
+      .prepare(`SELECT tags, updated_at FROM notes ${where}${this.ceilingSql()}${dis.sql}`)
       .all(...params, ...dis.params) as Array<{ tags: string; updated_at: string }>;
     const cfg = stalenessConfig();
     let n = 0;
@@ -3343,9 +3429,10 @@ export class Store {
     const existing = this.read(id);
     if (!existing) return null;
     this.refuseAgentOnPinned(id, "changing it");
-    if (existing.superseded_by !== undefined) {
+    const newLabel = patch.sensitivity !== undefined ? this.labelForRelabel(patch.sensitivity, existing.sensitivity) : undefined;
+    if (existing.status === "superseded") {
       throw new ValidationError(
-        `note ${id} was replaced by note ${existing.superseded_by} and is only kept as a record, so it cannot be edited. ` +
+        `note ${id} was replaced by ${existing.superseded_by !== undefined ? `note ${existing.superseded_by}` : "another note"} and is only kept as a record, so it cannot be edited. ` +
           `To bring it back first, undo the replacement (supersede undo).`
       );
     }
@@ -3393,6 +3480,7 @@ export class Store {
         body: patch.body,
         tags: patch.tags,
         source: patch.source,
+        sensitivity: newLabel ?? existing.sensitivity ?? DEFAULT_SENSITIVITY,
         findings,
         writtenBy: opts.writtenBy,
       });
@@ -3525,15 +3613,17 @@ export class Store {
                             attested_by = CASE WHEN ? = 1 THEN '' ELSE attested_by END,
                             merged_from_writers = ?,
                             confidence = CASE WHEN ? = 1 THEN ? ELSE confidence END,
-                            confidence_by = CASE WHEN ? = 1 THEN ? ELSE confidence_by END
-           WHERE id = ? AND (? IS NULL OR rev = ?)`
+                            confidence_by = CASE WHEN ? = 1 THEN ? ELSE confidence_by END,
+                            sensitivity = CASE WHEN ? = 1 THEN ? ELSE sensitivity END
+           WHERE id = ? AND (? IS NULL OR rev = ?) AND sensitivity = ?${this.ceilingSql()}`
         )
         .run(
           namespace, title, sealed.body, tags, source, rev, now, sealed.bodyEnc, expiresAt, writer,
           restamp ? 1 : 0, restamp ? 1 : 0, mergedAfter,
           confidenceSet ? 1 : 0, confidenceSet && typeof patch.confidence === "number" ? patch.confidence : null,
           confidenceSet ? 1 : 0, confidenceSet && typeof patch.confidence === "number" ? writerNow(opts) : "",
-          id, want, want
+          newLabel ? 1 : 0, newLabel ?? "",
+          id, want, want, existing.sensitivity ?? DEFAULT_SENSITIVITY
         );
 
       if (Number(res.changes) === 0) {
@@ -3542,7 +3632,7 @@ export class Store {
         const current = this.read(id);
         if (!current) return null; // deleted concurrently -> not found
         throw new StaleWriteError(
-          `stale write: note ${id} is at rev ${current.rev} (you have ${opts.ifRev}); re-read and retry`
+          `stale write: note ${id} is at rev ${current.rev} (you have ${opts.ifRev ?? existing.rev}); re-read and retry`
         );
       }
 
@@ -3597,7 +3687,8 @@ export class Store {
    * whatever it replaced comes back (and is logged). Consolidation deletes its sources through deleteIfRev and is not affected.
    */
   private reviveAfterReplacementDeleted(deletedId: number): void {
-    const rows = this.db.prepare("SELECT id, namespace FROM notes WHERE superseded_by = ?").all(deletedId) as Array<{ id: number; namespace: string }>;
+    // Rows the caller may not see are left alone: reviving them would be a write to a note the caller cannot know exists.
+    const rows = this.db.prepare(`SELECT id, namespace FROM notes WHERE superseded_by = ?${this.ceilingSql()}`).all(deletedId) as Array<{ id: number; namespace: string }>;
     if (rows.length === 0) return;
     const now = new Date().toISOString();
     this.db.exec("BEGIN IMMEDIATE");
@@ -3637,7 +3728,7 @@ export class Store {
     const res = this.db
       .prepare(
         `UPDATE notes SET archived_at = ?
-         WHERE expires_at IS NOT NULL AND expires_at <= ? AND archived_at IS NULL AND pinned = 0${nsSql}`
+         WHERE expires_at IS NOT NULL AND expires_at <= ? AND archived_at IS NULL AND pinned = 0${nsSql}${this.ceilingSql()}`
       )
       .run(iso, iso, ...(namespaces ?? []));
     const n = Number(res.changes ?? 0);
@@ -3696,7 +3787,7 @@ export class Store {
     }
     const nsSql = namespaces ? ` AND namespace IN (${namespaces.map(() => "?").join(",")})` : "";
     return {
-      sql: `archived_at IS NULL AND superseded_by IS NULL AND pinned = 0 AND instr(tags, ?) = 0 AND (${kinds.join(" OR ")})${nsSql}`,
+      sql: `archived_at IS NULL AND superseded_by IS NULL AND pinned = 0 AND instr(tags, ?) = 0 AND (${kinds.join(" OR ")})${nsSql}${this.ceilingSql()}`,
       params: [JSON.stringify(PINNED_TAG), ...params, ...(namespaces ?? [])],
     };
   }
@@ -3772,7 +3863,7 @@ export class Store {
     const rows = this.db
       .prepare(
         `SELECT nf.path, MAX(n.created_at) AS at FROM note_files nf JOIN notes n ON n.id = nf.note_id
-         WHERE n.archived_at IS NULL${namespace !== undefined ? " AND n.namespace = ?" : ""} GROUP BY nf.path ORDER BY at DESC LIMIT ?`
+         WHERE n.archived_at IS NULL${namespace !== undefined ? " AND n.namespace = ?" : ""}${this.ceilingSql("n.sensitivity")} GROUP BY nf.path ORDER BY at DESC LIMIT ?`
       )
       .all(...(namespace !== undefined ? [namespace] : []), limit) as Array<{ path: string }>;
     return rows.map((r) => r.path);
@@ -3781,10 +3872,14 @@ export class Store {
   /** v16: the files each of these notes is linked to (note_files), by note id. */
   noteFiles(ids: number[]): Map<number, Array<{ path: string; action: string }>> {
     const out = new Map<number, Array<{ path: string; action: string }>>();
+    const ceil = this.ceilingSql();
     for (let i = 0; i < ids.length; i += 500) {
       const page = ids.slice(i, i + 500);
       const rows = this.db
-        .prepare(`SELECT note_id, path, action FROM note_files WHERE note_id IN (${page.map(() => "?").join(",")}) ORDER BY path, action`)
+        .prepare(
+          `SELECT note_id, path, action FROM note_files WHERE note_id IN (${page.map(() => "?").join(",")})` +
+            `${ceil ? ` AND note_id IN (SELECT id FROM notes WHERE 1 = 1${ceil})` : ""} ORDER BY path, action`
+        )
         .all(...page) as Array<{ note_id: number; path: string; action: string }>;
       for (const r of rows) {
         const l = out.get(r.note_id) ?? [];
@@ -3916,16 +4011,19 @@ export class Store {
 
   /** Earlier versions of a note, newest first (the current text is the note itself). No policy: callers gate it. */
   historyOf(noteId: number): HistoryEntry[] {
+    if (this.idHidden(noteId)) return [];
     const rows = this.db.prepare("SELECT * FROM note_history WHERE note_id = ? ORDER BY version DESC").all(noteId) as Array<Record<string, unknown>>;
     return rows.map((r) => this.historyRowToEntry(r));
   }
 
   historyCount(noteId: number): number {
+    if (this.idHidden(noteId)) return 0;
     return Number((this.db.prepare("SELECT COUNT(*) AS c FROM note_history WHERE note_id = ?").get(noteId) as { c: number }).c);
   }
 
   /** One kept version, or null. */
   historyVersion(noteId: number, version: number): HistoryEntry | null {
+    if (this.idHidden(noteId)) return null;
     const r = this.db.prepare("SELECT * FROM note_history WHERE note_id = ? AND version = ?").get(noteId, version) as Record<string, unknown> | undefined;
     return r ? this.historyRowToEntry(r) : null;
   }
@@ -3952,6 +4050,7 @@ export class Store {
 
   /** Forget every kept version of a note (the note itself is untouched). Returns how many were removed. */
   purgeHistory(noteId: number): number {
+    if (this.idHidden(noteId)) return 0;
     this.refuseAgentOnPinned(noteId, "forgetting its history");
     this.db.exec("PRAGMA secure_delete = ON");
     const n = this.transaction(() => {
@@ -4100,7 +4199,7 @@ export class Store {
       const target = this.db.prepare("SELECT id, namespace, rev, archived_at, superseded_by FROM notes WHERE id = ?").get(input.newId) as
         | { id: number; namespace: string; rev: number; archived_at: string | null; superseded_by: number | null }
         | undefined;
-      if (!target || target.archived_at !== null || target.superseded_by !== null) throw new ValidationError("the replacing note is no longer a live note; nothing was changed");
+      if (!target || target.archived_at !== null || target.superseded_by !== null || this.idHidden(input.newId)) throw new ValidationError("the replacing note is no longer a live note; nothing was changed");
       if (input.newRev !== undefined && target.rev !== input.newRev) throw new StaleWriteError("the replacing note was edited after the preview; nothing was changed");
       const upd = this.db.prepare(
         `UPDATE notes SET archived_at = ?, superseded_by = ?, superseded_at = ?, superseded_by_writer = ?, rev = rev + 1
@@ -4145,7 +4244,7 @@ export class Store {
       const row = this.db.prepare("SELECT namespace, superseded_by FROM notes WHERE id = ? AND superseded_by IS NOT NULL").get(id) as
         | { namespace: string; superseded_by: number }
         | undefined;
-      if (!row) {
+      if (!row || this.idHidden(id)) {
         this.db.exec("ROLLBACK");
         return null;
       }
@@ -4181,7 +4280,10 @@ export class Store {
 
   /** Ids of this note's close neighbours in the similarity graph (same namespace by construction). */
   neighbourIds(id: number): Set<number> {
-    const rows = this.db.prepare("SELECT neighbor_id FROM note_edges WHERE note_id = ?").all(id) as Array<{ neighbor_id: number }>;
+    const ceil = this.ceilingSql("n.sensitivity");
+    const rows = this.db
+      .prepare(`SELECT e.neighbor_id AS neighbor_id FROM note_edges e JOIN notes n ON n.id = e.neighbor_id WHERE e.note_id = ?${ceil}`)
+      .all(id) as Array<{ neighbor_id: number }>;
     return new Set(rows.map((r) => r.neighbor_id));
   }
 
@@ -4196,7 +4298,7 @@ export class Store {
       .prepare(
         `WITH s AS (SELECT DISTINCT session_id FROM notes WHERE id IN (SELECT value FROM json_each(?)) AND session_id != ''),
               o AS (SELECT id, LAG(id) OVER w AS prev, LEAD(id) OVER w AS next FROM notes
-                    WHERE session_id IN (SELECT session_id FROM s) AND archived_at IS NULL
+                    WHERE session_id IN (SELECT session_id FROM s) AND archived_at IS NULL${this.ceilingSql()}
                     WINDOW w AS (PARTITION BY session_id ORDER BY created_at, id))
          SELECT id, prev, next FROM o WHERE id IN (SELECT value FROM json_each(?))`
       )
@@ -4207,13 +4309,17 @@ export class Store {
 
   /** How many other notes are close neighbours of this one in the similarity graph (a rough "what points at it"). */
   neighbourCount(id: number): number {
-    return Number((this.db.prepare("SELECT COUNT(*) AS c FROM note_edges WHERE note_id = ?").get(id) as { c: number }).c);
+    return Number(
+      (this.db
+        .prepare(`SELECT COUNT(*) AS c FROM note_edges e JOIN notes n ON n.id = e.neighbor_id WHERE e.note_id = ?${this.ceilingSql("n.sensitivity")}`)
+        .get(id) as { c: number }).c
+    );
   }
 
   /** Live notes that name this note as a task parent / blocker (by the reserved task tags). Cheap tag scan, namespace-bound. */
   taskDependents(id: number, namespace: string): number {
     const rows = this.db
-      .prepare("SELECT COUNT(*) AS c FROM notes WHERE namespace = ? AND archived_at IS NULL AND (instr(tags, ?) > 0 OR instr(tags, ?) > 0)")
+      .prepare(`SELECT COUNT(*) AS c FROM notes WHERE namespace = ? AND archived_at IS NULL AND (instr(tags, ?) > 0 OR instr(tags, ?) > 0)${this.ceilingSql()}`)
       .get(namespace, JSON.stringify(`task.parent:${id}`), JSON.stringify(`task.blocked_by:${id}`)) as { c: number };
     return Number(rows.c);
   }
@@ -4225,12 +4331,13 @@ export class Store {
 
   /** Notes that were retired in favour of this one (labelled in listings). */
   supersededBy(id: number): number[] {
-    return (this.db.prepare("SELECT id FROM notes WHERE superseded_by = ? ORDER BY id").all(id) as Array<{ id: number }>).map((r) => r.id);
+    return (this.db.prepare(`SELECT id FROM notes WHERE superseded_by = ?${this.ceilingSql()} ORDER BY id`).all(id) as Array<{ id: number }>).map((r) => r.id);
   }
 
 
   /** Soft-archive one note (retention action from an API/client). */
   archive(id: number): NoteRecord | null {
+    if (this.idHidden(id)) return null;
     const ns = (this.db.prepare("SELECT namespace FROM notes WHERE id = ?").get(id) as { namespace: string } | undefined)?.namespace;
     this.refusePaused();
     if (ns !== undefined) refuseAgentInApproveFirst(this, ns, "forgetting a note");
@@ -4259,9 +4366,10 @@ export class Store {
     if (restoreNs !== undefined) refuseAgentInApproveFirst(this, restoreNs, "restoring a note");
     this.refuseAgentOnPinned(id, "restoring it");
     validateForgetAfter(opts.forget_after);
+    if (this.idHidden(id)) return null;
     const cur = this.db.prepare("SELECT superseded_by FROM notes WHERE id = ?").get(id) as { superseded_by: number | null } | undefined;
     if (cur && cur.superseded_by !== null) {
-      throw new ValidationError(`note ${id} was replaced by note ${cur.superseded_by}; use "supersede undo" to bring it back (a plain restore would hide that it was replaced)`);
+      throw new ValidationError(`note ${id} was replaced by ${this.idHidden(cur.superseded_by) ? "another note" : `note ${cur.superseded_by}`}; use "supersede undo" to bring it back (a plain restore would hide that it was replaced)`);
     }
     // A restored captured row counts as just read, or the next decay sweep would archive it again at once.
     this.db
@@ -4518,9 +4626,9 @@ export class Store {
   /** DELETE one note (optionally rev-guarded), keeping the edge index in step. */
   private deleteWhere(id: number, rev: number | null): boolean {
     const row = this.db
-      .prepare("SELECT namespace FROM notes WHERE id = ?")
-      .get(id) as { namespace: string } | undefined;
-    if (!row) return false;
+      .prepare("SELECT namespace, sensitivity FROM notes WHERE id = ?")
+      .get(id) as { namespace: string; sensitivity: string } | undefined;
+    if (!row || this.hiddenByCeiling(row)) return false; // a note above the caller's ceiling is "not found", never deleted
     this.refuseAgentOnPinned(id, "deleting it");
     const result = this.db
       .prepare("DELETE FROM notes WHERE id = ? AND (? IS NULL OR rev = ?)")
@@ -4789,7 +4897,7 @@ export class Store {
   /** Every note, oldest first — for backup / export / migration. */
   exportAll(opts: { live?: boolean } = {}): NoteRecord[] {
     const rows = this.db
-      .prepare(`SELECT * FROM notes${opts.live ? " WHERE archived_at IS NULL" : ""} ORDER BY id ASC`)
+      .prepare(`SELECT * FROM notes WHERE 1 = 1${opts.live ? " AND archived_at IS NULL" : ""}${this.ceilingSql()} ORDER BY id ASC`)
       .all() as unknown as NoteRow[];
     return rows.map((r) => this.rec(r));
   }
@@ -4826,7 +4934,7 @@ export class Store {
     if (ns && ns.length === 0) return [];
     const nsSql = ns ? ` AND namespace IN (${ns.map(() => "?").join(",")})` : "";
     const rows = this.db
-      .prepare(`SELECT * FROM notes WHERE id > ?${nsSql} ORDER BY id ASC LIMIT ?`)
+      .prepare(`SELECT * FROM notes WHERE id > ?${nsSql}${this.ceilingSql()} ORDER BY id ASC LIMIT ?`)
       .all(afterId, ...(ns ?? []), lim) as unknown as NoteRow[];
     const key = opts.attest ? this.signing() : null;
     const sid = key ? this.serverId() : "";
@@ -4855,7 +4963,7 @@ export class Store {
 
   /** Total notes in the store (drives the export progress/size estimate). */
   countAll(): number {
-    const r = this.db.prepare("SELECT COUNT(*) AS c FROM notes").get() as { c: number };
+    const r = this.db.prepare(`SELECT COUNT(*) AS c FROM notes WHERE 1 = 1${this.ceilingSql()}`).get() as { c: number };
     return Number(r.c);
   }
 
@@ -4997,6 +5105,8 @@ export class Store {
                   tags: note.tags,
                   source: note.source, // preserve provenance across export -> import
                   created_at: note.created_at,
+                  // The label travels with the note; none (an older export) means the default. Checked against the ceiling.
+                  ...(note.sensitivity !== undefined ? { sensitivity: note.sensitivity } : {}),
                   // A confidence value is a claim; an unusable one is dropped, it never fails the note.
                   ...(typeof note.confidence === "number" && note.confidence >= 0 && note.confidence <= 1 ? { confidence: note.confidence } : {}),
                 },
@@ -5180,7 +5290,7 @@ export class Store {
     if (!created || typeof note.title !== "string") return false;
     const ns = note.namespace?.trim() || DEFAULT_NAMESPACE;
     const rows = this.db
-      .prepare("SELECT * FROM notes WHERE namespace = ? AND created_at = ? AND title = ?")
+      .prepare(`SELECT * FROM notes WHERE namespace = ? AND created_at = ? AND title = ?${this.ceilingSql()}`)
       .all(ns, created, note.title) as unknown as NoteRow[];
     const body = note.body ?? "";
     return rows.some((r) => {
@@ -5210,7 +5320,8 @@ export class Store {
       for (let i = 0; i < ids.length; i += IMPORT_LINK_BATCH) {
         const batch = ids.slice(i, i + IMPORT_LINK_BATCH);
         this.transaction(() => {
-          const idx = this.edgeIndex(ns);
+          const idx = this.edgeIndexOrDefer(ns, batch);
+          if (!idx) return;
           for (const id of batch) {
             const tf = idx.tf.get(id);
             if (!tf) continue; // deleted (or moved) since it was imported
@@ -5348,8 +5459,10 @@ export class Store {
     // Tokenize the target once; the namespace side comes from the cached
     // edge index. Same TF construction as precomputeTfMaps, so scores are
     // bit-identical to the brute-force scan.
+    const idx = this.edgeIndexOrDefer(namespace, excludeIds);
+    if (!idx) return { pairs: [] }; // too big to index inside this write: linked later, or by rebuild-edges
     const mine = termFreq(tokenize(`${title} ${body}`));
-    return { pairs: this.scoreAgainstIndex(this.edgeIndex(namespace), mine, excludeIds, threshold) };
+    return { pairs: this.scoreAgainstIndex(idx, mine, excludeIds, threshold) };
   }
 
   /** SQLite's data_version: moves whenever ANOTHER connection commits. O(1). */
@@ -5411,6 +5524,93 @@ export class Store {
     idx.ver = ver;
     this.evictEdgeIndexes(namespace);
     return idx;
+  }
+
+  /** Live (not archived) notes in a namespace; remembered for a minute because it is asked on every write to a big one. */
+  private liveCount(namespace: string): number {
+    const c = this.edgeSizes.get(namespace);
+    const now = Date.now();
+    if (c && now - c.at < 60_000) return c.n;
+    const n = Number(
+      (this.db.prepare("SELECT COUNT(*) AS c FROM notes WHERE namespace = ? AND archived_at IS NULL").get(namespace) as { c: number }).c
+    );
+    this.edgeSizes.set(namespace, { at: now, n });
+    return n;
+  }
+
+  /**
+   * The namespace's edge index when it can be had without freezing the server: already cached, or small enough to build
+   * right now. Otherwise null, and (up to the automatic limit) a background build is started; `pending` are the notes
+   * that wanted edges meanwhile and get them when it finishes.
+   */
+  private edgeIndexOrDefer(namespace: string, pending: Iterable<number>): NsEdgeIndex | null {
+    if (this.edgeIndexes.has(namespace)) return this.edgeIndex(namespace);
+    const building = this.edgeBuilds.get(namespace);
+    if (building) {
+      for (const id of pending) building.add(id);
+      return null;
+    }
+    const { syncMax, autoMax } = edgeBuildLimits();
+    const n = this.liveCount(namespace);
+    if (n <= syncMax) return this.edgeIndex(namespace);
+    if (n > autoMax) return null;
+    this.startEdgeBuild(namespace, pending);
+    return null;
+  }
+
+  /** Tokenize a big namespace in slices of a few milliseconds, handing the event loop back between slices. */
+  private startEdgeBuild(namespace: string, pending: Iterable<number>): void {
+    const waiting = new Set<number>(pending);
+    this.edgeBuilds.set(namespace, waiting);
+    const ids = (
+      this.db.prepare("SELECT id FROM notes WHERE namespace = ? AND archived_at IS NULL ORDER BY id").all(namespace) as Array<{ id: number }>
+    ).map((r) => Number(r.id));
+    const idx: NsEdgeIndex = { ver: -1, used: Date.now(), revs: new Map(), tf: new Map(), tfNorm: new Map(), postings: new Map() };
+    const fetch = this.db.prepare("SELECT rev, title, body FROM notes WHERE id = ? AND archived_at IS NULL");
+    let i = 0;
+    const step = (): void => {
+      if (this.closed) return;
+      const { sliceMs } = edgeBuildLimits();
+      const until = performance.now() + sliceMs;
+      try {
+        while (i < ids.length && performance.now() < until) {
+          const r = fetch.get(ids[i]) as { rev: number; title: string; body: string } | undefined;
+          if (r) addToIndex(idx, ids[i], Number(r.rev), termFreq(tokenize(`${r.title} ${r.body}`)));
+          i++;
+        }
+      } catch {
+        this.edgeBuilds.delete(namespace); // e.g. the file went away; the next write tries again
+        return;
+      }
+      if (i < ids.length) {
+        const t = setTimeout(step, 0);
+        t.unref?.();
+        return;
+      }
+      // Done. ver = -1 makes the next use diff against the database, which picks up everything written during the build.
+      this.edgeIndexes.set(namespace, idx);
+      this.edgeBuilds.delete(namespace);
+      if (waiting.size) void this.linkIds(namespace, [...waiting]).catch(() => undefined);
+    };
+    const t = setTimeout(step, 0);
+    t.unref?.();
+  }
+
+  /** Give these notes their similarity links now that the namespace index exists (a few at a time, yielding between). */
+  private async linkIds(namespace: string, ids: number[]): Promise<void> {
+    const threshold = this.getEdgeThreshold();
+    for (let i = 0; i < ids.length && !this.closed; i += IMPORT_LINK_BATCH) {
+      const batch = ids.slice(i, i + IMPORT_LINK_BATCH);
+      this.transaction(() => {
+        const idx = this.edgeIndex(namespace);
+        for (const id of batch) {
+          const tf = idx.tf.get(id);
+          if (!tf) continue; // deleted or moved since
+          this.applyEdgePairs(id, this.scoreAgainstIndex(idx, tf, new Set([id]), threshold));
+        }
+      });
+      await new Promise<void>((r) => setImmediate(r));
+    }
   }
 
   /**
@@ -5583,6 +5783,7 @@ export class Store {
    */
   listNeighbors(id: number, limit = EDGE_NEIGHBOR_LIMIT, includeDistrusted = false): NeighborEntry[] {
     // A neighbor is in the same namespace as the note, so only that namespace's rules matter.
+    if (this.idHidden(id)) return [];
     const ns = (this.db.prepare("SELECT namespace FROM notes WHERE id = ?").get(id) as { namespace: string } | undefined)?.namespace;
     const dis = includeDistrusted || ns === undefined
       ? { sql: "", params: [] as string[] }
@@ -5597,7 +5798,7 @@ export class Store {
          JOIN notes n ON n.id = e.neighbor_id
          WHERE e.note_id = ?
            AND n.archived_at IS NULL
-           AND n.namespace = (SELECT namespace FROM notes WHERE id = ?)${dis.sql}
+           AND n.namespace = (SELECT namespace FROM notes WHERE id = ?)${this.ceilingSql("n.sensitivity")}${dis.sql}
          ORDER BY e.score DESC, e.neighbor_id ASC
          LIMIT ?`
       )
@@ -5610,6 +5811,25 @@ export class Store {
   }
 
   /** Directed edge rows in the similarity graph (doctor's health check). */
+  /**
+   * Operator-level (doctor): are there notes that WOULD be linked but are not? Looks at the newest few notes only. A store of
+   * unrelated notes has no edges and nothing missing; one written before the graph existed has similar notes and none linked.
+   */
+  hasMissingEdges(sample = 30): boolean {
+    if (this.edgeCount() > 0) return false;
+    const rows = this.db.prepare("SELECT namespace, title, body FROM notes WHERE archived_at IS NULL ORDER BY id DESC LIMIT ?").all(sample) as Array<{ namespace: string; title: string; body: string }>;
+    const sets = rows.map((r) => ({ ns: r.namespace, w: new Set(`${r.title} ${r.body}`.toLowerCase().match(/[a-z0-9]{4,}/g) ?? []) }));
+    for (let a = 0; a < sets.length; a++) {
+      for (let b = a + 1; b < sets.length; b++) {
+        if (sets[a].ns !== sets[b].ns || sets[a].w.size === 0 || sets[b].w.size === 0) continue;
+        let shared = 0;
+        for (const x of sets[a].w) if (sets[b].w.has(x)) shared++;
+        if (shared / (sets[a].w.size + sets[b].w.size - shared) >= 0.5) return true; // clearly similar notes, none linked
+      }
+    }
+    return false;
+  }
+
   edgeCount(): number {
     return Number(
       (this.db.prepare("SELECT COUNT(*) AS c FROM note_edges").get() as { c: number }).c
@@ -5670,11 +5890,11 @@ export class Store {
       ns
         ? this.db
             .prepare(
-              "SELECT namespace, COUNT(*) AS n FROM notes WHERE namespace = ? AND archived_at IS NULL GROUP BY namespace"
+              `SELECT namespace, COUNT(*) AS n FROM notes WHERE namespace = ? AND archived_at IS NULL${this.ceilingSql()} GROUP BY namespace`
             )
             .all(ns)
         : this.db
-            .prepare("SELECT namespace, COUNT(*) AS n FROM notes WHERE archived_at IS NULL GROUP BY namespace")
+            .prepare(`SELECT namespace, COUNT(*) AS n FROM notes WHERE archived_at IS NULL${this.ceilingSql()} GROUP BY namespace`)
             .all()
     ) as Array<{ namespace: string; n: number }>;
     return rows
@@ -6276,6 +6496,8 @@ export class Store {
     const dis = opts.includeDistrusted
       ? { sql: "", params: [] as string[] }
       : distrustSql(rules, this.serverId(), { ns: "e.namespace", ...cur }, opts.namespaces);
+    // A change to a note above the caller's ceiling is not in its feed (a deleted note answers with the label it had).
+    const ceilFeed = this.ceilingSql("COALESCE(n.sensitivity, e.note_sensitivity)");
     const eventsSql = `
       WITH ev AS (SELECT seq, note_id, kind FROM change_log
                    WHERE seq > ? AND seq <= ?${nsSql}${srcSql}${wbSql}${exSql}),
@@ -6289,7 +6511,7 @@ export class Store {
              ${cur.attWriter} AS cur_att_writer, ${cur.attBy} AS cur_att_by, ${cur.merged} AS cur_merged
         FROM g JOIN change_log e ON e.seq = g.last
         LEFT JOIN notes n ON n.id = e.note_id
-       WHERE 1 = 1${noteSql}${dis.sql}`;
+       WHERE 1 = 1${noteSql}${dis.sql}${ceilFeed}`;
     const eventParams = [c.f, c.t, ...nsParams, ...srcParams, ...wbParams, ...exParams, ...noteParams, ...dis.params];
 
     const tail = opts.tail !== undefined ? clampInt(opts.tail, 30, 1, CHANGES_MAX_LIMIT) : 0;
@@ -6367,7 +6589,7 @@ export class Store {
       (
         this.db
           .prepare(
-            `SELECT COUNT(*) AS c FROM quarantine WHERE created_at >= ? AND created_at < ?${nsSql}${srcSql}`
+            `SELECT COUNT(*) AS c FROM quarantine WHERE created_at >= ? AND created_at < ?${nsSql}${srcSql}${this.ceilingSql()}`
           )
           .get(c.s, c.u, ...nsParams, ...srcParams) as { c: number }
       ).c
@@ -6545,8 +6767,8 @@ export class Store {
     if (!d.sql) return 0;
     const nsSql = namespace === ALL_NAMESPACES ? "" : " AND notes.namespace = ?";
     const nsParams = namespace === ALL_NAMESPACES ? [] : [namespace];
-    const all = Number((this.db.prepare(`SELECT COUNT(*) AS c FROM notes WHERE 1 = 1${nsSql}`).get(...nsParams) as { c: number }).c);
-    const visible = Number((this.db.prepare(`SELECT COUNT(*) AS c FROM notes WHERE 1 = 1${nsSql}${d.sql}`).get(...nsParams, ...d.params) as { c: number }).c);
+    const all = Number((this.db.prepare(`SELECT COUNT(*) AS c FROM notes WHERE 1 = 1${nsSql}${this.ceilingSql("notes.sensitivity")}`).get(...nsParams) as { c: number }).c);
+    const visible = Number((this.db.prepare(`SELECT COUNT(*) AS c FROM notes WHERE 1 = 1${nsSql}${d.sql}${this.ceilingSql("notes.sensitivity")}`).get(...nsParams, ...d.params) as { c: number }).c);
     return all - visible;
   }
 
@@ -6627,9 +6849,85 @@ export class Store {
     return distrustSql(this.distrustRules(), this.serverId(), cols, namespaces);
   }
 
-  /** rangeClause + the distrust exclusion, unless the caller opted in. */
+  // --- Sensitivity labels (v17) ----------------------------------------------------------------------------------------
+  // The caller's ceiling rides on the actor context (src/actor.ts), so every query below applies it itself. No ceiling
+  // (the operator, stdio, the CLI, a token without one) = no filter and the SQL is byte-identical to before.
+
+  /** " AND <col> IN ('public','internal')": hides notes above the caller's ceiling; "" when it has none. Fail closed: NULL and unknown labels never match. */
+  private ceilingSql(col = "sensitivity"): string {
+    const max = currentCeiling();
+    if (max === undefined) return "";
+    const levels = levelsAtOrBelow(max);
+    return levels.length ? ` AND ${col} IN (${levels.map((l) => `'${l}'`).join(",")})` : " AND 0";
+  }
+
+  /** Operator-level (no ceiling): how many notes carry a label other than "internal". Used only for start-up and sync warnings. */
+  labelledAboveDefault(): number {
+    return Number((this.db.prepare("SELECT COUNT(*) AS c FROM notes WHERE sensitivity <> ?").get(DEFAULT_SENSITIVITY) as { c: number }).c);
+  }
+
+  /** Operator-level: is there any note labelled private? */
+  hasPrivateNotes(): boolean {
+    return !!this.db.prepare("SELECT 1 FROM notes WHERE sensitivity = 'private' LIMIT 1").get();
+  }
+
+  /** True when this row is above the caller's ceiling (and so must read as "not found"). */
+  private hiddenByCeiling(row: { sensitivity?: string | null }): boolean {
+    return !sensitivityVisible(row.sensitivity ?? DEFAULT_SENSITIVITY, currentCeiling());
+  }
+
+  /** True when note `id` exists but is above the caller's ceiling (for callers that hold a bare id from a side table, e.g. a session's summary). */
+  hiddenFromCaller(id: number): boolean {
+    if (currentCeiling() === undefined) return false;
+    const row = this.db.prepare("SELECT sensitivity FROM notes WHERE id = ?").get(id) as { sensitivity: string } | undefined;
+    return !!row && this.hiddenByCeiling(row);
+  }
+
+  /** By-id guard for the write/move paths that touch a row without reading it first: true when the caller may not see note `id`. */
+  private idHidden(id: number): boolean {
+    if (currentCeiling() === undefined) return false;
+    const row = this.db.prepare("SELECT sensitivity FROM notes WHERE id = ?").get(id) as { sensitivity: string } | undefined;
+    return !row || this.hiddenByCeiling(row);
+  }
+
+  /** The label a new note gets: the one asked for (checked against the ceiling), else "internal" -- or the ceiling itself when that is lower. */
+  private labelForNew(raw: unknown): Sensitivity {
+    const max = currentCeiling();
+    if (raw === undefined || raw === null) {
+      if (max === undefined) return DEFAULT_SENSITIVITY;
+      const levels = levelsAtOrBelow(max);
+      if (levels.length === 0) throw new ValidationError("this token's sensitivity ceiling is not a valid label, so it cannot write");
+      return levels.includes(DEFAULT_SENSITIVITY) ? DEFAULT_SENSITIVITY : levels[levels.length - 1];
+    }
+    const label = parseSensitivity(raw);
+    if (!label) throw new ValidationError(`sensitivity must be ${SENSITIVITY_HELP}`);
+    if (!sensitivityVisible(label, max)) {
+      throw new ValidationError(`this token cannot write a "${label}" note: its sensitivity ceiling is "${String(max)}"`);
+    }
+    return label;
+  }
+
+  /** A relabel of an existing note: undefined when nothing changes; otherwise the new label, after the ceiling and declassify checks. */
+  private labelForRelabel(raw: unknown, current: string | undefined): Sensitivity | undefined {
+    const label = parseSensitivity(raw);
+    if (!label) throw new ValidationError(`sensitivity must be ${SENSITIVITY_HELP}`);
+    const max = currentCeiling();
+    if (!sensitivityVisible(label, max)) {
+      throw new ValidationError(`this token cannot label a note "${label}": its sensitivity ceiling is "${String(max)}"`);
+    }
+    const now = current ?? DEFAULT_SENSITIVITY;
+    if (label === now) return undefined;
+    if (sensitivityRank(label) < sensitivityRank(now) && actorStore.getStore()?.canDeclassify === false) {
+      throw new ValidationError("lowering a note's sensitivity label needs an admin token (raising it does not)");
+    }
+    return label;
+  }
+
+  /** rangeClause + the distrust exclusion (unless the caller opted in) + the sensitivity ceiling (always). */
   private rangeFor(opts: RangeOpts, namespaces?: readonly string[]): { sql: string; params: string[] } {
-    const r = rangeClause(opts, this.serverId());
+    const base = rangeClause(opts, this.serverId());
+    const ceil = this.ceilingSql();
+    const r = ceil ? { sql: base.sql + ceil, params: base.params } : base;
     if (opts.includeDistrusted) return r;
     const d = this.distrustFragment(NOTE_COLUMNS, namespaces);
     return d.sql ? { sql: r.sql + d.sql, params: [...r.params, ...d.params] } : r;
@@ -7181,7 +7479,9 @@ export class Store {
   /** Audit line, except from an in-memory store with no MONOMEM_AUDIT_LOG: that must never touch the owner's real log. */
   private audit(entry: Parameters<typeof audit>[0]): void {
     if (this.dbPath === ":memory:" && !process.env.MONOMEM_AUDIT_LOG) return;
-    audit(entry);
+    // Name the key that made the change (a label, never the key itself) so `monomem audit` can say who did what.
+    const who = actorStore.getStore()?.label;
+    audit(entry.label === undefined && who ? { ...entry, label: who } : entry);
   }
 
   // --- Approve-first namespaces ---------------------------------------------
@@ -7254,7 +7554,7 @@ export class Store {
   pinnedNotes(namespaces?: string[]): Array<{ id: number; namespace: string; title: string }> {
     if (namespaces && namespaces.length === 0) return [];
     const where = namespaces ? ` AND namespace IN (${namespaces.map(() => "?").join(",")})` : "";
-    return this.db.prepare(`SELECT id, namespace, title FROM notes WHERE pinned = 1${where} ORDER BY id`).all(...(namespaces ?? [])) as unknown as Array<{
+    return this.db.prepare(`SELECT id, namespace, title FROM notes WHERE pinned = 1${where}${this.ceilingSql()} ORDER BY id`).all(...(namespaces ?? [])) as unknown as Array<{
       id: number;
       namespace: string;
       title: string;
@@ -7276,7 +7576,7 @@ export class Store {
       .prepare(
         `SELECT id FROM notes WHERE ((${c.sql} AND created_at >= ?) OR (${w.sql} AND updated_at >= ?)
            OR id IN (SELECT h.note_id FROM note_history h WHERE ${h.sql} AND h.saved_at >= ?)
-           OR id IN (SELECT d.note_id FROM note_history_dropped d WHERE ${d.sql} AND d.last_at >= ?))${nsSql}
+           OR id IN (SELECT d.note_id FROM note_history_dropped d WHERE ${d.sql} AND d.last_at >= ?))${nsSql}${this.ceilingSql()}
          ORDER BY id`
       )
       .all(...c.params, sinceIso, ...w.params, sinceIso, ...h.params, sinceIso, ...d.params, sinceIso, ...(namespaces ?? [])) as Array<{ id: number }>;
@@ -7305,6 +7605,8 @@ export class Store {
     createdAt?: string;
     /** op=update: the original patch moved the note to `namespace`. */
     setNamespace?: boolean;
+    /** The label the held write carries (create: the new note's; update: the note's label after the write). */
+    sensitivity?: string;
     findings: LintFinding[];
     /** Internal override of the stamped writer (default: the current writer). */
     writtenBy?: string;
@@ -7323,8 +7625,8 @@ export class Store {
       const res = this.db
         .prepare(
           `INSERT INTO quarantine (op, target_id, if_rev, namespace, title, body, tags, source,
-                                   created_at_override, reasons, created_at, set_namespace, sealed, written_by)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                                   created_at_override, reasons, created_at, set_namespace, sealed, written_by, sensitivity)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           q.op,
@@ -7340,7 +7642,8 @@ export class Store {
           new Date().toISOString(),
           q.setNamespace ? 1 : 0,
           key ? 1 : 0,
-          q.writtenBy !== undefined ? cleanWriter(q.writtenBy) : currentWriter()
+          q.writtenBy !== undefined ? cleanWriter(q.writtenBy) : currentWriter(),
+          q.sensitivity ?? DEFAULT_SENSITIVITY
         );
       id = Number(res.lastInsertRowid);
       if (!nested) this.db.exec("COMMIT");
@@ -7392,9 +7695,9 @@ export class Store {
   listQuarantine(opts: { namespaces?: string[]; limit?: number } = {}): QuarantineEntry[] {
     if (opts.namespaces && opts.namespaces.length === 0) return [];
     const limit = clampInt(opts.limit, 50, 1, 500);
-    const where = opts.namespaces
-      ? `WHERE namespace IN (${opts.namespaces.map(() => "?").join(",")})`
-      : "";
+    const where = `WHERE 1 = 1${
+      opts.namespaces ? ` AND namespace IN (${opts.namespaces.map(() => "?").join(",")})` : ""
+    }${this.ceilingSql()}`;
     const rows = this.db
       .prepare(`SELECT * FROM quarantine ${where} ORDER BY id ASC LIMIT ?`)
       .all(...(opts.namespaces ?? []), limit) as Array<Record<string, unknown>>;
@@ -7405,7 +7708,8 @@ export class Store {
     const row = this.db.prepare("SELECT * FROM quarantine WHERE id = ?").get(id) as
       | Record<string, unknown>
       | undefined;
-    return row ? this.quarantineRow(row) : null;
+    // A held write above the caller's ceiling does not exist as far as it can tell.
+    return row && !this.hiddenByCeiling(row as { sensitivity?: string | null }) ? this.quarantineRow(row) : null;
   }
 
   /**
@@ -7424,8 +7728,8 @@ export class Store {
     let note: NoteRecord;
     if (q.op === "create") {
       const row = this.db
-        .prepare("SELECT created_at_override, written_by FROM quarantine WHERE id = ?")
-        .get(id) as { created_at_override: string | null; written_by: string | null };
+        .prepare("SELECT created_at_override, written_by, sensitivity FROM quarantine WHERE id = ?")
+        .get(id) as { created_at_override: string | null; written_by: string | null; sensitivity: string };
       note = this.transaction(() => {
         const n = this.create(
           {
@@ -7435,6 +7739,7 @@ export class Store {
             tags: q.tags ?? undefined,
             source: q.source ?? undefined,
             created_at: row.created_at_override ?? undefined,
+            sensitivity: row.sensitivity,
           },
           { lint: "none", writtenBy: row.written_by ?? "" }
         );
@@ -7443,8 +7748,8 @@ export class Store {
       });
     } else {
       const held = this.db
-        .prepare("SELECT if_rev, set_namespace, written_by FROM quarantine WHERE id = ?")
-        .get(id) as { if_rev: number | null; set_namespace: number; written_by: string | null };
+        .prepare("SELECT if_rev, set_namespace, written_by, sensitivity FROM quarantine WHERE id = ?")
+        .get(id) as { if_rev: number | null; set_namespace: number; written_by: string | null; sensitivity: string };
       const ifRev = held.if_rev;
       // Rows from before 1.1.0 may lack the rev the update was based on;
       // applying them unguarded could overwrite later edits.
@@ -7463,6 +7768,9 @@ export class Store {
           ...(q.body !== null ? { body: q.body } : {}),
           ...(q.tags !== null ? { tags: q.tags } : {}),
           ...(q.source !== null ? { source: q.source } : {}),
+          // The rev pin above means the note is exactly as it was when the write was held, so re-applying its label is a no-op
+          // unless the write itself relabelled the note.
+          sensitivity: held.sensitivity,
         },
         { ifRev, lint: "none", writtenBy: held.written_by ?? "" }
       );
@@ -7581,6 +7889,7 @@ export class Store {
   }
 
   close(): void {
+    this.closed = true;
     if (this.accessTimer) clearTimeout(this.accessTimer);
     this.accessTimer = null;
     this.flushAccess();

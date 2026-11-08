@@ -81,6 +81,7 @@ import {
 } from "./store.js";
 import { parseWriterRef } from "./trust.js";
 import { maybeEmbed } from "./search-service.js";
+import { type Sensitivity, DEFAULT_SENSITIVITY, parseSensitivity, sensitivityVisible, SENSITIVITY_HELP } from "./sensitivity.js";
 
 
 /** The approval tag family is store-keyed: a file can neither carry nor mint one. */
@@ -274,6 +275,8 @@ export function renderNoteFile(
   const lines = KEYS.map((k) => `${k}: ${JSON.stringify(fm[k])}`);
   // Written only for a note the trust policy hides from agents (export --include-distrusted).
   if (extra.distrusted) lines.push("distrusted: true");
+  // v17: only a labelled note (anything but the default "internal") carries a label, so other files are byte-identical to before.
+  if (note.sensitivity) lines.push(`sensitivity: ${JSON.stringify(note.sensitivity)}`);
   // v16: only a captured row carries these, so an ordinary note's file is byte-identical to before.
   if (note.kind && note.kind !== "note") {
     lines.push(`kind: ${JSON.stringify(note.kind)}`, `session_id: ${JSON.stringify(note.session_id ?? "")}`);
@@ -413,9 +416,17 @@ export interface ExportResult {
 export function exportMarkdown(
   store: Store,
   dir: string,
-  opts: { namespace?: string; prune?: boolean; force?: boolean; includeDistrusted?: boolean } = {}
+  opts: { namespace?: string; prune?: boolean; force?: boolean; includeDistrusted?: boolean; maxSensitivity?: Sensitivity } = {}
 ): ExportResult {
   const self = store.storeId();
+  // A vault is a plain folder (often a git repo or a synced drive) that nothing in Monomem guards. A ceiling here keeps the
+  // labelled notes out of it: the option, else MONOMEM_EXPORT_MAX_SENSITIVITY. A value that is not a label stops the export
+  // (fail closed) instead of exporting everything.
+  const envCeiling = (process.env.MONOMEM_EXPORT_MAX_SENSITIVITY ?? "").trim();
+  const ceiling: Sensitivity | undefined = opts.maxSensitivity ?? (envCeiling ? (parseSensitivity(envCeiling) ?? undefined) : undefined);
+  if (opts.maxSensitivity === undefined && envCeiling && !ceiling) {
+    throw new Error(`MONOMEM_EXPORT_MAX_SENSITIVITY must be ${SENSITIVITY_HELP} (got ${JSON.stringify(envCeiling)}); nothing was exported`);
+  }
   const origins = store.syncOrigins();
   mkdirSync(dir, { recursive: true });
   const everything = store.exportAll().filter((n) => !opts.namespace || n.namespace === opts.namespace); // gate-ok: the vault export skips hidden notes itself (hiddenIds) unless --include-distrusted
@@ -424,9 +435,11 @@ export function exportMarkdown(
   // and then each such file is marked `distrusted: true`.
   // An archived note was forgotten (often by an agent's state_delete): it is not written to the vault,
   // and its earlier unedited file is pruned like a hidden note's, so "forget" also leaves the folder.
-  const notes = (opts.includeDistrusted ? everything : store.filterVisible(everything)).filter((n) => !n.archived_at);
+  const trustVisible = opts.includeDistrusted ? everything : store.filterVisible(everything);
+  const notes = (ceiling ? trustVisible.filter((n) => sensitivityVisible(n.sensitivity ?? DEFAULT_SENSITIVITY, ceiling)) : trustVisible).filter((n) => !n.archived_at);
   // A Set of the visible ids: `notes.includes(n)` per note made this quadratic in the number of hidden notes.
   const visibleIds = new Set<number>(notes.map((n) => n.id));
+  // (A note above the export ceiling is hidden the same way: it is not written, and an earlier unedited file of it is pruned.)
   const hiddenIds = new Set<number>(everything.filter((n) => !visibleIds.has(n.id)).map((n) => n.id));
   const marked = new Set<number>(opts.includeDistrusted ? store.markDistrusted(everything).filter((n) => n.distrusted).map((n) => n.id) : []);
   const keep = new Set<string>();
@@ -673,6 +686,8 @@ export async function importMarkdown(
           tags: importTags(content.tags),
           source: typeof fm.source === "string" ? fm.source : undefined,
           created_at: typeof fm.created_at === "string" ? fm.created_at : undefined,
+          // A labelled note keeps its label when a file brings it back; no label in the file = the default.
+          ...(fm.sensitivity !== undefined ? { sensitivity: String(fm.sensitivity) } : {}),
         },
         {
           updatedAt: typeof fm.updated_at === "string" ? fm.updated_at : undefined,

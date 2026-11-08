@@ -278,8 +278,25 @@ export function hasHighEntropyToken(text: string): boolean {
 
 export const HIGH_ENTROPY_LABEL = "high-entropy token";
 
+// A password or key written as plain words ("password: hunter2xyz", "api key = abc123def"). Every repetition is bounded.
+// Placeholders ("<your password>", "xxxx", "$PASSWORD", "example") do not count; "changeme" does (it is a real, weak password).
+export const SECRET_ASSIGN_LABEL = "password or key written as plain text";
+export function secretAssignments(text: string, max = 20): Array<{ label: string; index: number; length: number }> {
+  const re =
+    /(?<![A-Za-z0-9])(password|passwd|pwd|passcode|secret|api[ _-]?key|apikey|pin)\b["'`]?[ \t]{0,4}[:=][ \t]{0,4}["'`]?(?![^\s"'`<>]{0,120}?(?:xxx|\*\*\*|example|placeholder|your[_-]?|redacted|\$\{?[A-Za-z_]|\.\.\.))([^\s"'`<>$]{6,120})([^\n]{0,200})/gi;
+  const out: Array<{ label: string; index: number; length: number }> = [];
+  let m: RegExpExecArray | null;
+  while (out.length < max && (m = re.exec(text)) !== null) {
+    // A value of plain letters is probably a sentence ("password: required for login"); keep it only when it ends the line.
+    if (/^[A-Za-z]+$/.test(m[2]) && m[3].trim() !== "") continue;
+    out.push({ label: m[1].toLowerCase(), index: m.index, length: m[0].length - m[3].length });
+  }
+  return out;
+}
+
 /** Label of a known-prefix secret in normalized text, or null. */
 function knownSecret(t: string): string | null {
+  if (secretAssignments(t, 1).length) return SECRET_ASSIGN_LABEL;
   for (const [label, re] of SECRET_PATTERNS) if (re.test(t)) return label;
   if (hasOpenAiAnthropicKey(t)) return "OpenAI/Anthropic key";
   if (hasJwt(t)) return "JWT";
@@ -325,6 +342,43 @@ export function originAllowed(req: IncomingMessage): boolean {
   // through. A real browser hitting the tunnel must be allowlisted explicitly.
   if (isLoopback(host)) return true;
   return allowed.includes(origin);
+}
+
+// ---- Host check (DNS-rebinding defense, second layer) ------------------------
+// A rebinding attack makes the victim's browser reach this server under the ATTACKER's hostname, so the Host header names
+// a host that is not ours. Allowed without any setting: localhost, an IP address (a rebinding attack needs a name), and a
+// request that came through a proxy or tunnel (it carries forwarding headers; Docker and tunnels keep working).
+// Everything else is refused unless listed in MONOMEM_ALLOWED_HOSTS (comma-separated host names, ports ignored). When that
+// variable is set the check is strict: only loopback names and the listed hosts pass, forwarding headers or not.
+const FORWARD_HEADERS = ["x-forwarded-for", "x-forwarded-host", "forwarded", "cf-connecting-ip", "x-real-ip", "cf-ray"];
+
+export function allowedHostList(): string[] {
+  return (process.env.MONOMEM_ALLOWED_HOSTS || "")
+    .split(",")
+    .map((h) => h.trim().toLowerCase().replace(/:\d+$/, ""))
+    .filter(Boolean);
+}
+
+/** The 403 body for a refused Host: says exactly what to set. */
+export function hostRefusal(req: IncomingMessage): { error: string; hint: string } {
+  const name = String(req.headers["host"] ?? "").replace(/:\d+$/, "");
+  return {
+    error: "host not allowed",
+    hint: `This server was reached as "${name}", a name it does not expect. If that name is yours (a tunnel or a domain), restart the server with MONOMEM_ALLOWED_HOSTS=${name} (comma-separate several). Only if a proxy you control is the sole way in, MONOMEM_TRUST_PROXY=1 also works.`,
+  };
+}
+
+export function hostAllowed(req: IncomingMessage): boolean {
+  const raw = req.headers["host"];
+  if (!raw || Array.isArray(raw)) return true; // HTTP/1.0 client with no Host
+  const h = raw.toLowerCase();
+  const name = (h.startsWith("[") ? h.slice(1, h.indexOf("]")) : h.replace(/:\d+$/, "")).trim();
+  if (name === "localhost" || name.endsWith(".localhost") || isLoopback(name)) return true;
+  const listed = allowedHostList();
+  if (listed.includes(name) || listed.includes("*")) return true;
+  if (listed.length > 0) return false; // strict once the operator has listed hosts
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(name) || name.includes(":")) return true; // an IP address
+  return process.env.MONOMEM_TRUST_PROXY === "1" && FORWARD_HEADERS.some((k) => req.headers[k] !== undefined);
 }
 
 // ---- Rate limiter: fixed window per client key ------------------------------

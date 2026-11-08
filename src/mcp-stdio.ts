@@ -11,6 +11,7 @@ import { DB_PATH, prepareDataDir } from "./config.js";
 import { resolveStartupNamespace } from "./namespace.js";
 import { setProcessWriter, stdioWriter } from "./actor.js";
 import { audit, printable } from "./security.js";
+import { parseSensitivity, SENSITIVITY_HELP } from "./sensitivity.js";
 
 prepareDataDir();
 // No token on stdio: writes are stamped with the marker "stdio", or "stdio:<app>" when the launch config sets
@@ -34,7 +35,16 @@ setInterval(sweepExpired, 3_600_000).unref();
 // process working directory. Null when unconfigured (legacy behavior).
 const nsOpts = resolveStartupNamespace(process.cwd());
 // local: admin with no token was never a deliberate grant, so operator-only tools stay off for the agent.
-const server = createMcpServer(store, "admin", nsOpts ?? undefined, { local: true });
+// Stdio has no token, so it has no token ceiling: whoever starts this process reads everything. MONOMEM_STDIO_MAX_SENSITIVITY
+// (public / internal / private) caps it anyway for setups that must use stdio. An app that must be kept away from private
+// notes should use the HTTP server with its own token instead (docs/give-an-app-limited-access.md).
+const stdioCeiling = (process.env.MONOMEM_STDIO_MAX_SENSITIVITY ?? "").trim();
+const stdioMax = stdioCeiling ? parseSensitivity(stdioCeiling) : undefined;
+if (stdioCeiling && !stdioMax) {
+  console.error(`[monomem] MONOMEM_STDIO_MAX_SENSITIVITY must be ${SENSITIVITY_HELP} (got ${JSON.stringify(stdioCeiling)}); not starting.`);
+  process.exit(1);
+}
+const server = createMcpServer(store, "admin", nsOpts ?? undefined, stdioMax ? { label: "stdio", authed: true, maxSensitivity: stdioMax, local: true } : { local: true });
 const transport = new StdioServerTransport();
 // The client's own name from the initialize handshake goes to the audit log, labelled as a claim: any program can
 // send any clientInfo. It is never used for written_by or for any access decision.

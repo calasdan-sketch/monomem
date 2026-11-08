@@ -8,7 +8,7 @@
 // Format: `Authorization: Bearer <token>`.
 
 import { createServer, ServerResponse, Server, type IncomingMessage } from "node:http";
-import { actorStore } from "./actor.js";
+import { actorStore, currentCeiling } from "./actor.js";
 import {
   Store,
   NoteInput,
@@ -33,8 +33,8 @@ import {
   DEFAULT_NAMESPACE,
 } from "./store.js";
 import { truthyParam } from "./trust.js";
-import { originAllowed, RateLimiter, AuthTarpit, clientKey, tokenKey, authenticateEntry, scopeAllows, LIMITS, audit, printable } from "./security.js";
-import { type Scope, type TokenEntry, TIME_ZONE, PROJECT_ROOT } from "./config.js";
+import { originAllowed, hostAllowed, hostRefusal, RateLimiter, AuthTarpit, clientKey, tokenKey, authenticateEntry, scopeAllows, LIMITS, audit, printable } from "./security.js";
+import { type Scope, type TokenEntry, TIME_ZONE, PROJECT_ROOT, DATA_DIR, resolveToken } from "./config.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -61,7 +61,7 @@ function signAsset(file: string): string | null {
   return signCache.get(file) ?? null;
 }
 import { runnerStatus } from "./liveness.js";
-import { PayloadTooLargeError, readBody, normalizeTokens, IMPORT_BODY_BYTES } from "./http-common.js";
+import { PayloadTooLargeError, readBody, normalizeTokens, IMPORT_BODY_BYTES, applyServerLimits } from "./http-common.js";
 
 /**
  * Import size above which the similarity-graph rebuild is DEFERRED rather
@@ -73,6 +73,8 @@ import { PayloadTooLargeError, readBody, normalizeTokens, IMPORT_BODY_BYTES } fr
  */
 const IMPORT_EDGE_DEFER_THRESHOLD = 200;
 import { DASHBOARD_HTML, DASHBOARD_JS, FAVICON_PNG } from "./dashboard.js";
+import { insights, buildDigest, renderDigest } from "./digest.js";
+import { readAudit, parseWindow } from "./audit-view.js";
 import { runSearch, runSearchExplained, parseMode, maybeEmbed, runRelevantSearch, roundRobin, type ExplainedHit } from "./search-service.js";
 import {
   type ServerNamespaceOpts,
@@ -100,6 +102,24 @@ import {
 import { ackChanges, resolveSince } from "./changes.js";
 import { qualityReport } from "./quality.js";
 import { rollbackPreview, rollbackConfirm, embedRestored } from "./rollback.js";
+import { redeemLoginCode } from "./login-code.js";
+
+// The quality and health scans read every note. The dashboard asks on every load, so answers are reused for a minute
+// (and a second request that arrives while one is running shares it).
+// MONOMEM_SCAN_CACHE_SECONDS changes the minute (0 = never reuse).
+const scanCache = new Map<string, { at: number; value: Promise<unknown> }>();
+function cachedFor<T>(store: Store, key: string, fn: () => Promise<T>): Promise<T> {
+  const ttl = Math.max(0, Number(process.env.MONOMEM_SCAN_CACHE_SECONDS ?? "60") || 0) * 1000;
+  const k = `${(store as unknown as { __scanId?: number }).__scanId ??= ++scanIds}:${key}`;
+  const hit = scanCache.get(k);
+  if (ttl > 0 && hit && Date.now() - hit.at < ttl) return hit.value as Promise<T>;
+  const value = fn();
+  scanCache.set(k, { at: Date.now(), value });
+  value.catch(() => scanCache.delete(k));
+  if (scanCache.size > 50) scanCache.clear();
+  return value;
+}
+let scanIds = 0;
 import { SupersedeError, supersedePreview, supersedeConfirm, supersedeUndo, noteHistory, restoreVersion, purgeNoteHistory, type Caller } from "./supersede.js";
 import { withFacts, factFeedback } from "./facts.js";
 import { assertPlainWriteTags, assertReviewedTag } from "./reserved-tags.js";
@@ -109,6 +129,10 @@ import { memoryIndex, memoryTimeline, memoryGet, sessionList, sessionGet, fileTi
 import { HOOK_EVENTS, type HookEvent, isOwnTool, recordEvent, cleanField } from "./capture.js";
 import { distillSession } from "./extract.js";
 import { meterStats } from "./meter.js";
+import { TokenAdminError, addApp, removeApp, listApps, describeAccess, connectionSnippet } from "./tokens-admin.js";
+
+/** When each app (by label) last made a request, since the server started. Shown in the dashboard's Apps panel. */
+const lastUsed = new Map<string, string>();
 
 // Minimum scope a request needs: deletes, imports and full /export are admin,
 // creates/updates are write, everything else (read/search/list) is read.
@@ -129,6 +153,8 @@ function requiredScope(method: string | undefined, path: string): Scope {
   if (method === "POST" && path === "/ack") return "read";
   // Approving a command task is the human gate in front of the runner.
   if (method === "POST" && /^\/tasks\/\d+\/approve$/.test(path)) return "admin";
+  // The list of apps that may connect (and their ceilings) is admin-only, reads included.
+  if (path === "/tokens" || path.startsWith("/tokens/")) return "admin";
   // /rebuild-edges rewrites the similarity graph: admin-only, like delete.
   if (method === "POST" && path === "/rebuild-edges") return "admin";
   // Retention: archiving hides a note from every read surface (a soft
@@ -137,6 +163,7 @@ function requiredScope(method: string | undefined, path: string): Scope {
   if (method === "POST" && /^\/notes\/\d+\/(archive|restore)$/.test(path)) return "admin";
   if (method === "POST" && path === "/sweep-expired") return "admin";
   // The quality view lists titles from every writer, and approving a held write is the linter's human gate.
+  if (path === "/audit" || path === "/insights") return "admin";
   if (path === "/quality" || path === "/quarantine" || /^\/quarantine\/\d+\/(approve|reject)$/.test(path)) return "admin";
   // Approve-first is the switch in front of an agent's own writes: reading or flipping it is admin, like the queue itself.
   if (path === "/approve-first") return "admin";
@@ -155,8 +182,8 @@ function requiredScope(method: string | undefined, path: string): Scope {
 // a generic 500 so SQL/internal details never leak to the client.
 // REST note bodies: a field Monomem does not know (a client sent `content` for `body`) used to be dropped, leaving an empty note.
 // written_by / created_by are accepted and ignored: the server stamps the writer from the token.
-const POST_NOTE_FIELDS = ["namespace", "title", "body", "tags", "source", "created_at", "forget_after", "confidence", "facts", "written_by", "created_by"];
-const PUT_NOTE_FIELDS = ["namespace", "title", "body", "tags", "source", "forget_after", "confidence", "if_rev", "facts", "written_by", "created_by"];
+const POST_NOTE_FIELDS = ["namespace", "title", "body", "tags", "source", "created_at", "forget_after", "confidence", "facts", "written_by", "created_by", "sensitivity"];
+const PUT_NOTE_FIELDS = ["namespace", "title", "body", "tags", "source", "forget_after", "confidence", "if_rev", "facts", "written_by", "created_by", "sensitivity"];
 // Fields of a note the server returns. A client that GETs a note and PUTs it back whole sends these; they are ignored (never applied).
 // `rev` is ignored too: use `if_rev` for compare-and-swap.
 const PUT_READ_ONLY_FIELDS = [
@@ -175,7 +202,13 @@ export function unknownNoteFields(body: unknown, allowed: readonly string[], ign
 function sendError(res: ServerResponse, e: unknown): void {
   // A linter-held write was accepted for admin review, not rejected: 202.
   if (e instanceof QuarantinedError) {
-    sendJson(res, 202, { quarantined: { id: e.quarantineId, reasons: e.findings } });
+    sendJson(res, 202, {
+      quarantined: {
+        id: e.quarantineId,
+        reasons: e.findings,
+        next: "The write was held, not lost. An administrator can approve or reject it in the dashboard, or with: monomem quarantine list",
+      },
+    });
     return;
   }
   if (e instanceof SupersedeError) {
@@ -210,6 +243,24 @@ const isReadRoute = (method: string | undefined, path: string): boolean => READ_
 /** Per-response read logger, set by handle() for a read route and run once by sendJson. */
 const pendingReads = new WeakMap<ServerResponse, (payload: unknown) => void>();
 
+/**
+ * Every note in an API answer says which label it has. The store leaves the field out for the default ("internal") so that
+ * records keep their old shape in code; an app reading the API should not have to know that, so it is filled in here.
+ * (Full exports are left as they are: they are a backup format.)
+ */
+function showLabels(v: unknown, depth = 0): void {
+  if (!v || typeof v !== "object" || depth > 6) return;
+  if (Array.isArray(v)) {
+    for (const x of v) showLabels(x, depth + 1);
+    return;
+  }
+  const o = v as Record<string, unknown>;
+  if (typeof o.id === "number" && typeof o.title === "string" && typeof o.namespace === "string" && typeof o.rev === "number" && o.sensitivity === undefined) {
+    o.sensitivity = "internal";
+  }
+  for (const k of Object.keys(o)) if (o[k] && typeof o[k] === "object") showLabels(o[k], depth + 1);
+}
+
 function sendJson(
   res: ServerResponse,
   status: number,
@@ -224,6 +275,7 @@ function sendJson(
     pendingReads.delete(res);
     if (status === 200) logRead(payload);
   }
+  if (opts.cap !== false) showLabels(payload);
   let body = JSON.stringify(payload);
   // Cap response size so a huge store or broad query can't blow up an agent's
   // context window or the process memory. `/export` opts out (cap:false): it is
@@ -418,6 +470,10 @@ export function createApiServer(
       // Everything past liveness goes through the DNS-rebinding Origin check and
       // the rate limiter first -- including /ready (which touches the DB) and
       // the dashboard, so an unauthenticated client can't hammer either.
+      if (!hostAllowed(req)) {
+        sendJson(res, 403, hostRefusal(req));
+        return;
+      }
       if (!originAllowed(req)) {
         sendJson(res, 403, { error: "origin not allowed" });
         return;
@@ -481,6 +537,23 @@ export function createApiServer(
         res.end(DASHBOARD_JS);
         return;
       }
+      // POST /login {code} -> {token}: trades the one-time code `monomem open` put in the address for the key (login-code.ts).
+      if (req.method === "POST" && path === "/login") {
+        if (anonLimited()) return;
+        let code: unknown;
+        try {
+          code = (JSON.parse((await readBody(req)) || "{}") as { code?: unknown }).code;
+        } catch {
+          sendJson(res, 400, { error: "invalid JSON body" });
+          return;
+        }
+        if (!redeemLoginCode(code)) {
+          sendJson(res, 401, { error: "that sign-in link has expired or was already used. Run monomem open again." });
+          return;
+        }
+        sendJson(res, 200, { token: resolveToken() });
+        return;
+      }
       // Phone command signer. No data in it; the secret never leaves the phone,
       // and its POST still needs a bearer token like any other write.
       if (req.method === "GET" && SIGN_PAGES[path]) {
@@ -508,7 +581,7 @@ export function createApiServer(
         // Escalating delay on repeated failures (valid tokens never reach here).
         const proceed = await tarpit.failed(ip);
         if (!proceed || !authFailures.check(ip)) sendJson(res, 429, { error: "rate limit exceeded" });
-        else sendJson(res, 401, { error: "unauthorized" });
+        else sendJson(res, 401, { error: "unauthorized", hint: "Send your key as the header  Authorization: Bearer <key>.  Your keys: monomem token list.  To open the dashboard already signed in: monomem open" });
         return;
       }
       if (!perToken.check(tokenKey(principal.token))) {
@@ -520,6 +593,13 @@ export function createApiServer(
       if (actorRef) {
         actorRef.label = principal.label;
         actorRef.authed = true; // written_by is the verified token label
+        // The token's sensitivity ceiling rides on the same per-request context, and the store applies it inside its queries.
+        if (principal.max_sensitivity !== undefined) actorRef.maxSensitivity = principal.max_sensitivity;
+        actorRef.canDeclassify = scopeAllows(principal.scope, "admin");
+      } else if (principal.max_sensitivity !== undefined) {
+        // Cannot happen (every request runs inside actorStore.run), but a ceiling that cannot be applied must never be skipped.
+        sendJson(res, 500, { error: "internal error" });
+        return;
       }
       // Per-request namespace: a token's own pin WINS over the server's
       // cwd-resolved namespace. This is the isolation boundary for this
@@ -528,7 +608,13 @@ export function createApiServer(
       // Enforce the token's scope: a read-only token can't write/delete, etc.
       const need = requiredScope(req.method, path);
       if (!scopeAllows(scope, need)) {
-        sendJson(res, 403, { error: `this token lacks the required '${need}' scope` });
+        sendJson(res, 403, {
+          error: `this token lacks the required '${need}' scope`,
+          hint:
+            need === "admin"
+              ? "This needs an administrator key. Make one with: monomem token add <name> --admin"
+              : "This app's key can only read. Make a key that can also write with: monomem token add <name> --scope write",
+        });
         return;
       }
       // Read access log: the preview is the search text when there is one, else the query string (POST bodies set it below).
@@ -567,6 +653,81 @@ export function createApiServer(
       // (By-id reads carry no namespace parameter: they are checked against the note's own namespace where they read it.)
       const byIdRead = req.method === "GET" && (/^\/notes\/\d+$/.test(path) || /^\/tasks\/\d+$/.test(path));
       if (flagParam(url, "include_distrusted") && (byIdRead ? !isAdmin && refuseDistrustedOptIn() : refuseDistrustedOptIn(url.searchParams.get("namespace")))) return;
+
+      // GET /whoami -> who this token is and what it can see (the dashboard's signed-in banner; a quick connection test).
+      if (req.method === "GET" && path === "/whoami") {
+        lastUsed.set(principal.label, new Date().toISOString());
+        const view = { scope: principal.scope, namespace: principal.namespace ?? null, max_sensitivity: principal.max_sensitivity ?? null };
+        sendJson(res, 200, { label: principal.label || "(unnamed)", ...view, can_see: describeAccess(view) });
+        return;
+      }
+      lastUsed.set(principal.label, new Date().toISOString());
+
+      // Apps that may connect (admin only, and only an administrator with no ceiling and no namespace pin: it would otherwise
+      // be a way to hand out wider access than it has itself). Secrets are never returned except the new one, once.
+      if (path === "/tokens" || path.startsWith("/tokens/")) {
+        if (principal.max_sensitivity !== undefined || nsCtx.active) {
+          sendJson(res, 403, { error: "managing apps needs an administrator token that has no sensitivity limit and no namespace pin" });
+          return;
+        }
+        try {
+          if (req.method === "GET" && path === "/tokens") {
+            sendJson(res, 200, { apps: listApps().map((a) => ({ ...a, last_used: lastUsed.get(a.label) ?? null })) });
+            return;
+          }
+          if (req.method === "POST" && path === "/tokens") {
+            let b: { label?: unknown; scope?: unknown; namespace?: unknown; max?: unknown; admin?: unknown; no_limit?: unknown };
+            try {
+              b = JSON.parse((await readBody(req)) || "{}");
+            } catch {
+              sendJson(res, 400, { error: "invalid JSON body" });
+              return;
+            }
+            const made = addApp({
+              label: String(b.label ?? ""),
+              ...(typeof b.scope === "string" ? { scope: b.scope } : {}),
+              ...(typeof b.namespace === "string" ? { namespace: b.namespace } : {}),
+              ...(typeof b.max === "string" ? { max: b.max } : {}),
+              admin: b.admin === true,
+              // Only reachable here: this branch already requires a caller with no limit and no namespace pin.
+              noLimit: b.no_limit === true,
+            });
+            // Take effect now, not at the next 2-second check (only this change is applied, nothing else is re-read).
+            tokens.push({ token: made.token, scope: made.app.scope, label: made.app.label, ...(made.app.namespace ? { namespace: made.app.namespace } : {}), ...(made.app.max_sensitivity ? { max_sensitivity: made.app.max_sensitivity } : {}) });
+            sendJson(res, 201, { token: made.token, app: made.app, access: describeAccess(made.app), ceiling_was_default: made.ceilingWasDefault, snippet: connectionSnippet(made.token) });
+            return;
+          }
+          const del = /^\/tokens\/(.+)$/.exec(path);
+          if (req.method === "DELETE" && del) {
+            let label: string;
+            try {
+              label = decodeURIComponent(del[1]);
+            } catch {
+              sendJson(res, 400, { error: "that app name is not valid (bad % escape)" });
+              return;
+            }
+            if (label.toLowerCase() === "primary") {
+              sendJson(res, 400, { error: "the main token cannot be removed here; it is set outside Monomem (MONOMEM_TOKEN or the token file)" });
+              return;
+            }
+            if (!removeApp(label)) {
+              sendJson(res, 404, { error: `no app called "${label}" in tokens.json (apps set in the environment cannot be removed here)` });
+              return;
+            }
+            for (let i = tokens.length - 1; i >= 0; i--) if (tokens[i].label.toLowerCase() === label.trim().toLowerCase() && tokens[i].label !== "primary") tokens.splice(i, 1);
+            sendJson(res, 200, { removed: label });
+            return;
+          }
+        } catch (e) {
+          if (e instanceof TokenAdminError) {
+            sendJson(res, 400, { error: e.message });
+            return;
+          }
+          throw e;
+        }
+        sendJson(res, 404, { error: "no such route" });
+        return;
+      }
 
       // POST /notes
       if (req.method === "POST" && path === "/notes") {
@@ -902,10 +1063,43 @@ export function createApiServer(
       }
 
       // GET /quality -> the memory quality report (quality.ts). Admin; a namespace-pinned admin sees its own namespace only.
+      // GET /insights -> the health score and the last day's digest (the dashboard's top card). Admin, no ceiling.
+      if (req.method === "GET" && path === "/insights") {
+        if (principal.max_sensitivity !== undefined || nsCtx.active) {
+          sendJson(res, 403, { error: "this needs an administrator key with no sensitivity limit and no namespace restriction" });
+          return;
+        }
+        const open = tokens.filter((t) => t.label !== "primary" && t.scope !== "admin" && t.max_sensitivity === undefined).length;
+        // The scan reads every note, so a refresh within a minute reuses the last answer.
+        const body = await cachedFor(store, "insights", async () => {
+          const ins = await insights(store, open, DATA_DIR, undefined);
+          const digest = await buildDigest(store, "24h", {});
+          return { health: { score: ins.health.score, deductions: ins.health.deductions, formula: ins.health.formula }, digest, text: renderDigest(digest) };
+        });
+        sendJson(res, 200, body);
+        return;
+      }
+
+      // GET /audit?since=24h&op=&label=&limit= -> who did what (metadata only). Admin, no ceiling.
+      if (req.method === "GET" && path === "/audit") {
+        if (principal.max_sensitivity !== undefined || nsCtx.active) {
+          sendJson(res, 403, { error: "this needs an administrator key with no sensitivity limit and no namespace restriction" });
+          return;
+        }
+        const w = url.searchParams.get("since") ? parseWindow(url.searchParams.get("since")!) : 86_400_000;
+        if (w === null) {
+          sendJson(res, 400, { error: 'since must look like 30m, 24h or 7d' });
+          return;
+        }
+        const r = readAudit({ sinceMs: w, op: url.searchParams.get("op") || undefined, label: url.searchParams.get("label") || undefined, limit: Number(url.searchParams.get("limit")) || 200 });
+        sendJson(res, 200, { entries: r.entries, truncated: r.truncated });
+        return;
+      }
+
       if (req.method === "GET" && path === "/quality") {
         const namespace = url.searchParams.get("namespace") || undefined;
         const namespaces = nsCtx.active ? [nsCtx.ownNamespace] : namespace ? [namespace] : undefined;
-        sendJson(res, 200, await qualityReport(store, namespaces));
+        sendJson(res, 200, await cachedFor(store, "quality:" + (namespaces ?? []).join(","), () => qualityReport(store, namespaces)));
         return;
       }
 
@@ -962,6 +1156,11 @@ export function createApiServer(
       if ((req.method === "GET" && (path === "/access" || path === "/flood")) || (req.method === "POST" && path === "/flood/resume")) {
         if (principal.namespace?.trim()) {
           sendJson(res, 403, { error: "the access log and flood guard are store-wide: use a token that is not pinned to a namespace" });
+          return;
+        }
+        // The access log keeps a redacted preview of what every app searched for: not for a key that has a sensitivity limit.
+        if (principal.max_sensitivity !== undefined) {
+          sendJson(res, 403, { error: "the access log shows what every app searched for: use an administrator key with no sensitivity limit" });
           return;
         }
         try {
@@ -1175,7 +1374,9 @@ export function createApiServer(
         // factors that produced the ranking. Off by default to keep the
         // common response small and byte-compatible.
         const explainRaw = (url.searchParams.get("explain") ?? "").toLowerCase();
-        const explain = explainRaw === "1" || explainRaw === "true";
+        // A relevance breakdown is computed over the whole corpus (document frequencies include hidden notes), so for a caller
+        // with a sensitivity ceiling it would be an oracle for text it cannot see: `explain` is ignored for them.
+        const explain = (explainRaw === "1" || explainRaw === "true") && currentCeiling() === undefined;
         // Like the MCP tool, an unrecognized time phrase is ignored rather
         // than an error -- the query still runs unscoped.
         const timePhrase = whenRaw ? parseTimePhrase(whenRaw, { timeZone: TIME_ZONE }) : null;
@@ -1401,7 +1602,7 @@ export function createApiServer(
         }
         sendJson(res, 200, {
           ...store.accessStats(namespaces, { hideDistrusted: !isAdmin }),
-          meter: meterStats(store, namespaces),
+          ...(currentCeiling() === undefined ? { meter: meterStats(store, namespaces) } : {}), // token totals are not split by label, so a ceilinged caller does not get them
           searchedNamespaces,
         });
         return;
@@ -1511,6 +1712,11 @@ export function createApiServer(
       // workload unless the body carries confirm: true. One rebuild at a
       // time: a concurrent request gets 409.
       if (req.method === "POST" && path === "/rebuild-edges") {
+        // The rebuild scores every note in scope and reports edge counts, so it cannot be limited to the notes a ceiling allows.
+        if (currentCeiling() !== undefined) {
+          sendJson(res, 403, { error: "rebuilding the similarity graph covers every note; it needs a token with no sensitivity ceiling" });
+          return;
+        }
         const raw = await readBody(req);
         let parsed: { threshold?: unknown; namespace?: unknown; confirm?: unknown };
         try {
@@ -2139,7 +2345,7 @@ export function createApiServer(
   };
   // Every request gets its own actor holder; the label is filled in once the
   // token is authenticated, so change_log records who actually wrote.
-  return createServer((req, res) => {
+  return applyServerLimits(createServer((req, res) => {
     void actorStore.run({ label: "" }, () => handle(req, res));
-  });
+  }));
 }

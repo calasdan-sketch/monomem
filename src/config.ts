@@ -24,6 +24,8 @@ import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { resolveTimeZone } from "./time-parse.js";
+import { didYouMean } from "./suggest.js";
+import { type Sensitivity, parseSensitivity, sensitivityRank, defaultCeilingFromEnv, SENSITIVITY_HELP } from "./sensitivity.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const PROJECT_ROOT = join(__dirname, "..", "..");
@@ -283,7 +285,7 @@ export function resolveToken(): string {
     if (t.length < MIN_TOKEN_LENGTH) {
       throw new Error(
         `monomem: MONOMEM_TOKEN is too short (${t.length} chars); use at least ${MIN_TOKEN_LENGTH}. ` +
-          `Generate one with: openssl rand -hex 32`
+          `Make one with: monomem token new (it only prints a fresh value; nothing is saved)`
       );
     }
     return t;
@@ -330,6 +332,20 @@ export interface TokenEntry {
    * carries one -- it stays the operator's unrestricted escape hatch.
    */
   namespace?: string;
+  /**
+   * Optional per-token sensitivity CEILING (`public` < `internal` < `private`).
+   *
+   * When set, this token can never read a note labelled above it, on any note path
+   * (search, recall, list, get, change feed, injection, export), can
+   * not write a note above it, and can not touch a note above it. A hidden note
+   * answers exactly like a note that does not exist. A non-admin token may raise
+   * a note's label (up to its ceiling) but not lower it.
+   *
+   * When unset the token is not restricted by label (legacy behaviour, so existing
+   * token files keep working); the docs recommend setting one on every secondary
+   * token. The primary token never carries one.
+   */
+  max_sensitivity?: Sensitivity;
 }
 
 function isScope(s: unknown): s is Scope {
@@ -350,6 +366,9 @@ function isScope(s: unknown): s is Scope {
 const SCOPE_RANK: Record<Scope, number> = { read: 1, write: 2, admin: 3 };
 
 export function resolveTokens(): TokenEntry[] {
+  // Tokens with at least one invalid entry. A token listed twice where ANY entry is invalid is refused entirely: the invalid
+  // entry may be the stricter one, and the valid one must not quietly stand in for it.
+  const refused = new Set<string>();
   const byToken = new Map<string, TokenEntry>();
   const locked = new Set<string>(); // the primary admin token's scope is fixed
   const add = (
@@ -357,16 +376,27 @@ export function resolveTokens(): TokenEntry[] {
     scope: unknown,
     label: unknown,
     lock = false,
-    namespace?: unknown
+    namespace?: unknown,
+    maxSensitivity?: unknown
   ): void => {
     if (typeof token !== "string" || !token.trim()) return;
-    if (!isScope(scope)) return;
     const t = token.trim();
+    if (!isScope(scope)) {
+      // A misspelt scope used to drop the token without a word; say so, and suggest the likely word.
+      const guess = typeof scope === "string" ? didYouMean(scope, ["read", "write", "admin"]) : null;
+      console.error(
+        `[monomem] ignoring token ${typeof label === "string" && label ? `"${label}"` : "(unnamed)"}: ` +
+          `its "scope" must be read, write or admin (got ${JSON.stringify(scope)}).${guess ? ` Did you mean "${guess}"?` : ""} ` +
+          `Fix the entry in MONOMEM_TOKENS / tokens.json; the token will not work until then.`
+      );
+      refused.add(t);
+      return;
+    }
     if (!lock && t.length < MIN_TOKEN_LENGTH) {
       console.error(
         `[monomem] ignoring token ${typeof label === "string" && label ? `"${label}"` : "(unnamed)"}: ` +
           `it is ${t.length} characters; user-supplied tokens must be at least ${MIN_TOKEN_LENGTH}. ` +
-          `Generate one with: openssl rand -hex 32`
+          `To add an app, let Monomem make the token for you: monomem token add <name>`
       );
       return;
     }
@@ -382,10 +412,33 @@ export function resolveTokens(): TokenEntry[] {
           `its "namespace" must be a non-empty string (got ${JSON.stringify(namespace)}). ` +
           `Fix the entry in MONOMEM_TOKENS / tokens.json; the token will not work until then.`
       );
+      refused.add(t);
       return;
     }
     const ns = typeof namespace === "string" ? namespace.trim() : undefined;
+    // A sensitivity ceiling is a restriction, so a value that is present but not a label (a typo such as "privte", 5, "")
+    // must NOT quietly become "no ceiling": the whole token is refused, loudly, like a bad namespace pin.
+    let ceiling: Sensitivity | undefined;
+    // (`null` is also refused: it reads like "no limit", which is the opposite of what a ceiling is for.)
+    if (maxSensitivity !== undefined) {
+      const parsed = parseSensitivity(maxSensitivity);
+      if (!parsed || lock) {
+        refused.add(t);
+        console.error(
+          `[monomem] ignoring token ${typeof label === "string" && label ? `"${label}"` : "(unnamed)"}: ` +
+            (lock
+              ? `the primary token cannot carry a "max_sensitivity".`
+              : `its "max_sensitivity" must be ${SENSITIVITY_HELP} (got ${JSON.stringify(maxSensitivity)}). `) +
+            `Fix the entry in MONOMEM_TOKENS / tokens.json; the token will not work until then.`
+        );
+        return;
+      }
+      ceiling = parsed;
+    }
     const existing = byToken.get(t);
+    if (existing && locked.has(t) && ceiling !== undefined) {
+      console.error(`[monomem] the primary token is also listed${typeof label === "string" && label ? ` as "${label}"` : ""} with a "max_sensitivity"; the primary token cannot carry one, so it is ignored and the primary token stays unrestricted.`);
+    }
     if (existing) {
       // Never downgrade/change the primary token. For any other token listed
       // more than once, keep the MOST restrictive scope (lowest rank) AND the
@@ -395,8 +448,13 @@ export function resolveTokens(): TokenEntry[] {
       if (!locked.has(t)) {
         const scopeDown = SCOPE_RANK[scope] < SCOPE_RANK[existing.scope];
         const pinTighter = ns !== undefined && existing.namespace === undefined;
-        if (scopeDown || pinTighter) {
+        // Same rule for the ceiling: the lower one wins, and any ceiling beats none.
+        const ceilTighter =
+          ceiling !== undefined &&
+          (existing.max_sensitivity === undefined || sensitivityRank(ceiling) < sensitivityRank(existing.max_sensitivity));
+        if (scopeDown || pinTighter || ceilTighter) {
           const nextNs = pinTighter ? ns : existing.namespace;
+          const nextCeil = ceilTighter ? ceiling : existing.max_sensitivity;
           if (ns !== undefined && existing.namespace !== undefined && ns !== existing.namespace) {
             console.error(
               `[monomem] token ${existing.label || "(unnamed)"} is listed with two different ` +
@@ -408,6 +466,7 @@ export function resolveTokens(): TokenEntry[] {
             scope: scopeDown ? scope : existing.scope,
             label: scopeDown && typeof label === "string" ? label : existing.label,
             ...(nextNs !== undefined ? { namespace: nextNs } : {}),
+            ...(nextCeil !== undefined ? { max_sensitivity: nextCeil } : {}),
           });
         } else if (ns !== undefined && existing.namespace !== undefined && ns !== existing.namespace) {
           console.error(
@@ -423,6 +482,7 @@ export function resolveTokens(): TokenEntry[] {
       scope,
       label: typeof label === "string" ? label : "",
       ...(ns !== undefined ? { namespace: ns } : {}),
+      ...(ceiling !== undefined ? { max_sensitivity: ceiling } : {}),
     });
     if (lock) locked.add(t);
   };
@@ -450,8 +510,24 @@ export function resolveTokens(): TokenEntry[] {
       return;
     }
     for (const e of arr) {
-      const o = e as { token?: unknown; scope?: unknown; label?: unknown; namespace?: unknown };
-      add(o?.token, o?.scope, o?.label, false, o?.namespace);
+      const o = e as { token?: unknown; scope?: unknown; label?: unknown; namespace?: unknown; max_sensitivity?: unknown };
+      // A misspelt ceiling key ("maxSensitivity", "max_sensitivty") would otherwise be ignored and leave the token unrestricted.
+      const lookalikes = o && typeof o === "object" ? Object.keys(o).filter((k) => k !== "max_sensitivity" && /sens|ceil/i.test(k)) : [];
+      if (lookalikes.length) {
+        console.error(
+          `[monomem] ignoring token ${typeof o.label === "string" && o.label ? `"${o.label}"` : "(unnamed)"}: unknown key ${lookalikes.map((k) => JSON.stringify(k)).join(", ")} looks like "max_sensitivity". ` +
+            `Fix the spelling in ${where}; the token will not work until then.`
+        );
+        if (typeof o.token === "string") refused.add(o.token.trim());
+        continue;
+      }
+      // "primary" is the main key's name: another key carrying it would be treated as the unrestricted main key.
+      if (typeof o?.label === "string" && o.label.trim().toLowerCase() === "primary" && typeof o.token === "string" && !locked.has(o.token.trim())) {
+        console.error(`[monomem] ignoring a token in ${where}: the name "primary" is reserved for the main key. Rename it (monomem token add <name> makes a new one).`);
+        refused.add(o.token.trim());
+        continue;
+      }
+      add(o?.token, o?.scope, o?.label, false, o?.namespace, o?.max_sensitivity);
     }
   };
 
@@ -463,7 +539,59 @@ export function resolveTokens(): TokenEntry[] {
     parseList(readFileSync(tokensFile, "utf8"), tokensFile);
   }
 
+  for (const t of refused) if (!locked.has(t)) byToken.delete(t);
+  // Opt-in default ceiling for secondary tokens that set none. A value that is not a label stops the server (fail closed).
+  const dflt = defaultCeilingFromEnv();
+  if (dflt === null) {
+    throw new Error(`MONOMEM_DEFAULT_MAX_SENSITIVITY must be ${SENSITIVITY_HELP} (got ${JSON.stringify(process.env.MONOMEM_DEFAULT_MAX_SENSITIVITY)})`);
+  }
+  if (dflt !== undefined) {
+    for (const [t, e] of byToken) if (!locked.has(t) && e.max_sensitivity === undefined) byToken.set(t, { ...e, max_sensitivity: dflt });
+  }
   return [...byToken.values()];
+}
+
+/**
+ * Hot reload of <data dir>/tokens.json. `tokens` is the live array the servers authenticate against (both HTTP front doors
+ * build a fresh server per request, so a change applies to the very next request): when the file changes, the list is
+ * re-read and replaced IN PLACE. A removed token stops working at once; a changed ceiling applies to the next request.
+ * A file that cannot be parsed keeps the old list (and says so), so a half-saved edit cannot lock everyone out or open it up.
+ * Returns the function that checks now (used by tests) and a stop function.
+ */
+export function startTokenReload(tokens: TokenEntry[], opts: { intervalMs?: number; file?: string; log?: (m: string) => void } = {}): { check: () => boolean; stop: () => void } {
+  const file = opts.file ?? join(DATA_DIR, "tokens.json");
+  const log = opts.log ?? ((m: string) => console.error(m));
+  const sig = (): string => {
+    try {
+      const st = statSync(file);
+      return `${st.mtimeMs}:${st.size}`;
+    } catch {
+      return "none";
+    }
+  };
+  let last = sig();
+  const check = (): boolean => {
+    const now = sig();
+    if (now === last) return false;
+    last = now;
+    try {
+      // resolveTokens() skips a broken file with a log line; for a reload that would silently revoke everyone, so check first.
+      if (now !== "none") {
+        const parsed = JSON.parse(readFileSync(file, "utf8"));
+        if (!Array.isArray(parsed)) throw new Error("expected a JSON list");
+      }
+      const fresh = resolveTokens();
+      tokens.splice(0, tokens.length, ...fresh);
+      log(`[monomem] tokens reloaded: ${fresh.length} token(s) now accepted`);
+      return true;
+    } catch (e) {
+      log(`[monomem] tokens.json changed but could not be read (${(e as Error).message}); keeping the previous list`);
+      return false;
+    }
+  };
+  const timer = setInterval(check, opts.intervalMs ?? 2000);
+  timer.unref();
+  return { check, stop: () => clearInterval(timer) };
 }
 
 // Parse a port from the environment, falling back (loudly) on anything that

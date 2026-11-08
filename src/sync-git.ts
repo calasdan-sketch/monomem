@@ -346,6 +346,11 @@ export async function runGitSync(io: GitSyncIO, o: GitSyncOptions): Promise<numb
         try {
           const imp = await importMarkdown(store, work, {});
           const c = imp.counts;
+          // exportMarkdown applies MONOMEM_EXPORT_MAX_SENSITIVITY itself. With no ceiling set, labelled notes (private ones above
+          // all) go into the repository: say so once per run.
+          if (!(process.env.MONOMEM_EXPORT_MAX_SENSITIVITY ?? "").trim() && store.hasPrivateNotes()) {
+            io.err("  warning: some notes are labelled private and MONOMEM_EXPORT_MAX_SENSITIVITY is not set, so they will be pushed. Set it to internal (or public) to keep them out.");
+          }
           const exp = exportMarkdown(store, work, {});
           io.out(`  merged: ${c.created} new, ${c.updated} updated, ${c.unchanged} unchanged, ${c.conflict} conflict(s), ${c.rejected} rejected; wrote ${exp.written} file(s), removed ${exp.removed}.`);
           if (c.conflict > 0) {

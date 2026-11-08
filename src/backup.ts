@@ -3,10 +3,11 @@
 // VACUUM INTO writes a complete, defragmented database file from one read
 // snapshot, so it is safe while the server is running and writing (no
 // -wal/-shm juggling, no torn copy). If at-rest encryption is on, the
-// notes' bodies are ciphertext and the key file (.key) is what opens them:
-// we copy it too, with mode 0600, and say loudly that it must be stored
-// SEPARATELY from the backup -- a backup and its key in one place defeats the
-// encryption, and a backup without its key is unreadable.
+// notes' bodies are ciphertext and the key file (.key) is what opens them.
+// The key is NOT copied into the backup folder unless --include-key is given:
+// a backup and its key in one place defeats the encryption, and a backup
+// without its key is unreadable, so the person is told where the key is and
+// that it needs its own safe copy.
 import { chmodSync, existsSync, mkdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -20,6 +21,8 @@ export interface BackupResult {
   bytes: number;
   notes: number;
   key: string | null;
+  /** Where the live encryption key is, when there is one and it was not copied (the person must keep a copy elsewhere). */
+  keyLeftOut: string | null;
   /** True when the command-task approval key was copied into the backup (--include-approval-key). */
   approvalKey: boolean;
   /** Path of the copied attestation signing key (--include-attest-key), or null. */
@@ -32,7 +35,7 @@ export function backupStore(
   store: Store,
   dbPath: string,
   outDir: string,
-  opts: { includeApprovalKey?: boolean; includeAttestKey?: boolean } = {}
+  opts: { includeApprovalKey?: boolean; includeAttestKey?: boolean; includeKey?: boolean } = {}
 ): BackupResult {
   const dir = resolve(outDir);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -90,9 +93,14 @@ export function backupStore(
   dropPart();
   let key: string | null = null;
   const kp = keyPath(dirname(dbPath));
+  let keyLeftOut: string | null = null;
   if (existsSync(kp)) {
-    key = join(dir, ".key");
-    copyKeyFileExclusive(kp, key);
+    if (opts.includeKey) {
+      key = join(dir, ".key");
+      copyKeyFileExclusive(kp, key);
+    } else {
+      keyLeftOut = kp;
+    }
   }
   // The attestation signing key is the server's signing identity. A database restored without it
   // keeps its server_id but mints a NEW key: peers that trusted the old key reject its exports, and
@@ -112,10 +120,14 @@ export function backupStore(
       "state.db  a complete copy of the database (restore: stop the server, put it at <data dir>/state.db,",
       "          delete any state.db-wal / state.db-shm beside it, start the server).",
       key
-        ? ".key      the at-rest encryption key. Without it the encrypted note bodies are unreadable; WITH it next to\n" +
-          "          the database, anyone who gets this folder can read everything. Move it somewhere else (a password\n" +
-          "          manager, a separate drive) and keep a second copy."
-        : "(no .key: at-rest encryption was off)",
+        ? ".key      the at-rest encryption key (copied because --include-key was given). Without it the encrypted note bodies\n" +
+          "          are unreadable; WITH it next to the database, anyone who gets this folder can read everything. Move it\n" +
+          "          somewhere else (a password manager, a separate drive) and keep a second copy."
+        : keyLeftOut
+          ? "The notes are encrypted and the key is NOT in this folder (on purpose). Without the key this backup cannot be read.\n" +
+            "          The live key is at " + keyLeftOut + " : keep a copy of it somewhere else (a password manager, a separate drive).\n" +
+            "          (monomem backup --include-key copies it here, but then this folder alone opens everything.)"
+          : "(no .key: at-rest encryption was off)",
       opts.includeApprovalKey
         ? "approval key INCLUDED (--include-approval-key): whoever holds this folder AND can write to a live store can mint\ncommand-task approvals. Guard it like the .key."
         : "approval key NOT included: command-task approvals in a restored copy read as stale (fail closed); an admin\nre-approves the tasks that are still queued.",
@@ -128,12 +140,18 @@ export function backupStore(
     ].join("\n"),
     { mode: 0o600 }
   );
+  try {
+    writeFileSync(join(dirname(dbPath), ".last-backup"), new Date().toISOString() + "\n", { mode: 0o600 }); // lets `monomem health` know how old the last backup is
+  } catch {
+    /* best effort */
+  }
   return {
     dir,
     db,
     bytes: statSync(db).size,
     notes,
     key,
+    keyLeftOut,
     approvalKey: Boolean(opts.includeApprovalKey),
     attestKey,
     attestKeyLeftOut: hasAttestKey && !attestKey,

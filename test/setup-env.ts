@@ -17,6 +17,7 @@ process.env.MONOMEM_TOOLS = "all";
 // Bulk tests write thousands of notes as one agent label in seconds; the flood guard would pause them.
 // test/access-log-flood.test.ts owns the flood-guard assertions and sets this variable itself.
 process.env.MONOMEM_FLOOD_WRITES_PER_HOUR = "0";
+process.env.MONOMEM_SCAN_CACHE_SECONDS = "0"; // the dashboard scans are cached for a minute in real use; tests want fresh answers
 process.on("exit", () => {
   try {
     rmSync(home, { recursive: true, force: true });

@@ -4,13 +4,17 @@ import "./legacy-env.js"; // second: read the old CLAUDE_BRIDGE_* variables as M
 import { Store } from "./store.js";
 import { createApiServer } from "./api.js";
 import { exitOnListenError } from "./http-common.js";
-import { DB_PATH, API_PORT, BIND_HOST, resolveTokens, assertSafeExposure, prepareDataDir } from "./config.js";
+import { DB_PATH, API_PORT, BIND_HOST, resolveTokens, startTokenReload, assertSafeExposure, prepareDataDir } from "./config.js";
 import { resolveStartupNamespace } from "./namespace.js";
+import { warnUnlabelledExposure } from "./sensitivity.js";
+import { openStoreOrExit } from "./db-problem.js";
 
 prepareDataDir();
 assertSafeExposure();
 const tokens = resolveTokens();
-const store = new Store(DB_PATH);
+const store = openStoreOrExit(DB_PATH);
+warnUnlabelledExposure(store, tokens);
+startTokenReload(tokens);
 // Namespace resolution happens ONCE here, at startup, from the process cwd.
 const nsOpts = resolveStartupNamespace(process.cwd());
 if (nsOpts) {

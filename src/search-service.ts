@@ -9,6 +9,7 @@
 // embedded, every mode degrades to keyword search -- a query must never fail
 // because an optional embedding server is unavailable.
 
+import { mayEmbed } from "./sensitivity.js";
 import { Store, NoteRecord, clampInt } from "./store.js";
 import { embed, embeddingsEnabled, embeddingsConfig, noteEmbeddingText } from "./embeddings.js";
 import { filterByTimeRange, parseTimePhrase, type TimeRange } from "./time-parse.js";
@@ -32,7 +33,7 @@ export type SearchMode = (typeof SEARCH_MODES)[number];
  * a write.
  */
 export async function maybeEmbed(store: Store, note: NoteRecord): Promise<void> {
-  if (!embeddingsEnabled()) return;
+  if (!embeddingsEnabled() || !mayEmbed(note)) return;
   try {
     const cfg = embeddingsConfig();
     const vec = await embed(noteEmbeddingText(note.title, note.body), cfg);

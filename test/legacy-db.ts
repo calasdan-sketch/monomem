@@ -50,10 +50,30 @@ const OLD_DELETE_TRIGGER = `
   END;
 `;
 
+// The delete trigger as v14 through v16 had it (no deleted-note label yet).
+const V14_DELETE_TRIGGER = `
+  CREATE TRIGGER notes_log_ad AFTER DELETE ON notes BEGIN
+    UPDATE change_log SET title = '' WHERE note_id = old.id AND title <> '';
+    INSERT INTO change_log (note_id, kind, namespace, title, source, rev, changed_at,
+                            note_written_by, note_attested_writer, note_attested_by, note_merged_from)
+    VALUES (old.id, 'deleted', old.namespace, '', old.source, NULL, ${NOW},
+            old.written_by, old.attested_writer, old.attested_by, old.merged_from_writers);
+  END;
+`;
+
 /** Rewrite the database file at `path` (closed by the caller) as it looked at `version`. */
-export function downgradeTo(path: string, version: 11 | 12 | 13 | 14 | 15 | 16 | 17): void {
+export function downgradeTo(path: string, version: 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18): void {
   const raw = new DatabaseSync(path);
   try {
+    // v19 additions (per-memory sensitivity labels), removed for every older shape. The delete trigger names the new
+    // columns, so it goes first; the v14-style one is put back for the shapes that keep it.
+    raw.exec("DROP TRIGGER IF EXISTS notes_log_ad; DROP INDEX IF EXISTS idx_notes_ns_sensitivity; DROP INDEX IF EXISTS idx_notes_ns_updated; DROP INDEX IF EXISTS idx_notes_live_updated;");
+    raw.exec("ALTER TABLE notes DROP COLUMN sensitivity; ALTER TABLE change_log DROP COLUMN note_sensitivity; ALTER TABLE quarantine DROP COLUMN sensitivity;");
+    raw.exec(V14_DELETE_TRIGGER);
+    if (version === 18) {
+      raw.exec("PRAGMA user_version = 18");
+      return;
+    }
     // v18 additions, removed for every older shape.
     raw.exec("DROP TABLE IF EXISTS note_history_dropped; ALTER TABLE notes DROP COLUMN pinned;");
     raw.exec("DROP TRIGGER IF EXISTS notes_archive_log_au; DROP TRIGGER IF EXISTS notes_archive_log_ad; DROP TABLE IF EXISTS archive_log; DELETE FROM _meta WHERE key = 'archive_log_since';");

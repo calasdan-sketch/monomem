@@ -19,7 +19,7 @@ import {
   API_PORT,
   MCP_HTTP_PORT,
   BIND_HOST,
-  resolveTokens,
+  resolveTokens, startTokenReload,
   assertSafeExposure,
   AUTO_CONSOLIDATE_INTERVAL_MS,
   prepareDataDir,
@@ -27,13 +27,17 @@ import {
 } from "./config.js";
 import { autoConsolidateCooperative, AUTO_MERGE_SCORE } from "./consolidate.js";
 import { resolveStartupNamespace } from "./namespace.js";
+import { warnUnlabelledExposure } from "./sensitivity.js";
+import { openStoreOrExit } from "./db-problem.js";
 import { abortAllWaiters } from "./change-wait.js";
 import { pruneStaleHeartbeats } from "./liveness.js";
 
 prepareDataDir();
 assertSafeExposure();
 const tokens = resolveTokens();
-const store = new Store(DB_PATH);
+const store = openStoreOrExit(DB_PATH);
+warnUnlabelledExposure(store, tokens);
+startTokenReload(tokens);
 
 // Namespace resolution happens ONCE here, at startup, from the process cwd --
 // both transports share it, so MCP and REST enforce the same boundaries.
@@ -118,6 +122,7 @@ exitOnListenError(apiServer, API_PORT, "MONOMEM_PORT", "API").listen(API_PORT, B
   console.error(`[monomem] DB: ${DB_PATH}`);
   const tokenFromEnv = Boolean(process.env.MONOMEM_TOKEN && process.env.MONOMEM_TOKEN.trim());
   console.error(`[monomem] token: ${tokenFromEnv ? "from MONOMEM_TOKEN" : TOKEN_FILE}`);
+  console.error(`[monomem] Open the dashboard: http://127.0.0.1:${API_PORT}/  (key in ${tokenFromEnv ? "MONOMEM_TOKEN" : TOKEN_FILE}; or run: monomem open)`);
   const tokenExpr = tokenFromEnv ? "$MONOMEM_TOKEN" : `$(cat "${TOKEN_FILE}")`;
   console.error(
     `[monomem] try: curl -H "Authorization: Bearer ${tokenExpr}" "http://127.0.0.1:${API_PORT}/notes?limit=5"`

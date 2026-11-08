@@ -18,6 +18,7 @@ import { scopeAllows } from "./security.js";
 import { annotateStaleness } from "./staleness.js";
 import { assertPlainWriteTags, isReservedTag } from "./reserved-tags.js";
 import { Store, ValidationError, StaleWriteError, validateConfidence, type NoteRecord, type HistoryEntry } from "./store.js";
+import { DEFAULT_SENSITIVITY, sensitivityRank, strictestLabel } from "./sensitivity.js";
 import { PREVIEW_MAX_OLD, type SupersedeReplacementInput } from "./supersede-shared.js";
 import { blockedText, doneText, previewText, safe, type PreviewFlags, type PreviewNote } from "./supersede-text.js";
 
@@ -159,7 +160,7 @@ export function supersedePreview(
   const ns = olds[0].namespace;
   for (const o of olds) {
     if (o.namespace !== ns) throw new SupersedeError("notes from different namespaces cannot be replaced together");
-    if (o.superseded_by !== undefined) throw new SupersedeError(`note ${o.id} was already replaced by note ${o.superseded_by}`, 409);
+    if (o.status === "superseded") throw new SupersedeError(`note ${o.id} was already replaced by ${o.superseded_by !== undefined ? `note ${o.superseded_by}` : "another note"}`, 409);
     if (o.archived_at) throw new SupersedeError(`note ${o.id} is archived, not a live note, so there is nothing to replace`, 409);
     if (o.tags.some(isReservedTag)) throw new SupersedeError(`note ${o.id} is a task or handoff, or captured work; those are managed by their own tools, not replaced`);
     // A pinned note: the confirm would be refused (Store.refuseAgentOnPinned), so say so now.
@@ -178,7 +179,7 @@ export function supersedePreview(
     if (ids.includes(nid)) throw new SupersedeError("a note cannot replace itself");
     const target = writable(store, caller, nid);
     if (target.namespace !== ns) throw new SupersedeError("the replacing note must be in the same namespace");
-    if (target.superseded_by !== undefined || target.archived_at) throw new SupersedeError(`note ${nid} is not a live note, so it cannot take the place of another`, 409);
+    if (target.status === "superseded" || target.archived_at) throw new SupersedeError(`note ${nid} is not a live note, so it cannot take the place of another`, 409);
     if (target.tags.some(isReservedTag)) throw new SupersedeError(`note ${nid} is a task or handoff, or captured work, and cannot replace a note`);
     if (store.isDistrusted(target)) throw new SupersedeError("a note from a writer on the distrust list cannot replace another note", 403);
     newId = nid;
@@ -300,7 +301,7 @@ export function supersedeConfirm(
     const ids = oldPairs.map((p) => p[0]);
     const olds = ids.map((id) => writable(store, caller, id));
     olds.forEach((o, i) => {
-      if (o.rev !== oldPairs[i][1] || o.superseded_by !== undefined || o.archived_at) {
+      if (o.rev !== oldPairs[i][1] || o.status === "superseded" || o.archived_at) {
         throw new StaleWriteError(`note ${o.id} changed (or was already retired) after the preview; nothing was changed. Run the preview again`);
       }
     });
@@ -311,6 +312,10 @@ export function supersedeConfirm(
       const target = writable(store, caller, newId);
       if (target.rev !== newRev) throw new StaleWriteError("the replacing note was edited after the preview; nothing was changed. Run the preview again");
       if (store.isDistrusted(target)) throw new SupersedeError("a note from a writer on the distrust list cannot replace another note", 403);
+      // A replacement must be at least as sensitive as everything it replaces, or a replace would be a way to lower a label.
+      if (sensitivityRank(target.sensitivity ?? DEFAULT_SENSITIVITY) < sensitivityRank(strictestLabel(olds))) {
+        throw new SupersedeError("the replacing note has a lower sensitivity label than a note it replaces; relabel it first", 400);
+      }
       content = { title: target.title, body: target.body, tags: target.tags, confidence: target.confidence ?? null };
       if (hashContent(content) !== t.h) throw new StaleWriteError("the replacing note changed after the preview; nothing was changed");
       record = target;
@@ -335,6 +340,7 @@ export function supersedeConfirm(
     if (replacementId === 0) {
       const made = store.create({
         namespace: olds[0].namespace,
+        sensitivity: strictestLabel(olds),
         title: content.title,
         body: content.body,
         tags: content.tags,
@@ -423,7 +429,7 @@ export function noteHistory(store: Store, caller: Caller, id: number, opts: { in
 /** Put an earlier version back as a NEW version (the text it replaces goes into the history). Administrators only. */
 export function restoreVersion(store: Store, caller: Caller, id: number, version: unknown, opts: { ifRev?: number } = {}): { ok: true; message: string; note: NoteRecord } {
   const n = historyGate(store, caller, id);
-  if (n.superseded_by !== undefined) throw new SupersedeError(`note ${id} was replaced by note ${n.superseded_by}; bring it back (supersede undo) before restoring a version`, 409);
+  if (n.status === "superseded") throw new SupersedeError(`note ${id} was replaced by ${n.superseded_by !== undefined ? `note ${n.superseded_by}` : "another note"}; bring it back (supersede undo) before restoring a version`, 409);
   if (typeof version !== "number" || !Number.isInteger(version) || version < 1) throw new SupersedeError("give the version number to restore");
   const entry = store.historyVersion(id, version);
   if (!entry) throw new SupersedeError(`note ${id} has no saved version ${version}`, 404);

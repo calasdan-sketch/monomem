@@ -23,6 +23,7 @@ import { Store, ValidationError, CandidateScanError, clampInt } from "./store.js
 import type { NoteRecord } from "./store.js";
 import { maybeEmbed } from "./search-service.js";
 import { currentWriter } from "./actor.js";
+import { strictestLabel } from "./sensitivity.js";
 
 /** ~30 common English stopwords dropped before similarity scoring. */
 const STOPWORDS = new Set([
@@ -771,6 +772,8 @@ export function consolidateNotes(
           (oldest, n) => (n.created_at < oldest ? n.created_at : oldest),
           notes[0].created_at
         ),
+        // The merged note is as sensitive as its most sensitive source: a merge must never be a way to lower a label.
+        sensitivity: strictestLabel(notes),
       },
       // Edges were pre-scored above; apply them directly instead of
       // re-running the scan inside the transaction.
@@ -809,6 +812,7 @@ export function consolidateNotes(
     return merged;
   });
 }
+
 
 /**
  * The writers whose text a merge is made of: every source's content writer, the
