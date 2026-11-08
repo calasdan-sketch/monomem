@@ -676,18 +676,28 @@ export function createApiServer(
             return;
           }
           if (req.method === "POST" && path === "/tokens") {
-            let b: { label?: unknown; scope?: unknown; namespace?: unknown; max?: unknown; admin?: unknown; no_limit?: unknown };
+            let b: { label?: unknown; scope?: unknown; namespace?: unknown; max?: unknown; max_sensitivity?: unknown; admin?: unknown; no_limit?: unknown };
             try {
               b = JSON.parse((await readBody(req)) || "{}");
             } catch {
               sendJson(res, 400, { error: "invalid JSON body" });
               return;
             }
+            const TOKEN_FIELDS = ["label", "scope", "namespace", "max", "max_sensitivity", "admin", "no_limit"];
+            const unknownField = b && typeof b === "object" && !Array.isArray(b) ? Object.keys(b).find((k) => !TOKEN_FIELDS.includes(k)) : undefined;
+            if (unknownField !== undefined || b === null || typeof b !== "object" || Array.isArray(b)) {
+              sendJson(res, 400, { error: unknownField !== undefined ? `unknown field "${unknownField.slice(0, 40)}"; valid fields: ${TOKEN_FIELDS.join(", ")}` : `body must be a JSON object; valid fields: ${TOKEN_FIELDS.join(", ")}` });
+              return;
+            }
+            if (typeof b.max === "string" && typeof b.max_sensitivity === "string" && b.max !== b.max_sensitivity) {
+              sendJson(res, 400, { error: "send max_sensitivity or max, not two different values" });
+              return;
+            }
             const made = addApp({
               label: String(b.label ?? ""),
               ...(typeof b.scope === "string" ? { scope: b.scope } : {}),
               ...(typeof b.namespace === "string" ? { namespace: b.namespace } : {}),
-              ...(typeof b.max === "string" ? { max: b.max } : {}),
+              ...(typeof b.max_sensitivity === "string" ? { max: b.max_sensitivity } : typeof b.max === "string" ? { max: b.max } : {}),
               admin: b.admin === true,
               // Only reachable here: this branch already requires a caller with no limit and no namespace pin.
               noLimit: b.no_limit === true,

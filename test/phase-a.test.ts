@@ -192,6 +192,14 @@ describe("A2: token administration", () => {
     assert.ok(!list.text.includes(made.json.token) && !list.text.includes(toks[0].token), "no secrets in the list");
     assert.ok(list.json.apps.some((a: { label: string }) => a.label === "phone"));
     assert.equal((await call(toks[0].token, "POST", "/tokens", { label: "phone" })).status, 400);
+    const viaFull = await call(toks[0].token, "POST", "/tokens", { label: "tablet", max_sensitivity: "public" });
+    assert.equal(viaFull.status, 201);
+    assert.equal(viaFull.json.app.max_sensitivity, "public");
+    const typo = await call(toks[0].token, "POST", "/tokens", { label: "x1", max_sensitiviti: "public" });
+    assert.equal(typo.status, 400);
+    assert.match(typo.json.error, /unknown field "max_sensitiviti".*max_sensitivity/);
+    assert.equal((await call(toks[0].token, "POST", "/tokens", { label: "x2", max: "public", max_sensitivity: "internal" })).status, 400);
+    assert.equal((await call(toks[0].token, "DELETE", "/tokens/tablet")).status, 200);
     assert.equal((await call(toks[0].token, "DELETE", "/tokens/phone")).status, 200);
     assert.equal((await call(toks[0].token, "DELETE", "/tokens/phone")).status, 404);
     assert.equal((await call(toks[0].token, "DELETE", "/tokens/primary")).status, 400);
