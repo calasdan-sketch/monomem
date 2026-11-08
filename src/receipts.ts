@@ -7,6 +7,7 @@
 import { localTimeOffset } from "./asof.js";
 import { writeFileSync } from "node:fs";
 import { accessLogDays, type Store } from "./store.js";
+import { currentCeiling } from "./actor.js";
 import { printable } from "./security.js";
 import { meterStats, meterLine, type MeterTotals } from "./meter.js";
 
@@ -82,13 +83,31 @@ const nsWhere = (ns?: string[]): string => (ns ? ` AND namespace IN (${ns.map(()
 /** Recent sessions, newest first, optionally limited to some namespaces. */
 export function receiptList(store: Store, namespaces?: string[], limit = 20): ReceiptSummary[] {
   if (!hasTable(store)) return [];
+  const cap = Math.max(1, Math.min(200, Math.floor(limit)));
+  if (currentCeiling() !== undefined) {
+    // A caller with a sensitivity ceiling must not count (or weigh) notes above it: tally the rows one by one without those.
+    const all = store
+      .captureDb()
+      .prepare(`SELECT session_id, note_id, namespace, client, at, tokens FROM memory_receipts WHERE 1=1${nsWhere(namespaces)} ORDER BY at DESC, session_id DESC`)
+      .all(...(namespaces ?? [])) as Array<{ session_id: string; note_id: number; namespace: string; client: string; at: string; tokens: number }>;
+    const bySession = new Map<string, ReceiptSummary>();
+    for (const r of all) {
+      if (store.hiddenFromCaller(Number(r.note_id))) continue;
+      const s = bySession.get(r.session_id);
+      if (s) {
+        s.notes += 1;
+        s.tokens += Number(r.tokens);
+      } else bySession.set(r.session_id, { session_id: r.session_id, namespace: r.namespace, client: r.client, at: r.at, notes: 1, tokens: Number(r.tokens) });
+    }
+    return [...bySession.values()].slice(0, cap);
+  }
   const rows = store
     .captureDb()
     .prepare(
       `SELECT session_id, MIN(namespace) AS namespace, MIN(client) AS client, MIN(at) AS at, COUNT(*) AS notes, SUM(tokens) AS tokens
        FROM memory_receipts WHERE 1=1${nsWhere(namespaces)} GROUP BY session_id ORDER BY at DESC, session_id DESC LIMIT ?`
     )
-    .all(...(namespaces ?? []), Math.max(1, Math.min(200, Math.floor(limit)))) as unknown as ReceiptSummary[];
+    .all(...(namespaces ?? []), cap) as unknown as ReceiptSummary[];
   return rows.map((r) => ({ ...r, notes: Number(r.notes), tokens: Number(r.tokens) }));
 }
 
@@ -100,11 +119,12 @@ export function receiptGet(store: Store, sessionId: string, namespaces?: string[
     .prepare(`SELECT note_id, namespace, client, at, rank, why, tokens FROM memory_receipts WHERE session_id = ?${nsWhere(namespaces)} ORDER BY rank`)
     .all(sessionId, ...(namespaces ?? [])) as Array<{ note_id: number; namespace: string; client: string; at: string; rank: number; why: string; tokens: number }>;
   if (!rows.length) return null;
-  const notes = rows.map((r): ReceiptNote => {
+  const notes = rows.filter((r) => !store.hiddenFromCaller(Number(r.note_id))).map((r): ReceiptNote => {
     const n = store.readVisible(Number(r.note_id), { hideArchived: true });
     const state = n ? "ok" : "gone";
     return { id: Number(r.note_id), rank: Number(r.rank), why: r.why, tokens: Number(r.tokens), title: n ? n.title : null, state };
   });
+  if (!notes.length && currentCeiling() !== undefined) return null; // every note of it is above the caller's ceiling
   const f = rows[0];
   return { session_id: sessionId, namespace: f.namespace, client: f.client, at: f.at, tokens: notes.reduce((a, n) => a + n.tokens, 0), notes };
 }
