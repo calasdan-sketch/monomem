@@ -243,7 +243,8 @@ describe("CLI and report grouping", () => {
     assert.deepEqual(groups[0].values.flatMap((v) => v.notes.map((n) => n.id)).sort(), [...ids].sort());
     const text = conflictLines(groups).join("\n");
     assert.equal((text.match(/\[conflict:/g) ?? []).length, 1);
-    assert.match(text, new RegExp(`monomem supersede --old ${[ids[1], ids[2], ids[3]].join(",")} --new-id ${ids[0]}`));
+    assert.ok(!/supersede --old \d+,\d+,\d+/.test(text), "never suggests replacing more than two notes at once");
+    assert.match(text, /not suggested/);
     s.close();
   });
   test("two notes can state one value: both listed under it", () => {
