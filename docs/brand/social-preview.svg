@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-label="Monomem: one memory, shared by all your AI apps">
+  <rect width="1280" height="640" fill="#0c0f16"/>
+  <rect x="0" y="0" width="12" height="640" fill="#4f8cff"/>
+  <text x="80" y="230" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="120" font-weight="700" fill="#e8ecf5">mono<tspan fill="#4f8cff">mem</tspan></text>
+  <text x="84" y="320" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="44" fill="#e8ecf5">One memory, shared by all your AI apps.</text>
+  <text x="84" y="400" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="30" fill="#93a0bd">Self-hosted. One SQLite file. Every note says who wrote it.</text>
+  <text x="84" y="450" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="30" fill="#93a0bd">Undo, scoped keys, and public / internal / private labels.</text>
+  <rect x="84" y="520" width="520" height="64" rx="12" fill="#141926" stroke="#232a3b"/>
+  <text x="112" y="563" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="30" fill="#35d0a5">npx monomem setup</text>
+</svg>
