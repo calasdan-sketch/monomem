@@ -2348,6 +2348,11 @@ export function createApiServer(
         sendJson(res, 500, { error: e.message, id: e.noteId });
         return;
       }
+      // A refusal written for the caller (a search that is too long, a bad value) is a 400 with its own words.
+      if (e instanceof ValidationError) {
+        sendJson(res, 400, { error: e.message });
+        return;
+      }
       // Log details server-side; never leak internals (SQL errors, paths) out.
       console.error("[monomem] request error:", (e as Error).message);
       sendJson(res, 500, { error: "internal error" });

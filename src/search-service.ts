@@ -10,7 +10,7 @@
 // because an optional embedding server is unavailable.
 
 import { mayEmbed } from "./sensitivity.js";
-import { Store, NoteRecord, clampInt } from "./store.js";
+import { Store, NoteRecord, clampInt, queryTooLong, ValidationError } from "./store.js";
 import { embed, embeddingsEnabled, embeddingsConfig, noteEmbeddingText } from "./embeddings.js";
 import { filterByTimeRange, parseTimePhrase, type TimeRange } from "./time-parse.js";
 import { TIME_ZONE } from "./config.js";
@@ -906,12 +906,19 @@ export function keywordCoverage(note: NoteRecord, keywords: string[]): number {
 // The public entry points. A caller that opted in with includeDistrusted gets
 // notes whose writer the admin distrusts back flagged `distrusted: true`, so no
 // surface can show one without the mark.
+export function assertQueryLength(query: unknown): void {
+  const why = queryTooLong(query);
+  if (why) throw new ValidationError(why);
+}
+
 export async function runSearch(store: Store, query: string, opts: SearchOpts = {}): Promise<NoteRecord[]> {
+  assertQueryLength(query);
   const r = await runSearchInner(store, query, opts);
   return opts.includeDistrusted ? store.markDistrusted(r) : r;
 }
 
 export async function runSearchExplained(store: Store, query: string, opts: SearchOpts = {}): Promise<ExplainedHit[]> {
+  assertQueryLength(query);
   const r = await runSearchExplainedInner(store, query, opts);
   if (!opts.includeDistrusted) return r;
   const marked = new Map(store.markDistrusted(r.map((h) => h.note)).map((n) => [n.id, n]));
@@ -923,6 +930,7 @@ export async function runRelevantSearch(
   message: string,
   opts: RelevantOpts = {}
 ): Promise<{ keywords: string[]; results: NoteRecord[] }> {
+  assertQueryLength(message);
   const r = await runRelevantSearchInner(store, message, opts);
   return opts.includeDistrusted ? { ...r, results: store.markDistrusted(r.results) } : r;
 }

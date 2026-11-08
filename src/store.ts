@@ -898,11 +898,27 @@ function parseTags(raw: string): string[] {
  * default, OR when `any` (bm25 then weighs each matched term by its rarity, so a
  * note hitting the rare words outranks one hitting only common ones).
  */
+/** The longest search text any route accepts: 4096 characters and 64 words. (A 1 MB query once held the database for ~99 s.) */
+export const QUERY_MAX_CHARS = 4096;
+export const QUERY_MAX_WORDS = 64;
+/** The caller-facing refusal for a search that is too long, or "" when it is fine. Routes call this so the message is clear; the FTS builder below also cuts, as a second layer. */
+export function queryTooLong(q: unknown): string {
+  if (typeof q !== "string") return "";
+  if (q.length <= QUERY_MAX_CHARS) {
+    const words = q.trim() ? q.trim().split(/\s+/).length : 0;
+    if (words <= QUERY_MAX_WORDS) return "";
+    return `That search is too long: ${words} words (the most allowed is ${QUERY_MAX_WORDS} words or ${QUERY_MAX_CHARS} characters). Use the key words only.`;
+  }
+  return `That search is too long: ${q.length} characters (the most allowed is ${QUERY_MAX_CHARS} characters or ${QUERY_MAX_WORDS} words). Use the key words only.`;
+}
+
 function buildMatchQuery(q: string, any = false): string {
   const tokens = q
+    .slice(0, QUERY_MAX_CHARS)
     .trim()
     .split(/\s+/)
     .filter((t) => /[\p{L}\p{N}]/u.test(t)) // keep only tokens with a letter/number
+    .slice(0, QUERY_MAX_WORDS)
     .map((t) => `"${t.replace(/"/g, '""')}"*`);
   return tokens.join(any ? " OR " : " AND "); // "" when nothing usable; caller returns []
 }

@@ -1253,6 +1253,14 @@ async function relevant(): Promise<void> {
     } else parts.push(a);
   }
   const message = parts.join(" ");
+  {
+    const { queryTooLong } = await import("./store.js");
+    const tooLong = queryTooLong(message);
+    if (tooLong) {
+      console.error(tooLong);
+      process.exit(1);
+    }
+  }
   if (!message.trim() && !asOfRaw && process.argv[2] === "search") {
     // `search` with no words lists notes, as the help says.
     const rest = args.filter((a) => a !== "--json");
