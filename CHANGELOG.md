@@ -6,7 +6,46 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-08
+
+Not published yet. Upgrade notes: the first start migrates the database from schema v18 to v19 (one way: older builds refuse it) after
+making `<database>.pre-v19-backup`. To go back, close every app that uses Monomem and run `monomem restore <database>.pre-v19-backup --yes`
+(it keeps your current database aside first), then install 1.2.1. Details: `docs/upgrading.md`.
+
 ### Added
+
+- **Everyday commands:** `monomem add "text" [--title T] [--ns work] [--tag a,b] [--private | --sens public|internal|private]` (`-` reads a
+  pipe; same linter, secret refusal and held-write review as any other writer; written as `cli`), `monomem show <id>`,
+  `monomem ls [--ns x] [--limit 20]`, `monomem edit <id>` (in `$EDITOR`; refused if the note changed meanwhile) and `monomem forget <id>`
+  (an archive you can undo with `restore`). `monomem search` with no words lists your notes, as its help says. The CLI is you, the
+  owner: sensitivity limits apply to apps, not to it.
+- **`monomem restore <backup folder | state.db>`**: puts a backup (or a `.pre-vNN-backup`) back as your database. Refuses while Monomem or
+  an app is using it, copies the current database aside, removes stale `-wal`/`-shm`, checks the result.
+- `search --mode semantic|hybrid` (and REST/MCP `mode`) now says "semantic search is not set up; showing keyword results" when no
+  embedding service is on (a `notice` field on REST and MCP). Ordering is unchanged. `relevant` shows a short snippet per note.
+- `POST /tokens` accepts `max_sensitivity` (and still `max`) and answers 400 naming the valid fields for an unknown one.
+- `health` gains one capped **Exposure** check (app keys with no limit, notes that may hold personal data and are not marked private, apps
+  connected without a key): all reasons together cost at most one grade step.
+- Write responses (REST `similar_note`, MCP `similar_note`, and the `add` command) hint "looks similar to #N - consider updating it".
+  Nothing is blocked.
+
+### Fixed
+
+- Conflict reports: a broad overlap (more than two notes on one key) is "low", never "high", and no longer suggests replacing more than two
+  notes with one command.
+- `health` and `doctor` agree: the optional start-of-session hook and `.pre-vNN-backup` copies are info, not warnings.
+- Session-start recall shows as many notes as 1.2.1 (short `by <name>` label on index lines, one legend line).
+- A search over 4096 characters or 64 words is refused with a clear message on every route (a 1 MB query once held the database for
+  about 99 seconds). The index builder also cuts it as a second layer.
+- `monomem <search|relevant> --help` lists the real options. `recall` run by hand at a keyboard prints text (`--json` for the hook
+  payload; the hook itself is unchanged). `stats.mostAccessed` no longer lists notes nobody has read.
+- Undoing a replacement says the replacement note is still live and how to archive it. The "read access log: a row was skipped" message
+  is now a calm one-time info line. A database from a newer build prints one plain line from the stdio server, naming the
+  `.pre-vNN-backup` copy, instead of a stack trace.
+- `private` is described plainly everywhere: limited apps cannot see it; apps with no limit (including your main Claude connection)
+  still can, with the next step.
+
+### Added (sensitivity labels, schema v19)
 
 - **Per-memory sensitivity labels and per-token ceilings.** Each note is `public`, `internal` (the default) or `private`. A token
   in `tokens.json` / `MONOMEM_TOKENS` can set `max_sensitivity`; above that ceiling a note is not found, searched, listed, counted,
@@ -37,7 +76,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Both servers set explicit connection limits and refuse a request that reaches them under an unexpected host name
   (`MONOMEM_ALLOWED_HOSTS`; localhost, IP addresses and proxied or tunnelled requests are unaffected).
 - `monomem backup` no longer copies the encryption key into the backup folder unless you pass `--include-key`; it says where the key is.
-- Session-start recall names the writer on every index line and ends with a reminder that the notes are data.
+- Session-start recall labels each index line with who wrote it (short `by <name>`, explained once) and ends with a reminder that the notes are data.
 - `monomem setup` and `connect` replace Monomem's own keyless entry with a limited one when you ask for a limit (shown, backed up, undoable).
 - `monomem demo` runs one benchmark suite (permission isolation) so the tour takes seconds.
 
