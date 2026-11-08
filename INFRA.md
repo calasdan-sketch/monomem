@@ -111,6 +111,11 @@ Creates a CNAME in Cloudflare DNS pointing `<TUNNEL_HOSTNAME>` at the
 tunnel. Cloudflare terminates TLS for you — the public URL is
 `https://<TUNNEL_HOSTNAME>/mcp` with a real cert, no extra work.
 
+> **Host names.** Requests that arrive through the tunnel are accepted under your public hostname with no extra setting
+> (the tunnel adds forwarding headers). If you ever see `host not allowed`, add the name:
+> `MONOMEM_ALLOWED_HOSTS=<TUNNEL_HOSTNAME>`. Setting it also makes the check strict: only `localhost` and the names you
+> list are accepted, proxy or not. See [docs/configuration.md](./docs/configuration.md).
+
 ### Step 6 — Test it manually
 
 ```powershell
@@ -535,8 +540,9 @@ monomem backup --out ~/om-backup/2026-10-24
 
 - Takes a consistent snapshot with SQLite `VACUUM INTO`, so it is **safe while
   the server is running and writing**; it never overwrites an existing backup.
-- Writes `state.db`, a `README.txt`, and a copy of **`.key`** (mode 0600) when
-  encryption is enabled, and checks the copy with `PRAGMA integrity_check`.
+- Writes `state.db` and a `README.txt`, and checks the copy with `PRAGMA integrity_check`. When encryption is
+  enabled, **`.key` is not put in the backup folder** (the command prints where it lives); `--include-key` copies it
+  (mode 0600) if you want that.
 - **Store the key separately from the backup.** Encrypted note bodies are
   unreadable without `.key`; a backup kept next to its key is no longer
   protected by the encryption. Put the key in a password manager or another

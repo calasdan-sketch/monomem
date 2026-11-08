@@ -4,7 +4,25 @@ Monomem speaks the standard **MCP** protocol, so it drops into any
 MCP-capable agent. They all launch it the same way — a local command over
 "stdio" — they just keep their config in different places. Pick yours below.
 
-> **One-time setup first** (Node.js 22.16+ or 24 LTS):
+## The easy way: `monomem setup`
+
+```bash
+npx monomem setup --dry-run     # shows exactly what it would change; writes nothing
+npx monomem setup               # does it, after you type y; backs up every file; --undo reverses it
+```
+
+It finds Claude Code, Claude Desktop, Cursor, Codex CLI, Gemini CLI, Muse, VS Code and Zed, adds only the Monomem entry, and can move an old `claude-bridge` entry across keeping your data.
+Details and troubleshooting: [docs/live-claude-code.md](./docs/live-claude-code.md). The manual steps for each app follow.
+
+To give one app its own key and a limit on what it can see, use `monomem connect <app> --max internal` instead; see
+[Give an app limited access](./docs/give-an-app-limited-access.md). Apps wired by hand below (the usual `monomem mcp` way)
+run on your computer with no limit, so use `connect` for any app that should not see `private` notes.
+
+---
+
+## Doing it by hand
+
+> **Before the by-hand steps** (Node.js 22.16+ or 24 LTS):
 > ```bash
 > npm install -g monomem
 > ```
@@ -35,16 +53,6 @@ MCP-capable agent. They all launch it the same way — a local command over
 > gives you the same `monomem` command.
 
 ---
-
-## The easy way: `monomem setup`
-
-```bash
-npx monomem setup --dry-run     # shows exactly what it would change; writes nothing
-npx monomem setup               # does it, after you type y; backs up every file; --undo reverses it
-```
-
-It finds Claude Code, Claude Desktop, Cursor, Codex CLI, Gemini CLI, Muse, VS Code and Zed, adds only the Monomem entry, and can move an old `claude-bridge` entry across keeping your data.
-Details and troubleshooting: [docs/live-claude-code.md](./docs/live-claude-code.md). The manual steps for each app follow.
 
 ## Claude Code
 

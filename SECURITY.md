@@ -244,3 +244,13 @@ CLI itself, so none of them stops an agent that can run commands.**
 Email **office@calasautomations.com**, or open a private security advisory on the GitHub repository
 (github.com/calasdan-sketch/monomem, Security tab, "Report a vulnerability"). We reply within 7 days and coordinate
 disclosure within 90 days. Please do not file public issues for security reports.
+
+
+## Not done yet (roadmap)
+
+These are known gaps, written down so nobody assumes they are covered:
+
+- **Keys are stored as they are.** Tokens in `tokens.json` and the main token file are kept in plain text (mode 0600), not as one-way hashes. Anyone who can read your data folder can use them. Hashing them is planned; until then protect the folder.
+- **No key rotation for at-rest encryption.** `monomem encrypt` uses one key. Changing it means decrypting and re-encrypting by hand (export, new store, import).
+- **A backup does not carry the encryption key by default** (`monomem backup --include-key` does copy it). Keep your own copy of the key somewhere separate.
+- **Host check is a second layer, not a wall.** A request under an unexpected host name is refused (see `MONOMEM_ALLOWED_HOSTS`), but a request through a proxy or tunnel is let through that check and still needs a valid key.

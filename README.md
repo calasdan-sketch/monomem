@@ -286,6 +286,10 @@ dashboard's **Meter** view. Tokens are estimates at about 4 characters a token.
 - **Scoped tokens.** `read` / `write` / `admin` bearer tokens, enforced
   identically on REST and MCP — give your phone a read token and a leaked
   token can't wipe the store.
+- **Sensitivity labels.** Mark a note `public`, `internal` (the default) or `private`, and give each app a ceiling
+  (`monomem token add --label cursor --scope write --max internal`, or `monomem connect cursor --restricted`). Above its
+  ceiling a note is not found, searched, listed, counted, exported or injected, and looks the same as a note that does
+  not exist. → [docs/sensitivity-labels.md](./docs/sensitivity-labels.md), [docs/give-an-app-limited-access.md](./docs/give-an-app-limited-access.md)
 - **MCP *and* a plain REST API** on the same store, plus a small dashboard.
 
 Also included: optional semantic / hybrid search with your own embeddings
@@ -413,6 +417,9 @@ monomem rollback --writer stdio:cursor --since 2h [--include-conflicts]   # undo
 monomem access [--since 24h] [--writer label]   # who read memory, with which tool (never note text)
 monomem flood     monomem resume <label>         # writers paused for too many writes in an hour
 monomem quality [--json]     monomem decay [--dry-run]     monomem archive <id> | restore <id>
+monomem label <id> [public|internal|private]    # show or set a note's sensitivity label
+monomem connect <app> [--restricted]     monomem open     # one app with its own key and limit; open the dashboard signed in
+monomem pii scan     monomem digest [--since 24h]     monomem scrub     monomem safety-report --out report.html     # checkups (docs/checkups.md)
 monomem consolidate | rebuild-edges | reindex | relevant "…" | recall
 monomem bench [--json] [--suite stale|contradiction|isolation|provenance] [--strict-gaps]   # provenance benchmark (docs/BENCHMARK.md)
 ```
@@ -555,6 +562,9 @@ remove it: [docs/footprint.md](./docs/footprint.md).
 | [docs/provenance.md](./docs/provenance.md) | who wrote a note: server-stamped `written_by`, filters, what is and is not trusted |
 | [docs/trust.md](./docs/trust.md) | distrust list, writer ids, signed attestations: what each does and does not prove, upgrade and rollback |
 | [docs/team.md](./docs/team.md) | shared memory for a team: one server, one token per person, namespaces, approve-first, sync, backups |
+| [docs/sensitivity-labels.md](./docs/sensitivity-labels.md) | public / internal / private labels and per-token ceilings; what a hidden note looks like |
+| [docs/give-an-app-limited-access.md](./docs/give-an-app-limited-access.md) | give one app its own key and a limit, step by step |
+| [docs/checkups.md](./docs/checkups.md) | `pii scan`, `digest`, `scrub`, `safety-report`, `audit` |
 | [docs/token-namespaces.md](./docs/token-namespaces.md) | per-token namespace permissions — one shared bridge, isolated agents |
 | [docs/replacing-memories.md](./docs/replacing-memories.md) | replacing a note in two steps, undo, version history and restore, confidence, the trust guard |
 | [docs/BENCHMARK.md](./docs/BENCHMARK.md) | `monomem bench`: stale memory, contradiction recovery, permission isolation, provenance retention; scenario format; adapting it to another memory system |

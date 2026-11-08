@@ -6,6 +6,41 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Per-memory sensitivity labels and per-token ceilings.** Each note is `public`, `internal` (the default) or `private`. A token
+  in `tokens.json` / `MONOMEM_TOKENS` can set `max_sensitivity`; above that ceiling a note is not found, searched, listed, counted,
+  exported, injected, shown in the change feed, named by `why`, `receipts`, `pinned`, `rollback` or the fact-conflict check, on every
+  route, and the token cannot write or relabel above it (lowering a label needs an administrator key). A hidden note looks exactly like
+  a missing one. Tokens without a ceiling behave as before. Set labels with `sensitivity` on `state_write` / `POST /notes`, or
+  `monomem label <id> <level>`. `MONOMEM_RECALL_MAX_SENSITIVITY` caps the session-start and file-context hooks,
+  `MONOMEM_STDIO_MAX_SENSITIVITY` caps a stdio app, and `MONOMEM_EXPORT_MAX_SENSITIVITY` / `monomem export --max-sensitivity` cap the
+  Markdown vault. The access log (`/access`) and the meter totals are not available to a key with a ceiling. See
+  `docs/sensitivity-labels.md`.
+- **Schema v19** (adds the label columns; every existing note becomes `internal`). A backup is written to `<db>.pre-v19-backup`, and
+  older builds refuse the file.
+- **`monomem token add <name> --max public|internal|private | --no-limit`** (the existing `token add --label ... --scope ...` form still
+  works), a running server picks up `tokens.json` changes within a couple of seconds, and the dashboard has an Apps panel to add and
+  remove keys. `monomem connect <app> [--restricted]` gives one app its own key and limit; `monomem open` opens the dashboard signed in
+  with a one-time code; `GET /whoami` tells an app what it can see.
+- Checkups that only suggest, never change: `monomem scrub` (backup first, then compacts the file and rebuilds search so deleted text
+  is gone; also `purge-deleted`), `monomem pii scan` (suggests `monomem label <id> private`), `monomem digest`,
+  `monomem safety-report --out report.html`, `monomem audit` (who changed what; `audit verify` is unchanged), `monomem demo`,
+  `monomem snippet`, `monomem import --rules`. Two new `monomem quality` checks: personal data in notes not marked private, and notes
+  that may contradict each other. The dashboard has a tidiness card, an Audit tab and a Changes window picker.
+- Per-command help: `monomem <command> --help`.
+
+### Changed
+
+- A big namespace is no longer indexed inside the write that needs it: above 5,000 live notes the similarity index is built in the
+  background in short slices. New indexes make the default note list about ten times faster at 50,000 notes.
+- Both servers set explicit connection limits and refuse a request that reaches them under an unexpected host name
+  (`MONOMEM_ALLOWED_HOSTS`; localhost, IP addresses and proxied or tunnelled requests are unaffected).
+- `monomem backup` no longer copies the encryption key into the backup folder unless you pass `--include-key`; it says where the key is.
+- Session-start recall names the writer on every index line and ends with a reminder that the notes are data.
+- `monomem setup` and `connect` replace Monomem's own keyless entry with a limited one when you ask for a limit (shown, backed up, undoable).
+- `monomem demo` runs one benchmark suite (permission isolation) so the tour takes seconds.
+
 ## [1.2.1] - 2026-11-06
 
 ### Fixed
