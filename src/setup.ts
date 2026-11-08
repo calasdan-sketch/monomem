@@ -91,6 +91,10 @@ export interface SetupOptions {
   noDoctor: boolean;
   /** "auto" (default), "node" (absolute node + cli.js) or "npx". */
   command: "auto" | "node" | "npx";
+  /** Wire the app to the running HTTP server with its own key (so its sensitivity limit applies) instead of the stdio command. */
+  httpEntry?: { url: string; headers: Record<string, string> };
+  /** `connect` calls setup for one app: skip the version banner and the list of every app found. */
+  terse?: boolean;
   /** Replace a config file that exists but is completely empty (0 bytes), which may be a half-written one. */
   forceEmpty: boolean;
   /** Remove an old (`onememory` / `claude-bridge`) entry that sits beside a `monomem` one. Only ever set after a typed yes. */
@@ -232,6 +236,9 @@ export function buildHookCommand(e: SetupEnv, opts: Pick<SetupOptions, "command"
   if (useNpx) return `npx -y monomem@${e.version} recall --budget-ms 800${db}`;
   return `node "${e.cliPath.replace(/\\/g, "/")}" recall --budget-ms 800${db}`;
 }
+
+/** Apps whose config accepts a web (HTTP) MCP server with headers: Claude Code and VS Code (type "http"), Cursor (url + headers). */
+export const HTTP_CAPABLE: readonly string[] = ["claude-code", "vscode", "cursor", "project"];
 
 export type EntryKind = "monomem" | "legacy" | "other";
 
@@ -506,6 +513,7 @@ export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, 
   const hasOneTop = top.some((s) => classifyEntry(s.name, safeParseEntry(base, s) ?? {}) === "monomem");
   let migrated = 0;
   let labelled = 0;
+  let replaced = 0;
   for (const s of servers) {
     const entry = safeParseEntry(base, s);
     if (!entry) {
@@ -518,6 +526,24 @@ export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, 
     }
     const kind = classifyEntry(s.name, entry);
     const where = s.path.length === 1 ? "" : ` (project ${s.path[1]})`;
+    if (kind === "monomem" && opts.httpEntry) {
+      // Monomem's OWN entry (the one setup wrote, with no key) is replaced by the limited one. The change is shown, the file
+      // is backed up like every other setup change, and `monomem setup --undo` puts the old entry back exactly.
+      if (!HTTP_CAPABLE.includes(target.id)) {
+        conflicts.push(`${target.label}: I cannot safely write a key-based connection into this app's config (its format is not verified). Use the paste-in block that  monomem connect ${target.id} --restricted --print  shows`);
+        continue;
+      }
+      if ((entry as { url?: unknown }).url !== undefined || (entry as { headers?: unknown }).headers !== undefined) {
+        conflicts.push(`${target.label}: "${s.name}"${where} already connects this app with its own key. To change its limit, take that connection out first: monomem token list  (then monomem token remove <name> and monomem setup --undo), and run connect again`);
+        continue;
+      }
+      const limited = { ...(withType ? { type: "http" } : {}), url: opts.httpEntry.url, headers: opts.httpEntry.headers } as unknown as ServerEntry;
+      ops.push({ op: "set", path: s.path, key: s.name, value: limited });
+      inverse.unshift({ op: "set", path: s.path, key: s.name, value: entry });
+      lines.push(`replace Monomem's own "${s.name}" entry${where}: it connected this app to ALL your notes with no key and no limit; the new entry uses its own key and limit`);
+      replaced++;
+      continue;
+    }
     if (kind === "monomem") {
       const env = entry.env && typeof entry.env === "object" && !Array.isArray(entry.env) ? (entry.env as Record<string, unknown>) : null;
       // A folder's .mcp.json is only edited when asked (--project), the same as adding one.
@@ -559,11 +585,21 @@ export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, 
     if (dbToCheck) shared.dbs.add(dbToCheck);
     migrated++;
   }
-  if (migrated === 0 && labelled === 0 && !hasOneTop && (target.id !== "project" || opts.project) && !already.length) {
+  if (migrated === 0 && labelled === 0 && replaced === 0 && !hasOneTop && (target.id !== "project" || opts.project) && !already.length) {
     // MONOMEM_CLIENT names the app for written_by ("stdio:<app>"): a label the config declares, not a verified identity.
     const env: Record<string, string> = { MONOMEM_CLIENT: appLabel(target.id) };
     if (opts.db) env.MONOMEM_DB_PATH = opts.db;
-    let entry = buildServerEntry(e, opts, env, withType);
+    let entry: ServerEntry;
+    if (opts.httpEntry) {
+      // Only apps whose web-connection format is documented are written here; the others get a paste-in snippet from `connect`.
+      if (!HTTP_CAPABLE.includes(target.id)) {
+        conflicts.push(`${target.label}: I cannot safely write a key-based connection into this app's config (its format is not verified). Use the paste-in block that  monomem connect ${target.id} --restricted --print  shows`);
+        return { change: null, already, conflicts, warnings };
+      }
+      entry = { ...(withType ? { type: "http" } : {}), url: opts.httpEntry.url, headers: opts.httpEntry.headers } as unknown as ServerEntry;
+    } else {
+      entry = buildServerEntry(e, opts, env, withType);
+    }
     // Muse: "optional" so a server that fails to start is skipped with a warning instead of aborting the whole run.
     if (target.id === "muse") entry = { transport: "stdio", ...entry, mode: "optional" };
     // Muse refuses to start without "schema_version": 1, so a file we create (or one missing it) gets it.
@@ -1154,8 +1190,10 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   // because the app will not run inside this shell.
   const envDb = (e.env.MONOMEM_DB_PATH || e.env.CLAUDE_BRIDGE_DB_PATH || "").trim();
   if (!opts.db && envDb) opts = { ...opts, db: envDb };
-  io.out(`Monomem setup (version ${e.version})`);
-  io.out(`  Node ${e.nodeVersion}: OK\n`);
+  if (!opts.terse) {
+    io.out(`Monomem setup (version ${e.version})`);
+    io.out(`  Node ${e.nodeVersion}: OK\n`);
+  }
   if (opts.only) {
     const bad = opts.only.filter((x) => !(CLIENT_IDS as readonly string[]).includes(x));
     if (bad.length) {
@@ -1164,12 +1202,14 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
     }
   }
   const found = detectClients(e);
-  io.out("What I found:");
-  for (const t of found) {
-    if (t.id === "project" && !t.exists) continue;
-    io.out(`  ${t.label.padEnd(26)} ${(t.exists ? "found" : t.present ? "installed, no config file yet" : "not found").padEnd(30)}${t.present ? t.file : ""}`.trimEnd());
+  if (!opts.terse) {
+    io.out("What I found:");
+    for (const t of found) {
+      if (t.id === "project" && !t.exists) continue;
+      io.out(`  ${t.label.padEnd(26)} ${(t.exists ? "found" : t.present ? "installed, no config file yet" : "not found").padEnd(30)}${t.present ? t.file : ""}`.trimEnd());
+    }
+    io.out("");
   }
-  io.out("");
 
   let plan: SetupPlan = { nodeOk: true, found, changes: [], dbs: [], warnings: [], already: [], conflicts: [], };
   let shared: { dbs: Set<string>; dupOld?: number } = { dbs: new Set<string>() };
@@ -1211,7 +1251,12 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   }
 
   if (plan.changes.length === 0 && plan.conflicts.length === 0) {
-    if (plan.already.length === 0) io.out("I found no app to connect. Pass --only claude-code (or claude-desktop, cursor, codex, gemini, muse, vscode, zed) to create its config, or --project for this folder.");
+    if (plan.already.length === 0) {
+        io.out("I found no app to connect on this computer (none of the supported apps is installed), so nothing was changed. That is fine. What to do next:");
+        io.out("  1. If you use one of these, name it and I will create its settings file:  monomem connect claude-code   (also: claude-desktop, cursor, codex, gemini, muse, vscode, zed)");
+        io.out("  2. Or connect an app by hand: it needs the command  monomem mcp  (see INSTALL.md), or for a web connection run  monomem token add <app-name>  and paste what it prints.");
+        io.out("  3. Not sure? Run  monomem doctor  to see what Monomem can find.");
+      }
   }
   if (plan.conflicts.length) {
     io.err("Stopped, because:");
@@ -1459,6 +1504,11 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   // assistant is known by another. It used to end by asking the user to search
   // for the note the installer had just written about the installer -- proof
   // that Monomem could talk to itself, in the slot where attention peaks.
+  if (opts.terse) {
+    // `monomem connect` prints its own closing lines.
+    io.out(`\nWritten. Restart ${written.length === 1 ? "that app" : "those apps"} so ${written.length === 1 ? "it picks" : "they pick"} up the change. To go back: monomem setup --undo`);
+    return 0;
+  }
   const proof = proofPair(written);
   io.out("\nDone. Restart any assistant that was open, so it picks up the new entry.");
   io.out("  Check it loaded: type  /mcp  (or your tool's equivalent) and look for  monomem  connected.");

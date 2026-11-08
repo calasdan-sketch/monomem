@@ -546,8 +546,8 @@ describe("setup: moving from claude-bridge", () => {
     const { oldDb } = legacyHome(s, {});
     const io = makeIO();
     await runSetup(s.e, io, opts({ dryRun: true }));
-    assert.match(io.all(), /schema v13; this version upgrades it to v18/);
-    assert.match(io.all(), /pre-v18-backup/);
+    assert.match(io.all(), /schema v13; this version upgrades it to v19/);
+    assert.match(io.all(), /pre-v19-backup/);
     assert.match(io.all(), /close Claude Code/i);
     assert.equal(Store.peekSchemaVersion(oldDb), 13, "a dry run did not upgrade it");
   });
