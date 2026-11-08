@@ -608,7 +608,8 @@ export function createMcpServer(
           { lintWarnings: warnings }
         );
         await maybeEmbed(store, created);
-        return untrustedResult(withConflicts(withWarnings({ note: created }, warnings), store, created, facts));
+        const sim = store.similarNote(created.id);
+        return untrustedResult(withConflicts(withWarnings({ note: created, ...(sim ? { similar_note: { id: sim.id, title: sim.title, hint: `looks similar to #${sim.id} - consider updating it (state_write with id=${sim.id}) if this is the same thing` } } : {}) }, warnings), store, created, facts));
       } catch (e) {
         if (e instanceof QuarantinedError) return quarantinedResult(e);
         return errorFor(e);

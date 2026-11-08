@@ -370,11 +370,11 @@ export function supersedeConfirm(
 }
 
 /** Bring a replaced note back. Safe by design (it restores, never removes), so no code is needed; it is recorded. */
-export function supersedeUndo(store: Store, caller: Caller, id: unknown): { ok: true; message: string; note: NoteRecord } {
+export function supersedeUndo(store: Store, caller: Caller, id: unknown): { ok: true; message: string; note: NoteRecord; replacement_still_live?: number } {
   if (!scopeAllows(caller.scope, "write")) throw new SupersedeError("bringing a replaced note back needs a write or admin token", 403);
   if (typeof id !== "number" || !Number.isInteger(id) || id < 1) throw new SupersedeError("give the note number to bring back");
   const n = writable(store, caller, id);
-  if (n.superseded_by === undefined) throw new SupersedeError(`note ${id} has not been replaced, so there is nothing to undo`, 409);
+  if (n.superseded_by === undefined && n.status !== "superseded") throw new SupersedeError(`note ${id} has not been replaced, so there is nothing to undo`, 409);
   const me = writerOf(caller);
   if (me !== "" && store.isDistrusted({ namespace: n.namespace, written_by: me }) && !scopeAllows(caller.scope, "admin")) {
     throw new SupersedeError("a writer on the distrust list cannot bring replaced notes back", 403);
@@ -386,7 +386,18 @@ export function supersedeUndo(store: Store, caller: Caller, id: unknown): { ok: 
   }
   const back = store.supersedeUndo(id, me);
   if (!back) throw new SupersedeError(`note ${id} has not been replaced, so there is nothing to undo`, 409);
-  return { ok: true, message: `Note ${id} is back. It shows up in search again, exactly as it was. The note that replaced it was not touched.`, note: back };
+  // Both notes are live now, which surprises people: say so, with the one-line fix. (The replacement is never archived for them.)
+  const replacement = n.superseded_by;
+  const live = replacement !== undefined ? store.readVisible(replacement) : null;
+  const still = live && !live.archived_at ? live.id : undefined;
+  return {
+    ok: true,
+    message:
+      `Note ${id} is back. It shows up in search again, exactly as it was. The note that replaced it was not touched.` +
+      (still !== undefined ? ` Replacement note #${still} is still live, so both are live now; if you only want the old one, run: monomem forget ${still}` : ""),
+    note: back,
+    ...(still !== undefined ? { replacement_still_live: still } : {}),
+  };
 }
 
 // ---- History -------------------------------------------------------------------------------------------------------

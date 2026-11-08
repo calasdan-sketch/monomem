@@ -772,7 +772,8 @@ export function createApiServer(
           const warnings: LintFinding[] = [];
           const note = store.create(parsed, { lintWarnings: warnings });
           await maybeEmbed(store, note);
-          sendJson(res, 201, { note, ...(warnings.length ? { warnings } : {}), ...(facts === undefined ? {} : factFeedback(store, note)) });
+          const sim = store.similarNote(note.id);
+          sendJson(res, 201, { note, ...(sim ? { similar_note: { id: sim.id, title: sim.title, hint: `looks similar to #${sim.id} - consider updating it (PUT /notes/${sim.id}) if this is the same thing` } } : {}), ...(warnings.length ? { warnings } : {}), ...(facts === undefined ? {} : factFeedback(store, note)) });
         } catch (e) {
           sendError(res, e);
         }

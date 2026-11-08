@@ -4295,6 +4295,24 @@ export class Store {
       .all(...(namespaces ?? []), clampInt(limit, 50, 1, 500)) as unknown as Array<{ at: string; actor: string; action: string; namespace: string; old_id: number; new_id: number | null; flags: string }>;
   }
 
+  /**
+   * The closest existing note a new write looks like (score at least `min`), for a gentle "consider updating it" hint. Only live notes
+   * the caller may see; a note above the caller's sensitivity ceiling is never named. Null when nothing is close.
+   */
+  similarNote(id: number, min = 0.6): { id: number; title: string; score: number } | null {
+    const ceil = this.ceilingSql("n.sensitivity");
+    const row = this.db
+      .prepare(
+        `SELECT n.id AS id, n.title AS title, e.score AS score FROM note_edges e JOIN notes n ON n.id = e.neighbor_id
+         WHERE e.note_id = ? AND e.score >= ? AND n.archived_at IS NULL AND n.superseded_by IS NULL AND n.kind = 'note'${ceil}
+         ORDER BY e.score DESC, n.id ASC LIMIT 1`
+      )
+      .get(id, min) as { id: number; title: string; score: number } | undefined;
+    if (!row) return null;
+    const visible = this.readVisible(Number(row.id)); // hides distrusted writers and sealed titles the same way every read does
+    return visible ? { id: Number(row.id), title: visible.title, score: Math.round(Number(row.score) * 100) / 100 } : null;
+  }
+
   /** Ids of this note's close neighbours in the similarity graph (same namespace by construction). */
   neighbourIds(id: number): Set<number> {
     const ceil = this.ceilingSql("n.sensitivity");
@@ -7367,7 +7385,7 @@ export class Store {
       });
       if (!wrote && !Store.accessSkipReported) {
         Store.accessSkipReported = true;
-        console.error("[monomem] read access log: a row was skipped because the database was busy (reads are never made to wait for it)");
+        console.error("[monomem] info: one read was not counted in the access log because the database was busy. Nothing is lost or wrong; this is shown once.");
       }
     } catch {
       // The access log must never break a read.
