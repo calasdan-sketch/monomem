@@ -19,7 +19,7 @@ const COMMANDS = [
   "consolidate", "rebuild-edges", "relevant", "search", "token", "changes", "backup", "runner-status", "watch", "export", "import", "trust",
   "quarantine", "approve-first", "access", "flood", "resume", "decay", "archive", "restore", "delete", "quality", "conflicts", "facts", "fact",
   "encrypt", "meter", "receipts", "why", "never-show", "supersede", "history", "pin", "unpin", "rollback", "bench", "drill", "health", "audit",
-  "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet",
+  "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet",
   "help", "--help", "-h", "--version", "-v", "version",
 ];
 
@@ -67,6 +67,8 @@ function shortUsage(): void {
       "  search|relevant \"message\" --as-of 7d [--json]   The same, as memory stood then (ISO time or 7d/2h; no message lists notes)",
       "  changes                 What changed while you were away",
       "  history <id>            A note's earlier versions (history restore <id> <version> puts one back)",
+      "  add \"text\" [--title T] [--ns work] [--tag a,b] [--private]   Save a note (\"-\" reads the text from a pipe)",
+      "  show <id> | ls [--ns x] [--limit 20] | edit <id> | forget <id>   Look at, list, change or archive notes (forget can be undone with restore)",
       "  pin <id> | unpin <id>   Pin a note so agents can read it but not change it",
       "",
       "Trust",
@@ -263,6 +265,10 @@ function usage(all = false): void {
       "            Also runs on its own in the expiry sweep and at the end of a captured session.",
       "  archive <id> | restore <id>",
       "            Soft-archive a note, or bring an archived one back (the undo for decay and archive).",
+      "  add \"text\" [--title T] [--ns work] [--tag a,b] [--private | --sens public|internal|private]",
+      "            Save a note from the shell (\"-\" reads a pipe). Same linter, secret refusal and quarantine as any other writer; written as \"cli\".",
+      "  show <id> | ls [--ns x] [--limit 20] | edit <id> | forget <id>",
+      "            Read, list, change (in $EDITOR, refused if the note changed meanwhile) or archive a note. The CLI is you, the owner: sensitivity limits apply to apps, not to it.",
       "  audit [--since 24h] [--op create|update|delete|...] [--label <key name>] [--limit n] [--json]",
       "            Who changed what: the change log in plain words (never note text).",
       "  audit verify [--expect <head-hash>]",
@@ -1247,6 +1253,12 @@ async function relevant(): Promise<void> {
     } else parts.push(a);
   }
   const message = parts.join(" ");
+  if (!message.trim() && !asOfRaw && process.argv[2] === "search") {
+    // `search` with no words lists notes, as the help says.
+    const rest = args.filter((a) => a !== "--json");
+    await (await import("./everyday-cli.js")).lsCmd([...rest, ...(asJson ? ["--json"] : [])]);
+    return;
+  }
   if (!message.trim() && !asOfRaw) {
     console.error('Usage: monomem relevant "some natural language message" [--limit 5] [--namespace ns] [--as-of <ISO|7d|2h>] [--json]');
     process.exit(1);
@@ -3131,9 +3143,31 @@ async function main(): Promise<void> {
     case "decay":
       await decayCmd();
       break;
+    case "add":
+      await (await import("./everyday-cli.js")).addCmd(process.argv.slice(3));
+      break;
+    case "show":
+      await (await import("./everyday-cli.js")).showCmd(process.argv.slice(3));
+      break;
+    case "ls":
+      await (await import("./everyday-cli.js")).lsCmd(process.argv.slice(3));
+      break;
+    case "edit":
+      await (await import("./everyday-cli.js")).editCmd(process.argv.slice(3));
+      break;
+    case "forget":
     case "archive":
     case "restore":
-      await archiveCmd(cmd);
+      if (cmd === "forget" && process.stdin.isTTY && !process.argv.includes("--yes")) {
+        const rl = (await import("node:readline/promises")).createInterface({ input: process.stdin, output: process.stdout });
+        const a = (await rl.question(`Forget note #${process.argv[3]}? It is archived, not deleted, and "monomem restore ${process.argv[3]}" brings it back. [y/N] `)).trim().toLowerCase();
+        rl.close();
+        if (a !== "y" && a !== "yes") {
+          console.log("Left as it was.");
+          break;
+        }
+      }
+      await archiveCmd(cmd === "forget" ? "archive" : cmd);
       break;
     case "delete":
       await deleteCmd();
