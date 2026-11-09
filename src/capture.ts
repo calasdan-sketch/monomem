@@ -12,6 +12,7 @@ import { join } from "node:path";
 import type { Store } from "./store.js";
 import { redact } from "./redact.js";
 import { captureAad } from "./crypto.js";
+import { currentWriter } from "./actor.js";
 
 export const HOOK_EVENTS = ["session-start", "user-prompt", "post-tool", "post-tool-failure", "stop", "subagent-stop", "session-end"] as const;
 export type HookEvent = (typeof HOOK_EVENTS)[number];
@@ -144,8 +145,8 @@ export function recordEvent(store: Store, ev: CaptureEvent, namespace: string): 
   try {
     const created = Number(
       db
-        .prepare("INSERT OR IGNORE INTO sessions (id, namespace, cwd, started_at) VALUES (?, ?, ?, ?)")
-        .run(ev.session_id, namespace, ev.cwd, ev.at).changes ?? 0
+        .prepare("INSERT OR IGNORE INTO sessions (id, namespace, cwd, started_at, writer) VALUES (?, ?, ?, ?, ?)")
+        .run(ev.session_id, namespace, ev.cwd, ev.at, currentWriter() || null).changes ?? 0
     );
     const res = db
       .prepare("INSERT INTO capture_events (session_id, at, event, tool, input, input_enc, output, output_enc, ok, bytes) VALUES (?, ?, ?, ?, '', NULL, '', NULL, ?, ?)")

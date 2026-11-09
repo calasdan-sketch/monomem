@@ -107,7 +107,14 @@ describe("MCP read results sized for host output limits", () => {
       assert.ok((JSON.parse(lt.slice(lt.indexOf("{"))).notes as Array<{ body_truncated?: boolean }>).every((n) => n.body_truncated === true));
       const one = (await client.callTool({ name: "state_read", arguments: { id } })) as { content: Array<{ text: string }> };
       const ot = one.content[0].text;
-      assert.equal(JSON.parse(ot.slice(ot.indexOf("{"))).note.body.length, 54_000, "state_read is never cut");
+      // Round 2: state_read returns the body in parts of max_chars (default 40000); next_offset fetches the rest.
+      const first = JSON.parse(ot.slice(ot.indexOf("{"))).note;
+      assert.equal(first.body.length, 40_000);
+      assert.equal(first.body_chars, 54_000);
+      const rest = (await client.callTool({ name: "state_read", arguments: { id, offset: first.next_offset } })) as { content: Array<{ text: string }> };
+      const rt = JSON.parse(rest.content[0].text.slice(rest.content[0].text.indexOf("{"))).note;
+      assert.equal(first.body + rt.body, big, "the two parts are the whole body");
+      assert.equal(rt.next_offset, undefined);
       const small = (await client.callTool({ name: "state_write", arguments: { title: "short", body: "tiny" } })) as { content: Array<{ text: string }> };
       void small;
       const r2 = (await client.callTool({ name: "state_search", arguments: { query: "short" } })) as { content: Array<{ text: string }> };

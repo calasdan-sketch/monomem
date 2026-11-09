@@ -343,7 +343,7 @@ describe("store write path under each policy", () => {
     const s = new Store(":memory:");
     assert.throws(
       () => s.create({ title: "k", body: j("AKIA", "1234567890ABCD12") }),
-      /refusing to store what looks like a AWS access key/
+      /refusing to store what looks like an AWS access key/
     );
     assert.throws(() => s.create({ title: "k", tags: [j("ghp", "_", "0123456789abcdefghijklmnopqrstuvwxyz")] }), ValidationError);
     s.close();

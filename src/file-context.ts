@@ -68,13 +68,13 @@ async function fileContext(payload: Record<string, unknown>, opts: HookOptions):
     const claimed = store.captureDb().prepare("INSERT OR IGNORE INTO file_context_seen (session_id, path) VALUES (?, ?)").run(sessionId, rel).changes;
     if (Number(claimed) !== 1) return "";
     store.logAccess({ tool: "hook:file-context", namespaces: notes.map((n) => n.namespace), query: rel, results: notes.length });
-    const { indexLine, openToolName } = await import("./context-inject.js");
+    const { indexLine, openHint } = await import("./context-inject.js");
     const { UNTRUSTED_BANNER } = await import("./security.js");
     const text =
       `Monomem has earlier memory about ${rel} (advisory; read the file as usual):\n` +
       notes.map((n) => indexLine(n)).join("\n") +
       // Name only a tool this install registers (memory_get is not in the default set); state_read takes one id.
-      (openToolName() === "memory_get" ? `\nOpen any with memory_get ids=[${notes.map((n) => n.id).join(",")}]` : `\nOpen any with state_read id=N (${notes.map((n) => n.id).join(", ")})`);
+      "\n" + openHint(notes.map((n) => n.id));
     return JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: UNTRUSTED_BANNER + text } });
   } finally {
     store.close();

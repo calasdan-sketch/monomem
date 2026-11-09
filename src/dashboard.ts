@@ -369,6 +369,7 @@ function render(notes){
   if(lf){ notes = notes.filter(function(n){ return (n.sensitivity || "internal") === lf; }); $("count").textContent = notes.length + " note" + (notes.length===1?"":"s") + " labelled " + lf; }
   if(!notes.length){
     list.innerHTML = lf ? empty("No notes with that label here.") : $("q").value.trim() ? empty("No notes match that search. Try fewer words, or clear the namespace box.")
+      : $("ns").value.trim() ? empty("No notes in namespace &quot;" + esc($("ns").value.trim()) + "&quot;. Clear the namespace box to see notes in every namespace.")
       : empty("No notes yet. Ask your assistant to remember something, or run <code>monomem setup</code>.");
     return;
   }

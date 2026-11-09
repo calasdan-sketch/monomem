@@ -132,7 +132,7 @@ exitOnListenError(apiServer, API_PORT, "MONOMEM_PORT", "API").listen(API_PORT, B
 
 exitOnListenError(mcpServer, MCP_HTTP_PORT, "MONOMEM_MCP_PORT", "MCP").listen(MCP_HTTP_PORT, BIND_HOST, () => {
   console.error(
-    `[monomem] MCP over HTTP on http://${BIND_HOST}:${MCP_HTTP_PORT}/mcp (tunnel this)`
+    `[monomem] MCP over HTTP on http://${BIND_HOST}:${MCP_HTTP_PORT}/mcp (for apps that connect over HTTP with a key; see docs/give-an-app-limited-access.md)`
   );
   scheduleJanitor();
 });

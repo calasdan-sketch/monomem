@@ -12,6 +12,7 @@ import { meterStats } from "./meter.js";
 import { cardBrand, cardFooter, esc, svgLines } from "./receipts.js";
 import { auditFailureCount, auditPath as defaultAuditPath, printable, verifyAuditChain } from "./security.js";
 import { Store } from "./store.js";
+import { describeDbFailure } from "./db-problem.js";
 import { embeddingsConfig } from "./embeddings.js";
 import { acceptLegacyHeartbeats } from "./liveness.js";
 import { scanPii } from "./pii.js";
@@ -155,6 +156,16 @@ const SEEN_KEY = "health_audit_seen";
 type Db = ReturnType<Store["captureDb"]>;
 type Result = Pick<HealthCheck, "status" | "text">;
 
+/** The ts of the newest audit line, if it has one. */
+function lastTs(lines: string[]): string | undefined {
+  try {
+    const ts = (JSON.parse(lines[lines.length - 1]) as { ts?: unknown }).ts;
+    return typeof ts === "string" ? ts : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Every audit line, oldest file first (the order verifyAuditChain reads them). */
 function auditLines(path: string): string[] {
   const files: string[] = [];
@@ -164,13 +175,14 @@ function auditLines(path: string): string[] {
 }
 
 /**
- * Audit-log check. Remembers (in _meta) how many lines the log had and the hash of the last one, and warns when a later run
- * finds fewer lines or a different line in that place. It cannot see tampering that happened before its first run.
+ * Audit-log check. Remembers (in _meta) the hash of the log's last line, and warns when a later run cannot find that line
+ * anywhere in the log, unless the log has rotated past it. It cannot see tampering that happened before its first run, and
+ * once rotation has dropped the remembered line it cannot tell rotation from removal.
  */
 function auditCheck(path: string | undefined, db: Db | undefined, notes: number): Result {
   const a = verifyAuditChain(path);
   if (a.breaks > 0) return { status: "fail", text: `${plural(a.breaks, "break")} (first at line ${a.brokenLine}): a log line was edited or removed` };
-  let seen: { lines: number; hash: string } | undefined;
+  let seen: { lines: number; hash: string; ts?: string } | undefined;
   try {
     const row = db?.prepare("SELECT value FROM _meta WHERE key = ?").get(SEEN_KEY) as { value: string } | undefined;
     seen = row ? (JSON.parse(row.value) as { lines: number; hash: string }) : undefined;
@@ -182,14 +194,29 @@ function auditCheck(path: string | undefined, db: Db | undefined, notes: number)
     return { status: "ok", text: "no audit log yet" };
   }
   const lines = auditLines(path ?? defaultAuditPath());
-  if (seen && lines.length < seen.lines) return { status: "warn", text: `the log has ${plural(lines.length, "line")}, fewer than the ${seen.lines} it had at the last health check: lines were removed (rotation can also drop old lines)` };
-  if (seen && sha(lines[seen.lines - 1]) !== seen.hash) return { status: "warn", text: `line ${seen.lines} is not the line health saw there last time: the log was edited or replaced (health only notices changes since its last run)` };
+  let note = "";
+  if (seen && !lines.some((l) => sha(l) === seen.hash)) {
+    // The line health saw last time is gone. Rotation drops the OLDEST files (MONOMEM_AUDIT_KEEP): then every line left was
+    // written after the remembered one, and the oldest of them chains to a line that is no longer there (its prev is not
+    // the genesis hash). Lines cut from the END leave older lines behind instead: that is still a warning.
+    const first = ((): { prev?: unknown; ts?: unknown } => {
+      try {
+        return JSON.parse(lines[0]) as { prev?: unknown; ts?: unknown };
+      } catch {
+        return {}; // a torn first line: treat as not rotated
+      }
+    })();
+    const rotated = typeof first.prev === "string" && first.prev !== "0".repeat(64) && typeof first.ts === "string" && typeof seen.ts === "string" && first.ts >= seen.ts;
+    if (rotated) note = " (the line health last saw has rotated out of the kept files)";
+    else if (lines.length < seen.lines) return { status: "warn", text: `the log has ${plural(lines.length, "line")}, fewer than the ${seen.lines} it had at the last health check: lines were removed` };
+    else return { status: "warn", text: `line ${seen.lines} is not the line health saw there last time: the log was edited or replaced (health only notices changes since its last run)` };
+  }
   try {
-    db?.prepare("INSERT OR REPLACE INTO _meta (key, value) VALUES (?, ?)").run(SEEN_KEY, JSON.stringify({ lines: lines.length, hash: sha(lines[lines.length - 1]) }));
+    db?.prepare("INSERT OR REPLACE INTO _meta (key, value) VALUES (?, ?)").run(SEEN_KEY, JSON.stringify({ lines: lines.length, hash: sha(lines[lines.length - 1]), ts: lastTs(lines) }));
   } catch {
     /* read-only database: skip the note */
   }
-  return { status: "ok", text: `${plural(a.lines, "line")}, no breaks, ${plural(a.forks, "fork")} (forks are concurrent writers, not tampering)` };
+  return { status: "ok", text: `${plural(a.lines, "line")}, no breaks, ${plural(a.forks, "fork")} (forks are concurrent writers, not tampering)${note}` };
 }
 
 export interface HealthOpts {
@@ -221,28 +248,47 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
     try {
       const s = new Store(dbPath);
       try {
-        notes = s.countAll();
-        held = s.listQuarantine({ limit: 500 }).length;
-        distrust = s.distrustRules().length;
-        // ponytail: loads every live note to count markers; use SQL if a store gets big enough for this to show up in the runtime
-        const live = s.exportAll({ live: true }); // gate-ok: operator CLI, counts redaction markers only; no note content is returned or printed
-        marked = live.filter((n) => /\[REDACTED:/.test(`${n.title}\n${n.body}`)).length;
-        piiNotes = scanPii(live, 200).suggestions.length;
-        privateNotes = live.filter((n) => n.sensitivity === "private").length;
-        labelledNotes = live.filter((n) => n.sensitivity !== undefined).length;
-        const m = meterStats(s);
-        meterText = `${plural(notes, "note")}, database ${(m.db_bytes / 1048576).toFixed(1)} MB; the meter counts ~${m.totals.saved_tokens} tokens saved over ${plural(m.totals.sessions, "session")} (estimate, ~4 characters a token)`;
-        try {
-          audit = auditCheck(o.auditPath, s.captureDb(), notes);
-        } catch (e) {
-          audit = { status: "warn", text: `could not read the audit log: ${(e as Error).message}` };
+        const damaged = s.integrityProblem();
+        if (damaged) {
+          const d = describeDbFailure(dbPath, new Error(damaged));
+          add("database", "Database", "fail", `${d.problem}. ${d.fix}`);
+        } else {
+          // Each count on its own: one that fails is a warning of its own and lowers the grade, the others still run.
+          const step = (id: string, label: string, f: () => void): void => {
+            try {
+              f();
+            } catch (e) {
+              add(id, label, "warn", `could not be checked: ${(e as Error).message}`);
+            }
+          };
+          notes = s.countAll();
+          step("held", "Held writes", () => void (held = s.listQuarantine({ limit: 500 }).length));
+          step("distrust", "Distrusted writers", () => void (distrust = s.distrustRules().length));
+          step("redacted", "Note scan", () => {
+            // ponytail: loads every live note to count markers; use SQL if a store gets big enough for this to show up in the runtime
+            const live = s.exportAll({ live: true }); // gate-ok: operator CLI, counts redaction markers only; no note content is returned or printed
+            marked = live.filter((n) => /\[REDACTED:/.test(`${n.title}\n${n.body}`)).length;
+            piiNotes = scanPii(live, 200).suggestions.length;
+            privateNotes = live.filter((n) => n.sensitivity === "private").length;
+            labelledNotes = live.filter((n) => n.sensitivity !== undefined).length;
+          });
+          step("memory", "Memory size", () => {
+            const m = meterStats(s);
+            meterText = `${plural(notes, "note")}, database ${(m.db_bytes / 1048576).toFixed(1)} MB; the meter counts ~${m.totals.saved_tokens} tokens saved over ${plural(m.totals.sessions, "session")} (estimate, ~4 characters a token)`;
+          });
+          try {
+            audit = auditCheck(o.auditPath, s.captureDb(), notes);
+          } catch (e) {
+            audit = { status: "warn", text: `could not read the audit log: ${(e as Error).message}` };
+          }
+          dbOk = true;
         }
-        dbOk = true;
       } finally {
         s.close();
       }
     } catch (e) {
-      add("database", "Database", "fail", `cannot open ${dbPath}: ${(e as Error).message}`);
+      const d = describeDbFailure(dbPath, e);
+      add("database", "Database", "fail", `${d.problem}. ${d.fix}`);
     }
   } else add("database", "Database", "info", `no database yet at ${dbPath}: nothing is stored, and it is created on first use (monomem setup)`);
   if (dbOk) add("database", "Database", "ok", `database opens (${plural(notes, "note")})`);
@@ -262,7 +308,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
     try {
       const d: DrillReport = await (o.drill ?? runDrill)({ dbPath });
       const known = d.reached.length - d.unexpected.length;
-      add("drill", "Drill", d.ok ? "ok" : "fail", d.ok ? (d.reached.length ? `${d.reached.length} of ${d.attacks} known attacks reached the agent, all known misses (${known})` : `none of ${d.attacks} known attacks reached the agent`) + (d.approve_first ? " (approve-first is on: held writes wait for your review; approving one unread lets it in)" : "") : `${d.unexpected.length} unexpected of ${d.attacks} attacks reached the agent: ${d.unexpected.map((x) => x.id).join(", ")} (monomem drill has the detail)`);
+      add("drill", "Drill", d.ok ? "ok" : "fail", d.ok ? (d.reached.length ? `${d.attacks - d.reached.length} of ${d.attacks} known attacks blocked; ${d.reached.length === 1 ? "the 1 that gets through is a known limit" : `the ${d.reached.length} that get through are known limits`}` : `none of ${d.attacks} known attacks reached the agent`) + (d.approve_first ? " (approve-first is on: held writes wait for your review; approving one unread lets it in)" : "") : `${d.unexpected.length} unexpected of ${d.attacks} attacks reached the agent: ${d.unexpected.map((x) => x.id).join(", ")} (monomem drill has the detail)`);
     } catch (e) {
       add("drill", "Drill", "warn", `could not run: ${(e as Error).message}`);
     }

@@ -768,9 +768,38 @@ export function auditFailureCount(): number {
  * a terminal or into a log: control characters (escape sequences, carriage returns, newlines) become "?",
  * bidi overrides (RLO etc.) too, and it is cut to `max` characters, so it cannot clear the line or fake a "run this command" line.
  */
+// eslint-disable-next-line no-control-regex
+const UNPRINTABLE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
+const UNPRINTABLE_G = new RegExp(UNPRINTABLE.source, "g");
+export const NAMESPACE_MAX = 100;
+
+/**
+ * A namespace or tag that printable() would have to mangle (control, bidi or line-separator characters), a namespace
+ * longer than NAMESPACE_MAX, or the reserved namespace "*": the reason, else null. Every write path (notes, tasks,
+ * handoffs) goes through Store.create/update, which calls this.
+ */
+export function checkNames(input: { namespace?: string; tags?: string[] }): string | null {
+  const ns = input.namespace?.trim();
+  if (ns) {
+    if (UNPRINTABLE.test(ns)) return "namespace contains a control or text-direction character; use plain text";
+    if (ns.length > NAMESPACE_MAX) return `namespace exceeds ${NAMESPACE_MAX} chars`;
+    if (ns === "*") return 'namespace "*" is reserved (it means every namespace)';
+  }
+  for (const t of input.tags ?? []) if (UNPRINTABLE.test(t)) return "a tag contains a control or text-direction character; use plain text";
+  return null;
+}
+
+/** printable() for a multi-line text: keeps line breaks and tabs, replaces every other character printable() would. */
+export function printableBlock(s: unknown, max = 20000): string {
+  return String(s ?? "")
+    .split("\n")
+    .map((l) => printable(l.replace(/\t/g, "    "), Number.MAX_SAFE_INTEGER))
+    .join("\n")
+    .slice(0, max);
+}
+
 export function printable(s: unknown, max = 120): string {
-  // eslint-disable-next-line no-control-regex
-  const t = String(s ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "?");
+  const t = String(s ?? "").replace(UNPRINTABLE_G, "?");
   return t.length > max ? t.slice(0, max) + "..." : t;
 }
 

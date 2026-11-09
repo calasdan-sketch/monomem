@@ -8,7 +8,7 @@
 // Format: `Authorization: Bearer <token>`.
 
 import { createServer, ServerResponse, Server, type IncomingMessage } from "node:http";
-import { actorStore, currentCeiling } from "./actor.js";
+import { actorStore, currentCeiling, currentWriter } from "./actor.js";
 import {
   Store,
   NoteInput,
@@ -289,6 +289,9 @@ function sendJson(
   res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
     "Content-Length": Buffer.byteLength(body),
+    // Note text must not sit in a browser or proxy cache, and a browser must not sniff a JSON body as HTML.
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
   });
   res.end(body);
 }
@@ -1698,9 +1701,14 @@ export function createApiServer(
         const s = (k: string, max: number): string => (typeof b[k] === "string" ? (b[k] as string) : "").slice(0, max);
         const capNs = nsCtx.active ? nsCtx.ownNamespace : s("namespace", 200).trim() || DEFAULT_NAMESPACE;
         try {
-          const owner = store.captureDb().prepare("SELECT namespace FROM sessions WHERE id = ?").get(b.session_id) as { namespace: string } | undefined;
+          const owner = store.captureDb().prepare("SELECT namespace, writer FROM sessions WHERE id = ?").get(b.session_id) as { namespace: string; writer: string | null } | undefined;
           if (owner && owner.namespace !== capNs) {
             sendJson(res, 409, { error: "that session belongs to another namespace" });
+            return;
+          }
+          // A session is one writer's: another key adding events (or ending it, which writes its summary) is refused.
+          if (owner && owner.writer && owner.writer !== currentWriter()) {
+            sendJson(res, 409, { error: "that session belongs to another writer" });
             return;
           }
           const tool = s("tool", 200);
@@ -2099,6 +2107,8 @@ export function createApiServer(
         const exportNs = nsCtx.active ? readable(nsCtx) : undefined;
         res.writeHead(200, {
           "Content-Type": "application/json; charset=utf-8",
+          "Cache-Control": "no-store",
+          "X-Content-Type-Options": "nosniff",
           // No Content-Length: the length is not known up front when streaming.
           // Node falls back to chunked transfer-encoding, which every HTTP/1.1
           // client handles.

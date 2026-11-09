@@ -35,6 +35,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   random block id, new for each output, so a note that copies the old closing line does not match the real one. `monomem drill` checks
   both (FORGE, TERM), so it now reports 22 attacks instead of 20.
 
+- **Names a terminal could misprint are refused:** a namespace or tag with a control, line-separator or text-direction character
+  (anything `printable()` would replace) is refused on every write path (notes, tasks, handoffs: `Store.create` / `update`), as is
+  a namespace over 100 characters and the namespace `*`. A restore or `import --file` still brings such rows in as they were; for
+  rows already stored, `monomem audit`, `ls`, `show`, `search` and the other note listings print namespace, label and tags through
+  `printable()`. JSON responses (and the `/export` stream) carry `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`.
+- **Two app tokens with the same name are refused.** Tokens whose labels match after cleaning (letter case and spacing aside; two
+  unnamed tokens count too) would stamp the same `written_by`, so both stop working and the server says so on stderr (doctor and
+  health show that line too) until one is renamed. **Check `MONOMEM_TOKENS` / `tokens.json` for unnamed tokens before upgrading.**
+- **Stdio with `MONOMEM_STDIO_MAX_SENSITIVITY`:** writes are stamped `stdio:<app>` again; with the ceiling set they were stamped
+  plain `stdio`.
+- **`POST /capture`:** a session remembers the writer that opened it (new nullable `sessions.writer` column, filled for new sessions
+  only); another writer posting to it gets 409, so it cannot add events or end the session with its own summary.
+- **Session-start notes:** the opening notice now says that the closing line carries the same block id. The drill's TERM check now
+  uses a note that knows this output's block id and checks that no printed line equals the real closing line.
+
 ### Fixed
 
 - **`monomem restore`** works on a damaged database (it is moved aside as-is, with its `-wal` / `-shm`, instead of failing on the
@@ -48,14 +63,53 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   nine.
 - **Setup:** a `MONOMEM_HOME` that is not `~/.monomem` is written into every app entry setup or connect writes (as `MONOMEM_DB_PATH`
   already was), and setup says so; before, the app used `~/.monomem`. Claude Code's start-of-session hook also runs after `/compact`
-  (matcher `startup|clear|compact`, in setup and the plugin's `hooks/hooks.json`); running setup again upgrades a `startup|clear` entry
-  it wrote earlier in place. Re-printing costs one more recall block per compaction. `init` says `monomem uninstall` reverses every app
+  (matcher `startup|clear|compact`, in setup and the plugin's `hooks/hooks.json`); running setup again replaces a `startup|clear` entry
+  it wrote earlier (the new one goes at the end of the SessionStart list; no second entry). Re-printing costs one more recall block per compaction. `init` says `monomem uninstall` reverses every app
   and `setup --undo` only the last run.
 - **`monomem edit`:** a missing note is reported before anything else; with no `VISUAL` / `EDITOR` it opens `notepad` on Windows and
   `vi` elsewhere; the file path is quoted, so a temp folder with a space works and Node prints no DEP0190 warning.
 - **Agent-facing text names only tools a default install has:** the file-context hook says `state_read id=N` unless `memory_get` is
   enabled; the snippet and the habits skill say `state_search` (add mode: "relevant") instead of `state_relevant`; `catch_up`'s
   description mentions `task_get`, `memory_since` and `memory_ack` only when they are enabled.
+
+- **Setup and `MONOMEM_HOME`:** with `MONOMEM_HOME` set and no `--db`, the session-start and capture hooks get
+  `--db "<home>/state.db"`, so they use the same notes as the app entry (before, they used `~/.monomem`). An existing `monomem`
+  entry that names no data folder gets `MONOMEM_HOME` (and `MONOMEM_DB_PATH` with `--db`) added, and `--undo` takes it out again;
+  one that names a different folder stops setup with a conflict instead of "already set up". Codex's TOML entry gets the same, or a
+  by-hand hint when its env is written inline. `MONOMEM_HOME=~/x` (or `~\x`) means the home folder; a relative path still works but
+  prints a warning, and doctor warns too.
+- **`monomem connect windsurf`** prints the real launch command (the same one setup writes) with `MONOMEM_CLIENT=windsurf` and, when
+  set, `MONOMEM_HOME`, instead of `{"command":"monomem"}`. `connect --dry-run` no longer says "Connected"; it says to run the same
+  command without `--dry-run`. `connect --name <label>` sets the restricted key's label (it was in the help but refused); the help
+  lists `--max`, `--print`, `--dry-run` and `--yes`.
+- **`monomem backup`** with `MONOMEM_HOME` set and no `--out` writes `monomem-backup-<time>` next to that data folder instead of
+  into the real home folder.
+- **`monomem edit`** always deletes its temporary copy of the note, also when the editor fails, the title is empty, or the change is
+  refused or held (same exit codes as before).
+- **A damaged database is reported, not shown as "no notes".** A search error that is not a query-syntax problem (a damaged file,
+  for example) is raised instead of returning no results, and any command that hits one prints what happened and how to restore
+  (`monomem restore`). `monomem doctor` and `monomem health` run `PRAGMA quick_check(1)` and the FTS5 index's integrity-check
+  (structure only), and report a fail line with the same advice. Health runs each count on its own, so one that fails is a warning
+  of its own instead of stopping the rest; with a damaged file it no longer runs the drill.
+- **`monomem health`'s audit check** looks for the line it saw last time anywhere in the log, so new lines and a rotation
+  (`MONOMEM_AUDIT_MAX_BYTES` / `MONOMEM_AUDIT_KEEP`) are not reported as tampering: when that line has rotated out it says so (it
+  then cannot tell rotation from removal). `monomem backup` leaves health's remembered line out of the copy and `monomem restore`
+  clears it. The audit-write check counts only this process's failed audit entries (a running server reports its own in
+  `GET /stats` `audit_failures`); it now has a test.
+- **Session-start notes:** the closing hint says `Open any with state_read id=N (...)` (as the file-context hook does) unless
+  `memory_get` is enabled; it used to name `state_read ids=[...]`, a parameter `state_read` did not take. A second recall for the same
+  session (after `/compact` or `/clear`) no longer adds to the meter's "saved" estimate again; the injection itself is still counted.
+- **Audit lines only for committed writes:** a write inside a transaction that is rolled back (a failing batch, for example) leaves no
+  audit line; lines from a transaction are written when it commits.
+- **CLI:** `search` / `relevant --json` print JSON (`{keywords, results: [{id, namespace, title, updated_at, written_by}]}`);
+  `search --limit` takes a whole number of 1 or more, like `ls`; `--ns` works as `--namespace` in `relevant`, `search`, `export`,
+  `quality`, `conflicts`, `facts`, `digest`, `pii` and `decay`; a value flag with no value says `--<flag> needs a value`. `show`
+  prints a multi-line body line by line (control characters still replaced). `ls --ns x` with no notes there names the namespaces in
+  use; the dashboard says the namespace box is the reason. The secret refusal says "an AWS access key", not "a AWS access key".
+- **Wording:** the start banner says the MCP-over-HTTP address is for apps that connect over HTTP with a key (it said "tunnel this");
+  health's drill line reads "20 of 22 known attacks blocked; the 2 that get through are known limits"; doctor's no-edges warning names
+  imports and restores, which skip linking. README: a line about `npx monomem demo`, and the benchmark is "above" the honest numbers;
+  `demo` is in the short help.
 
 ### Changed
 
@@ -64,6 +118,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   its body. `memory_supersede_preview` returns one block (the JSON with `warning`, `token`, `expires_at`) instead of the warning twice.
   Measured on 5 notes of 54,000 characters each (characters of tool output): `state_search` 273,089 to 5,548, `state_list` 272,805 to
   5,384, `state_write` 54,979 to 852, `memory_supersede_preview` 5,685 to 3,595, `state_read` 54,893 to 54,783 (no indent only).
+
+- **The default MCP tools accept common argument drift:** ids, limits and offsets given as strings (`"5"`), tags as one
+  comma-separated string, fact values as numbers or true/false, and `facts` as a JSON string; every limit (10 facts, 80-character
+  values, tag counts) still applies after. `state_write` creating a note with no title takes the body's first line (about 60
+  characters, cut at a word) and says so in `title_generated`; no title and no body is still an error. `state_read` also takes `ids`
+  (the first one is read) and returns at most `max_chars` (default 40,000) of the body, from `offset`, with `body_truncated`,
+  `body_chars` and `next_offset` when there is more (round 1 said `state_read` is never cut; that is no longer true above 40,000).
+- **`catch_up`, `memory_since` and `memory_ack` with no `consumer`** use this connection's own writer name (the token label, or
+  `stdio:<app>` written as `stdio_<app>`), so two apps on one store each keep their own "last" marker; before, they shared
+  `"default"` and one app's catch-up hid the changes from the other. `consumer: "default"` still gives the shared marker.
+- **Claude Code's session-start notes leave out notes `import --claude` brought in** (tagged `claude-md` or `claude-auto-memory`):
+  Claude Code already reads those files. Recall treats the hook as Claude Code's when `CLAUDE_PROJECT_DIR` or `CLAUDECODE=1` is set.
+  Search and other apps still show them; `import --claude` and docs/switching.md say so.
 
 ## [1.3.0] - 2026-11-08
 

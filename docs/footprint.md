@@ -47,7 +47,7 @@ Monomem part. An entry setup did not add (one you wrote by hand) is listed, not 
 |---|---|
 | `setup --project` | `./.mcp.json` |
 | `export --format md --dir <d>` / `export --format json --out <f>` | that folder / file |
-| `backup [--out <d>]` | `<d>`, default `~/monomem-backup-<time>` (never the current folder: a backup and its key must not land in a repo) |
+| `backup [--out <d>]` | `<d>`, default `~/monomem-backup-<time>`, or next to the data folder when `MONOMEM_HOME` is set (never the current folder: a backup and its key must not land in a repo) |
 | `uninstall --purge` | the final backup, `~/monomem-final-backup-<time>` (unless `--no-backup`) |
 | `sync --git <repo>` | `<repo>/monomem/` or `<repo>/monomem-enc/`, and git commits in that repo |
 | `npm run runner` (a Monomem checkout only, not in the npm package) | `<checkout>/data/runner.lock`, `runner-seen.json` |

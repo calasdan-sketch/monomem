@@ -55,7 +55,7 @@ All environment variables are optional. This table lists **every** `MONOMEM_*` v
 | `MONOMEM_TOKENS` | unset | Optional JSON array of extra scoped tokens: `[{"token":"…","scope":"read\|write\|admin","label":"…","namespace":"…","max_sensitivity":"…"}]` (also readable from `<data dir>/tokens.json`). `namespace` optionally pins a token to one namespace — per-token isolation on a shared server, so several agents can share one bridge without seeing each other's notes. See [token-namespaces.md](./token-namespaces.md). `max_sensitivity` (`public`, `internal` or `private`) is a ceiling on which notes the token can see or write, whatever namespace it is in. See [sensitivity-labels.md](./sensitivity-labels.md) |
 | `MONOMEM_BIND` | `127.0.0.1` | Interface to bind (`0.0.0.0` inside Docker) |
 | `MONOMEM_PORT` | `8790` | HTTP API + dashboard port |
-| `MONOMEM_MCP_PORT` | `8791` | MCP-over-HTTP port (tunnel this one) |
+| `MONOMEM_MCP_PORT` | `8791` | MCP-over-HTTP port (for apps that connect over HTTP with a key) |
 | `MONOMEM_TRUST_PROXY` | unset | Set to `1` only behind a trusted proxy that sets `x-forwarded-for`. It also lets requests that carry forwarding headers pass the host check without being listed in `MONOMEM_ALLOWED_HOSTS`; leave it unset unless a proxy you control is the only way to reach the port. |
 | `MONOMEM_TRUST_PROXY_HOPS` | `1` | With `MONOMEM_TRUST_PROXY=1`, how many trusted proxies sit in front: the rate-limit key is the Nth `x-forwarded-for` entry from the right (the leftmost one if there are fewer). Invalid or below 1 means 1. |
 | `MONOMEM_TRUST_CLOUDFLARE` | unset | Set to `1` behind Cloudflare so per-client rate limiting keys on `cf-connecting-ip` |

@@ -1,7 +1,7 @@
 // Reading the audit log back: who did what, when. The log holds metadata only (operation, note id, namespace, count,
 // the key's label); never note text, never a search query, never a key. This reads the current file and the rotated ones.
 import { existsSync, readFileSync } from "node:fs";
-import { auditPath } from "./security.js";
+import { auditPath, printable } from "./security.js";
 
 export interface AuditEntry {
   ts: string;
@@ -64,6 +64,6 @@ export function readAudit(q: AuditQuery = {}, now = Date.now(), path = auditPath
 export function renderAudit(entries: AuditEntry[]): string {
   if (!entries.length) return "No matching entries.";
   return entries
-    .map((e) => `${e.ts.slice(0, 19).replace("T", " ")}  ${e.op.padEnd(14)} ${e.label ? `by ${e.label}` : "by (no key: command line or server)"}${e.namespace ? `  [${e.namespace}]` : ""}${e.id !== undefined ? `  #${e.id}` : ""}${e.kind === "read" || e.kind === "search" ? `  ${e.bytes ?? 0} result(s)` : ""}`)
+    .map((e) => `${e.ts.slice(0, 19).replace("T", " ")}  ${e.op.padEnd(14)} ${e.label ? `by ${printable(e.label, 80)}` : "by (no key: command line or server)"}${e.namespace ? `  [${printable(e.namespace, 100)}]` : ""}${e.id !== undefined ? `  #${e.id}` : ""}${e.kind === "read" || e.kind === "search" ? `  ${e.bytes ?? 0} result(s)` : ""}`)
     .join("\n");
 }

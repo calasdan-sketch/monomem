@@ -181,8 +181,8 @@ describe("token namespace pins fail closed", () => {
         { token: P("t-num"), scope: "admin", namespace: 5 },
         { token: P("t-empty"), scope: "admin", namespace: "" },
         { token: P("t-arr"), scope: "admin", namespace: ["a"] },
-        { token: P("t-ok"), scope: "admin", namespace: "work" },
-        { token: P("t-none"), scope: "read" },
+        { token: P("t-ok"), scope: "admin", namespace: "work", label: "ok" },
+        { token: P("t-none"), scope: "read", label: "none" },
       ]);
       const r = spawnSync(
         process.execPath,

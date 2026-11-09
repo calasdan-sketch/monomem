@@ -5,7 +5,7 @@ import { test, describe, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { parseJsonc } from "../src/jsonc-edit.js";
@@ -77,7 +77,8 @@ describe("setup names each app (MONOMEM_CLIENT)", () => {
     const http = JSON.stringify({ mcpServers: { monomem: { url: "http://127.0.0.1:8765/mcp" } } });
     writeFileSync(cur, http);
     assert.equal(await runSetup(s.e, io(), opts(s, { only: ["gemini", "cursor"] })), 0);
-    assert.deepEqual((parseJsonc(readFileSync(gem, "utf8")) as { mcpServers: { monomem: { env: unknown } } }).mcpServers.monomem.env, { MONOMEM_CLIENT: "gemini" });
+    // Round 2: the data folder set in this shell (MONOMEM_HOME, --db) is pinned into an entry that names none.
+    assert.deepEqual((parseJsonc(readFileSync(gem, "utf8")) as { mcpServers: { monomem: { env: unknown } } }).mcpServers.monomem.env, { MONOMEM_CLIENT: "gemini", MONOMEM_HOME: resolve(s.e.env.MONOMEM_HOME!), MONOMEM_DB_PATH: s.db });
     assert.equal(readFileSync(cur, "utf8"), http);
   });
 
@@ -96,7 +97,7 @@ describe("setup names each app (MONOMEM_CLIENT)", () => {
     assert.equal(await runSetup(s.e, io(), opts(s, { undo: true })), 0);
     assert.equal(readFileSync(file, "utf8"), old);
 
-    const inline = '[mcp_servers.monomem]\ncommand = "npx"\nenv = { MONOMEM_DB_PATH = "x" }\n';
+    const inline = '[mcp_servers.monomem]\ncommand = "npx"\nenv = { OTHER = "x" }\n';
     writeFileSync(file, inline);
     const said: string[] = [];
     assert.equal(await runSetup(s.e, io(said), opts(s, { only: ["codex"] })), 0);

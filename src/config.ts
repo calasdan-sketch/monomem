@@ -20,10 +20,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { resolveTimeZone } from "./time-parse.js";
+import { cleanWriter } from "./actor.js";
 import { didYouMean } from "./suggest.js";
 import { type Sensitivity, parseSensitivity, sensitivityRank, defaultCeilingFromEnv, SENSITIVITY_HELP } from "./sensitivity.js";
 
@@ -51,6 +52,11 @@ export const LEGACY_HOME_DIR_NAME = ".onememory";
 /** Where it lives now. */
 export const HOME_DIR_NAME = ".monomem";
 
+/** A leading ~, ~/ or ~\ means the home folder (a shell expands it, but an app's config file does not). */
+export function expandHome(p: string): string {
+  return /^~(?=$|[\\/])/.test(p) ? join(homedir(), p.slice(1)) : p;
+}
+
 /**
  * The data directory (database, token, tokens.json, spaces.json):
  *   1. MONOMEM_HOME, when set (ONEMEMORY_HOME still works -- see legacy-env.ts);
@@ -74,7 +80,9 @@ export function resolveDataDir(
 ): { dir: string; why: "env" | "checkout" | "home" | "legacy-home" } {
   const home = env.MONOMEM_HOME ?? env.ONEMEMORY_HOME;
   if (home && home.trim()) {
-    return { dir: resolve(home.trim()), why: "env" };
+    const dir = expandHome(home.trim());
+    if (!isAbsolute(dir)) process.stderr.write(`[monomem] warning: MONOMEM_HOME is a relative path (${dir}); it depends on the folder you start from. Use a full path.\n`);
+    return { dir: resolve(dir), why: "env" };
   }
   if (existsSync(join(root, ".git")) && existsSync(join(root, "data", "state.db"))) {
     return { dir: join(root, "data"), why: "checkout" };
@@ -579,6 +587,19 @@ export function resolveTokens(): TokenEntry[] {
     parseList(readFileSync(tokensFile, "utf8"), tokensFile);
   }
 
+  // Two different tokens with one label (letter case and spacing aside, an empty label included) would stamp the same
+  // written_by: their writes could not be told apart. Both are refused, loudly, until one is renamed.
+  const byLabel = new Map<string, string[]>();
+  for (const [t, e] of byToken) {
+    if (refused.has(t)) continue;
+    const k = cleanWriter(e.label).toLowerCase();
+    byLabel.set(k, [...(byLabel.get(k) ?? []), t]);
+  }
+  for (const [k, ts] of byLabel) {
+    if (ts.length < 2) continue;
+    console.error(`[monomem] ignoring ${ts.length} tokens that share the name ${k ? `"${k}"` : "(unnamed)"}: their writes would carry the same writer. Give each its own name in MONOMEM_TOKENS / tokens.json (or remove one: monomem token list); they will not work until then.`);
+    for (const t of ts) if (!locked.has(t)) refused.add(t);
+  }
   for (const t of refused) if (!locked.has(t)) byToken.delete(t);
   // Opt-in default ceiling for secondary tokens that set none. A value that is not a label stops the server (fail closed).
   const dflt = defaultCeilingFromEnv();

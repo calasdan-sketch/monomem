@@ -15,7 +15,7 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, statSync, statfsSync, readdirSync, renameSync, linkSync, existsSync, copyFileSync, unlinkSync } from "node:fs";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { dirname, basename, join } from "node:path";
-import { checkSizes, audit } from "./security.js";
+import { checkSizes, checkNames, audit } from "./security.js";
 import { chmodQuiet } from "./config.js";
 import { SECRET_ASSIGN_LABEL } from "./security.js";
 import { lintContent, lintPolicy, describeFindings, type LintFinding, type LintAction, type LintCategory } from "./lint.js";
@@ -300,6 +300,12 @@ function validateSizes(input: { title?: string; body?: string; tags?: string[] }
   if (sizeErr) throw new ValidationError(sizeErr);
 }
 
+/** Refuse a namespace or tag a terminal could misprint (see checkNames). */
+function validateNames(input: { namespace?: string; tags?: string[] }): void {
+  const err = checkNames(input);
+  if (err) throw new ValidationError(err);
+}
+
 /**
  * Decide what the lint policy says about `findings`: throw for block, return
  * "quarantine" when the write must be held, else record warnings and return
@@ -319,7 +325,7 @@ function applyLintPolicy(findings: LintFinding[], opts: LintOpts): "quarantine" 
     // Keep the 1.0 wording for secrets: callers and docs match on it.
     if (secret) {
       throw new ValidationError(
-        `refusing to store what looks like a ${secret.label}; remove the secret or store a reference to it instead` +
+        `refusing to store what looks like ${/^[aeiou]/i.test(secret.label) ? "an" : "a"} ${secret.label}; remove the secret or store a reference to it instead` +
           (secret.label === SECRET_ASSIGN_LABEL
             ? ` (the note has something like "password: ..." in it, and every app you connect can read your notes. If it is not really a password, reword it; to store such notes on purpose, an administrator can set MONOMEM_LINT=secrets=warn)`
             : "")
@@ -1607,10 +1613,10 @@ export class Store {
         this.ensureArchiveLog();
         this.cleanStoredLabels();
       }
-      this.db.exec("COMMIT");
+      this.commitTx();
     } catch (e) {
       try {
-        this.db.exec("ROLLBACK");
+        this.rollbackTx();
       } catch {
         /* nothing to roll back */
       }
@@ -1733,6 +1739,13 @@ export class Store {
     } catch {
       /* read-only file: no writer can store a capture event either */
     }
+    try {
+      // sessions.writer: who opened the session (set on first insert, NULL for older rows). POST /capture refuses a
+      // different writer adding to it. A nullable column an older build simply ignores, so no schema version step.
+      if (this.hasColumn("sessions", "writer") === false && this.hasColumn("sessions", "id")) this.addColumn("sessions", "writer", "TEXT");
+    } catch {
+      /* read-only file: no writer can store a capture event either */
+    }
   }
 
   /**
@@ -1792,11 +1805,11 @@ export class Store {
           this.db.prepare("DELETE FROM trust_distrust WHERE namespace = ? AND writer = ?").run(r.namespace, r.writer);
         }
         this.setMeta("labels_clean_v1", "1");
-        if (own) this.db.exec("COMMIT");
+        if (own) this.commitTx();
       } catch (e) {
         if (own) {
           try {
-            this.db.exec("ROLLBACK");
+            this.rollbackTx();
           } catch {
             /* nothing to roll back */
           }
@@ -2680,10 +2693,10 @@ export class Store {
         this.db.exec("DROP INDEX IF EXISTS idx_notes_written_by");
         this.db.exec("CREATE INDEX IF NOT EXISTS idx_notes_ns_writer ON notes(namespace, written_by, updated_at DESC)");
       }
-      this.db.exec("COMMIT");
+      this.commitTx();
     } catch (e) {
       try {
-        this.db.exec("ROLLBACK");
+        this.rollbackTx();
       } catch {
         /* nothing to roll back */
       }
@@ -2773,6 +2786,8 @@ export class Store {
       throw new ValidationError("title is required");
     }
     validateSizes(input);
+    // A restore keeps rows that were stored before this check existed; the CLI prints them through printable().
+    if (!opts.bulkImport) validateNames(input);
     validateForgetAfter(input.forget_after);
     validateConfidence(input.confidence);
     const sensitivity = this.labelForNew(input.sensitivity);
@@ -2891,11 +2906,11 @@ export class Store {
       if (!opts.skipEdges && !archivedAt) {
         this.recomputeEdgesFor(id, namespace, input.title, body, this.getEdgeThreshold());
       }
-      this.db.exec(nested ? "RELEASE monomem_create" : "COMMIT");
+      this.commitTx(nested ? "RELEASE monomem_create" : "COMMIT");
     } catch (e) {
       this.edgeIndexes.clear(); // may hold rolled-back state; resync lazily
       try {
-        this.db.exec(nested ? "ROLLBACK TO monomem_create" : "ROLLBACK");
+        this.rollbackTx(nested ? "ROLLBACK TO monomem_create" : "ROLLBACK");
         if (nested) this.db.exec("RELEASE monomem_create");
       } catch {
         /* already rolled back -- rethrow the original */
@@ -3107,11 +3122,11 @@ export class Store {
             WHERE id = ?`
         );
         for (const [id, p] of batch) up.run(p.n, p.at, p.at, id);
-        this.db.exec("COMMIT");
+        this.commitTx();
         ok = true;
       } catch (e) {
         try {
-          this.db.exec("ROLLBACK");
+          this.rollbackTx();
         } catch {
           /* not in a transaction */
         }
@@ -3441,6 +3456,7 @@ export class Store {
     } & LintOpts = {}
   ): NoteRecord | null {
     this.floodGate(opts.lint ?? "full", opts.noFloodCount !== true);
+    validateNames(patch);
     validateForgetAfter(patch.forget_after);
     validateConfidence(patch.confidence);
     const existing = this.read(id);
@@ -3571,7 +3587,7 @@ export class Store {
     const want = opts.ifRev ?? null;
     // Inside a caller's transaction (a rollback restores many notes in one) a SAVEPOINT keeps this write all-or-nothing.
     const nested = this.db.isTransaction;
-    const undo = (): void => this.db.exec(nested ? "ROLLBACK TO monomem_update; RELEASE monomem_update" : "ROLLBACK");
+    const undo = (): void => this.rollbackTx(nested ? "ROLLBACK TO monomem_update; RELEASE monomem_update" : "ROLLBACK");
     this.db.exec(nested ? "SAVEPOINT monomem_update" : "BEGIN IMMEDIATE");
     try {
       // Sealed under the write lock so the key state cannot change between
@@ -3672,7 +3688,7 @@ export class Store {
         id,
         this.planEdges(namespace, title, body, this.getEdgeThreshold(), new Set([id])).pairs
       );
-      this.db.exec(nested ? "RELEASE monomem_update" : "COMMIT");
+      this.commitTx(nested ? "RELEASE monomem_update" : "COMMIT");
     } catch (e) {
       this.edgeIndexes.clear(); // may hold rolled-back state; resync lazily
       try {
@@ -3716,10 +3732,10 @@ export class Store {
         upd.run(r.id, deletedId);
         log.run(now, currentWriter(), r.namespace, r.id, deletedId);
       }
-      this.db.exec("COMMIT");
+      this.commitTx();
     } catch (e) {
       try {
-        this.db.exec("ROLLBACK");
+        this.rollbackTx();
       } catch {
         /* already rolled back */
       }
@@ -4232,13 +4248,13 @@ export class Store {
         }
         log.run(now, input.actor, target.namespace, oid, input.newId, input.flags ?? "");
       });
-      this.db.exec(nested ? "RELEASE monomem_supersede" : "COMMIT");
+      this.commitTx(nested ? "RELEASE monomem_supersede" : "COMMIT");
     } catch (e) {
       try {
         if (nested) {
           this.db.exec("ROLLBACK TO monomem_supersede");
           this.db.exec("RELEASE monomem_supersede");
-        } else this.db.exec("ROLLBACK");
+        } else this.rollbackTx();
       } catch {
         /* already rolled back */
       }
@@ -4262,7 +4278,7 @@ export class Store {
         | { namespace: string; superseded_by: number }
         | undefined;
       if (!row || this.idHidden(id)) {
-        this.db.exec("ROLLBACK");
+        this.rollbackTx();
         return null;
       }
       this.db
@@ -4271,10 +4287,10 @@ export class Store {
       this.db
         .prepare("INSERT INTO supersede_log (at, actor, action, namespace, old_id, new_id, flags) VALUES (?, ?, 'undo', ?, ?, ?, '')")
         .run(now, actor, row.namespace, id, row.superseded_by);
-      this.db.exec("COMMIT");
+      this.commitTx();
     } catch (e) {
       try {
-        this.db.exec("ROLLBACK");
+        this.rollbackTx();
       } catch {
         /* already rolled back */
       }
@@ -4471,10 +4487,10 @@ export class Store {
       this.sealHistory(key);
       this.sealCaptureEvents(key);
       this.sealAccessLog(key, true);
-      this.db.exec("COMMIT");
+      this.commitTx();
     } catch (e) {
       try {
-        this.db.exec("ROLLBACK");
+        this.rollbackTx();
       } catch {
         /* already rolled back */
       }
@@ -4538,9 +4554,9 @@ export class Store {
             CREATE VIRTUAL TABLE notes_fts USING fts5(title, body, tags, content='notes', content_rowid='id', ${FTS_PREFIX_OPT});
             INSERT INTO notes_fts(notes_fts) VALUES('rebuild');`);
         }
-        this.db.exec("COMMIT");
+        this.commitTx();
       } catch (e) {
-        this.db.exec("ROLLBACK");
+        this.rollbackTx();
         throw e;
       }
     } catch (e) {
@@ -4638,10 +4654,10 @@ export class Store {
       this.unsealCaptureEvents(key);
       this.sealAccessLog(key, false);
       hooks.beforeCommit?.();
-      this.db.exec("COMMIT");
+      this.commitTx();
     } catch (e) {
       try {
-        this.db.exec("ROLLBACK");
+        this.rollbackTx();
       } catch {
         /* already rolled back */
       }
@@ -4705,7 +4721,7 @@ export class Store {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const out = fn();
-      this.db.exec("COMMIT");
+      this.commitTx();
       this.announceChange();
       return out;
     } catch (e) {
@@ -4713,7 +4729,7 @@ export class Store {
       // insert can even hand its id to the next note): drop it, resync lazily.
       this.edgeIndexes.clear();
       try {
-        this.db.exec("ROLLBACK");
+        this.rollbackTx();
       } catch {
         /* already rolled back or no active transaction -- rethrow the original */
       }
@@ -4923,9 +4939,11 @@ export class Store {
       // FTS5's rank is negative (lower = better), so -rank is a positive
       // higher-is-better score.
       return rows.map((row) => ({ note: this.rec(row), score: row.score ?? 0 }));
-    } catch {
-      // A malformed FTS expression should never 500 the caller.
-      return [];
+    } catch (e) {
+      // A malformed FTS expression should never 500 the caller. Anything else (a damaged file: SQLITE_CORRUPT,
+      // SQLITE_NOTADB) is rethrown, so it is reported instead of looking like "no notes".
+      if (/fts5|syntax error|unterminated|no such column/i.test(e instanceof Error ? e.message : String(e))) return [];
+      throw e;
     }
   }
 
@@ -4994,6 +5012,23 @@ export class Store {
         return marker as NoteRecord;
       }
     });
+  }
+
+  /**
+   * A damaged file, in words describeDbFailure() recognises, or null. PRAGMA quick_check(1) reads every page (it stops at
+   * the first problem) and the FTS5 integrity-check reads the search index structure (not compared with the notes: rank 0). Neither changes anything.
+   */
+  integrityProblem(): string | null {
+    try {
+      const qc = this.db.prepare("PRAGMA quick_check(1)").get() as { quick_check?: string } | undefined;
+      if (qc?.quick_check !== "ok") return `the database file is malformed (quick_check: ${qc?.quick_check ?? "no answer"})`;
+      this.db.prepare("INSERT INTO notes_fts(notes_fts) VALUES('integrity-check')").run();
+      return null;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/readonly|read-only|busy|locked/i.test(msg)) return null; // cannot check right now; not damage
+      return `the database file is malformed (${msg})`;
+    }
   }
 
   /** Total notes in the store (drives the export progress/size estimate). */
@@ -5207,6 +5242,9 @@ export class Store {
       if (this.db.isTransaction) insertBatch();
       else this.transaction(insertBatch);
       if (start + IMPORT_INSERT_BATCH < notes.length) {
+        // Measured (2026-11, Windows, WAL): a write from another process during a 10,000-note import finished in ~0.5 s
+        // with this setImmediate gap, so a longer pause (tried: 110 ms, +2.5 s per 10,000 notes) bought nothing.
+        // test/expert-round2.test.ts keeps that check.
         await new Promise<void>((r) => setImmediate(r));
       }
     }
@@ -6192,10 +6230,10 @@ export class Store {
             REBUILD_PROGRESS_KEY,
             JSON.stringify({ threshold, scope: scopeKey, ns: nsName, band: bandIdx, sig })
           );
-          this.db.exec("COMMIT");
+          this.commitTx();
         } catch (err) {
           try {
-            this.db.exec("ROLLBACK");
+            this.rollbackTx();
           } catch {
             /* already rolled back -- rethrow the original */
           }
@@ -7511,12 +7549,40 @@ export class Store {
     this.db.prepare("INSERT INTO write_rate (writer, at) VALUES (?, ?)").run(w, new Date(now).toISOString());
   }
 
+  /** Audit lines written inside a transaction wait here until it commits; a rollback drops them. */
+  private pendingAudit: Array<Parameters<typeof audit>[0]> = [];
+
   /** Audit line, except from an in-memory store with no MONOMEM_AUDIT_LOG: that must never touch the owner's real log. */
   private audit(entry: Parameters<typeof audit>[0]): void {
     if (this.dbPath === ":memory:" && !process.env.MONOMEM_AUDIT_LOG) return;
     // Name the key that made the change (a label, never the key itself) so `monomem audit` can say who did what.
     const who = actorStore.getStore()?.label;
-    audit(entry.label === undefined && who ? { ...entry, label: who } : entry);
+    const e = entry.label === undefined && who ? { ...entry, label: who } : entry;
+    // Inside a transaction the write may still be rolled back: the line is written only once it commits (commitTx).
+    if (this.db.isTransaction) return void this.pendingAudit.push(e);
+    this.flushAudit();
+    audit(e);
+  }
+
+  private flushAudit(): void {
+    const q = this.pendingAudit;
+    this.pendingAudit = [];
+    for (const e of q) audit(e);
+  }
+
+  /** COMMIT (or a savepoint RELEASE), then write the audit lines it held, once the outermost transaction has ended. */
+  private commitTx(sql = "COMMIT"): void {
+    this.db.exec(sql);
+    if (!this.db.isTransaction) this.flushAudit();
+  }
+
+  /** ROLLBACK (or ROLLBACK TO a savepoint); when the whole transaction is gone, so are the audit lines it held. */
+  private rollbackTx(sql = "ROLLBACK"): void {
+    try {
+      this.db.exec(sql);
+    } finally {
+      if (!this.db.isTransaction) this.pendingAudit = [];
+    }
   }
 
   // --- Approve-first namespaces ---------------------------------------------
@@ -7681,11 +7747,11 @@ export class Store {
           q.sensitivity ?? DEFAULT_SENSITIVITY
         );
       id = Number(res.lastInsertRowid);
-      if (!nested) this.db.exec("COMMIT");
+      if (!nested) this.commitTx();
     } catch (e) {
       if (!nested) {
         try {
-          this.db.exec("ROLLBACK");
+          this.rollbackTx();
         } catch {
           /* already rolled back */
         }

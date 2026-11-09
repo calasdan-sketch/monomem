@@ -66,10 +66,12 @@ export function backupStore(
     // honours. A backup must not carry it unless asked: restored without it,
     // existing approvals fail their check ("stale") -- fail closed -- and the
     // admin simply re-approves.
-    if (!opts.includeApprovalKey) {
+    // What `monomem health` remembered about the audit log (line count, last hash) never travels: restored next to
+    // another log it would read as tampering.
+    {
       const strip = new DatabaseSync(part);
       try {
-        strip.prepare("DELETE FROM _meta WHERE key = 'approval_key'").run();
+        strip.prepare(`DELETE FROM _meta WHERE key IN ('health_audit_seen'${opts.includeApprovalKey ? "" : ", 'approval_key'"})`).run();
         strip.exec("VACUUM");
       } finally {
         strip.close();

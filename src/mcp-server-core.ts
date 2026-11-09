@@ -9,7 +9,7 @@
 // state store, not a mock or a second copy.
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { actorStore, currentCeiling } from "./actor.js";
+import { actorStore, currentCeiling, currentWriter } from "./actor.js";
 import { type Sensitivity, SENSITIVITY_LEVELS } from "./sensitivity.js";
 import { z } from "zod";
 import { memoryIndex, memoryTimeline, memoryGet, sessionList, sessionGet, GET_MAX_IDS, type ReadScope } from "./progressive.js";
@@ -44,7 +44,7 @@ import { withFacts, factFeedback, COMMON_FACT_KEYS, type FactFeedback } from "./
 import { waitForChanges, parseWait, WAIT_MAX_SECONDS, WAIT_RECOMMENDED_SECONDS } from "./change-wait.js";
 import { type Scope, PACKAGE_VERSION } from "./config.js";
 export { PACKAGE_VERSION };
-import { scopeAllows, UNTRUSTED_BANNER, provenanceBanner, audit } from "./security.js";
+import { scopeAllows, UNTRUSTED_BANNER, provenanceBanner, audit, printableWords } from "./security.js";
 import { runSearch, runSearchExplained, semanticNotice, parseMode, maybeEmbed, runRelevantSearch, roundRobin, describeWhen, SEARCH_MODES, type SearchOpts, type RelevantOpts, type ExplainedHit } from "./search-service.js";
 import {
   type ServerNamespaceOpts,
@@ -81,6 +81,26 @@ function textResult(payload: unknown) {
 
 /** Longest note body state_search / state_list return; state_read always returns the whole note. */
 export const LIST_BODY_CHARS = 600;
+
+// Models often send "5" for 5, "deploy,ci" for ["deploy","ci"], 8080 or true as a fact value, or the facts object as a JSON
+// string. The default tools accept those shapes; every limit (10 facts, 80-char values, tag counts) still applies after.
+const zInt = () => z.coerce.number().int();
+const zTags = () => z.preprocess((v) => (typeof v === "string" ? v.split(",").map((t) => t.trim()).filter(Boolean) : v), z.array(z.string()));
+const zFacts = () =>
+  z.preprocess((v) => {
+    let o: unknown = v;
+    if (typeof o === "string") {
+      try {
+        o = JSON.parse(o);
+      } catch {
+        return v; // not JSON: let the record check say what is wrong
+      }
+    }
+    if (!o || typeof o !== "object" || Array.isArray(o)) return o;
+    return Object.fromEntries(Object.entries(o).map(([k, x]) => [k, typeof x === "number" || typeof x === "boolean" ? String(x) : x]));
+  }, z.record(z.string(), z.string()));
+/** state_read returns at most this much body by default; the rest comes with offset (next_offset). */
+const READ_MAX_CHARS = 40_000;
 const CUT_NOTE = `Long bodies are cut to ${LIST_BODY_CHARS} characters (body_truncated, body_chars); state_read id=N for the full text.`;
 /** The same payload with each note body in `results` / `notes` cut to LIST_BODY_CHARS (a host caps how much tool output it shows). */
 function cutBodies(payload: Record<string, unknown>): Record<string, unknown> {
@@ -515,11 +535,7 @@ export function createMcpServer(
           ? " SERVER-RESOLVED NAMESPACE: this server writes to its own namespace; no `namespace` parameter is accepted."
           : ""),
       inputSchema: {
-        id: z
-          .number()
-          .int()
-          .optional()
-          .describe("Id of an existing note to update. Omit to create a new note."),
+        id: zInt().optional().describe("Id of an existing note to update. Omit to create a new note."),
         // When server-side namespace resolution is active the model-supplied
         // namespace is dropped entirely (writes always land in the resolved
         // namespace), so the parameter is stripped from the schema rather
@@ -536,11 +552,10 @@ export function createMcpServer(
         title: z
           .string()
           .optional()
-          .describe("Note title. Required when creating a new note."),
+          .describe("Note title. When creating a note without one, it is made from the body's first line (about 60 characters) and the reply says so."),
         body: z.string().optional().describe("Note body/content."),
-        tags: z.array(z.string()).optional().describe("Tags for the note."),
-        facts: z
-          .record(z.string(), z.string())
+        tags: zTags().optional().describe("Tags for the note (a list, or one comma-separated string)."),
+        facts: zFacts()
           .optional()
           .describe(
             "Settings as key/value pairs, e.g. {\"package_manager\":\"pnpm\",\"test_runner\":\"vitest\"}. Use a common key when one fits: " + COMMON_FACT_KEYS.join(", ") + ". Add a subject prefix only when the project has several (api.deploy_target). At most 10; keys are lowercase a-z 0-9 _ . - (max 40 chars), values one line of at most 80 chars. The reply may carry `conflicts` (another writer states a different value; your write still succeeds, so tell the user) or `similar_keys` and a `hint` (an existing key looks like the same setting; follow the hint)."
@@ -582,8 +597,9 @@ export function createMcpServer(
           ),
       },
     },
-    async ({ id, namespace, title, body, tags: plainTags, facts, source, if_rev, forget_after, confidence, sensitivity }) => {
+    async ({ id, namespace, title: givenTitle, body, tags: plainTags, facts, source, if_rev, forget_after, confidence, sensitivity }) => {
       const warnings: LintFinding[] = [];
+      let title = givenTitle;
       let tags = plainTags;
       try {
         const denied = denyIfUnder("write");
@@ -620,8 +636,12 @@ export function createMcpServer(
           // pre-existing body planted by someone else -- wrap it as untrusted.
           return untrustedResult(withConflicts(withWarnings({ note: noBody(updated) }, warnings), store, updated, facts));
         }
+        let titleGenerated = false;
         if (!title || !title.trim()) {
-          return errorResult("title is required when creating a new note");
+          const first = (body ?? "").split("\n").map((l) => l.trim()).find(Boolean);
+          if (!first) return errorResult("a new note needs a title or a body");
+          title = printableWords(first, 60);
+          titleGenerated = true;
         }
         // Writes always go to the server-resolved namespace when active; the
         // model-supplied `namespace` is ignored (prompt-injection guard).
@@ -634,7 +654,7 @@ export function createMcpServer(
         );
         await maybeEmbed(store, created);
         const sim = store.similarNote(created.id);
-        return untrustedResult(withConflicts(withWarnings({ note: noBody(created), ...(sim ? { similar_note: { id: sim.id, title: sim.title, hint: `looks similar to #${sim.id} - consider updating it (state_write with id=${sim.id}) if this is the same thing` } } : {}) }, warnings), store, created, facts));
+        return untrustedResult(withConflicts(withWarnings({ note: noBody(created), ...(titleGenerated ? { title_generated: `No title was given, so it was made from the body's first line. To change it: state_write id=${created.id} title="..."` } : {}), ...(sim ? { similar_note: { id: sim.id, title: sim.title, hint: `looks similar to #${sim.id} - consider updating it (state_write with id=${sim.id}) if this is the same thing` } } : {}) }, warnings), store, created, facts));
       } catch (e) {
         if (e instanceof QuarantinedError) return quarantinedResult(e);
         return errorFor(e);
@@ -647,9 +667,12 @@ export function createMcpServer(
     {
       title: "Read shared state",
       description:
-        "Open one note from memory by its id. Pass `neighbors: true` to also get up to 10 similar notes.",
+        `Open one note from memory by its id. Pass \`neighbors: true\` to also get up to 10 similar notes. A body longer than max_chars (default ${READ_MAX_CHARS}) comes in parts: body_truncated, body_chars and next_offset say where to continue (pass it as offset).`,
       inputSchema: {
-        id: z.number().int().describe("Id of the note to read."),
+        id: zInt().optional().describe("Id of the note to read."),
+        ids: z.array(zInt()).optional().describe("Same as id, for older prompts: the first id is read."),
+        offset: zInt().min(0).optional().describe("Start the body at this character (from next_offset). Default 0."),
+        max_chars: zInt().min(1).optional().describe(`Most body characters to return (default ${READ_MAX_CHARS}).`),
         neighbors: z
           .boolean()
           .optional()
@@ -659,8 +682,10 @@ export function createMcpServer(
         ...INCLUDE_DISTRUSTED_SHAPE,
       },
     },
-    async ({ id, neighbors, include_distrusted }) => {
+    async ({ id: oneId, ids, offset, max_chars, neighbors, include_distrusted }) => {
       try {
+        const id = oneId ?? ids?.[0];
+        if (id === undefined) return errorResult("id is required");
         // Uniform scope gate on the read tools too (defense-in-depth: the
         // scope floor is "read" today, but the check must not silently rot
         // if a narrower floor is ever introduced).
@@ -695,6 +720,13 @@ export function createMcpServer(
               })),
             }
           : annotated;
+        const full = typeof note.body === "string" ? note.body : "";
+        const start = Math.max(0, offset ?? 0);
+        const max = clampInt(max_chars, READ_MAX_CHARS, 1, 1_000_000);
+        if (start > 0 || full.length > max) {
+          const end = Math.min(full.length, start + max);
+          return untrustedResult({ note: { ...payload, body: full.slice(start, end), body_truncated: true, body_chars: full.length, ...(end < full.length ? { next_offset: end } : {}) } });
+        }
         return untrustedResult({ note: payload });
       } catch (e) {
         return errorFor(e);
@@ -721,7 +753,7 @@ export function createMcpServer(
               ? "Untrusted hint: restrict search to this namespace. Ignored unless this server may read it."
               : "Restrict search to this namespace."
           ),
-        limit: z.number().int().optional().describe("Max results (default 20, max 200)."),
+        limit: zInt().optional().describe("Max results (default 20, max 200)."),
         mode: z
           .enum([...SEARCH_MODES, "relevant"])
           .optional()
@@ -999,8 +1031,8 @@ export function createMcpServer(
               ? "Untrusted hint: restrict listing to this namespace. Ignored unless this server may read it."
               : "Restrict listing to this namespace."
           ),
-        limit: z.number().int().optional().describe("Max results (default 50, max 500)."),
-        offset: z.number().int().optional().describe("Pagination offset."),
+        limit: zInt().optional().describe("Max results (default 50, max 500)."),
+        offset: zInt().optional().describe("Pagination offset."),
         ...WRITER_FILTER_SHAPE,
         ...SUPERSEDED_SHAPE,
       },
@@ -1046,7 +1078,7 @@ export function createMcpServer(
         "and only a person can delete it permanently (dashboard or `monomem delete <id>`). " +
         "Tell the user this when they ask you to forget something sensitive.",
       inputSchema: {
-        id: z.number().int().describe("Id of the note to delete."),
+        id: zInt().describe("Id of the note to delete."),
       },
     },
     async ({ id }) => {
@@ -1466,7 +1498,7 @@ export function createMcpServer(
         consumer: z
           .string()
           .optional()
-          .describe('Label for the "last" marker, e.g. "phone" or "claude-code" (default "default").'),
+          .describe('Label for the "last" marker, e.g. "phone" or "claude-code" (default: this connection\'s own writer name; pass "default" for the shared one).'),
         wait_seconds: z
           .number()
           .int()
@@ -1502,7 +1534,7 @@ export function createMcpServer(
         const signals = [extra?.signal, conn.signal].filter((x): x is AbortSignal => Boolean(x));
         const out = await waitForChanges(
           store,
-          { since, cursor, namespaces, source, ...writerFilterArgs(written_by, not_written_by, include_distrusted), ...noteWriterArgs(note_written_by, not_note_written_by), limit, consumer, ackMode: ack_mode, ackToken: ack_token, excludeSelf: exclude_self },
+          { since, cursor, namespaces, source, ...writerFilterArgs(written_by, not_written_by, include_distrusted), ...noteWriterArgs(note_written_by, not_note_written_by), limit, consumer: ownConsumer(consumer), ackMode: ack_mode, ackToken: ack_token, excludeSelf: exclude_self },
           {
             waitSeconds: parseWait(wait_seconds ?? wait),
             signal: signals.length ? AbortSignal.any(signals) : undefined,
@@ -1531,6 +1563,11 @@ export function createMcpServer(
     return namespace ? [namespace] : undefined;
   };
   const writeScope = (): { namespace?: string } => (nsActive ? { namespace: ownNs } : {});
+  // No consumer given: this connection's own writer (the token label, or stdio:<app>), so two apps sharing one store
+  // each keep their own "last" marker instead of moving one shared "default" marker for each other.
+  // A consumer key allows only [A-Za-z0-9._@-], so "stdio:claude-code" is kept as "stdio_claude-code".
+  const ownConsumer = (consumer: string | undefined): string | undefined =>
+    consumer ?? ((conn.label || currentWriter()).replace(/[^A-Za-z0-9._@-]/g, "_").slice(0, 64) || undefined);
 
   server.registerTool(
     "task_put",
@@ -1825,11 +1862,11 @@ export function createMcpServer(
         `\`ack_mode:"manual"\`: the marker then moves only when you send the returned \`ack_token\` back (${["memory_since", "memory_ack"].filter(has).length ? `next catch_up, ${["memory_since", "memory_ack"].filter(has).join(" or ")}` : "on your next catch_up"}).` +
         (nsActive ? " The `namespace` parameter is an untrusted hint: only readable namespaces are included." : ""),
       inputSchema: {
-        consumer: z.string().optional().describe('Label for the "last" marker (default "default").'),
+        consumer: z.string().optional().describe('Label for the "last" marker (default: this connection\'s own writer name; pass "default" for the shared one).'),
         namespace: z.string().optional().describe(nsActive ? "Untrusted hint: restrict to this namespace." : "Restrict to this namespace."),
         include_changes: z.boolean().optional().describe("false = skip the changes part (and leave the marker alone). Default true."),
-        tasks: z.number().int().optional().describe("Max open tasks (default 20)."),
-        handoffs: z.number().int().optional().describe("Max handoffs (default 3)."),
+        tasks: zInt().optional().describe("Max open tasks (default 20)."),
+        handoffs: zInt().optional().describe("Max handoffs (default 3)."),
         ack_mode: z.enum(["auto", "manual"]).optional().describe("auto (default): marker advances now. manual: it advances when you return `ack_token`."),
         ack_token: z.string().optional().describe("Token from an earlier ack_mode:manual call: moves the marker before reading."),
         exclude_self: z.boolean().optional().describe("Hide changes written by the token whose label equals your `consumer` label (see memory_since)."),
@@ -1844,7 +1881,7 @@ export function createMcpServer(
         const namespaces = readScope(namespace);
         const out = catchUp(store, {
           namespaces,
-          consumer,
+          consumer: ownConsumer(consumer),
           changes: include_changes,
           tasks,
           handoffs,
@@ -1878,7 +1915,7 @@ export function createMcpServer(
         "`ack_token` and the consumer\'s \"last\" marker moves there (never backwards). Until then the same changes are returned again.",
       inputSchema: {
         ack_token: z.string().describe("The ack_token from the final page of an ack_mode:manual read."),
-        consumer: z.string().optional().describe("Same consumer label you read with (default \"default\")."),
+        consumer: z.string().optional().describe("Same consumer label you read with (default: this connection's own writer name)."),
         namespace: z.string().optional().describe(nsActive ? "Untrusted hint: same scope you read with." : "Same namespace you read with."),
         source: z.string().optional().describe("Same source filter you read with."),
         ...WRITER_FILTER_SHAPE,
@@ -1890,7 +1927,7 @@ export function createMcpServer(
         const denied = denyIfUnder("read");
         if (denied) return errorResult(denied);
         const namespaces = readScope(namespace);
-        const r = ackChanges(store, { ackToken: ack_token, consumer, namespaces, source, ...writerFilterArgs(written_by, not_written_by, include_distrusted), ...noteWriterArgs(note_written_by, not_note_written_by) });
+        const r = ackChanges(store, { ackToken: ack_token, consumer: ownConsumer(consumer), namespaces, source, ...writerFilterArgs(written_by, not_written_by, include_distrusted), ...noteWriterArgs(note_written_by, not_note_written_by) });
         audit({ op: "changes.ack", label: conn.label, kind: "changes", detail: `consumer=${r.consumer} seq=${r.seq}` });
         return textResult({ acked: true, ...r });
       } catch (e) {
@@ -2066,8 +2103,8 @@ export function createMcpServer(
         "connection and acknowledge_risk. Give the replacement either as new_title (+ new_body, new_tags) OR as new_id (a note that already exists)." +
         (nsActive ? " Only notes in this server's own namespace can be replaced." : ""),
       inputSchema: {
-        old_ids: z.array(z.number().int()).min(1).max(20).describe("The id(s) of the note(s) to be replaced."),
-        new_id: z.number().int().optional().describe("The id of an existing live note that takes the old note's place (instead of new_title/new_body)."),
+        old_ids: z.array(zInt()).min(1).max(20).describe("The id(s) of the note(s) to be replaced."),
+        new_id: zInt().optional().describe("The id of an existing live note that takes the old note's place (instead of new_title/new_body)."),
         ...NEW_NOTE_SHAPE,
       },
     },
@@ -2131,7 +2168,7 @@ export function createMcpServer(
       description:
         "Brings a replaced (superseded) note back exactly as it was: it shows up in search again. The note that replaced it is not touched. " +
         "Safe by design (it only restores), so it needs no confirmation code; it is recorded.",
-      inputSchema: { id: z.number().int().describe("The id of the replaced note to bring back.") },
+      inputSchema: { id: zInt().describe("The id of the replaced note to bring back.") },
     },
     async ({ id }) => {
       try {

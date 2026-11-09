@@ -34,7 +34,7 @@ export interface MeterStats {
 }
 
 /** Add to one session's counters (fail-silent). */
-export function meterAdd(store: Store, sessionId: string, namespace: string, add: { injected?: number; saved?: number; llm?: number }): void {
+export function meterAdd(store: Store, sessionId: string, namespace: string, add: { injected?: number; saved?: number; llm?: number; savedOnce?: boolean }): void {
   if (!sessionId) return;
   const db = store.captureDb();
   // Session start must never wait behind another process's write lock for a meter row: fail fast, say so, keep going.
@@ -46,7 +46,7 @@ export function meterAdd(store: Store, sessionId: string, namespace: string, add
     db.prepare(
       `INSERT INTO meter_sessions (session_id, namespace, injections, injected_tokens, saved_tokens, llm_tokens, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(session_id) DO UPDATE SET injections = injections + excluded.injections, injected_tokens = injected_tokens + excluded.injected_tokens,
-         saved_tokens = saved_tokens + excluded.saved_tokens, llm_tokens = llm_tokens + excluded.llm_tokens, updated_at = excluded.updated_at`
+         saved_tokens = ${add.savedOnce ? "saved_tokens" : "saved_tokens + excluded.saved_tokens"}, llm_tokens = llm_tokens + excluded.llm_tokens, updated_at = excluded.updated_at`
     ).run(sessionId, namespace, inj, Math.max(0, Math.round(add.injected ?? 0)), Math.max(0, Math.round(add.saved ?? 0)), Math.max(0, Math.round(add.llm ?? 0)), new Date().toISOString());
   } catch (e) {
     process.stderr.write(`monomem: meter not updated (${(e as Error).message})\n`);

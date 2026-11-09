@@ -69,6 +69,13 @@ export interface InjectOptions {
   tokens?: number;
   /** The agent session this context is for: its sizes go to the meter (meter.ts). Omitted = not metered. */
   sessionId?: string;
+  /** Leave out notes with any of these tags (Claude Code's own CLAUDE.md imports, which it already loads). */
+  skipTags?: string[];
+}
+
+/** "Open any with ..." naming only a tool this install registers; state_read takes one id. */
+export function openHint(ids: number[]): string {
+  return openToolName() === "memory_get" ? `Open any with memory_get ids=[${ids.join(",")}]` : `Open any with state_read id=N (${ids.join(", ")})`;
 }
 
 /** The profile's share of the budget (MONOMEM_PROFILE_TOKENS, default 300); 0 = off (MONOMEM_PROFILE=off). */
@@ -187,8 +194,9 @@ export async function rankContext(
     ...(opts.notWrittenBy ? { notWrittenBy: opts.notWrittenBy } : {}),
     ...(opts.includeDistrusted ? { includeDistrusted: true } : {}),
   };
-  const base = { namespace: ns, kinds: NOTE_KINDS, withoutTags: [TASK_TAG, HANDOFF_TAG, NEVER_SHOW_TAG], ...wf };
-  const skip = (n: NoteRecord): boolean => n.tags.includes(TASK_TAG) || n.tags.includes(HANDOFF_TAG) || n.tags.includes(NEVER_SHOW_TAG);
+  const hidden = [TASK_TAG, HANDOFF_TAG, NEVER_SHOW_TAG, ...(opts.skipTags ?? [])];
+  const base = { namespace: ns, kinds: NOTE_KINDS, withoutTags: hidden, ...wf };
+  const skip = (n: NoteRecord): boolean => n.tags.some((t) => hidden.includes(t));
   const why = new Map<number, Set<string>>();
   const mark = (id: number, s: string): void => {
     if (!why.has(id)) why.set(id, new Set());
@@ -316,7 +324,7 @@ export async function injectContext(store: Store, opts: InjectOptions = {}): Pro
   const shownTok = Math.ceil(body.length / CHARS_PER_TOKEN);
   const rawTok = Math.ceil(fullChars / CHARS_PER_TOKEN);
   // Estimates, ~4 characters a token. The block adds headers and index lines, so it can be longer than the notes it summarises: say that plainly.
-  const open = `Open any with ${openToolName()} ids=[${ids.join(",")}]`;
+  const open = openHint(ids);
   const lead = `Showing ${shown.length} of ${Math.max(total, shown.length)} memories in ~${shownTok} tokens (estimate)`;
   const footer =
     shownTok <= rawTok
@@ -330,7 +338,8 @@ export async function injectContext(store: Store, opts: InjectOptions = {}): Pro
     // "Saved" = full text of the notes shown minus what was injected. Not the capture log: that is the whole history of
     // the namespace, so adding it on every injection counted the same captured work again in every session (1.2.x meters
     // reached ~1.27 billion tokens over 119 sessions that way).
-    meterAdd(store, opts.sessionId, ns ?? "", { injected, saved: Math.max(0, Math.ceil(notesChars / CHARS_PER_TOKEN) - injected) });
+    // savedOnce: a re-run for the same session (after /compact or /clear) shows the same notes again; it is not new savings.
+    meterAdd(store, opts.sessionId, ns ?? "", { injected, saved: Math.max(0, Math.ceil(notesChars / CHARS_PER_TOKEN) - injected), savedOnce: true });
     // Receipt: ids, why-tags, rank and size only (receipts.ts); titles and text stay in the store.
     receiptAdd(store, { sessionId: opts.sessionId, namespace: ns ?? "", client: currentWriter(), shown: shown.map((n) => ({ id: n.id, why: tagOf(n), tokens: tokensOf(n) })) });
   }

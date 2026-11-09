@@ -112,10 +112,10 @@ describe("MCP tool wrappers", () => {
     assert.equal(direct?.body, "written via tool");
   });
 
-  test("state_write without id and without title errors", async () => {
+  test("state_write without id, title or body errors (a body alone gives the title: see expert-round2.test)", async () => {
     const result: any = await client.callTool({
       name: "state_write",
-      arguments: { body: "no title" },
+      arguments: { body: "   " },
     });
     assert.equal(result.isError, true);
   });

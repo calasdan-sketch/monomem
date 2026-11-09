@@ -138,6 +138,17 @@ export function applyRestore(plan: RestorePlan, dbPath: string, now = new Date()
       }
     }
     copyFileSync(plan.source, tmp);
+    // What `monomem health` remembered about the audit log belongs to the old database's history, not this one.
+    try {
+      const meta = new DatabaseSync(tmp);
+      try {
+        meta.prepare("DELETE FROM _meta WHERE key = 'health_audit_seen'").run();
+      } finally {
+        meta.close();
+      }
+    } catch {
+      /* no _meta table (a very old backup): nothing to clear */
+    }
     for (const ext of ["-wal", "-shm", "-journal"]) {
       try {
         unlinkSync(dbPath + ext);

@@ -7,6 +7,8 @@
 npx monomem setup
 ```
 
+Want to see it first? `npx monomem demo` runs a short tour on a throwaway store (deleted at the end); it never touches your notes.
+
 Needs Node 22.16 or newer (check with `node -v`). No new enough Node? One command instead (needs Docker; put a long random `MONOMEM_TOKEN` in `.env` first):
 
 ```bash
@@ -537,7 +539,7 @@ Limits no scenario can show (what the benchmark cannot see) are listed next, und
 - **Finding a note again (keyword search only, top 5 results, from a QA pass).** Questions that use the note's own words: the right note was
   in the top 5 about **95%** of the time. Reworded questions that share few words with the note: about **50%**. Semantic search
   (`MONOMEM_EMBEDDINGS=on`, needs a local Ollama) helps with the reworded ones; without it Monomem does not understand meaning. These come
-  from a QA pass, not from the benchmark below: treat them as a rough guide and test on your own notes.
+  from a QA pass, not from the benchmark above: treat them as a rough guide and test on your own notes.
 - **What it adds at the start of a session.** A store of 60 short notes at the default setting (`MONOMEM_RECALL_TOKENS` = 1,500) produced
   about 7,100 characters, roughly **1,800 tokens** (estimated at 4 characters a token), listing 57 of the 60 notes. The block is capped at
   8,000 characters. `monomem meter` shows what yours actually costs and saves, as estimates.

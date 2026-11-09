@@ -132,7 +132,7 @@ summary, so the notes the hook printed at the start can be summarised away;
 printing them again keeps them in view. The cost is one more recall block
 (up to the hook's size cap) per compaction. Use `"startup|clear"` if you
 would rather not pay that. `monomem setup` writes `startup|clear|compact`
-and, run again, upgrades a `startup|clear` entry it wrote earlier in place.
+and, run again, replaces a `startup|clear` entry it wrote earlier (the new one goes at the end of the SessionStart list; no second entry).
 
 ## Fail-silent by design
 

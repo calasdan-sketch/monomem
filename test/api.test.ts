@@ -76,6 +76,29 @@ describe("HTTP API", () => {
     assert.ok(note.id);
   });
 
+  test("POST /notes refuses a namespace with a terminal escape, and one over 100 chars", async () => {
+    for (const namespace of ["evil\u001b[2J", "n".repeat(101), "*"]) {
+      const res = await fetch(`${baseUrl}/notes`, {
+        method: "POST",
+        headers: { ...auth, "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "x", namespace }),
+      });
+      assert.equal(res.status, 400, JSON.stringify(namespace));
+    }
+    const tag = await fetch(`${baseUrl}/notes`, {
+      method: "POST",
+      headers: { ...auth, "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "x", tags: ["a‮b"] }),
+    });
+    assert.equal(tag.status, 400);
+  });
+
+  test("GET /notes sends no-store and nosniff", async () => {
+    const res = await fetch(`${baseUrl}/notes`, { headers: auth });
+    assert.equal(res.headers.get("cache-control"), "no-store");
+    assert.equal(res.headers.get("x-content-type-options"), "nosniff");
+  });
+
   test("POST /notes without title is rejected", async () => {
     const res = await fetch(`${baseUrl}/notes`, {
       method: "POST",

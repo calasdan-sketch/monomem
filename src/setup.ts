@@ -470,21 +470,65 @@ function serversKey(id: ClientId, text: string): string {
  */
 const appLabel = (id: ClientId): string => (id === "project" ? "claude-code" : id);
 
+/** The data location this setup run pins into each entry (MONOMEM_HOME / MONOMEM_DB_PATH), if any. */
+function pinFor(opts: SetupOptions): Record<string, string> {
+  return { ...(opts.home ? { MONOMEM_HOME: opts.home } : {}), ...(opts.db ? { MONOMEM_DB_PATH: opts.db } : {}) };
+}
+const pinText = (pin: Record<string, string>): string => Object.entries(pin).map(([k, v]) => `${k}=${v}`).join(", ");
+
+/** An existing entry against the pin: "none" (nothing to pin), "ok" (same place), "missing" (entry names no place), "differs". */
+function pinMismatch(pin: Record<string, string>, read: (k: string) => string | undefined): "none" | "ok" | "missing" | "differs" {
+  if (!Object.keys(pin).length) return "none";
+  const has = ["MONOMEM_HOME", "MONOMEM_DB_PATH"].filter((k) => read(k) !== undefined);
+  if (!has.length) return "missing";
+  for (const k of has) if (pin[k] === undefined || resolve(String(read(k))) !== resolve(pin[k])) return "differs";
+  return "ok";
+}
+
+/** `KEY = "..."` (basic string, JSON-style escapes) or `KEY = '...'` (literal) in TOML text: the value, else undefined. */
+function tomlString(text: string, k: string): string | undefined {
+  const m = new RegExp(`\\b${k}\\s*=\\s*(?:"((?:[^"\\\\]|\\\\.)*)"|'([^']*)')`).exec(text);
+  if (!m) return undefined;
+  if (m[2] !== undefined) return m[2];
+  try {
+    return JSON.parse(`"${m[1]}"`) as string;
+  } catch {
+    return m[1];
+  }
+}
+
+/** The plan line for adding env keys to an existing entry. */
+function envLine(name: string, where: string, add: Record<string, string>, app: string): string {
+  const parts: string[] = [];
+  const { MONOMEM_CLIENT: client, ...rest } = add;
+  if (client) parts.push(`label "${name}"${where} as ${app} (MONOMEM_CLIENT), so its writes are stamped "stdio:${app}"`);
+  const pin = pinText(rest);
+  if (pin) parts.push(`point "${name}"${where} at the data folder set in this shell (${pin}), so the app uses the same notes`);
+  return parts.join("; ");
+}
+
 /** Codex CLI: one [mcp_servers.monomem] table in ~/.codex/config.toml (command/args/env), everything else untouched. */
 function planToml(e: SetupEnv, opts: SetupOptions, target: ClientTarget, text: string | null, shared: { dbs: Set<string>; dupOld?: number }): { change: FileChange | null; already: string[]; conflicts: string[]; warnings: string[] } {
   if (text !== null && hasServer(text, "monomem")) {
     const already = { change: null, already: [`${target.label}: "monomem" is already set up`], conflicts: [], warnings: [] };
-    if (/MONOMEM_CLIENT/.test(text)) return already;
+    const table = findTable(text, ["mcp_servers", "monomem"]);
+    const envTable = findTable(text, ["mcp_servers", "monomem", "env"]);
+    const ours = (table ? text.slice(table.start, table.end) : "") + (envTable ? text.slice(envTable.start, envTable.end) : "");
+    const want: Record<string, string> = /MONOMEM_CLIENT/.test(ours || text) ? {} : { MONOMEM_CLIENT: "codex" };
+    const pin = pinFor(opts);
+    const pinned = pinMismatch(pin, (k) => tomlString(ours, k));
+    if (pinned === "differs") return { ...already, already: [], conflicts: [`${target.label}: "monomem" uses a different data folder than the one set in this shell (${pinText(pin)}). Make them the same in ${target.file}, or unset MONOMEM_HOME / MONOMEM_DB_PATH here, then run setup again`] };
+    if (pinned === "missing") Object.assign(want, pin);
+    if (!Object.keys(want).length) return already;
     // An entry from before per-app labels gets an [mcp_servers.monomem.env] table, but only when that cannot clash with
     // what is there: the entry is a table of its own and has no env yet (an inline `env = {...}` or an inline entry is
     // closed in TOML, so a second env would make the file invalid). Otherwise it keeps working, stamped plain "stdio".
-    const table = findTable(text, ["mcp_servers", "monomem"]);
-    if (!table || /^\s*"?env"?\s*[.=]/m.test(text.slice(table.start, table.end)) || findTable(text, ["mcp_servers", "monomem", "env"])) {
-      return { ...already, warnings: [`${target.label}: to label its writes "stdio:codex", add MONOMEM_CLIENT = "codex" to the env of [mcp_servers.monomem] by hand`] };
+    if (!table || /^\s*"?env"?\s*[.=]/m.test(text.slice(table.start, table.end)) || envTable) {
+      return { ...already, warnings: [`${target.label}: add ${Object.entries(want).map(([k, v]) => `${k} = ${JSON.stringify(v)}`).join(" and ")} to the env of [mcp_servers.monomem] by hand`] };
     }
     const at = ["mcp_servers", "monomem"];
     return {
-      change: { client: target.id, label: target.label, file: target.file, before: text, ops: [{ op: "set", path: at, key: "env", value: { MONOMEM_CLIENT: "codex" } }], lines: [`label "monomem" as codex (MONOMEM_CLIENT), so its writes are stamped "stdio:codex"`], inverse: [{ op: "remove", path: at, key: "env" }], allowEmpty: opts.forceEmpty, format: "toml" },
+      change: { client: target.id, label: target.label, file: target.file, before: text, ops: [{ op: "set", path: at, key: "env", value: want }], lines: [envLine("monomem", "", want, "codex")], inverse: [{ op: "remove", path: at, key: "env" }], allowEmpty: opts.forceEmpty, format: "toml" },
       already: [],
       conflicts: [],
       warnings: [],
@@ -550,16 +594,34 @@ export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, 
       const env = entry.env && typeof entry.env === "object" && !Array.isArray(entry.env) ? (entry.env as Record<string, unknown>) : null;
       // A folder's .mcp.json is only edited when asked (--project), the same as adding one.
       // Only a stdio entry (a command) is labelled: MONOMEM_CLIENT means nothing to an HTTP entry (url).
-    if ((env && "MONOMEM_CLIENT" in env) || typeof entry.command !== "string" || (target.id === "project" && !opts.project)) {
+      if (typeof entry.command !== "string" || (target.id === "project" && !opts.project)) {
         already.push(`${target.label}: "${s.name}"${where} is already set up`);
         continue;
       }
       // An entry from before per-app labels: name the app, so its writes are stamped stdio:<app> instead of plain stdio.
-      const at = env ? [...s.path, s.name, "env"] : [...s.path, s.name];
-      const op: Op = env ? { op: "set", path: at, key: "MONOMEM_CLIENT", value: appLabel(target.id) } : { op: "set", path: at, key: "env", value: { MONOMEM_CLIENT: appLabel(target.id) } };
-      ops.push(op);
-      inverse.unshift({ op: "remove", path: at, key: op.key });
-      lines.push(`label "${s.name}"${where} as ${appLabel(target.id)} (MONOMEM_CLIENT), so its writes are stamped "stdio:${appLabel(target.id)}"`);
+      const add: Record<string, string> = env && "MONOMEM_CLIENT" in env ? {} : { MONOMEM_CLIENT: appLabel(target.id) };
+      // MONOMEM_HOME / MONOMEM_DB_PATH set in this shell: an entry that names no data folder would use ~/.monomem instead.
+      const pin = pinFor(opts);
+      const pinned = pinMismatch(pin, (k) => (env && typeof env[k] === "string" ? (env[k] as string) : undefined));
+      if (pinned === "differs") {
+        conflicts.push(`${target.label}: "${s.name}"${where} uses a different data folder than the one set in this shell (${pinText(pin)}). Make them the same in ${target.file}, or unset MONOMEM_HOME / MONOMEM_DB_PATH here, then run setup again`);
+        continue;
+      }
+      if (pinned === "missing") Object.assign(add, pin);
+      if (!Object.keys(add).length) {
+        already.push(`${target.label}: "${s.name}"${where} is already set up`);
+        continue;
+      }
+      if (env) {
+        for (const [k, v] of Object.entries(add)) {
+          ops.push({ op: "set", path: [...s.path, s.name, "env"], key: k, value: v });
+          inverse.unshift({ op: "remove", path: [...s.path, s.name, "env"], key: k });
+        }
+      } else {
+        ops.push({ op: "set", path: [...s.path, s.name], key: "env", value: add });
+        inverse.unshift({ op: "remove", path: [...s.path, s.name], key: "env" });
+      }
+      lines.push(envLine(s.name, where, add, appLabel(target.id)));
       labelled++;
       continue;
     }
@@ -701,7 +763,7 @@ export interface HookHost {
  */
 /**
  * Claude Code's SessionStart sources: a new session, /clear, and after a /compact (the compacted context loses what the
- * session-start hook printed, so it is printed again). The matcher setup wrote before is upgraded in place on the next run.
+ * session-start hook printed, so it is printed again). The matcher setup wrote before is replaced on the next run (the new entry goes at the end of the list).
  */
 export const CLAUDE_START_MATCHER = "startup|clear|compact";
 const OLD_CLAUDE_START_MATCHER = "startup|clear";
@@ -787,7 +849,7 @@ export function planHooks(e: SetupEnv, opts: SetupOptions, dbForHook: string | u
       lines.push(`replace the start-of-session hook from the old onememory-mcp package with the current Monomem one (same place, same settings)`);
     }
   } else if (doc && host.start.matcher === CLAUDE_START_MATCHER && has(host.start.on, HOOK_DETECT)) {
-    // Ours is already there: upgrade a "startup|clear" matcher setup wrote earlier, in place (no second entry).
+    // Ours is already there: replace a "startup|clear" entry setup wrote earlier (it moves to the end of the list; no second entry).
     const items = getPath(doc, ["hooks", host.start.on])?.items ?? [];
     for (const marker of ["hook session-start", HOOK_MARKER]) {
       const first = items.find((i) => text!.slice(i.start, i.end).includes(marker));
@@ -1084,7 +1146,7 @@ export interface HistorySession {
 /** The data folder: MONOMEM_HOME, else ~/.monomem. */
 export function dataHome(e: SetupEnv): string {
   const home = e.env.MONOMEM_HOME?.trim();
-  return home ? resolve(home) : join(e.home, ".monomem");
+  return home ? resolve(home.replace(/^~(?=$|[\\/])/, e.home)) : join(e.home, ".monomem");
 }
 
 export function historyFile(e: SetupEnv): string {
@@ -1300,7 +1362,8 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   // Hook decision: every installed agent with command hooks (Claude Code, Codex, Gemini CLI, Muse). One answer covers all.
   let wantHook = false;
   let wantCapture = false;
-  const hookDb = primaryDbIfCustom(primaryDb, DB_PATH, opts);
+  // The hooks run inside the app, which does not see this shell's MONOMEM_HOME: name the database outright.
+  const hookDb = primaryDbIfCustom(primaryDb, DB_PATH, opts) ?? (opts.home ? join(opts.home, "state.db") : undefined);
   const hosts = hookHosts(e).filter((h) => !!found.find((t) => t.id === h.client)?.present && (!opts.only || opts.only.includes(h.client)));
   /** Per host: the start-of-session hook alone, and the automatic memory plan (which includes it). */
   const hookPlans = new Map<HookHost, FileChange>();

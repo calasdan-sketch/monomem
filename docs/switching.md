@@ -18,6 +18,10 @@ monomem import --from claude-mem            # asks before writing; --yes skips t
 
 Get everything across first and check it. Remove the old tool only after that.
 
+Notes that `import --claude` brings in from CLAUDE.md files and Claude Code's auto-memory (tagged `claude-md` or
+`claude-auto-memory`) are left out of Claude Code's own session-start notes, because Claude Code already reads those files;
+search and your other apps still see them.
+
 ## From claude-mem
 
 **What is read.** claude-mem keeps its data in a SQLite database: `~/.claude-mem/claude-mem.db`, or

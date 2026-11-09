@@ -10,7 +10,7 @@ can be prepared in the repository are marked **done** (they exist and are checke
 | `server.json` for the official MCP Registry | done (not yet validated against the registry: run `mcp-publisher validate`, needs Dan) |
 | `mcpName` in `package.json` | done. The registry's quickstart says an npm package must carry `mcpName` equal to the server name, and that GitHub sign-in needs it to start with `io.github.<your GitHub name>/` (source: the registry's own docs, `docs/modelcontextprotocol-io/quickstart.mdx` in github.com/modelcontextprotocol/registry, read when this was prepared) |
 | Social-preview picture | done: `docs/brand/social-preview.svg` (1280 x 640). GitHub wants a PNG or JPG for the repository setting: export it first (any browser can save it as an image) |
-| README badges | done: CI, npm version, license and Node badges are already at the top of the README |
+| README badges | done: CI, npm version, license and Node badges sit under the demo GIF, near the top of the README |
 
 ## Repository settings (needs Dan)
 
@@ -64,4 +64,4 @@ Do not offer a download from anywhere else.
 
 1. `npm publish` is a separate decision (needs Dan). The version in the README, `server.json` and npm must agree.
 2. Run `monomem demo --out receipt.html` and keep the receipt: it shows what the tool does without claiming more than it measures.
-3. Say plainly what it is not (README, "What Monomem is not").
+3. Say plainly what it is not (README, "What it does not do" and "Known limits").
