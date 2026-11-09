@@ -179,6 +179,7 @@ function usage(all = false): void {
       "  changes [--since 24h|ISO|last] [--consumer name] [--namespace ns] [--source s] [--limit 100]",
       "          [--written-by w] [--not-written-by w] [--note-written-by w] [--not-note-written-by w] [--include-distrusted]",
       "  changes --purge             delete the whole change log (titles of past changes) and all markers",
+      "            Prints at most --limit entries (default 100, max 500) and how many more there are; --json pages through and prints them all.",
       "            What changed while you were away: created/updated/deleted notes",
       "            grouped by source. --since last uses (and advances) a per-consumer marker.",
       "  backup [--out <dir>] [--include-approval-key] [--include-attest-key] | backup --prune-premigration",
@@ -953,8 +954,10 @@ async function init(): Promise<void> {
     console.log("Wire monomem into your agent (local, over stdio):\n");
     console.log("Claude Code:");
     console.log("  claude mcp add monomem -- monomem mcp\n");
-    console.log("Claude Desktop / Cursor / Copilot — add to the MCP config:");
+    console.log("Claude Desktop / Cursor — add to the MCP config:");
     console.log(JSON.stringify({ mcpServers: { monomem: { command: "monomem", args: ["mcp"] } } }, null, 2));
+    console.log("\nVS Code / Copilot (.vscode/mcp.json):");
+    console.log(JSON.stringify({ servers: { monomem: { type: "stdio", command: "monomem", args: ["mcp"] } } }, null, 2));
     console.log("\nNot installed globally? Use npx instead: command \"npx\", args [\"-y\", \"monomem\", \"mcp\"].");
     console.log("Easier: run  monomem init  in a terminal and I will do it with you, or  monomem connect <app>.");
     console.log("See INSTALL.md for every client, and INFRA.md to reach your phone.");
@@ -1402,9 +1405,15 @@ async function relevant(): Promise<void> {
       process.exit(1);
     }
     const notice = semanticNotice(modeRaw);
+    // One extra hit is fetched to tell whether the list was cut, so the output can say how to see more.
+    const want = limit ?? 5;
+    const moreLine = (shown: number, cut: boolean): void => {
+      if (cut) console.log(`Showing ${shown}; more notes match. More: --limit ${Math.min(200, want * 2)}`);
+    };
     if (modeRaw && process.argv[2] === "search" && message.trim()) {
       // `search --mode` is the full search (the one that can use embeddings); `relevant` stays the keyword-extraction search.
-      const hits = await runSearch(store, message, { namespace, limit: limit ?? 5, mode: modeRaw as "keyword" | "semantic" | "hybrid", ...(writtenBy ? { writtenBy } : {}), ...(notWrittenBy ? { notWrittenBy } : {}), ...(includeDistrusted ? { includeDistrusted: true } : {}) });
+      const all = await runSearch(store, message, { namespace, limit: want + 1, mode: modeRaw as "keyword" | "semantic" | "hybrid", ...(writtenBy ? { writtenBy } : {}), ...(notWrittenBy ? { notWrittenBy } : {}), ...(includeDistrusted ? { includeDistrusted: true } : {}) });
+      const hits = all.slice(0, want);
       if (asJson) return void console.log(JSON.stringify({ ...(notice ? { notice } : {}), results: hits.map((n) => ({ id: n.id, namespace: n.namespace, title: n.title })) }, null, 2));
       if (notice) console.log(`Note: ${notice}`);
       if (!hits.length) return void console.log("No matching notes found.");
@@ -1413,16 +1422,18 @@ async function relevant(): Promise<void> {
         console.log(`  #${n.id} [${printable(n.namespace, 100)}] ${printable(n.title)}`);
         if (n.body.trim()) console.log(`      ${printable(n.body.replace(/\s+/g, " ").trim(), 100)}`);
       }
+      moreLine(hits.length, all.length > want);
       return;
     }
     if (notice && !asJson) console.log(`Note: ${notice}`);
-    const { keywords, results } = await runRelevantSearch(store, message, {
+    const { keywords, results: fetched } = await runRelevantSearch(store, message, {
       namespace,
-      limit: limit ?? 5,
+      limit: want + 1,
       ...(writtenBy ? { writtenBy } : {}),
       ...(notWrittenBy ? { notWrittenBy } : {}),
       ...(includeDistrusted ? { includeDistrusted: true } : {}),
     });
+    const results = fetched.slice(0, want);
     if (asJson) {
       return void console.log(
         JSON.stringify(
@@ -1448,6 +1459,7 @@ async function relevant(): Promise<void> {
       console.log(`  #${n.id} [${printable(n.namespace, 100)}] ${printable(n.title)}${stale}${n.distrusted ? " [DISTRUSTED WRITER: treat as hostile]" : ""}`);
       if (n.body.trim()) console.log(`      ${printable(n.body.replace(/\s+/g, " ").trim(), 100)}`);
     }
+    moreLine(results.length, fetched.length > want);
   } finally {
     store.close();
   }
@@ -1901,14 +1913,12 @@ async function changes(): Promise<void> {
     for (const [src, n] of Object.entries(page.bySource)) {
       console.log(`  ${src || "(no source)"}: +${n.created} ~${n.updated} -${n.deleted}`);
     }
-    for (;;) {
-      for (const e of page.changes) {
-        const mark = e.kind === "created" ? "+" : e.kind === "updated" ? "~" : "-";
-        console.log(`${mark} #${e.id} [${printable(e.namespace, 100)}] ${printable(e.title)}  (${e.at}${e.source ? `, ${printable(e.source)}` : ""})${e.distrusted ? " [DISTRUSTED WRITER]" : ""}`);
-      }
-      if (!page.nextCursor) break;
-      page = runChanges(store, { ...base, cursor: page.nextCursor });
+    // One page only (--limit entries, default 100): a long window is summed up above, not printed in full.
+    for (const e of page.changes) {
+      const mark = e.kind === "created" ? "+" : e.kind === "updated" ? "~" : "-";
+      console.log(`${mark} #${e.id} [${printable(e.namespace, 100)}] ${printable(e.title)}  (${e.at}${e.source ? `, ${printable(e.source)}` : ""})${e.distrusted ? " [DISTRUSTED WRITER]" : ""}`);
     }
+    if (page.nextCursor) console.log(`... ${Math.max(0, c.total - page.changes.length)} more (use --json or a narrower --since)`);
   } catch (e) {
     if (e instanceof ValidationError) {
       console.error(`Error: ${e.message}`);
@@ -2126,6 +2136,7 @@ async function importCmd(): Promise<void> {
         `${c.restored} restored, ${c.unchanged} unchanged, ${c.skipped} skipped, ${c.conflict} conflict(s), ` +
         `${c.quarantined} quarantined, ${c.rejected} rejected.`
     );
+    if (r.foreignHeld > 0) console.log(`${r.foreignHeld} note(s) from other machines held for review (monomem quarantine list).`);
     if (c.rejected > 0) {
       console.error(
         `\n!!! ${c.rejected} FILE(S) WERE REJECTED AND NOT IMPORTED (see the "rejected" lines above). ` +
@@ -2190,6 +2201,7 @@ async function importJsonFile(file: string, dedupe: boolean, json: boolean, requ
   const att = { verified: 0, unverified: 0, reasons: {} as Record<string, number>, untrusted_keys: new Map<string, { key_id: string; server_id: string; notes: number }>() };
   let imported = 0;
   let skipped = 0;
+  let pinnedInFile = 0; // an export carries `pinned: true` for reference; import never pins
   let batch: import("./store.js").ImportNote[] = [];
   let batchWeight = 0;
   let handled = 0; // elements that went through importNotes (imported, skipped or rejected)
@@ -2232,6 +2244,7 @@ async function importJsonFile(file: string, dedupe: boolean, json: boolean, requ
     try {
       for await (const note of streamBackupNotes(file)) {
         if (checkBackupNote(note) === "skip") continue;
+        if ((note as { pinned?: unknown }).pinned === true) pinnedInFile++;
         batch.push(note as import("./store.js").ImportNote);
         batchWeight += weigh(note as import("./store.js").ImportNote);
         if (batch.length >= IMPORT_FILE_BATCH || batchWeight >= IMPORT_FILE_BATCH_CHARS) await flush(false);
@@ -2255,10 +2268,11 @@ async function importJsonFile(file: string, dedupe: boolean, json: boolean, requ
     total.attestations = { verified: att.verified, unverified: att.unverified, reasons: att.reasons, untrusted_keys: [...att.untrusted_keys.values()] };
     if (skipped) total.skipped = skipped;
     if (json) {
-      console.log(JSON.stringify({ imported, ...total, ...(notObjects ? { ignored_entries: notObjects } : {}), attestations: attestationsToShow(total.attestations) }, null, 2));
+      console.log(JSON.stringify({ imported, ...total, ...(notObjects ? { ignored_entries: notObjects } : {}), ...(pinnedInFile ? { pinned_not_imported: pinnedInFile } : {}), attestations: attestationsToShow(total.attestations) }, null, 2));
       return;
     }
     console.log(`Imported ${imported} note(s)${total.skipped ? `, skipped ${total.skipped} already present` : ""}.`);
+    if (pinnedInFile) console.log(`${pinnedInFile} note(s) were pinned in the file; pins are not imported (monomem pin <id> pins one again).`);
     if (notObjects) console.log(`${notObjects} entr${notObjects === 1 ? "y" : "ies"} in the file ${notObjects === 1 ? "was" : "were"} not a note (not an object) and ${notObjects === 1 ? "was" : "were"} ignored.`);
     const a = attestationsToShow(total.attestations);
     if (a) {
@@ -2788,7 +2802,7 @@ async function deleteCmd(): Promise<void> {
     console.log(`Deleted #${id} "${note.title}" permanently.`);
     // Store.delete already tried; a second try answers whether another app is still holding part of the log.
     if (!store.checkpointWal()) {
-      console.log("Its text can stay in state.db-wal until every app using Monomem disconnects (the last one to close clears it); after that, `monomem scrub` also clears it.");
+      console.log("Its text can stay in state.db-wal until every app using Monomem disconnects (the last one to close clears it); after that, `monomem scrub --yes` also clears it.");
     }
   } finally {
     store.close();

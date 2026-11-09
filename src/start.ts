@@ -24,6 +24,7 @@ import {
   AUTO_CONSOLIDATE_INTERVAL_MS,
   prepareDataDir,
   TOKEN_FILE,
+  isLoopback,
 } from "./config.js";
 import { autoConsolidateCooperative, AUTO_MERGE_SCORE } from "./consolidate.js";
 import { resolveStartupNamespace } from "./namespace.js";
@@ -119,6 +120,9 @@ function scheduleJanitor(): void {
 
 exitOnListenError(apiServer, API_PORT, "MONOMEM_PORT", "API").listen(API_PORT, BIND_HOST, () => {
   console.error(`[monomem] API + dashboard on http://${BIND_HOST}:${API_PORT}`);
+  if (!isLoopback(BIND_HOST)) {
+    console.error(`[monomem] warning: listening on ${BIND_HOST}, not loopback, over plain HTTP (tokens and notes cross the network unencrypted). Put it behind your own TLS / authenticated tunnel: see INFRA.md.`);
+  }
   console.error(`[monomem] DB: ${DB_PATH}`);
   const tokenFromEnv = Boolean(process.env.MONOMEM_TOKEN && process.env.MONOMEM_TOKEN.trim());
   console.error(`[monomem] token: ${tokenFromEnv ? "from MONOMEM_TOKEN" : TOKEN_FILE}`);

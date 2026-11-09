@@ -562,6 +562,8 @@ export interface ImportResult {
   dir: string;
   entries: ImportEntry[];
   counts: Record<ImportAction, number>;
+  /** Files written by another store that went to quarantine (approve-first, or the linter) instead of going live. */
+  foreignHeld: number;
 }
 
 /**
@@ -580,6 +582,7 @@ export async function importMarkdown(
   const self = store.storeId();
   const dry = opts.dryRun === true;
   const entries: ImportEntry[] = [];
+  let foreignHeld = 0;
   const conflictsDir = join(dir, ".conflicts");
   const saveConflict = (name: string, text: string): string => {
     const p = join(conflictsDir, name);
@@ -613,6 +616,9 @@ export async function importMarkdown(
     const origin = typeof fm.origin === "string" ? fm.origin : null;
     const originId = typeof fm.id === "number" && Number.isInteger(fm.id) ? fm.id : null;
     const hasIdentity = origin !== null && originId !== null;
+    // Written by another store: its writer claims are unverified, and approve-first holds it like an agent's write.
+    const foreign = origin !== null && origin !== self;
+    const foreignOpts = foreign ? { holdForApproval: true, importedUnverified: true } : {};
 
     let localId: number | null = null;
     if (hasIdentity) localId = origin === self ? originId : store.syncLookup(origin!, originId!);
@@ -652,6 +658,7 @@ export async function importMarkdown(
       // Re-importing content already held for review must not queue it again.
       const held = store.pendingQuarantineId(namespace, title, body, content.tags);
       if (held !== null) {
+        if (foreign) foreignHeld++;
         push("quarantined", { detail: `already held in quarantine #${held}` });
         return;
       }
@@ -666,6 +673,7 @@ export async function importMarkdown(
         push(ok, { id: n.id, ...(detail ? { detail } : {}) });
       } catch (e) {
         if (e instanceof QuarantinedError) {
+          if (foreign) foreignHeld++;
           push("quarantined", { detail: `quarantine #${e.quarantineId}: ${e.message}` });
         } else if (e instanceof ValidationError) {
           push("rejected", { detail: e.message });
@@ -699,6 +707,7 @@ export async function importMarkdown(
             : {}),
           // A captured row (observation / summary) comes back as one, with its files and session.
           ...captureFieldsOf(fm),
+          ...foreignOpts,
         }
       );
       store.restoreCaptureLinks(n, fm.files);
@@ -742,7 +751,7 @@ export async function importMarkdown(
       return store.update(
         local.id,
         { namespace, title, body, tags: importTags(content.tags, local.tags) },
-        { ifRev: local.rev, ...(typeof fm.origin_writer === "string" && fm.origin_writer.trim() ? { alsoTouchedBy: claimNames(fm.origin_writer) } : {}) }
+        { ifRev: local.rev, ...foreignOpts, ...(typeof fm.origin_writer === "string" && fm.origin_writer.trim() ? { alsoTouchedBy: claimNames(fm.origin_writer) } : {}) }
       );
     };
 
@@ -790,5 +799,5 @@ export async function importMarkdown(
     rejected: 0,
   } as Record<ImportAction, number>;
   for (const e of entries) counts[e.action]++;
-  return { dir, entries, counts };
+  return { dir, entries, counts, foreignHeld };
 }

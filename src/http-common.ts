@@ -4,7 +4,7 @@
 
 import type { IncomingMessage, Server } from "node:http";
 import { StringDecoder } from "node:string_decoder";
-import { type TokenEntry } from "./config.js";
+import { envNum as num, type TokenEntry } from "./config.js";
 
 // 1MB cap so a bad client can't OOM the process. Shared by both servers.
 export const MAX_BODY_BYTES = 1_000_000;
@@ -96,10 +96,6 @@ export function exitOnListenError(server: Server, port: number, envVar: string, 
  * allow a large /import over a slow link), MONOMEM_KEEPALIVE_TIMEOUT_MS (default 5000).
  */
 export function applyServerLimits<T extends Server>(server: T): T {
-  const num = (name: string, def: number): number => {
-    const v = Number(process.env[name]);
-    return process.env[name] !== undefined && process.env[name]!.trim() !== "" && Number.isFinite(v) && v >= 0 ? Math.floor(v) : def;
-  };
   server.maxConnections = num("MONOMEM_MAX_CONNECTIONS", 512) || 512;
   server.headersTimeout = num("MONOMEM_HEADERS_TIMEOUT_MS", 20_000);
   server.requestTimeout = num("MONOMEM_REQUEST_TIMEOUT_MS", 300_000);

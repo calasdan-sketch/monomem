@@ -351,6 +351,8 @@ function lintFor(
 }
 
 /** The quarantine reason of a write held only because its namespace is approve-first. */
+/** bm25 column weights for notes_fts(title, body, tags). */
+const FTS_WEIGHTS = "5, 1, 2";
 const APPROVAL_FINDING: LintFinding = { category: "approval", label: "namespace requires approval", field: "namespace" };
 
 /**
@@ -925,7 +927,9 @@ function buildMatchQuery(q: string, any = false): string {
     .split(/\s+/)
     .filter((t) => /[\p{L}\p{N}]/u.test(t)) // keep only tokens with a letter/number
     .slice(0, QUERY_MAX_WORDS)
-    .map((t) => `"${t.replace(/"/g, '""')}"*`);
+    // Any-term searches run on extracted keywords: a keyword of one or two letters is matched exactly there ("go" must not
+    // match every word starting with go). A typed search keeps prefix matching for every word.
+    .map((t) => `"${t.replace(/"/g, '""')}"${any && /^[\p{L}]{1,2}$/u.test(t) ? "" : "*"}`);
   return tokens.join(any ? " OR " : " AND "); // "" when nothing usable; caller returns []
 }
 
@@ -2092,6 +2096,24 @@ export class Store {
     }
   }
 
+  /** Notes in a database file, read-only (never created or upgraded); 0 when it is missing or cannot be read. */
+  static peekNoteCount(dbPath: string): number {
+    if (dbPath === ":memory:" || !existsSync(dbPath)) return 0;
+    let db: DatabaseSync | null = null;
+    try {
+      db = new DatabaseSync(dbPath, { readOnly: true });
+      return Number((db.prepare("SELECT COUNT(*) AS c FROM notes").get() as { c: number }).c);
+    } catch {
+      return 0;
+    } finally {
+      try {
+        db?.close();
+      } catch {
+        /* nothing to close */
+      }
+    }
+  }
+
   private hasColumn(table: string, column: string): boolean {
     return (this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some(
       (c) => c.name === column
@@ -2781,6 +2803,8 @@ export class Store {
       obsType?: string;
       /** importNotes: a restore is one operator action, not N agent writes; the flood guard does not count it. */
       bulkImport?: boolean;
+      /** Sync of another machine's file: held under approve-first even though the CLI runs it, like an agent's write. */
+      holdForApproval?: boolean;
     } & LintOpts = {}
   ): NoteRecord {
     if (!opts.bulkImport) this.floodGate(opts.lint ?? "full");
@@ -2800,7 +2824,7 @@ export class Store {
     const sensitivity = this.labelForNew(input.sensitivity);
     const findings = lintFor(input, opts.lint ?? "full");
     const linted = applyLintPolicy(findings, opts);
-    if (!isOperatorWrite(opts.lint ?? "full") && this.isApproveFirst(input.namespace?.trim() || DEFAULT_NAMESPACE)) findings.push(APPROVAL_FINDING);
+    if ((opts.holdForApproval || !isOperatorWrite(opts.lint ?? "full")) && this.isApproveFirst(input.namespace?.trim() || DEFAULT_NAMESPACE)) findings.push(APPROVAL_FINDING);
     if (linted === "quarantine" || findings.includes(APPROVAL_FINDING)) {
       const qid = this.quarantineWrite({
         op: "create",
@@ -3460,6 +3484,10 @@ export class Store {
       historyReason?: string;
       /** internal: an operator rollback; not counted by the flood guard (a paused writer is still refused). */
       noFloodCount?: boolean;
+      /** internal (sync of another machine's file): held under approve-first like an agent's write ... */
+      holdForApproval?: boolean;
+      /** ... and flagged `imported_unverified` when applied. */
+      importedUnverified?: boolean;
     } & LintOpts = {}
   ): NoteRecord | null {
     this.floodGate(opts.lint ?? "full", opts.noFloodCount !== true);
@@ -3497,18 +3525,19 @@ export class Store {
     // forgetting there is the operator's alone, so an agent is refused (0 = keep forever, harmless, stays allowed).
     if (patch.forget_after !== undefined && patch.forget_after !== 0) {
       refuseAgentInApproveFirst(this, existing.namespace, "setting a forget date on a note");
-      // A delayed forget of someone else's note is removal: admin only (a non-admin key may set one on its own notes).
+      // A delayed forget of someone else's note is removal: admin only (a non-admin key may set one on notes it created;
+      // created_by, not written_by, so editing someone's body does not make the note yours).
       if (
         !isOperatorWrite(opts.lint ?? "full") &&
         actorStore.getStore()?.canDeclassify === false &&
-        (existing.written_by ?? "") !== currentWriter()
+        (existing.created_by ?? "") !== currentWriter()
       ) {
         throw new ValidationError(ADMIN_SCOPE_NEEDED);
       }
     }
     const movedTo = patch.namespace?.trim();
     if (
-      !isOperatorWrite(opts.lint ?? "full") &&
+      (opts.holdForApproval || !isOperatorWrite(opts.lint ?? "full")) &&
       (Object.keys(changed).length > 0 || (movedTo && movedTo !== existing.namespace)) &&
       (this.isApproveFirst(existing.namespace) || (movedTo !== undefined && movedTo !== "" && this.isApproveFirst(movedTo)))
     ) {
@@ -3683,6 +3712,7 @@ export class Store {
           `stale write: note ${id} is at rev ${current.rev} (you have ${opts.ifRev ?? existing.rev}); re-read and retry`
         );
       }
+      if (opts.importedUnverified) this.db.prepare("UPDATE notes SET imported_unverified = 1 WHERE id = ?").run(id);
 
       // Invalidate the embedding: the note's text just changed, so the stored
       // vector is now stale. Drop it rather than keep a vector that no longer
@@ -4960,10 +4990,10 @@ export class Store {
       if (opts.namespace) {
         rows = this.db
           .prepare(
-            `SELECT notes.*, -rank AS score FROM notes_fts
+            `SELECT notes.*, -bm25(notes_fts, ${FTS_WEIGHTS}) AS score FROM notes_fts
              JOIN notes ON notes.id = notes_fts.rowid
              WHERE notes_fts MATCH ? AND notes.namespace = ? AND ${liveSql(opts.includeSuperseded)}${range.sql}
-             ORDER BY rank
+             ORDER BY bm25(notes_fts, ${FTS_WEIGHTS}), notes.updated_at DESC, notes.id DESC
              LIMIT ?`
           )
           .all(matchQuery, opts.namespace, ...range.params, limit) as unknown as Array<
@@ -4972,18 +5002,18 @@ export class Store {
       } else {
         rows = this.db
           .prepare(
-            `SELECT notes.*, -rank AS score FROM notes_fts
+            `SELECT notes.*, -bm25(notes_fts, ${FTS_WEIGHTS}) AS score FROM notes_fts
              JOIN notes ON notes.id = notes_fts.rowid
              WHERE notes_fts MATCH ? AND ${liveSql(opts.includeSuperseded)}${range.sql}
-             ORDER BY rank
+             ORDER BY bm25(notes_fts, ${FTS_WEIGHTS}), notes.updated_at DESC, notes.id DESC
              LIMIT ?`
           )
           .all(matchQuery, ...range.params, limit) as unknown as Array<
           NoteRow & { score: number }
         >;
       }
-      // FTS5's rank is negative (lower = better), so -rank is a positive
-      // higher-is-better score.
+      // bm25 is negative (lower = better), so its negation is a positive higher-is-better score. Columns are weighted
+      // (FTS_WEIGHTS): a match in the title counts most, then tags, then the body; ties go to the newest note.
       return rows.map((row) => ({ note: this.rec(row), score: row.score ?? 0 }));
     } catch (e) {
       // A malformed FTS expression should never 500 the caller. Anything else (a damaged file: SQLITE_CORRUPT,
@@ -5406,11 +5436,15 @@ export class Store {
   /** True when an identical note (namespace, title, created_at, body) already exists. */
   private hasImportTwin(note: ImportNote): boolean {
     const created = isoOrNull(note.created_at);
-    if (!created || typeof note.title !== "string") return false;
+    if (typeof note.title !== "string") return false;
     const ns = note.namespace?.trim() || DEFAULT_NAMESPACE;
-    const rows = this.db
-      .prepare(`SELECT * FROM notes WHERE namespace = ? AND created_at = ? AND title = ?${this.ceilingSql()}`)
-      .all(ns, created, note.title) as unknown as NoteRow[];
+    // No created_at in the file (a hand-written or trimmed export): the twin is a note with the same namespace, title and
+    // body. With created_at it must match too, so two genuinely separate notes with the same text both come in.
+    const rows = (
+      created
+        ? this.db.prepare(`SELECT * FROM notes WHERE namespace = ? AND created_at = ? AND title = ?${this.ceilingSql()}`).all(ns, created, note.title)
+        : this.db.prepare(`SELECT * FROM notes WHERE namespace = ? AND title = ?${this.ceilingSql()}`).all(ns, note.title)
+    ) as unknown as NoteRow[];
     const body = note.body ?? "";
     return rows.some((r) => {
       try {
@@ -6691,28 +6725,36 @@ export class Store {
       };
     });
 
-    const grouped = this.db
-      .prepare(`SELECT source, kind, COUNT(*) AS n FROM (${eventsSql}) GROUP BY source, kind`)
-      .all(...eventParams) as Array<{ source: string; kind: ChangeEntry["kind"]; n: number }>;
-    const counts = { created: 0, updated: 0, deleted: 0, total: 0 };
-    const bySource: Record<string, ChangeCounts> = {};
-    for (const g of grouped) {
-      const n = Number(g.n);
-      const key = g.source ?? "";
-      bySource[key] ??= { created: 0, updated: 0, deleted: 0 };
-      bySource[key][g.kind] += n;
-      counts[g.kind] += n;
-      counts.total += n;
+    // The window's totals do not change between pages (the window is fixed), so they are counted on the first page only
+    // and travel in the signed cursor; a later page skips the two counting queries over the whole window.
+    let totals = c.n;
+    if (!totals) {
+      const grouped = this.db
+        .prepare(`SELECT source, kind, COUNT(*) AS n FROM (${eventsSql}) GROUP BY source, kind`)
+        .all(...eventParams) as Array<{ source: string; kind: ChangeEntry["kind"]; n: number }>;
+      const counts = { created: 0, updated: 0, deleted: 0, total: 0 };
+      const bySource: Record<string, ChangeCounts> = {};
+      for (const g of grouped) {
+        const n = Number(g.n);
+        const key = g.source ?? "";
+        bySource[key] ??= { created: 0, updated: 0, deleted: 0 };
+        bySource[key][g.kind] += n;
+        counts[g.kind] += n;
+        counts.total += n;
+      }
+      const q = Number(
+        (
+          this.db
+            .prepare(
+              `SELECT COUNT(*) AS c FROM quarantine WHERE created_at >= ? AND created_at < ?${nsSql}${srcSql}${this.ceilingSql()}`
+            )
+            .get(c.s, c.u, ...nsParams, ...srcParams) as { c: number }
+        ).c
+      );
+      totals = { counts, bySource, q };
     }
-    const quarantined = Number(
-      (
-        this.db
-          .prepare(
-            `SELECT COUNT(*) AS c FROM quarantine WHERE created_at >= ? AND created_at < ?${nsSql}${srcSql}${this.ceilingSql()}`
-          )
-          .get(c.s, c.u, ...nsParams, ...srcParams) as { c: number }
-      ).c
-    );
+    const { counts, bySource } = totals;
+    const quarantined = totals.q;
     const last = pageRows[pageRows.length - 1];
     return {
       since: c.s,
@@ -6721,7 +6763,7 @@ export class Store {
       counts,
       bySource,
       quarantined,
-      nextCursor: more && last ? this.encodeCursor({ ...c, a: Number(last.seq) }) : null,
+      nextCursor: more && last ? this.encodeCursor({ ...c, a: Number(last.seq), n: totals }) : null,
       consumer: c.c ?? null,
       seq: c.t,
     };
@@ -8062,6 +8104,8 @@ interface FeedCursor {
   c?: string;
   /** exclude_self: hide changes whose source equals this label */
   x?: string;
+  /** The window's totals, counted once on the first page and carried (signed) to the later ones. */
+  n?: { counts: ChangesPage["counts"]; bySource: ChangesPage["bySource"]; q: number };
 }
 
 /** Most "last" markers a store keeps (see Store.setFeedMarker). */

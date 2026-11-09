@@ -835,12 +835,19 @@ export function createMcpServer(
         const max = clampInt(max_chars, READ_MAX_CHARS, 1, 1_000_000);
         if (oneId === undefined && ids !== undefined && ids.length > 1) {
           // Several ids: each through the same gated path, one max_chars budget shared by all bodies.
-          const take = ids.slice(0, MULTI_READ_MAX);
+          const uniq = [...new Set(ids)]; // a repeated id is read (and counted as an access) once
+          const take = uniq.slice(0, MULTI_READ_MAX);
           const notes: Record<string, unknown>[] = [];
           const missing: number[] = [];
           const archived: number[] = [];
+          const spent: number[] = [];
           let left = max;
           for (const one of take) {
+            // Budget gone: do not read (or count an access for) a note whose body would come back empty.
+            if (left <= 0) {
+              spent.push(one);
+              continue;
+            }
             const r = readOne(one, 0, left, neighbors === true, include_distrusted === true);
             if ("error" in r) {
               (r.archived ? archived : missing).push(one);
@@ -849,10 +856,11 @@ export function createMcpServer(
             notes.push(r.note);
             left = Math.max(0, left - (typeof r.note.body === "string" ? r.note.body.length : 0));
           }
-          const ignored = ids.slice(MULTI_READ_MAX);
+          const ignored = uniq.slice(MULTI_READ_MAX);
           return untrustedResult({
             notes,
             missing,
+            ...(spent.length ? { not_read_budget_spent: spent, budget_hint: "max_chars was used up; read these in another call" } : {}),
             ...(archived.length ? { archived, archived_hint: "archived (hidden, not erased); a person can restore one with `monomem restore <id>`; write a new note only if the user wants a fresh one" } : {}),
             ...(ignored.length ? { ignored_ids: ignored, hint: `at most ${MULTI_READ_MAX} ids per call; read the rest in another call` } : {}),
           });
@@ -886,7 +894,7 @@ export function createMcpServer(
               ? "Untrusted hint: restrict search to this namespace. Ignored unless this server may read it."
               : "Restrict search to this namespace."
           ),
-        limit: zInt().optional().describe("Max results (default 20, max 200)."),
+        limit: zInt().optional().describe("Max results: default 20, min 1, max 200 (a larger value is lowered to 200 and the response says limit_capped: 200). When the results fill the limit the response has more: true (there may be more matches)."),
         mode: z
           .enum([...SEARCH_MODES, "relevant"])
           .optional()
@@ -969,7 +977,12 @@ export function createMcpServer(
           : undefined;
         const resolvedMode = mode ?? parseMode(undefined);
         const semNotice = semanticNotice(mode);
-        const untrustedResultN = (p: Record<string, unknown>) => untrustedResultCut(semNotice ? { ...p, notice: semNotice } : p);
+        const effLimit = clampInt(limit, 20, 1, 200);
+        const untrustedResultN = (p: Record<string, unknown>) => {
+          const n = Array.isArray(p.results) ? p.results.length : 0;
+          const q = { ...p, ...(limit !== undefined && limit > 200 ? { limit_capped: 200 } : {}), ...(n >= effLimit ? { more: true } : {}) };
+          return untrustedResultCut(semNotice ? { ...q, notice: semNotice } : q);
+        };
         const wf = { ...writerFilterArgs(written_by, not_written_by, include_distrusted), ...supersededArg(include_superseded) };
         if (explain === true && currentCeiling() === undefined) {
           // Explained twin of the branches below: same namespace gating, the

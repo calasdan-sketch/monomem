@@ -242,7 +242,12 @@ function boostAndRank(
 ): Array<{ note: NoteRecord; score: number }> {
   return hits
     .map((h) => ({ ...h, score: accessBoost(h.score, h.note.access_count, h.note.last_accessed) }))
-    .sort((a, b) => b.score - a.score);
+    .sort((a, b) => b.score - a.score || newerFirst(a.note, b.note));
+}
+
+/** Tie-break for equal scores: the newest note first (updated_at, then id), as the keyword query orders them. */
+function newerFirst(a: NoteRecord, b: NoteRecord): number {
+  return a.updated_at < b.updated_at ? 1 : a.updated_at > b.updated_at ? -1 : b.id - a.id;
 }
 
 /**

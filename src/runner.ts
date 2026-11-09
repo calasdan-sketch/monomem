@@ -654,12 +654,29 @@ export interface ExecOutcome {
   timed_out: boolean;
 }
 
+/** Variable names a child never inherits: credentials, agent sockets, connection strings and Monomem's own paths. */
+const CHILD_ENV_DENY =
+  /(^MONOMEM_(TOKEN|TOKENS|RUNNER_SECRET|HOME)$)|^ONEMEMORY_HOME$|SECRET|TOKEN|PASSWORD|PASSWD|PWD$|API_?KEY|CREDENTIAL|PRIVATE_?KEY|_AUTH|DSN|CONNECTION_?STRING|SSH_AUTH_SOCK|GPG_AGENT/i;
+/** A value carrying a password in a URL (scheme://user:pass@host). */
+const URL_WITH_PASSWORD = /[a-z][a-z0-9+.-]*:\/\/[^\s/:@]*:[^\s/@]+@/i;
+
+/** The environment an allowlisted command gets: `source` minus every name CHILD_ENV_DENY matches and every URL-with-password value. */
+export function childEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(source)) {
+    if (CHILD_ENV_DENY.test(k) || (typeof v === "string" && URL_WITH_PASSWORD.test(v))) continue;
+    env[k] = v;
+  }
+  return env;
+}
+
 /**
  * Run an allowlisted command. shell:false is the whole point -- argv is passed
  * as an array, so no value can ever be interpreted as shell syntax. The child
- * gets a trimmed environment: the runner secret and the store token are
- * removed so an allowlisted script can't read the credentials that authorized
- * it.
+ * gets a trimmed environment (childEnv): credential-shaped variables, including
+ * the runner secret and the store token, are removed. This is not a sandbox:
+ * the child runs as the same user and can read any file that user can, the
+ * data folder and its .token file included (docs/RUNNER.md, Honest limits).
  */
 export function runCommand(
   file: string,
@@ -671,12 +688,7 @@ export function runCommand(
   // allowlisted script has no business reading the secret that authorized it
   // -- and while we are at it, nor should it inherit unrelated API keys that
   // happen to be set on this machine. Narrow beats convenient here.
-  const env = { ...process.env };
-  for (const k of Object.keys(env)) {
-    if (/(^MONOMEM_(TOKEN|TOKENS|RUNNER_SECRET)$)|SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|CREDENTIAL|PRIVATE_?KEY/i.test(k)) {
-      delete env[k];
-    }
-  }
+  const env = childEnv(process.env);
   return new Promise((resolve) => {
     execFile(
       file,

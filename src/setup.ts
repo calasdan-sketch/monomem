@@ -290,13 +290,66 @@ export function migrateEntry(e: SetupEnv, opts: Pick<SetupOptions, "command">, o
       db = guess;
       notes.push(`the old entry named no database; found one at ${guess} and pointed the new entry at it`);
     } else {
-      notes.push("the old entry named no database and none was found next to it: the new entry will start with the standard location (~/.monomem)");
+      notes.push(`the old entry named no database and none was found next to it: the new entry will use ${dataHome(e)}${e.env.MONOMEM_HOME?.trim() ? " (MONOMEM_HOME)" : " (the standard location)"}`);
     }
   }
   const entry = buildServerEntry(e, opts, env, withType);
   // Keep any extra setting the old entry had (a timeout, "disabled") rather than silently dropping it.
   for (const [k, v] of Object.entries(old)) if (!["command", "args", "env", "type"].includes(k)) entry[k] = v;
   return { entry, db, notes };
+}
+
+/** What planning one app shares with the next: the databases in play, and how to count a database's notes (read-only). */
+export interface SharedPlan {
+  dbs: Set<string>;
+  dupOld?: number;
+  noteCount?: (db: string) => number;
+}
+
+/**
+ * Where several old entries (claude-bridge, onememory) sit side by side with no "monomem" beside them, choose the one to
+ * migrate: the one whose database has notes, otherwise claude-bridge, otherwise the first. The rest are removed in the
+ * same edit (`drop` says why). When two DIFFERENT databases both have notes, this app is skipped (`skip`) with the
+ * commands that settle it; other apps still go ahead.
+ */
+function pickLegacyKeepers(
+  e: SetupEnv,
+  opts: SetupOptions,
+  base: string,
+  servers: ReturnType<typeof findServers>,
+  withType: boolean,
+  target: ClientTarget,
+  noteCount: (db: string) => number
+): { drop: Map<ReturnType<typeof findServers>[number], string>; skip?: string } {
+  const drop = new Map<ReturnType<typeof findServers>[number], string>();
+  const groups = new Map<string, Array<{ s: ReturnType<typeof findServers>[number]; db: string; notes: number }>>();
+  const at = (s: { path: string[] }): string => s.path.join("\u0000");
+  for (const s of servers) {
+    const entry = safeParseEntry(base, s);
+    if (!entry || classifyEntry(s.name, entry) !== "legacy") continue;
+    if (servers.some((x) => x.name === "monomem" && at(x) === at(s))) continue; // handled as a sibling conflict
+    const db = opts.db ?? migrateEntry(e, opts, entry, withType).db ?? join(opts.home ?? dataHome(e), "state.db");
+    const list = groups.get(at(s)) ?? [];
+    list.push({ s, db: resolve(db), notes: noteCount(db) });
+    groups.set(at(s), list);
+  }
+  for (const list of groups.values()) {
+    if (list.length < 2) continue;
+    const withNotes = [...new Set(list.filter((x) => x.notes > 0).map((x) => x.db))];
+    if (withNotes.length > 1) {
+      const names = list.map((x) => `"${x.s.name}" (${x.db}, ${x.notes} notes)`).join(" and ");
+      return {
+        drop,
+        skip: `${target.label}: ${names} both hold notes, so I did not change ${target.file}. To keep both sets: monomem export --format json --out other.json with MONOMEM_DB_PATH=${withNotes[1]}, then monomem import --file other.json with MONOMEM_DB_PATH=${withNotes[0]}; then delete the "${list.find((x) => x.db === withNotes[1])!.s.name}" entry from ${target.file} and run monomem setup again`,
+      };
+    }
+    const keep = list.find((x) => x.notes > 0) ?? list.find((x) => x.s.name === "claude-bridge") ?? list[0];
+    for (const x of list) {
+      if (x === keep) continue;
+      drop.set(x.s, `"${keep.s.name}" becomes "monomem" and keeps its data (${keep.db}); this entry's database ${x.db === keep.db ? "is the same one" : `(${x.db}, ${x.notes} notes) is left on disk, unused`}`);
+    }
+  }
+  return { drop };
 }
 
 // ---- planning ----------------------------------------------------------------------------------------------------------
@@ -580,7 +633,7 @@ function envLine(name: string, where: string, add: Record<string, string>, app: 
 }
 
 /** Codex CLI: one [mcp_servers.monomem] table in ~/.codex/config.toml (command/args/env), everything else untouched. */
-function planToml(e: SetupEnv, opts: SetupOptions, target: ClientTarget, text: string | null, shared: { dbs: Set<string>; dupOld?: number }): { change: FileChange | null; already: string[]; conflicts: string[]; warnings: string[] } {
+function planToml(e: SetupEnv, opts: SetupOptions, target: ClientTarget, text: string | null, shared: SharedPlan): { change: FileChange | null; already: string[]; conflicts: string[]; warnings: string[] } {
   if (text !== null && hasServer(text, "monomem")) {
     const already = { change: null, already: [`${target.label}: "monomem" is already set up`], conflicts: [], warnings: [] };
     const table = findTable(text, ["mcp_servers", "monomem"]);
@@ -618,7 +671,7 @@ function planToml(e: SetupEnv, opts: SetupOptions, target: ClientTarget, text: s
   return { change: { client: target.id, label: target.label, file: target.file, before: text, ops, lines, inverse: [{ op: "remove", path: ["mcp_servers"], key: "monomem" }], allowEmpty: opts.forceEmpty, format: "toml" }, already: [], conflicts: [], warnings: [] };
 }
 
-export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, shared: { dbs: Set<string>; dupOld?: number }): { change: FileChange | null; already: string[]; conflicts: string[]; warnings: string[] } {
+export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, shared: SharedPlan): { change: FileChange | null; already: string[]; conflicts: string[]; warnings: string[] } {
   const text = readTextFile(target.file);
   if (text === "" && !opts.forceEmpty) return { change: null, already: [], conflicts: [EMPTY_FILE_MSG(target.file)], warnings: [] };
   if (target.id === "codex") return planToml(e, opts, target, text, shared);
@@ -637,6 +690,9 @@ export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, 
   let migrated = 0;
   let labelled = 0;
   let replaced = 0;
+  // Several old entries (claude-bridge, onememory) in one place would each become "monomem": keep one, drop the others.
+  const multi = pickLegacyKeepers(e, opts, base, servers, withType, target, shared.noteCount ?? (() => 0));
+  if (multi.skip) return { change: null, already, conflicts, warnings: [multi.skip] };
   for (const s of servers) {
     const entry = safeParseEntry(base, s);
     if (!entry) {
@@ -715,6 +771,13 @@ export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, 
       continue;
     }
     if (kind !== "legacy") continue;
+    const dropped = multi.drop.get(s);
+    if (dropped) {
+      ops.push({ op: "remove", path: s.path, key: s.name });
+      inverse.unshift({ op: "set", path: s.path, key: s.name, value: entry });
+      lines.push(`remove the old "${s.name}" entry${where}: ${dropped}`);
+      continue;
+    }
     // An existing "monomem" next to the old one: do not merge two things by guesswork.
     const sibling = servers.some((x) => x.name === "monomem" && x.path.join("\u0000") === s.path.join("\u0000"));
     if (sibling && opts.removeOld) {
@@ -732,7 +795,7 @@ export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, 
     m.entry.env = { MONOMEM_CLIENT: appLabel(target.id), ...(m.entry.env ?? {}), ...(opts.db ? { MONOMEM_DB_PATH: opts.db } : {}), ...(opts.home ? { MONOMEM_HOME: opts.home } : {}) };
     ops.push({ op: "rename", path: s.path, key: s.name, newKey: "monomem", value: m.entry });
     inverse.unshift({ op: "rename", path: s.path, key: "monomem", newKey: s.name, value: entry });
-    lines.push(`replace the old "${s.name}" entry${where} with "monomem"; ${m.db ? `your data stays where it is (${m.db})` : "standard data location"}. The old install folder is not touched`);
+    lines.push(`replace the old "${s.name}" entry${where} with "monomem"; ${m.db ? `your data stays where it is (${m.db})` : opts.home ? `data folder ${opts.home}` : e.env.MONOMEM_HOME?.trim() ? `data folder ${dataHome(e)} (MONOMEM_HOME)` : `standard data location (${dataHome(e)})`}. The old install folder is not touched`);
     lines.push(...m.notes.map((n) => "note: " + n));
     const dbToCheck = opts.db ?? m.db;
     if (dbToCheck) shared.dbs.add(dbToCheck);
@@ -1403,10 +1466,12 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   }
 
   let plan: SetupPlan = { nodeOk: true, found, changes: [], dbs: [], warnings: [], already: [], conflicts: [], };
-  let shared: { dbs: Set<string>; dupOld?: number } = { dbs: new Set<string>() };
+  const { Store: StoreForCount } = await import("./store.js");
+  const noteCount = (db: string): number => StoreForCount.peekNoteCount(db);
+  let shared: SharedPlan = { dbs: new Set<string>(), noteCount };
   const planApps = (): void => {
     plan = { nodeOk: true, found, changes: [], dbs: [], warnings: [], already: [], conflicts: [] };
-    shared = { dbs: new Set<string>() };
+    shared = { dbs: new Set<string>(), noteCount };
     for (const t of found) {
       if (opts.only && !opts.only.includes(t.id)) continue;
       const asked = !!opts.only?.includes(t.id) || (t.id === "project" && opts.project);

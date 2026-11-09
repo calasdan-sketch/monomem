@@ -88,6 +88,9 @@ describe("1. write tokens cannot fake history or schedule removal of others' not
       assert.ok(as("alice", false, () => s.update(n.id, { forget_after: 1 }))?.expires_at);
       assert.ok(as("boss", true, () => s.update(n.id, { forget_after: 2 }))?.expires_at);
       assert.ok(as("carol", false, () => s.update(n.id, { forget_after: 0 }))); // clearing a deadline is harmless
+      // Editing the body does not make the note carol's: ownership is created_by, not written_by.
+      as("carol", false, () => s.update(n.id, { body: "carol edited this" }));
+      assert.throws(() => as("carol", false, () => s.update(n.id, { forget_after: 1 })), (e: Error) => e instanceof ValidationError && /'admin' scope/.test(e.message));
     } finally {
       s.close();
     }

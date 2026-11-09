@@ -93,7 +93,8 @@ export function recallTokens(env: NodeJS.ProcessEnv = process.env): number {
 function git(cwd: string, args: string[]): Promise<string> {
   return new Promise((resolve) => {
     try {
-      execFile("git", args, { cwd, timeout: GIT_TIMEOUT_MS, windowsHide: true }, (err, out) => resolve(err ? "" : String(out)));
+      // A repo's own config must not make this read-only call run a program: no fsmonitor hook, no hooks path.
+      execFile("git", ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=", ...args], { cwd, timeout: GIT_TIMEOUT_MS, windowsHide: true }, (err, out) => resolve(err ? "" : String(out)));
     } catch {
       resolve("");
     }
@@ -101,7 +102,7 @@ function git(cwd: string, args: string[]): Promise<string> {
 }
 
 export async function gitSignals(cwd: string): Promise<ContextSignals> {
-  const [b, d] = await Promise.all([git(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]), git(cwd, ["diff", "--name-only", "HEAD"])]);
+  const [b, d] = await Promise.all([git(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]), git(cwd, ["diff", "--no-ext-diff", "--name-only", "HEAD"])]);
   const branch = b.trim();
   return { branch: branch === "HEAD" ? "" : branch, diffFiles: d.split("\n").map((s) => s.trim()).filter(Boolean).slice(0, 50) };
 }
@@ -220,7 +221,9 @@ export async function rankContext(
     mark(h.note.id, "kw");
     if (!pool.has(h.note.id)) pool.set(h.note.id, opts.includeDistrusted ? store.markDistrusted([h.note])[0] : h.note);
   }
-  const bm25 = hits.map((h) => h.note.id);
+  // Equal keyword scores keep id order here, not newest first: recency is its own list below, and counting it twice would
+  // let the newest of many common-word notes outrank a rare-word match.
+  const bm25 = [...hits].sort((a, b) => b.score - a.score || a.note.id - b.note.id).map((h) => h.note.id);
   const overlap: number[] = [];
   const diff = (signals.diffFiles ?? []).slice(0, 50);
   if (diff.length) {

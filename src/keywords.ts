@@ -60,6 +60,8 @@ const STOP_WORDS: ReadonlySet<string> = new Set([
   "while", "whither", "who", "whoever", "whom", "whose", "why", "will",
   "with", "within", "without", "would", "yes", "yet", "you",
   "your", "yours", "yourself", "yourselves",
+  // Request words: how people ask, not what they ask about ("can you remind me what we decided ...").
+  "remind", "recall", "remember", "tell", "know", "please", "want", "wanted", "need", "let", "show", "find",
 ]);
 
 /** Max keywords returned -- keeps the downstream FTS fan-out bounded. */
@@ -102,8 +104,11 @@ export function extractKeywords(text: string): string[] {
   // "#status" and vice versa): first occurrence wins, no double-count.
   const bareSeen = new Set<string>();
   const out: string[] = [];
-  for (const raw of text.toLowerCase().split(/\s+/)) {
-    if (!raw) continue;
+  // Two-letter words dropped only for being short: used when nothing else is left ("go", "db.ts").
+  const shortHeld: string[] = [];
+  for (const orig of text.split(/\s+/)) {
+    if (!orig) continue;
+    const raw = orig.toLowerCase();
     if (raw.startsWith("#") && raw.length > 1) {
       // Hashtag: keep as-is (unstemmed), punctuation stripped from the body.
       // Kept even when short and even if it looks like a stop-word -- a
@@ -116,11 +121,17 @@ export function extractKeywords(text: string): string[] {
     } else {
       // Prose token: punctuation becomes a separator, so "don't" -> "don"
       // "t" and "well-known" -> "well" "known".
-      for (const part of raw.split(/[^\p{L}\p{N}]+/u).filter(Boolean)) {
+      for (const origPart of orig.split(/[^\p{L}\p{N}]+/u).filter(Boolean)) {
+        const part = origPart.toLowerCase();
         // Digit carve-out: "s3"/"ec2" survive the short-token drop. Polarity
         // carve-out: "no" is two letters and reverses a sentence's meaning, so
-        // it must not be dropped for being short either.
-        if (part.length < 3 && !/\d/.test(part) && !SHORT_MEANINGFUL.has(part)) continue;
+        // it must not be dropped for being short either. Written in capitals
+        // (CI, QA, UI, PR) a two-letter word is an acronym and is kept too.
+        const acronym = part.length === 2 && origPart === origPart.toUpperCase() && /\p{L}/u.test(origPart);
+        if (part.length < 3 && !/\d/.test(part) && !SHORT_MEANINGFUL.has(part) && !acronym) {
+          if (part.length === 2 && !STOP_WORDS.has(part) && !shortHeld.includes(part)) shortHeld.push(part);
+          continue;
+        }
         if (STOP_WORDS.has(part)) continue;
         if (bareSeen.has(part)) continue; // hashtag twin already emitted
         bareSeen.add(part);
@@ -129,5 +140,7 @@ export function extractKeywords(text: string): string[] {
     }
     if (out.length >= MAX_KEYWORDS) break;
   }
+  // Nothing else left: the short words are the query ("go", "db.ts" -> db, ts). Search matches them exactly, not as prefixes.
+  if (out.length === 0) for (const p of shortHeld.slice(0, MAX_KEYWORDS)) pushKeyword(seen, out, p);
   return out;
 }

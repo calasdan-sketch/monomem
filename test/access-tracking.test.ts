@@ -115,8 +115,9 @@ describe("access tracking: search bumps + ranking boost", () => {
     const first = store.create({ title: "stable order", body: "word" });
     const second = store.create({ title: "stable order", body: "word" });
     const baseline = await runSearch(store, "stable order", { mode: "keyword" });
-    assert.equal(baseline[0].id, first.id);
-    assert.equal(baseline[1].id, second.id);
+    // Equal scores come newest first (updated_at, then id).
+    assert.equal(baseline[0].id, second.id);
+    assert.equal(baseline[1].id, first.id);
   });
 
   test("boost math: score * (1 + 0.1 * log10(1 + access_count))", async () => {

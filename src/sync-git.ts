@@ -361,6 +361,7 @@ export async function runGitSync(io: GitSyncIO, o: GitSyncOptions): Promise<numb
               io.out(`  ${c.conflict} note(s) were edited on two computers; the losing text is saved in ${keep}`);
             }
           }
+          if (imp.foreignHeld > 0) io.out(`  ${imp.foreignHeld} note(s) from other machines held for review (monomem quarantine list).`);
           if (c.rejected > 0) io.err(`  ${c.rejected} file(s) were rejected (see \`monomem import --dir\` for details).`);
         } finally {
           store.close();

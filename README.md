@@ -80,7 +80,8 @@ if you want the dashboard, REST API and MCP-over-HTTP (the `curl` examples
 below need it): `monomem start`.
 
 No global install: `claude mcp add monomem -- npx -y monomem mcp`.
-`monomem init` prints the config for Claude Desktop / Cursor / Copilot;
+`monomem init --print` prints the config for Claude Desktop / Cursor, and a separate
+`.vscode/mcp.json` block (`"servers"`) for VS Code / Copilot;
 [INSTALL.md](./INSTALL.md) has every client.
 
 `monomem start` serves the dashboard and REST API on `:8790` and
@@ -493,17 +494,18 @@ It has five suites, as plain JSON scenario files you can extend in [`bench/scena
 | E  Memory poisoning | 19 | injected or malicious memories never reach an agent as trusted content: prompt-injection (plain, forged tags, zero-width-obfuscated, hidden in invisible Unicode tag characters, a booking-policy override) is quarantined; a sleeper trigger or curl-pipe-to-shell note is stored with a warning; a reworded override that passes the gate leaves all four booking answers once its writer is distrusted; a distrusted/low-trust writer cannot outrank or silently overwrite a trusted fact; secrets are redacted (capture) or blocked (write); a forged writer/namespace is stamped with the real one; an unsigned import cannot pose as verified; a captured web fetch is not trusted memory; SessionStart injection carries the untrusted-data banner and leaves distrusted notes out; mass near-duplicate flooding cannot bury the answer | `poison-reach-count` (must be 0) |
 
 **Retrieval quality.** `monomem bench --longmemeval` and `--locomo` score retrieval on the public datasets, with no model
-and no judge (does the right conversation come back?). On one Windows PC, 2026-11-04, keyword search (the default, no model):
+and no judge (does the right conversation come back?). On one Windows PC, 2026-11-09, keyword search (the default, no model):
 
 | Dataset | Recall@5 | Recall@10 | Search time (p50) |
 |---|---|---|---|
-| LongMemEval-S, 470 of 500 questions (the 30 abstention questions have no right answer to find) | 97.0 % | 98.3 % | 2.9 ms |
-| LoCoMo-10, 1,982 questions, by session | 90.2 % | 95.6 % | 1.1 ms |
-| LoCoMo-10, 1,982 questions, by turn (the hard one: our weakest number) | 58.2 % | 65.8 % | 1.5 ms |
+| LongMemEval-S, 470 of 500 questions (the 30 abstention questions have no right answer to find) | 96.6 % | 98.3 % | 2.8 ms |
+| LoCoMo-10, 1,982 questions, by session | 90.3 % | 95.5 % | 1.0 ms |
+| LoCoMo-10, 1,982 questions, by turn (the hard one: our weakest number) | 57.8 % | 65.0 % | 1.1 ms |
 
 Optional hybrid search (keywords plus a local embedding model, `nomic-embed-text` via Ollama) does better still: LoCoMo-10
-by session 91.3 % / 96.2 %, by turn 65.7 % / 74.8 %, LongMemEval-S 98.1 % / 99.1 % (recall@5 / @10, full runs,
-18 to 39 ms per search, measured just before the date-hint change).
+by session 91.8 % / 96.7 %, by turn 66.3 % / 74.9 %, LongMemEval-S 98.5 % / 99.4 % (recall@5 / @10, full runs,
+13 to 22 ms per search (p50), measured 2026-11-09 with this code). Ties between equal scores go to the newest note, so a re-run
+can move a by-turn figure by about 0.1 to 0.2 points.
 
 These are retrieval numbers, not the end-to-end QA accuracy memory vendors usually publish, so they are not comparable with
 those. Every number, the per-type breakdown, where hybrid is worse, and the caveats: [docs/BENCHMARK.md](./docs/BENCHMARK.md#retrieval-longmemeval-s-and-locomo).
@@ -541,8 +543,8 @@ Limits no scenario can show (what the benchmark cannot see) are listed next, und
   (`MONOMEM_EMBEDDINGS=on`, needs a local Ollama) helps with the reworded ones; without it Monomem does not understand meaning. These come
   from a QA pass, not from the benchmark above: treat them as a rough guide and test on your own notes.
 - **What it adds at the start of a session.** A store of 60 short notes at the default setting (`MONOMEM_RECALL_TOKENS` = 1,500) produced
-  about 7,100 characters, roughly **1,800 tokens** (estimated at 4 characters a token), listing 57 of the 60 notes. The block is capped at
-  8,000 characters. `monomem meter` shows what yours actually costs and saves, as estimates.
+  about 5,900 characters, roughly **1,500 tokens** (estimated at 4 characters a token), listing all 60 notes (measured 2026-11-09 with
+  `node bench/recall-size.mjs`, which you can run yourself). The block is capped at 8,000 characters. `monomem meter` shows what yours actually costs and saves, as estimates.
 
 ## Security in one paragraph
 

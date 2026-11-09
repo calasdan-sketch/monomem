@@ -8,7 +8,7 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSyn
 import { createHash, timingSafeEqual } from "node:crypto";
 import { dirname, join } from "node:path";
 import type { IncomingMessage } from "node:http";
-import { DATA_DIR, isLoopback, type Scope, type TokenEntry } from "./config.js";
+import { DATA_DIR, envNum, isLoopback, type Scope, type TokenEntry } from "./config.js";
 import { isWriterMarker, MARKER_DESCRIPTIONS } from "./actor.js";
 
 // ---- Untrusted-data banner --------------------------------------------------
@@ -403,8 +403,8 @@ export function hostAllowed(req: IncomingMessage): boolean {
 export class RateLimiter {
   private hits = new Map<string, { count: number; resetAt: number }>();
   constructor(
-    private max = Number(process.env.MONOMEM_RATE_MAX || 120),
-    private windowMs = Number(process.env.MONOMEM_RATE_WINDOW_MS || 10_000)
+    private max = envNum("MONOMEM_RATE_MAX", 120),
+    private windowMs = envNum("MONOMEM_RATE_WINDOW_MS", 10_000)
   ) {}
   /** true = allowed, false = over limit. */
   check(key: string): boolean {
@@ -444,8 +444,8 @@ export class AuthTarpit {
   private fails = new Map<string, { n: number; resetAt: number; pending: number }>();
   constructor(
     private freeFailures = 5,
-    private stepMs = Number(process.env.MONOMEM_TARPIT_STEP_MS || 250),
-    private capMs = Number(process.env.MONOMEM_TARPIT_CAP_MS || 2000),
+    private stepMs = envNum("MONOMEM_TARPIT_STEP_MS", 250),
+    private capMs = envNum("MONOMEM_TARPIT_CAP_MS", 2000),
     private windowMs = 60_000,
     private maxPending = 16
   ) {}
@@ -790,6 +790,10 @@ export function checkNames(input: { namespace?: string; tags?: string[] }): stri
     if (UNPRINTABLE.test(ns)) return "namespace contains a control or text-direction character; use plain text";
     if (ns.length > NAMESPACE_MAX) return `namespace exceeds ${NAMESPACE_MAX} chars`;
     if (ns === "*") return 'namespace "*" is reserved (it means every namespace)';
+    // A namespace is shown in listings, the audit log and the change feed: a key pasted as one would leak everywhere.
+    // Known-prefix patterns only (no entropy check: a namespace may well be a long random-looking id).
+    const secret = knownSecret(normalizeForScan(ns));
+    if (secret) return `namespace looks like a secret (${secret}); namespaces are shown everywhere, so use a plain name`;
   }
   for (const t of input.tags ?? []) if (UNPRINTABLE.test(t)) return "a tag contains a control or text-direction character; use plain text";
   return null;

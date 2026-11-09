@@ -111,12 +111,16 @@ export async function lsCmd(args: string[]): Promise<void> {
   const store = new Store(DB_PATH);
   try {
     const archived = flags.archived === true;
-    const notes = store.list({ ...(ns ? { namespace: ns } : {}), limit, ...(archived ? { archivedOnly: true } : {}) }).notes;
+    const page = store.list({ ...(ns ? { namespace: ns } : {}), limit, ...(archived ? { archivedOnly: true } : {}) });
+    const notes = page.notes;
+    const moreLine = (): void => {
+      if (page.total > notes.length) console.log(`Showing ${notes.length} of ${page.total} (newest first). More: monomem ls${archived ? " --archived" : ""}${ns ? ` --ns ${ns}` : ""} --limit ${Math.min(500, Math.max(limit * 2, 50))}`);
+    };
     if (flags.json) return void console.log(JSON.stringify(notes.map((n) => ({ id: n.id, namespace: n.namespace, title: n.title, updated_at: n.updated_at, sensitivity: n.sensitivity ?? "internal" })), null, 2));
     if (archived) {
       if (!notes.length) return void console.log(`No archived notes${ns ? ` in namespace "${printable(ns, 100)}"` : ""}.`);
       for (const n of notes) console.log(`#${n.id} [${printable(n.namespace, 100)}] ${printable(n.title, 70)}   (bring back: monomem restore ${n.id})`);
-      return;
+      return moreLine();
     }
     if (!notes.length && ns) {
       const used = store.rebuildPlan().map((r) => printable(r.namespace, 100));
@@ -124,6 +128,7 @@ export async function lsCmd(args: string[]): Promise<void> {
     }
     if (!notes.length) return void console.log("No notes yet. Add one with: monomem add \"something worth remembering\"");
     for (const n of notes) console.log(`#${n.id} [${printable(n.namespace, 100)}] ${printable(n.title, 70)}${n.sensitivity === "private" ? "  (private)" : ""}`);
+    moreLine();
   } finally {
     store.close();
   }

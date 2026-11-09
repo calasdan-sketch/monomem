@@ -251,6 +251,25 @@ monomem bench --locomo      [--data file] [--limit N] [--mode keyword|hybrid] [-
   `nDCG@10` with binary relevance. `MRR` over the top 50. Search latency p50/p95 per query; indexing time per
   haystack (single process, SQLite in a temp folder).
 
+### Results, 2026-11-09 (expert round 4)
+
+Full runs on one Windows PC with this round's changes: keyword ranking weighs title 5, tags 2, body 1 (`bm25(notes_fts, 5, 1, 2)`),
+equal scores go to the newest note, two-letter words are matched exactly, and request words ("remind", "tell", "find" ...) are
+stop words. Recall@5 / recall@10, search time p50:
+
+| Run | Keyword | Hybrid (`nomic-embed-text`, local Ollama) |
+|---|---|---|
+| LongMemEval-S session (470) | 96.6 / 98.3, 2.8 ms | 98.5 / 99.4, 22 ms |
+| LoCoMo-10 session (1,982) | 90.3 / 95.5, 1.0 ms | 91.8 / 96.7, 13 ms |
+| LoCoMo-10 turn (1,982) | 57.8 / 65.0, 1.1 ms | 66.3 / 74.9, 22 ms |
+
+The same code with equal column weights (1, 1, 1) gave the same LongMemEval-S and LoCoMo session figures and 58.1 / 65.6 by
+turn, so the column weights cost about 0.3 to 0.6 points by turn on LoCoMo; the rest of the change from 2026-11-04 (97.0 / 98.3,
+90.2 / 95.6, 58.2 / 65.8) comes from other changes since then (this round's keyword changes or earlier rounds; not measured
+separately). An earlier by-turn keyword run of nearly the same code gave 57.7 / 65.2: ties go to the
+newest note, and notes written in the same millisecond tie on time, so expect about 0.1 to 0.2 points of run-to-run movement.
+The older tables below are kept as they were measured.
+
 ### Results, 2026-10-31
 
 Machine: Windows 11 Home, RTX 5080 PC, Node v24.18.0, Monomem 2.0.0. Embeddings for `hybrid`: `nomic-embed-text`

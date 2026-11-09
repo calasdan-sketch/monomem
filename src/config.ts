@@ -52,6 +52,20 @@ export const LEGACY_HOME_DIR_NAME = ".onememory";
 /** Where it lives now. */
 export const HOME_DIR_NAME = ".monomem";
 
+/**
+ * A whole number >= 0 from the environment variable `name`, or `def` when it is unset or blank. A value that is not such
+ * a number (MONOMEM_RATE_MAX=abc) also gives `def`, with one line on stderr naming the variable, instead of a NaN that
+ * silently turns a limit off.
+ */
+export function envNum(name: string, def: number, env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env[name];
+  if (raw === undefined || raw.trim() === "") return def;
+  const v = Number(raw);
+  if (Number.isFinite(v) && v >= 0) return Math.floor(v);
+  process.stderr.write(`[monomem] ${name}=${JSON.stringify(raw)} is not a whole number >= 0; using the default ${def}\n`);
+  return def;
+}
+
 /** A leading ~, ~/ or ~\ means the home folder (a shell expands it, but an app's config file does not). */
 export function expandHome(p: string): string {
   return /^~(?=$|[\\/])/.test(p) ? join(homedir(), p.slice(1)) : p;
@@ -89,8 +103,10 @@ export function resolveDataDir(
     let raw = home.trim();
     // One pair of matching quotes, as a config file or a shell line copied with its quotes leaves them.
     if (raw.length >= 2 && (raw[0] === '"' || raw[0] === "'") && raw[raw.length - 1] === raw[0]) raw = raw.slice(1, -1).trim();
-    // An app's JSON config does not expand variables: %USERPROFILE% or $HOME arrive as literal text.
-    if (/%[A-Za-z_][A-Za-z0-9_]*%|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/.test(raw)) {
+    if (!raw) throw new Error(`${name} is set but empty; set it to a folder or unset it`);
+    // An app's JSON config does not expand variables: %USERPROFILE% or $HOME arrive as literal text. $NAME counts only at the
+    // start of the path or of a segment (C:/data$foo is a real folder name); a segment such as $Recycle is refused too.
+    if (/%[A-Za-z_][A-Za-z0-9_]*%|(^|[\\/])\$\{?[A-Za-z_]\w*\}?/.test(raw)) {
       throw new Error(
         `${name}=${raw} is not a full path (an app's config file does not expand variables); write the full path, e.g. C:\\Users\\you\\.monomem`
       );

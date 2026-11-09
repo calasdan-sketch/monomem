@@ -204,7 +204,7 @@ describe("setup: recognising the old claude-bridge entry", () => {
     const s = sandbox();
     const m = migrateEntry(s.e, { command: "auto" }, { command: "node", args: ["/nowhere/dist/src/mcp-stdio.js"] }, false);
     assert.equal(m.entry.env, undefined);
-    assert.match(m.notes.join(" "), /start with the standard location/);
+    assert.match(m.notes.join(" "), /none was found next to it: the new entry will use .+/);
   });
 });
 

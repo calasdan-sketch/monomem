@@ -34,7 +34,6 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in a title print as `(` and `)`, and a title is one line. The opening notice and the closing "END OF STORED NOTES" line carry the same
   random block id, new for each output, so a note that copies the old closing line does not match the real one. `monomem drill` checks
   both (FORGE, TERM), so it now reports 22 attacks instead of 20.
-
 - **Names a terminal could misprint are refused:** a namespace or tag with a control, line-separator or text-direction character
   (anything `printable()` would replace) is refused on every write path (notes, tasks, handoffs: `Store.create` / `update`), as is
   a namespace over 100 characters and the namespace `*`. Imports (`import --file` and admin `POST /import`) apply the same rule:
@@ -54,12 +53,37 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and consolidation may still set it, but a `created_at` more than 5 minutes in the future is refused (an import lists that row in
   `rejected`).
 - **A forget date on someone else's note needs admin:** a non-admin key may set a non-zero `forget_after` only on a note whose
-  `written_by` is its own; otherwise the update is refused with the same "lacks the required 'admin' scope" message `state_delete`
+  `created_by` is its own (editing a note does not make it yours); otherwise the update is refused with the same "lacks the required 'admin' scope" message `state_delete`
   gives. This applies in every namespace. The CLI, stdio and admin keys are not limited. `forget_after: 0` stays allowed.
 - **Expiry sweep audit:** `sweep-expire` is written once per archived note (its id, namespace and the note's last writer as
   `last written by <name>`; who set the deadline is not stored), instead of one line with a count.
 - **Strict ids in MCP tools:** an id is accepted as a number or a digit-only string (`"5"`). `true`, `null`, `""` and `[5]` are
   validation errors; before, they became 1, 0, 0 and 5, so `state_delete {"id": true}` archived note 1.
+- **Sync: notes written on another machine are claims, not trusted writes.** A file `import --dir` or `sync` reads whose `origin`
+  is another store now creates or updates its note with `imported_unverified` set (so `why` and the provenance banner say it came
+  in without a verified attestation), and in an approve-first namespace that create or update goes to quarantine like an agent's
+  write instead of going live. The summary adds "N note(s) from other machines held for review". Approving one applies it as the
+  approver (`cli`), without the `imported_unverified` flag. Files this store wrote merge as before.
+- **A forget date on someone else's note** now checks `created_by` (the note's first writer), not `written_by`: editing another
+  writer's note no longer makes it yours.
+- **A namespace that looks like a known secret** (an AWS key, a GitHub token and the other known-prefix patterns; no entropy
+  check) is refused on every write path, the import paths included, before anything is written or audited. The message names the
+  kind of secret, never the value.
+- **Runner child environment:** also drops variables whose names match `_AUTH`, `PWD` at the end, `DSN`, `CONNECTION_STRING`,
+  `SSH_AUTH_SOCK`, `GPG_AGENT`, and `MONOMEM_HOME` / `ONEMEMORY_HOME`, and any variable whose value is a URL with a password
+  (`scheme://user:pass@...`). docs/RUNNER.md now says plainly that a command runs as the same user and can read the data folder,
+  `.token` included.
+- **`MONOMEM_RATE_MAX`, `MONOMEM_RATE_WINDOW_MS`, `MONOMEM_TARPIT_STEP_MS`, `MONOMEM_TARPIT_CAP_MS`** that are not a whole number
+  >= 0 fall back to the default with one stderr line (before, `abc` became NaN and switched the limit off). Same check as the
+  server-limit variables, now shared (`envNum` in config.ts).
+- **`monomem start` on a non-loopback bind** prints one stderr warning that the API is plain HTTP and points to INFRA.md (doctor
+  already showed a `[warn]` line for it; a test now checks that line).
+- **Session-start git signals** run git with `-c core.fsmonitor=false -c core.hooksPath=`, and the diff with `--no-ext-diff`, so a
+  repository's own config cannot make that read run a program.
+- **`uninstall --purge` never deletes files that are not Monomem's.** It compares the data folder's top-level entries with the names
+  Monomem writes (the database and its side files, keys, tokens, audit log, capture spool, setup history, runner and sync state,
+  backups); if anything else is there it deletes only Monomem's entries, keeps the folder, and says how many other files it left.
+  The plan says the same before you confirm. It refuses outright when the data folder is your home folder or a drive root.
 
 ### Fixed
 
@@ -146,6 +170,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in a namespace the caller can read say `note N is archived (hidden, not erased); a person can restore it with monomem restore N; ...`;
   other namespaces still get `no note with id N`. `monomem ls --archived` lists archived notes with the `restore <id>` command for each.
 - **Search results with no notes carry no SECURITY NOTICE banner** (there is no stored text in them); any result with a note keeps it.
+- **`MONOMEM_HOME='""'`** (quotes around nothing) now fails with "is set but empty" instead of resolving to the current folder.
+- **Variable check in `MONOMEM_HOME`:** `$NAME` / `${NAME}` is refused only at the start of the path or of a path segment, so a real
+  folder such as `C:/data$foo` is accepted; `$HOME/x` and `C:/x/$FOO/y` are still refused (so is a segment like `$Recycle`, by
+  design). `%NAME%` is refused anywhere, as before.
+- **The hint after `monomem delete`** names `monomem scrub --yes`.
+- **Multi-id `state_read`** reads each id once (`ids: [1,1,1]` returns one note and counts one access). Once `max_chars` is used up
+  the remaining notes are not read or counted; their ids come back in `not_read_budget_spent`.
+- **`monomem backup`** builds its copy under a name of its own (process id plus random, like the pre-upgrade copy) and removes only
+  that file, so two backups into one folder cannot delete each other's copy in progress.
+- **Import dedupe works without `created_at`:** a note in an import file with no `created_at` is skipped when a note with the same
+  namespace, title and body exists, so importing such a file twice no longer doubles it. With `created_at` the old rule applies.
+- **`monomem setup` with several old entries in one file** (`claude-bridge` and `onememory`, which would each become `monomem`):
+  it migrates one and removes the others in the same edit, preferring the entry whose database has notes, otherwise
+  `claude-bridge`, and the plan says which data is kept and which entry is dropped. When two different databases both have notes
+  that app is skipped with the export / import commands that merge them, and the other apps still go ahead. With `MONOMEM_HOME`
+  set, the plan and the migration note name that folder instead of `~/.monomem` / "standard data location".
 
 ### Changed
 
@@ -163,13 +203,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Import yield:** a longer pause between import batches (110 ms) was tried in round 2 and rejected: a write from another process
   during a 10,000-note import already finished in about 0.5 s with the `setImmediate` gap, and the pause added about 2.5 s per 10,000
   notes. `setImmediate` is kept.
-
 - **MCP results are smaller.** `state_search` and `state_list` cut each note body to 600 characters (`body_truncated: true`,
   `body_chars: N`); `state_read` is unchanged. MCP JSON is no longer indented (REST is unchanged). `state_write` returns the note without
   its body. `memory_supersede_preview` returns one block (the JSON with `warning`, `token`, `expires_at`) instead of the warning twice.
   Measured on 5 notes of 54,000 characters each (characters of tool output): `state_search` 273,089 to 5,548, `state_list` 272,805 to
   5,384, `state_write` 54,979 to 852, `memory_supersede_preview` 5,685 to 3,595, `state_read` 54,893 to 54,783 (no indent only).
-
 - **The default MCP tools accept common argument drift:** ids, limits and offsets given as strings (`"5"`), tags as one
   comma-separated string, fact values as numbers or true/false, and `facts` as a JSON string; every limit (10 facts, 80-character
   values, tag counts) still applies after. `state_write` creating a note with no title takes the body's first line (about 60
@@ -182,6 +220,35 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Claude Code's session-start notes leave out notes `import --claude` brought in** (tagged `claude-md` or `claude-auto-memory`):
   Claude Code already reads those files. Recall treats the hook as Claude Code's when `CLAUDE_PROJECT_DIR` or `CLAUDECODE=1` is set.
   Search and other apps still show them; `import --claude` and docs/switching.md say so.
+- **Keyword ranking weighs the title most, then tags, then the body** (`bm25(notes_fts, 5, 1, 2)` in both keyword queries), and
+  equal scores go to the newest note (`updated_at`, then id, in SQL and in the ranking step). Session-start context keeps id
+  order for equal keyword scores, because recency is already its own signal there. Measured with `monomem bench` on
+  2026-11-09 against the same code with equal weights: LongMemEval-S and LoCoMo-10 by session unchanged (96.6 / 98.3 and
+  90.3 / 95.5 recall@5 / @10), LoCoMo-10 by turn 58.1 / 65.6 to 57.8 / 65.0 (57.7 / 65.2 on another run: ties between notes written in the same
+  millisecond can fall either way).
+- **`state_search`** states its limit bounds in the schema (default 20, min 1, max 200); a larger `limit` is lowered to 200 and
+  the response says `limit_capped: 200`; when the results fill the limit it says `more: true` (there may be more matches).
+- **CLI `search` / `relevant`** print "Showing N; more notes match. More: --limit X" when the list was cut (one extra hit is
+  fetched to tell), and **`ls`** prints "Showing 20 of 25 (newest first). More: monomem ls --limit 50".
+- **Keyword extraction keeps two-letter words that matter:** written in capitals (`CI`, `QA`, `UI`, `PR`), or when dropping them
+  would leave no keyword at all (`go`, `db.ts` gives `db` and `ts`). In the searches that run on extracted keywords (relevant
+  mode, CLI `search` / `relevant`, session-start context and the any-keyword fallback of keyword search) a keyword of one or two
+  letters is matched exactly, not as a prefix, so `go` does not match `golang`; a typed keyword search still prefix-matches every
+  word. "remind, recall, remember, tell, know, please, want, wanted, need, let, show,
+  find" are now stop words, so "can you remind me what we decided about the database migration?" searches for the decision.
+- **`monomem changes`** (human output) prints at most `--limit` entries (default 100) and then "... N more (use --json or a
+  narrower --since)" instead of printing every page; `--json` still pages through and prints them all. The window's totals are
+  counted on the first page only and carried in the signed cursor, so later pages skip the two counting queries.
+- **`monomem init --print`** shows Claude Desktop / Cursor in the `mcpServers` block and VS Code / Copilot in a separate
+  `.vscode/mcp.json` block (`{"servers": {"monomem": {"type": "stdio", ...}}}`); the README says the same.
+- **`monomem import --file`** says "N note(s) were pinned in the file; pins are not imported" when the file has pinned notes
+  (`pinned_not_imported` with `--json`).
+- **README numbers re-measured** on 2026-11-09 with this code: the session-start block for 60 short notes (new script
+  `bench/recall-size.mjs`) and the keyword and hybrid retrieval figures. Keyword: LongMemEval-S 96.6 / 98.3, LoCoMo-10 by session 90.3 / 95.5, by turn
+  57.8 / 65.0 (recall@5 / @10; it was 97.0 / 98.3, 90.2 / 95.6, 58.2 / 65.8 on 2026-11-04; docs/BENCHMARK.md has the
+  breakdown). Hybrid (`nomic-embed-text` via local Ollama), replacing the figures measured before the date-hint change:
+  LoCoMo-10 by session 91.8 / 96.7, by turn 66.3 / 74.9, LongMemEval-S 98.5 / 99.4. The session-start block for 60 short
+  notes is about 5,900 characters (~1,500 tokens) and lists all 60 (it said 7,100 characters, 57 of 60).
 
 ## [1.3.0] - 2026-11-08
 
@@ -367,7 +434,8 @@ making `<database>.pre-v19-backup`. To go back, close every app that uses Monome
   local `monomem` CLI can edit, forget, restore, hard-delete, replace (as the replaced note, and by supersede undo), restore an
   older version of, purge the history of, or merge it. Every other caller gets an error naming the note: MCP, every REST call
   (an admin token included, as for approve-first; an admin token can unpin and then change it), the server's own jobs. The
-  expiry sweep and decay never archive a pinned note. Not carried by export, import or sync. Details:
+  expiry sweep and decay never archive a pinned note. A JSON export includes `pinned: true` for reference; it is not restored
+  by import or sync. Details:
   [docs/replacing-memories.md](./docs/replacing-memories.md#pinned-notes-cli-only).
 - **Roll back one writer.** `monomem rollback --writer <name> --since <ISO|30m|2h|7d> [--include-conflicts] [--yes]`, admin
   `POST /rollback/preview` + `POST /rollback/confirm`, and the operator-only MCP tool `memory_rollback` (off over stdio unless

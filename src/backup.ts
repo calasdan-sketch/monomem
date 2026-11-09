@@ -9,6 +9,7 @@
 // without its key is unreadable, so the person is told where the key is and
 // that it needs its own safe copy.
 import { chmodSync, existsSync, mkdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Store } from "./store.js";
@@ -43,7 +44,9 @@ export function backupStore(
   if (existsSync(db)) throw new Error(`${db} already exists; choose another --out directory (backups never overwrite)`);
   // Written under a temporary name and renamed only when complete and verified, so a failed or killed copy
   // never leaves a corrupt state.db behind (which a retry would then refuse as "already exists").
-  const part = `${db}.partial`;
+  // A name of our own (pid plus random, as preMigrationBackup does), so two backups into one folder never share or delete
+  // each other's copy in progress; only this run's partial is ever removed.
+  const part = `${db}.${process.pid}${randomBytes(3).toString("hex")}.partial`;
   const dropPart = (): void => {
     for (const f of [part, `${part}-journal`, `${part}-wal`, `${part}-shm`]) {
       try {
@@ -53,7 +56,6 @@ export function backupStore(
       }
     }
   };
-  dropPart();
   let notes = 0;
   try {
     store.backupTo(part);
