@@ -263,7 +263,7 @@ export function shannonEntropy(s: string): number {
 }
 
 /** Adjacent letter pairs that switch case ("aB", "Xy"). */
-function caseFlips(s: string): number {
+export function caseFlips(s: string): number {
   let n = 0;
   for (let i = 1; i < s.length; i++) {
     const a = s[i - 1];

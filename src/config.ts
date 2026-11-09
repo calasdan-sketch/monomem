@@ -2,7 +2,7 @@
 // MCP server, and the HTTP/SSE MCP server so all three point at the same
 // state file and accept the same token.
 
-import "./legacy-env.js"; // first: CLAUDE_BRIDGE_* (the old name) are read as MONOMEM_*
+import { homeDataDir } from "./legacy-env.js"; // first: CLAUDE_BRIDGE_* (the old name) are read as MONOMEM_*
 import { randomBytes } from "node:crypto";
 import {
   chmodSync,
@@ -118,12 +118,7 @@ export function resolveDataDir(
   if (existsSync(join(root, ".git")) && existsSync(join(root, "data", "state.db"))) {
     return { dir: join(root, "data"), why: "checkout" };
   }
-  const newHome = join(homedir(), HOME_DIR_NAME);
-  const oldHome = join(homedir(), LEGACY_HOME_DIR_NAME);
-  if (!existsSync(join(newHome, "state.db")) && existsSync(join(oldHome, "state.db"))) {
-    return { dir: oldHome, why: "legacy-home" };
-  }
-  return { dir: newHome, why: "home" };
+  return homeDataDir(homedir());
 }
 
 const DATA = resolveDataDir();

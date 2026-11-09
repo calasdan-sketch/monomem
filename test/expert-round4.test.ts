@@ -280,7 +280,7 @@ describe("6. setup with several old entries in one file", () => {
     const opts = { ...DEFAULT_OPTIONS, noDoctor: true, noTestNote: true, yes: true, only: ["claude-code"], hook: "no" as const, capture: "no" as const } as typeof DEFAULT_OPTIONS;
     return { root, home, e, opts, file: join(home, ".claude.json") };
   }
-  test("claude-bridge (with notes) and onememory become one monomem entry", async () => {
+  test("claude-bridge with its own database beside onememory: onememory becomes monomem, claude-bridge is left as it is with an import hint", async () => {
     const { runSetup } = await import("../src/setup.js");
     const s = await sandbox();
     const oldDb = join(s.root, "old", "state.db");
@@ -292,9 +292,10 @@ describe("6. setup with several old entries in one file", () => {
     const out = io();
     assert.equal(await runSetup(s.e, out, s.opts), 0, out.all());
     const j = JSON.parse(readFileSync(s.file, "utf8"));
-    assert.deepEqual(Object.keys(j.mcpServers).sort(), ["keep", "monomem"]);
-    assert.equal(j.mcpServers.monomem.env.MONOMEM_DB_PATH, oldDb);
-    assert.match(out.all(), /remove the old "onememory" entry: "claude-bridge" becomes "monomem" and keeps its data/);
+    assert.deepEqual(Object.keys(j.mcpServers).sort(), ["claude-bridge", "keep", "monomem"]);
+    assert.equal(j.mcpServers["claude-bridge"].env.CLAUDE_BRIDGE_DB_PATH, oldDb, "claude-bridge is never made the main store, and never silently dropped");
+    assert.equal(j.mcpServers.monomem.env.MONOMEM_DB_PATH, undefined);
+    assert.match(out.all(), /"claude-bridge" entry has its own database .*1 notes.*monomem import --file/);
   });
   test("with MONOMEM_HOME set the plan names that folder", async () => {
     const { runSetup } = await import("../src/setup.js");

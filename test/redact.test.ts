@@ -99,3 +99,39 @@ describe("redactSecrets: ordinary code and prose stay readable", () => {
     test(`unchanged: ${s}`, () => assert.equal(redactSecrets(s).text, s));
   }
 });
+
+// A bare random token in tool output (cat .token, a printed key) has no prefix, no name= and, as hex, no mixed case,
+// so neither the patterns nor the entropy heuristic saw it: it was stored raw in capture_events.
+describe("redactSecrets: bare random tokens (capture only)", () => {
+  const HEX32 = "9f86d081884c7d659a2feaa0c55ad015";
+  const HEX64 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+  const B64URL = "Xk9_pQ2-vR7mLz4TbW1yNc8hJd3sFq6uGe0aKo5iVtQ"; // 43 chars: a 32-byte key, base64url
+  const B64URL_SHORT_RUNS = "aB3dE5fG7hJ9kL-mN2pQ4rS6tU8vW_xY1zA3bC5dE7fG"; // no separator-free run of 24+
+  for (const [name, tok] of [["32 hex", HEX32], ["32 HEX", HEX32.toUpperCase()], ["64 hex", HEX64], ["base64url", B64URL], ["base64url with short runs", B64URL_SHORT_RUNS]] as const) {
+    test(`redacts a bare ${name} token`, () => {
+      for (const s of [tok, `key: ${tok}\n`, `"${tok}"`, `token=${tok}`]) {
+        const r = redactSecrets(s);
+        assert.ok(!r.text.includes(tok), `${name} left in ${JSON.stringify(r.text)}`);
+      }
+    });
+  }
+  test("the capture hook stores no bare key from a tool's output", async () => {
+    const { normalizeHookInput } = await import("../src/capture.js");
+    const ev = normalizeHookInput("post-tool", { session_id: "s", cwd: "/w", tool_name: "Bash", tool_input: { command: "cat ~/.monomem/.token" }, tool_response: { stdout: HEX32 + "\n" } });
+    assert.ok(!ev.output.includes(HEX32), ev.output);
+  });
+  for (const s of [
+    "commit 3f2a9c1e5b7d8f0a1c2e4b6d8f0a2c4e6b8d0f1a", // a git commit SHA: exactly 40 hex
+    "HEAD is now at 3f2a9c1e5b7d8f0a1c2e4b6d8f0a2c4e6b8d0f1a fix: x",
+    "abc1234 short sha, 9f86d081884c7d659a2feaa0c55ad01 (31 hex)",
+    "550e8400-e29b-41d4-a716-446655440000", // a UUID
+    "image@sha256:" + "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", // a content digest
+    "12345678901234567890123456789012345", // digits only: a number
+    "getUserProfileSettingsForCurrentAccountId", // an identifier
+    "My_Project_v2_Final_Build_Release_2024_Draft", // words joined with _
+    "test-Monomem-Setup-Legacy-Home-Keeps-Notes-2026",
+    "C:/Users/someone/AppData/Local/Temp/monomem-test-home-AbC123/state.db",
+  ]) {
+    test(`unchanged: ${s}`, () => assert.equal(redactSecrets(s).text, s));
+  }
+});

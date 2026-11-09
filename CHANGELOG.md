@@ -6,7 +6,36 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`setup` on an upgrade from OneMemory kept pointing apps at an empty store.** When the notes are in `~/.onememory/state.db`
+  and there is no `~/.monomem/state.db` (the folder the server already falls back to), setup planned the migrated entry on the empty
+  `~/.monomem` and judged the old entry by that empty folder. It now uses the same rule as the server (one shared function), says so
+  in the plan, and writes `MONOMEM_HOME=<home>/.onememory` into each app entry and `--db` into each hook, so the notes stay reachable
+  even after something creates `~/.monomem/state.db`.
+- **An old `claude-bridge` entry with its own database is no longer made the main store** when an `onememory` or `monomem` entry is
+  beside it (before, the one with notes won, and the `onememory` entry was removed). It is left exactly as it is, and setup prints one
+  line on how to bring its notes over (`monomem export --format json` from a copy, then `monomem import --file`). A `claude-bridge`
+  entry on its own is still migrated as before.
+- **`monomem` beside `onememory` on different databases:** when the old entry has notes and the `monomem` one has none, the plan
+  shows the empty `monomem` entry being replaced by the old one with its data, and it is applied only after a typed yes (not with
+  `--yes` alone). When both have notes, setup stops, changes nothing and prints the commands that merge them. Same data, or an empty
+  old entry: unchanged (remove the old entry, asked first).
+- **Old hooks are replaced, not left or duplicated:** `npx -y onememory-mcp[@x] hook <event>` (and an npx `monomem@<other version>`
+  or `monomem@latest`) is rewritten in place for every automatic-memory event, not only the start-of-session one, and a rewritten
+  start-of-session entry moves from `startup|clear` to `startup|clear|compact`.
+- **Hooks run the installed copy:** when setup runs from npx and the same version is installed globally, every hook (not only the
+  prompt and Read ones) runs `node <global cli.js>`; without a global copy they stay on `npx -y monomem@<this version>`.
+
 ### Security
+
+- **Capture redacts bare random tokens.** The capture hooks stored a bare 32-character hex key (e.g. the output of `cat .token`)
+  as it was, because it has no prefix, no `name=` before it and, being hex, no mixed case. Now redacted as `[REDACTED:random token]`:
+  any standalone run of 32+ hex digits (one case, with a digit and a letter) except exactly 40, and any base62/base64url token of 32+
+  characters with upper, lower and digits that flips case at least every 4 characters and has >= 4.3 bits/char of entropy. Kept:
+  git object ids (exactly 40 hex), short SHAs and anything under 32 hex, digests written `sha1:`/`sha256:`/`sha384:`/`sha512:` (or
+  with `=`/`-`), UUIDs, plain numbers, identifiers and joined words, paths. Known cost: other unprefixed 32+ hex ids (an MD5 checksum,
+  a 64-hex docker container id) are redacted too. This is capture only; the note linter's rules are unchanged.
 
 - **Rate-limit key behind a proxy:** with `MONOMEM_TRUST_PROXY=1` the bucket is the rightmost `X-Forwarded-For` entry (the one your
   proxy appended), not the leftmost one, which the client controls: a client could get a fresh bucket for every forged value.
