@@ -4,10 +4,23 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.3.0] - 2026-11-09
+
+Upgrade notes: the first start migrates the database from schema v18 to v19 (one way: older builds refuse it) after
+making `<database>.pre-v19-backup`. To go back, close every app that uses Monomem and run `monomem restore <database>.pre-v19-backup --yes`
+(it keeps your current database aside first), then install 1.2.1. Details: `docs/upgrading.md`.
 
 ### Fixed
 
+- **The audit log followed the default folder, not the database in use.** With `MONOMEM_DB_PATH` pinned (a second or temporary
+  store), every write was logged in the default store's `audit.log`. The log now sits beside the pinned database (`MONOMEM_AUDIT_LOG`
+  still wins; `:memory:` keeps the old rule).
+- **`setup --yes` left old capture hooks that could no longer run.** Without `--capture`, it replaced only the start-of-session hook;
+  the other `npx -y onememory-mcp@x hook <event>` hooks stayed, could not open a v19 database, and capture silently stopped. Rewriting
+  hooks that are already installed is an upgrade, not a new opt-in, so setup now does it (listed in the plan); `--no-capture` leaves
+  them and warns.
+- **`setup` ignored `ONEMEMORY_DB_PATH` / `ONEMEMORY_HOME` set in the shell** in some paths. Old-style names now count as `MONOMEM_*`
+  everywhere in setup, as at run time.
 - **`setup` deleted notes it had not written.** Its test-note step also deleted every note tagged `setup-check` that an earlier
   installer had left (for example a pinned "OneMemory is connected" note #1). On a store where that note was pinned, the delete was
   refused and setup stopped with "the database could not be opened". Setup now deletes only the one test note it wrote in the same
@@ -310,12 +323,6 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   breakdown). Hybrid (`nomic-embed-text` via local Ollama), replacing the figures measured before the date-hint change:
   LoCoMo-10 by session 91.8 / 96.7, by turn 66.3 / 74.9, LongMemEval-S 98.5 / 99.4. The session-start block for 60 short
   notes is about 5,900 characters (~1,500 tokens) and lists all 60 (it said 7,100 characters, 57 of 60).
-
-## [1.3.0] - 2026-11-08
-
-Not published yet. Upgrade notes: the first start migrates the database from schema v18 to v19 (one way: older builds refuse it) after
-making `<database>.pre-v19-backup`. To go back, close every app that uses Monomem and run `monomem restore <database>.pre-v19-backup --yes`
-(it keeps your current database aside first), then install 1.2.1. Details: `docs/upgrading.md`.
 
 ### Added
 
