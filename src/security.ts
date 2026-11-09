@@ -6,7 +6,7 @@
 
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync } from "node:fs";
 import { createHash, timingSafeEqual } from "node:crypto";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { IncomingMessage } from "node:http";
 import { DATA_DIR, envNum, isLoopback, type Scope, type TokenEntry } from "./config.js";
 import { isWriterMarker, MARKER_DESCRIPTIONS } from "./actor.js";
@@ -574,7 +574,11 @@ export function authenticate(req: IncomingMessage, tokens: TokenEntry[]): Scope 
 // only the operation and metadata (op/id/namespace/byte count) -- never the
 // note title or body, so the audit trail can't itself become a leak.
 export function auditPath(): string {
-  return process.env.MONOMEM_AUDIT_LOG || join(DATA_DIR, "audit.log");
+  if (process.env.MONOMEM_AUDIT_LOG) return process.env.MONOMEM_AUDIT_LOG;
+  // The log lives beside the database in use: a pinned MONOMEM_DB_PATH (a temp or second store) must never append
+  // to the default store's audit.log.
+  const db = process.env.MONOMEM_DB_PATH?.trim();
+  return db && db !== ":memory:" ? join(dirname(resolve(db)), "audit.log") : join(DATA_DIR, "audit.log");
 }
 
 let auditWrites = 0;

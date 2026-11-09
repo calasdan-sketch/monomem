@@ -9,6 +9,11 @@ import { join } from "node:path";
 for (const k of Object.keys(process.env)) if (k.startsWith("MONOMEM_") || k.startsWith("ONEMEMORY_") || k.startsWith("CLAUDE_BRIDGE_")) delete process.env[k];
 const home = mkdtempSync(join(tmpdir(), "monomem-test-home-"));
 process.env.MONOMEM_HOME = home;
+// setup finds app configs through these (Claude Desktop under APPDATA, its Microsoft Store build under LOCALAPPDATA),
+// and many tests spawn with { ...process.env, HOME: tmp }: without this they read, and could edit, the real files.
+process.env.APPDATA = join(home, "AppData", "Roaming");
+process.env.LOCALAPPDATA = join(home, "AppData", "Local");
+process.env.XDG_CONFIG_HOME = join(home, ".config");
 // The suite exercises every tool, including the operator ones that a plain
 // install no longer registers by default (see DEFAULT_TOOLS in
 // mcp-server-core.ts). test/tool-surface.test.ts owns the assertions about

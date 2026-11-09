@@ -20,7 +20,7 @@ import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { applyOps, getMember, getPath, JsonEditError, opsAreApplied, parseDoc, parseJsonc, type Op } from "./jsonc-edit.js";
 import { applyTomlOps, findTable, hasServer, tomlOpsApplied } from "./toml-table.js";
-import { homeDataDir } from "./legacy-env.js";
+import { applyLegacyEnv, homeDataDir } from "./legacy-env.js";
 
 // ---- environment (injectable, so tests never touch a real configuration) ---------------------------------------------
 
@@ -1131,8 +1131,9 @@ export function hookHosts(e: SetupEnv): HookHost[] {
  * there) and, with `capture`, one entry per CAPTURE_HOOKS event (each only if that event has no monomem hook yet).
  * With capture the start-of-session entry is `hook session-start`, which prints the same context and also does the
  * capture housekeeping. Existing entries, ours or anyone's, are never touched; every addition has its own undo op.
+ * `upgradeOnly` (with capture): only rewrite capture hooks of the old package / another npx version, add none.
  */
-export function planHooks(e: SetupEnv, opts: SetupOptions, dbForHook: string | undefined, want: { recall: boolean; capture: boolean }, host: HookHost = hookHosts(e)[0]): { change: FileChange | null; already: boolean; conflict?: string } {
+export function planHooks(e: SetupEnv, opts: SetupOptions, dbForHook: string | undefined, want: { recall: boolean; capture: boolean; upgradeOnly?: boolean }, host: HookHost = hookHosts(e)[0]): { change: FileChange | null; already: boolean; conflict?: string } {
   const file = host.file;
   const text = readTextFile(file);
   if (text === "" && !opts.forceEmpty) return { change: null, already: false, conflict: EMPTY_FILE_MSG(file) };
@@ -1218,6 +1219,7 @@ export function planHooks(e: SetupEnv, opts: SetupOptions, dbForHook: string | u
         }
         continue;
       }
+      if (want.upgradeOnly) continue;
       // Ours: a command line naming this tool (the package or its cli.js path) with `hook <event>`; another tool's
       // hook is not. The retired names count: the command line lives in the USER's settings file and still holds
       // whatever path was installed then, so matching only the current name would add a duplicate hook on upgrade.
@@ -1629,9 +1631,12 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   if (opts.undo) return undoLast(e, io);
   if (e.globalCliPath === undefined && opts.command === "auto" && runningFromNpxCache(e.cliPath)) e = { ...e, globalCliPath: detectGlobalCli(e) ?? null };
 
-  // A database pinned in the shell (MONOMEM_DB_PATH, or the old CLAUDE_BRIDGE_DB_PATH) must also reach the app's entry,
+  // Old-style names (ONEMEMORY_*, CLAUDE_BRIDGE_*) in the shell count as MONOMEM_*, exactly as at run time. A copy, so the
+  // caller's env is left as it was.
+  { const env = { ...e.env }; applyLegacyEnv(env); e = { ...e, env }; }
+  // A database pinned in the shell (MONOMEM_DB_PATH, or an old-style twin) must also reach the app's entry,
   // because the app will not run inside this shell.
-  const envDb = (e.env.MONOMEM_DB_PATH || e.env.CLAUDE_BRIDGE_DB_PATH || "").trim();
+  const envDb = (e.env.MONOMEM_DB_PATH || "").trim();
   if (!opts.db && envDb) opts = { ...opts, db: envDb };
   // The same for a data folder set with MONOMEM_HOME: without it in the entry, the app would use ~/.monomem instead.
   // And for notes still in ~/.onememory (no ~/.monomem store yet): the server opens them by default today, but only
@@ -1748,6 +1753,11 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
       }
     }
   }
+  // Capture hooks of the old onememory-mcp package (or another npx version) are already installed: rewriting them is an
+  // upgrade, not a new opt-in, so it happens without --capture (only --no-capture leaves them). Left alone they fail on
+  // a newer database and capture silently stops.
+  const upgradeHosts = new Set(hosts.filter((h) => planHooks(e, opts, hookDb, { recall: false, capture: true, upgradeOnly: true }, h).change));
+  if (capture === "no") for (const h of upgradeHosts) plan.warnings.push(`${h.label.replace(/ hook$/, "")}: your automatic memory hooks still run the old onememory-mcp package (or another npx version), which may not open this database, so they may record nothing. Run  monomem setup --capture  to upgrade them`);
   const anyHook = hookPlans.size > 0;
   const hookReplacesOld = [...hookPlans.values()].some((c) => c.lines.some((l) => l.startsWith("replace the start-of-session hook")));
   const anyCapture = capturePlans.size > 0;
@@ -1762,6 +1772,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   io.out("What I will do:");
   let n = 1;
   for (const c of plan.changes) for (const l of c.lines) io.out(`  ${l.startsWith("note:") ? "   " : `${n++}. ${c.label}: `}${l}`);
+  if (capture === "ask") for (const h of upgradeHosts) io.out(`  ${n++}. ${h.label.replace(/ hook$/, "")}: upgrade your existing automatic memory hooks from the old onememory-mcp package (or another npx version) to this Monomem, same place and settings. They are already installed; this is not a new hook`);
   for (const d of dbs) io.out(`  ${n++}. Database ${d}: ${describeSchema(Store.peekSchemaVersion(d), SCHEMA_VERSION)}`);
   if (!opts.noTestNote) io.out(`  ${n++}. Write a test note, read it back and delete it, so you know writing, reading and deleting all work (only that one note is deleted; no other note is touched)`);
   io.out(`  ${n++}. Run \`monomem doctor\` and tell you how to check the connection in your assistant`);
@@ -1881,7 +1892,11 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   const written: WrittenChange[] = [];
   // Each hook file: automatic memory (with the start-of-session hook when that was wanted too), else the hook alone.
   const hookChanges = hosts.flatMap((h) => {
-    const c = wantCapture ? planHooks(e, opts, hookDb, { recall: wantHook || (opts.hook !== "no" && !hookPlans.has(h)), capture: true }, h).change : wantHook ? hookPlans.get(h) : null;
+    const c = wantCapture
+      ? planHooks(e, opts, hookDb, { recall: wantHook || (opts.hook !== "no" && !hookPlans.has(h)), capture: true }, h).change
+      : capture !== "no" && upgradeHosts.has(h)
+        ? planHooks(e, opts, hookDb, { recall: wantHook, capture: true, upgradeOnly: true }, h).change
+        : wantHook ? hookPlans.get(h) : null;
     return c ? [c] : [];
   });
   const toWrite = [...plan.changes, ...hookChanges];
@@ -1914,7 +1929,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   if (claudeHost) {
     const marker = join(dirname(DB_PATH), HOOKS_DECLINED_FILE); // the standard data folder, never an old install's
     try {
-      if (wantHook || wantCapture) rmSync(marker, { force: true });
+      if (wantHook || wantCapture || (capture !== "no" && upgradeHosts.has(claudeHost))) rmSync(marker, { force: true });
       else if (hookPlans.has(claudeHost) || capturePlans.has(claudeHost)) {
         mkdirSync(dirname(marker), { recursive: true });
         writeFileSync(marker, "The Claude Code hook was declined when setup ran. Run monomem setup --hook to add it.\n");

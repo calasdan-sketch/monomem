@@ -93,6 +93,36 @@ describe("setup: an upgrade whose notes are still in ~/.onememory", () => {
     assert.equal(h.PostToolUse[0].hooks[0].command, "prettier --write", "the person's own hook is untouched");
   });
 
+  test("--yes --hook without --capture still upgrades the old capture hooks (an upgrade, not a new opt-in)", async () => {
+    const s = danLayout();
+    const out = io();
+    assert.equal(await runSetup(s.e, out, opts({ yes: true, hook: "yes", capture: "ask" })), 0, out.all());
+    assert.match(out.all(), /upgrade your existing automatic memory hooks/);
+    const h = JSON.parse(readFileSync(s.settings, "utf8")).hooks;
+    for (const [on, [ev]] of Object.entries(OLD_HOOKS)) {
+      const cmds = (h[on] as Array<{ hooks: Array<{ command: string }> }>).flatMap((g) => g.hooks.map((x) => x.command)).filter((c) => /monomem|onememory/.test(c));
+      assert.equal(cmds.length, 1, `${on}: ${JSON.stringify(cmds)}`);
+      assert.ok(cmds[0].startsWith(`node "${CLI}" hook ${ev}`), cmds[0]);
+    }
+  });
+
+  test("--no-capture leaves the old capture hooks but warns that they may record nothing", async () => {
+    const s = danLayout();
+    const out = io();
+    assert.equal(await runSetup(s.e, out, opts({ yes: true, hook: "yes", capture: "no" })), 0, out.all());
+    assert.match(out.all(), /still run the old onememory-mcp package/);
+    assert.match(readFileSync(s.settings, "utf8"), /onememory-mcp@2\.0\.0 hook post-tool/);
+  });
+
+  test("ONEMEMORY_DB_PATH in the shell counts as MONOMEM_DB_PATH and reaches the entry", async () => {
+    const s = danLayout();
+    const e: SetupEnv = { ...s.e, env: { ...s.e.env, ONEMEMORY_DB_PATH: s.legacyDb } };
+    const out = io();
+    assert.equal(await runSetup(e, out, opts({ yes: true })), 0, out.all());
+    assert.equal(JSON.parse(readFileSync(s.file, "utf8")).mcpServers.monomem.env.MONOMEM_DB_PATH, s.legacyDb);
+    assert.equal(e.env.MONOMEM_DB_PATH, undefined, "the caller's env is not changed");
+  });
+
   test("a hook command uses the global install for every event when setup runs from npx", () => {
     const e: SetupEnv = { home: "/h", platform: "linux", env: {}, cwd: "/", nodeVersion: "24.4.1", execPath: "/usr/bin/node", cliPath: "/c/_npx/abc/node_modules/monomem/dist/src/cli.js", version: "2.0.0", now: () => new Date(), globalCliPath: "/usr/lib/node_modules/monomem/dist/src/cli.js" };
     for (const ev of ["session-start", "user-prompt", "post-tool", "stop"]) assert.equal(buildCaptureCommand(e, { command: "auto" }, ev), `node "/usr/lib/node_modules/monomem/dist/src/cli.js" hook ${ev}`);
