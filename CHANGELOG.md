@@ -63,7 +63,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is another store now creates or updates its note with `imported_unverified` set (so `why` and the provenance banner say it came
   in without a verified attestation), and in an approve-first namespace that create or update goes to quarantine like an agent's
   write instead of going live. The summary adds "N note(s) from other machines held for review". Approving one applies it as the
-  approver (`cli`), without the `imported_unverified` flag. Files this store wrote merge as before.
+  approver (`cli`) and keeps the `imported_unverified` flag; an approved create is linked to the file's origin, so the next sync
+  updates that note instead of adding a second copy. Files this store wrote merge as before.
 - **A forget date on someone else's note** now checks `created_by` (the note's first writer), not `written_by`: editing another
   writer's note no longer makes it yours.
 - **A namespace that looks like a known secret** (an AWS key, a GitHub token and the other known-prefix patterns; no entropy
@@ -87,6 +88,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`monomem changes --since last`** prints every page again and moves its marker. With more changes than `--limit` it printed
+  one page and left the marker where it was, so the same changes came back every run. Other `--since` values still print one page
+  and the "more" line.
+- **Setup with several old entries:** an `onememory` entry's `ONEMEMORY_DB_PATH` / `ONEMEMORY_HOME` now count when choosing which
+  entry keeps its data (they were ignored, so an empty `claude-bridge` entry could win and the onememory notes were left unused),
+  and the new entry carries them as `MONOMEM_DB_PATH` / `MONOMEM_HOME`. An entry with `MONOMEM_HOME` is judged by that folder's
+  database.
 - **`monomem restore`** works on a damaged database (it is moved aside as-is, with its `-wal` / `-shm`, instead of failing on the
   checkpoint) and refuses while another program has the database open even when idle (it tests the database lock; it no longer refuses
   just because something answers on the API port). A file another program holds gives the "close the apps" message, never a stack

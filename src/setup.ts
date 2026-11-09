@@ -276,13 +276,18 @@ export function migrateEntry(e: SetupEnv, opts: Pick<SetupOptions, "command">, o
   const env: Record<string, string> = {};
   const oldEnv = old.env && typeof old.env === "object" ? (old.env as Record<string, unknown>) : {};
   // A name already in the new style wins over its old-style twin, exactly as at run time (legacy-env.ts).
-  for (const [k, v] of Object.entries(oldEnv)) if (typeof v === "string" && !k.startsWith("CLAUDE_BRIDGE_")) env[k] = v;
-  for (const [k, v] of Object.entries(oldEnv)) {
-    if (typeof v !== "string" || !k.startsWith("CLAUDE_BRIDGE_")) continue;
-    const nk = "MONOMEM_" + k.slice("CLAUDE_BRIDGE_".length);
-    if (!(nk in env)) env[nk] = v;
+  // Old names, newest first (ONEMEMORY_* wins over CLAUDE_BRIDGE_*), as legacy-env.ts reads them.
+  const oldPrefixes = ["ONEMEMORY_", "CLAUDE_BRIDGE_"];
+  for (const [k, v] of Object.entries(oldEnv)) if (typeof v === "string" && !oldPrefixes.some((p) => k.startsWith(p))) env[k] = v;
+  for (const p of oldPrefixes) {
+    for (const [k, v] of Object.entries(oldEnv)) {
+      if (typeof v !== "string" || !k.startsWith(p) || k.length === p.length) continue;
+      const nk = "MONOMEM_" + k.slice(p.length);
+      if (!(nk in env)) env[nk] = v;
+    }
   }
-  let db = env.MONOMEM_DB_PATH ?? null;
+  // An entry that names a data folder (MONOMEM_HOME, or ONEMEMORY_HOME mapped above) keeps its data there.
+  let db = env.MONOMEM_DB_PATH ?? (env.MONOMEM_HOME?.trim() ? join(dataHome({ ...e, env: { MONOMEM_HOME: env.MONOMEM_HOME } }), "state.db") : null);
   if (!db) {
     const guess = dbBesideInstall(old);
     if (guess && existsSync(guess)) {

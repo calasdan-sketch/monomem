@@ -1914,11 +1914,20 @@ async function changes(): Promise<void> {
       console.log(`  ${src || "(no source)"}: +${n.created} ~${n.updated} -${n.deleted}`);
     }
     // One page only (--limit entries, default 100): a long window is summed up above, not printed in full.
-    for (const e of page.changes) {
-      const mark = e.kind === "created" ? "+" : e.kind === "updated" ? "~" : "-";
-      console.log(`${mark} #${e.id} [${printable(e.namespace, 100)}] ${printable(e.title)}  (${e.at}${e.source ? `, ${printable(e.source)}` : ""})${e.distrusted ? " [DISTRUSTED WRITER]" : ""}`);
+    // Except --since last: its marker moves only when the final page is read, so every page is printed.
+    const isLast = (str(flags.since) ?? "").trim().toLowerCase() === "last";
+    for (;;) {
+      for (const e of page.changes) {
+        const mark = e.kind === "created" ? "+" : e.kind === "updated" ? "~" : "-";
+        console.log(`${mark} #${e.id} [${printable(e.namespace, 100)}] ${printable(e.title)}  (${e.at}${e.source ? `, ${printable(e.source)}` : ""})${e.distrusted ? " [DISTRUSTED WRITER]" : ""}`);
+      }
+      if (!page.nextCursor) break;
+      if (!isLast) {
+        console.log(`... ${Math.max(0, c.total - page.changes.length)} more (use --json or a narrower --since)`);
+        break;
+      }
+      page = runChanges(store, { ...base, cursor: page.nextCursor });
     }
-    if (page.nextCursor) console.log(`... ${Math.max(0, c.total - page.changes.length)} more (use --json or a narrower --since)`);
   } catch (e) {
     if (e instanceof ValidationError) {
       console.error(`Error: ${e.message}`);

@@ -1752,6 +1752,17 @@ export class Store {
     } catch {
       /* read-only file: no writer can store a capture event either */
     }
+    try {
+      // A held write from another machine's sync file: approving it keeps the imported_unverified flag and links the new
+      // note to its (origin, id), so the next sync updates it instead of creating it again. Columns an older build ignores.
+      if (this.hasColumn("quarantine", "imported_unverified") === false && this.hasColumn("quarantine", "id")) {
+        this.addColumn("quarantine", "imported_unverified", "INTEGER NOT NULL DEFAULT 0");
+        this.addColumn("quarantine", "sync_origin", "TEXT");
+        this.addColumn("quarantine", "sync_origin_id", "INTEGER");
+      }
+    } catch {
+      /* read-only file: nothing can be held either */
+    }
   }
 
   /**
@@ -2805,6 +2816,8 @@ export class Store {
       bulkImport?: boolean;
       /** Sync of another machine's file: held under approve-first even though the CLI runs it, like an agent's write. */
       holdForApproval?: boolean;
+      /** Sync of another machine's file: its (origin, id), linked to the note when a held create is approved. */
+      syncIdentity?: { origin: string; id: number };
     } & LintOpts = {}
   ): NoteRecord {
     if (!opts.bulkImport) this.floodGate(opts.lint ?? "full");
@@ -2837,6 +2850,8 @@ export class Store {
         createdAt: input.created_at,
         findings,
         writtenBy: opts.writtenBy,
+        importedUnverified: opts.importedUnverified,
+        syncIdentity: opts.syncIdentity,
       });
       throw new QuarantinedError(qid, findings);
     }
@@ -3560,6 +3575,7 @@ export class Store {
         sensitivity: newLabel ?? existing.sensitivity ?? DEFAULT_SENSITIVITY,
         findings,
         writtenBy: opts.writtenBy,
+        importedUnverified: opts.importedUnverified,
       });
       throw new QuarantinedError(qid, findings);
     }
@@ -7799,6 +7815,10 @@ export class Store {
     findings: LintFinding[];
     /** Internal override of the stamped writer (default: the current writer). */
     writtenBy?: string;
+    /** Another machine's sync file: applied with imported_unverified ... */
+    importedUnverified?: boolean;
+    /** ... and (create) linked to its (origin, id). */
+    syncIdentity?: { origin: string; id: number };
   }): number {
     // Held writes are the flagged ones (secrets, injections): when at-rest
     // encryption is on they are sealed too. The key state is read under the
@@ -7835,6 +7855,11 @@ export class Store {
           q.sensitivity ?? DEFAULT_SENSITIVITY
         );
       id = Number(res.lastInsertRowid);
+      if (q.importedUnverified || q.syncIdentity) {
+        this.db
+          .prepare("UPDATE quarantine SET imported_unverified = ?, sync_origin = ?, sync_origin_id = ? WHERE id = ?")
+          .run(q.importedUnverified ? 1 : 0, q.syncIdentity?.origin ?? null, q.syncIdentity?.id ?? null, id);
+      }
       if (!nested) this.commitTx();
     } catch (e) {
       if (!nested) {
@@ -7917,8 +7942,15 @@ export class Store {
     let note: NoteRecord;
     if (q.op === "create") {
       const row = this.db
-        .prepare("SELECT created_at_override, written_by, sensitivity FROM quarantine WHERE id = ?")
-        .get(id) as { created_at_override: string | null; written_by: string | null; sensitivity: string };
+        .prepare("SELECT created_at_override, written_by, sensitivity, imported_unverified, sync_origin, sync_origin_id FROM quarantine WHERE id = ?")
+        .get(id) as {
+        created_at_override: string | null;
+        written_by: string | null;
+        sensitivity: string;
+        imported_unverified: number;
+        sync_origin: string | null;
+        sync_origin_id: number | null;
+      };
       note = this.transaction(() => {
         const n = this.create(
           {
@@ -7930,15 +7962,16 @@ export class Store {
             created_at: row.created_at_override ?? undefined,
             sensitivity: row.sensitivity,
           },
-          { lint: "none", writtenBy: row.written_by ?? "" }
+          { lint: "none", writtenBy: row.written_by ?? "", importedUnverified: Number(row.imported_unverified) === 1 }
         );
+        if (row.sync_origin !== null && row.sync_origin_id !== null) this.syncLink(row.sync_origin, Number(row.sync_origin_id), n.id);
         drop.run(id);
         return n;
       });
     } else {
       const held = this.db
-        .prepare("SELECT if_rev, set_namespace, written_by, sensitivity FROM quarantine WHERE id = ?")
-        .get(id) as { if_rev: number | null; set_namespace: number; written_by: string | null; sensitivity: string };
+        .prepare("SELECT if_rev, set_namespace, written_by, sensitivity, imported_unverified FROM quarantine WHERE id = ?")
+        .get(id) as { if_rev: number | null; set_namespace: number; written_by: string | null; sensitivity: string; imported_unverified: number };
       const ifRev = held.if_rev;
       // Rows from before 1.1.0 may lack the rev the update was based on;
       // applying them unguarded could overwrite later edits.
@@ -7961,7 +7994,7 @@ export class Store {
           // unless the write itself relabelled the note.
           sensitivity: held.sensitivity,
         },
-        { ifRev, lint: "none", writtenBy: held.written_by ?? "" }
+        { ifRev, lint: "none", writtenBy: held.written_by ?? "", importedUnverified: Number(held.imported_unverified) === 1 }
       );
       if (!updated) {
         throw new ValidationError(

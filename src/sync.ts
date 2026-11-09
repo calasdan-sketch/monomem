@@ -619,6 +619,8 @@ export async function importMarkdown(
     // Written by another store: its writer claims are unverified, and approve-first holds it like an agent's write.
     const foreign = origin !== null && origin !== self;
     const foreignOpts = foreign ? { holdForApproval: true, importedUnverified: true } : {};
+    // A held create remembers where it came from, so approving it links the note and the next sync does not add it twice.
+    const syncIdentity = foreign && hasIdentity ? { syncIdentity: { origin: origin!, id: originId! } } : {};
 
     let localId: number | null = null;
     if (hasIdentity) localId = origin === self ? originId : store.syncLookup(origin!, originId!);
@@ -708,6 +710,7 @@ export async function importMarkdown(
           // A captured row (observation / summary) comes back as one, with its files and session.
           ...captureFieldsOf(fm),
           ...foreignOpts,
+          ...syncIdentity,
         }
       );
       store.restoreCaptureLinks(n, fm.files);
