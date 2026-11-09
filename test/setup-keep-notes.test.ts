@@ -85,14 +85,17 @@ describe("Codex: an old [mcp_servers.onememory] becomes [mcp_servers.monomem]", 
     const s = sandbox();
     mkdirSync(join(s.home, ".codex"));
     const file = join(s.home, ".codex", "config.toml");
-    const orig = 'model = "o5"\n\n[mcp_servers.onememory]\ncommand = "npx"\nargs = ["-y", "onememory-mcp@2.0.0"]\n\n[mcp_servers.onememory.env]\nONEMEMORY_HOME = "/data/om"\n\n[projects."/w"]\ntrust_level = "trusted"\n';
+    // A data folder inside the sandbox (forward slashes: a TOML basic string treats \ as an escape). A fixed path such as
+    // /data/om cannot be created on Linux/macOS CI, and on Windows it lands on the real C: drive.
+    const data = join(s.root, "om").replace(/\\/g, "/");
+    const orig = `model = "o5"\n\n[mcp_servers.onememory]\ncommand = "npx"\nargs = ["-y", "onememory-mcp@2.0.0"]\n\n[mcp_servers.onememory.env]\nONEMEMORY_HOME = "${data}"\n\n[projects."/w"]\ntrust_level = "trusted"\n`;
     writeFileSync(file, orig);
     const out = io();
     assert.equal(await runSetup(s.e, out, opts({ yes: true, only: ["codex"] })), 0, out.all());
     const text = readFileSync(file, "utf8");
     assert.doesNotMatch(text, /onememory/, text);
     assert.equal(text.match(/\[mcp_servers\.monomem\]/g)?.length, 1, text);
-    assert.match(text, /MONOMEM_HOME = "\/data\/om"/, "same data folder");
+    assert.ok(text.includes(`MONOMEM_HOME = "${data}"`), `same data folder\n${text}`);
     assert.match(text, /MONOMEM_CLIENT = "codex"/);
     assert.match(text, /^model = "o5"/);
     assert.match(text, /\[projects\."\/w"\]\ntrust_level = "trusted"/);
