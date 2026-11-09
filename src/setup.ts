@@ -87,6 +87,8 @@ export interface SetupOptions {
   project: boolean;
   /** Use this database for the new entry (default: the standard one, or the old one when migrating). */
   db?: string;
+  /** A data folder other than ~/.monomem (from MONOMEM_HOME in this shell): written into each app entry's env too. */
+  home?: string;
   noTestNote: boolean;
   noDoctor: boolean;
   /** "auto" (default), "node" (absolute node + cli.js) or "npx". */
@@ -488,7 +490,7 @@ function planToml(e: SetupEnv, opts: SetupOptions, target: ClientTarget, text: s
       warnings: [],
     };
   }
-  const entry = buildServerEntry(e, opts, { MONOMEM_CLIENT: target.id, ...(opts.db ? { MONOMEM_DB_PATH: opts.db } : {}) });
+  const entry = buildServerEntry(e, opts, { MONOMEM_CLIENT: target.id, ...(opts.db ? { MONOMEM_DB_PATH: opts.db } : {}), ...(opts.home ? { MONOMEM_HOME: opts.home } : {}) });
   if (opts.db) shared.dbs.add(opts.db);
   const ops: Op[] = [{ op: "set", path: ["mcp_servers"], key: "monomem", value: entry }];
   const lines = [`add the "monomem" memory server${opts.db ? ` (database ${opts.db})` : ""}`];
@@ -576,7 +578,7 @@ export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, 
       continue;
     }
     const m = migrateEntry(e, opts, entry, withType);
-    m.entry.env = { MONOMEM_CLIENT: appLabel(target.id), ...(m.entry.env ?? {}), ...(opts.db ? { MONOMEM_DB_PATH: opts.db } : {}) };
+    m.entry.env = { MONOMEM_CLIENT: appLabel(target.id), ...(m.entry.env ?? {}), ...(opts.db ? { MONOMEM_DB_PATH: opts.db } : {}), ...(opts.home ? { MONOMEM_HOME: opts.home } : {}) };
     ops.push({ op: "rename", path: s.path, key: s.name, newKey: "monomem", value: m.entry });
     inverse.unshift({ op: "rename", path: s.path, key: "monomem", newKey: s.name, value: entry });
     lines.push(`replace the old "${s.name}" entry${where} with "monomem"; ${m.db ? `your data stays where it is (${m.db})` : "standard data location"}. The old install folder is not touched`);
@@ -589,6 +591,7 @@ export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, 
     // MONOMEM_CLIENT names the app for written_by ("stdio:<app>"): a label the config declares, not a verified identity.
     const env: Record<string, string> = { MONOMEM_CLIENT: appLabel(target.id) };
     if (opts.db) env.MONOMEM_DB_PATH = opts.db;
+    if (opts.home) env.MONOMEM_HOME = opts.home;
     let entry: ServerEntry;
     if (opts.httpEntry) {
       // Only apps whose web-connection format is documented are written here; the others get a paste-in snippet from `connect`.
@@ -696,10 +699,17 @@ export interface HookHost {
  *    stdin fields or the allowed group keys, and it skips a group with a key it does not know, so ours carry nothing but
  *    the command (no matcher, no async) and are recognised by their command line alone. UNVERIFIED: the stdin field names.
  */
+/**
+ * Claude Code's SessionStart sources: a new session, /clear, and after a /compact (the compacted context loses what the
+ * session-start hook printed, so it is printed again). The matcher setup wrote before is upgraded in place on the next run.
+ */
+export const CLAUDE_START_MATCHER = "startup|clear|compact";
+const OLD_CLAUDE_START_MATCHER = "startup|clear";
+
 export function hookHosts(e: SetupEnv): HookHost[] {
   const muse = detectClients(e).find((t) => t.id === "muse")!.file;
   return [
-    { client: "claude-code", label: "Claude Code hook", agent: "Claude", file: join(claudeDir(e), "settings.json"), start: { on: "SessionStart", matcher: "startup|clear" }, events: CAPTURE_HOOKS },
+    { client: "claude-code", label: "Claude Code hook", agent: "Claude", file: join(claudeDir(e), "settings.json"), start: { on: "SessionStart", matcher: CLAUDE_START_MATCHER }, events: CAPTURE_HOOKS },
     {
       client: "codex",
       label: "Codex CLI hook",
@@ -775,6 +785,26 @@ export function planHooks(e: SetupEnv, opts: SetupOptions, dbForHook: string | u
       inverse.unshift({ op: "append", path: ["hooks"], key: host.start.on, value: old });
       inverse.unshift({ op: "unappend", path: ["hooks"], key: host.start.on, marker: want.capture ? "hook session-start" : HOOK_MARKER });
       lines.push(`replace the start-of-session hook from the old onememory-mcp package with the current Monomem one (same place, same settings)`);
+    }
+  } else if (doc && host.start.matcher === CLAUDE_START_MATCHER && has(host.start.on, HOOK_DETECT)) {
+    // Ours is already there: upgrade a "startup|clear" matcher setup wrote earlier, in place (no second entry).
+    const items = getPath(doc, ["hooks", host.start.on])?.items ?? [];
+    for (const marker of ["hook session-start", HOOK_MARKER]) {
+      const first = items.find((i) => text!.slice(i.start, i.end).includes(marker));
+      if (!first) continue;
+      let old: { matcher?: unknown } | null = null;
+      try {
+        old = JSON.parse(text!.slice(first.start, first.end));
+      } catch {
+        /* comments inside the entry: leave it alone */
+      }
+      if (old && old.matcher === OLD_CLAUDE_START_MATCHER) {
+        ops.push({ op: "unappend", path: ["hooks"], key: host.start.on, marker }, { op: "append", path: ["hooks"], key: host.start.on, value: { ...old, matcher: CLAUDE_START_MATCHER } });
+        inverse.unshift({ op: "append", path: ["hooks"], key: host.start.on, value: old });
+        inverse.unshift({ op: "unappend", path: ["hooks"], key: host.start.on, marker });
+        lines.push(`also show your notes again after Claude Code compacts a conversation (start-of-session hook matcher "${OLD_CLAUDE_START_MATCHER}" becomes "${CLAUDE_START_MATCHER}")`);
+      }
+      break;
     }
   } else if (want.recall && !has(host.start.on, HOOK_DETECT)) {
     const command = want.capture ? buildCaptureCommand(e, opts, "session-start", dbForHook) : buildHookCommand(e, opts, dbForHook);
@@ -1190,10 +1220,13 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   // because the app will not run inside this shell.
   const envDb = (e.env.MONOMEM_DB_PATH || e.env.CLAUDE_BRIDGE_DB_PATH || "").trim();
   if (!opts.db && envDb) opts = { ...opts, db: envDb };
+  // The same for a data folder set with MONOMEM_HOME: without it in the entry, the app would use ~/.monomem instead.
+  if (!opts.home && dataHome(e) !== resolve(join(e.home, ".monomem"))) opts = { ...opts, home: dataHome(e) };
   if (!opts.terse) {
     io.out(`Monomem setup (version ${e.version})`);
     io.out(`  Node ${e.nodeVersion}: OK\n`);
   }
+  if (opts.home) io.out(`MONOMEM_HOME is set (${opts.home}), so each app entry setup writes gets MONOMEM_HOME too and uses that data folder.\n`);
   if (opts.only) {
     const bad = opts.only.filter((x) => !(CLIENT_IDS as readonly string[]).includes(x));
     if (bad.length) {

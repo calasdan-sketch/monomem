@@ -59,7 +59,8 @@ describe("preview shows what would be lost", () => {
       const t0 = wr.content[0].text as string;
       const id = JSON.parse(t0.slice(t0.indexOf("{"))).note.id;
       const p = (await client.callTool({ name: "memory_supersede_preview", arguments: { old_ids: [id], new_title: "Rotation rule", new_body: "Rotates on Monday" } })) as any;
-      assertShowsWhatIsLost(p.content[0].text, id);
+      const pt = p.content[0].text as string;
+      assertShowsWhatIsLost(JSON.parse(pt.slice(pt.indexOf("{"))).warning, id);
       await client.close();
     } finally {
       store.close();

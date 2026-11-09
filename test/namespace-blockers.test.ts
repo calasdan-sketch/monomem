@@ -88,7 +88,7 @@ describe("blocker #3: reads_from grants never confer write access (MCP)", () => 
       arguments: { id: ownId, body: "own body edited" },
     });
     const { note } = parseToolText(res);
-    assert.equal(note.body, "own body edited");
+    assert.equal(store.read(ownId)?.body, "own body edited"); // state_write no longer echoes the body
     assert.equal(note.namespace, "agent-a");
   });
 

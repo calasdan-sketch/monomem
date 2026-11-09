@@ -34,7 +34,11 @@ To check your own setup, run `monomem drill` (replays 20 known memory-poisoning 
   and the app reads but does not set its permissions.
 - **Rate limiting:** per-client fixed-window limiter (defaults configurable via
   `MONOMEM_RATE_MAX` / `MONOMEM_RATE_WINDOW_MS`) so a leaked token
-  can't be brute-forced or hammered. Over-limit requests get `429`.
+  can't be brute-forced or hammered. Over-limit requests get `429`. The bucket is the
+  socket address; with `MONOMEM_TRUST_PROXY=1` it is the rightmost `X-Forwarded-For`
+  entry (the one your proxy appended, which a client cannot forge), or with
+  `MONOMEM_TRUST_PROXY_HOPS=N` the Nth entry from the right (the leftmost one if
+  there are fewer); with `MONOMEM_TRUST_CLOUDFLARE=1` it is `CF-Connecting-IP`.
 - **Input validation:** per-note size caps (title/body/tags), a 1MB request
   body cap, and all values are bound as parameters; SQL text is
   built only from internal identifiers.
@@ -150,7 +154,18 @@ limits, stated plainly:
   (even an admin one) cannot read or write another namespace. See
   [docs/token-namespaces.md](./docs/token-namespaces.md).
 - Rotate by setting a new `MONOMEM_TOKEN` or deleting
-  `~/.monomem/.token`; a leaked token works until you do.
+  `~/.monomem/.token`; a leaked token works until you do. Changing the main
+  token does not touch the app tokens in `tokens.json`: a leaked admin token
+  may have been used to make more of them, so also run `monomem token list`
+  and remove every entry you do not recognise (`monomem token remove <name>`).
+  Every token made or removed through `monomem token` or `/tokens` is written
+  to the audit log (`token.add` / `token.remove`, with the caller's label and
+  the new token's name, scope, namespace and limit, never the token itself),
+  and so is every export (`export`).
+- Over REST, `POST /tokens` needs an admin token with no sensitivity limit and
+  no namespace pin; making an app with `admin: true` or `no_limit: true` there
+  further needs the main (`primary`) token, and any other caller gets `403`.
+  The CLI (`monomem token add --admin` / `--no-limit`) is unchanged.
 
 ## Memory safety
 
@@ -219,7 +234,7 @@ CLI itself, so none of them stops an agent that can run commands.**
   duplicates.
 - Rate limiting is per client address and runs before authentication;
   behind a shared tunnel, clients share a bucket.
-- The audit log records operations, never note content.
+- The audit log records operations, never note content. A failed audit write never fails the request: it is counted (`audit_failures` in `GET /stats`, a warning in `monomem health`) and the first failure, then every 1000th, is printed to stderr.
 - **Dispute notices are a nuisance vector.** Any writer that can write a fact can make
   Monomem print "writers disagree on <key>" at the start of sessions in that namespace. The
   notice never shows a fact value that the injection or directive scan, or the fact-value

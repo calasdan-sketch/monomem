@@ -128,7 +128,8 @@ describe("MCP tool wrappers", () => {
     });
     const { note } = parseToolText(result);
     assert.equal(note.id, created.id);
-    assert.equal(note.body, "new");
+    assert.equal(note.body, undefined, "state_write no longer echoes the body (expert round 1)");
+    assert.equal(store.read(created.id)?.body, "new");
     assert.equal(note.title, "Will update");
   });
 

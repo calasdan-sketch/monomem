@@ -119,7 +119,7 @@ last changed its **content** (a token label, or `stdio` / `cli` / `server` / `ru
 change it. `source` is **only a claim** the writer typed: never treat it as who wrote
 the note. To ignore your own writes pass `not_written_by=<your label>`; to look at one
 writer's notes pass `written_by=<label>` (`state_list`, `state_search`, `task_list`,
-`state_relevant`, `catch_up`, `memory_since`, `memory_ack`). Notes with an unknown writer (`""`) are
+`state_search` with mode: "relevant", `catch_up`, `memory_since`, `memory_ack`). Notes with an unknown writer (`""`) are
 not removed by `not_written_by`. On `memory_since` / `catch_up` the filter matches each change's own writer; use
 `note_written_by` / `not_note_written_by` to filter on who holds the note now. A merged note
 (`memory_consolidate`) is written by whoever merged it and keeps `merged_from_writers`, so
@@ -214,14 +214,14 @@ those files arrive as normal updates (they show up in `memory_since`), and
 imports pass through the same linter. Conflicts keep the newer version; the
 other is saved under `.conflicts/` in that folder.
 
-## Keyword extraction notes (`state_relevant` / `POST /relevant`)
+## Keyword extraction notes (`state_search` mode: "relevant" / `POST /relevant`)
 
 Keywords are extracted with a zero-dependency English tokenizer: the
 stop-word list is English-only (non-English function words survive as
 keywords), and a hashtag plus its prose twin (`#status` + `status`) yields a
-single keyword. `state_relevant` results carry the same `stale`/`ageDays`/
+single keyword. Results of `state_search` (add mode: "relevant" to pass the whole question) carry the same `stale`/`ageDays`/
 `staleWarning` fields as search, and every namespace-fan-out response
-(`state_search`, `state_relevant`, `state_list`, and the REST equivalents)
+(`state_search` in every mode, `state_list`, and the REST equivalents)
 echoes `searchedNamespaces` — the namespaces actually searched — so an
 unreadable `namespace` hint silently falling back to the readable set is
 visible instead of misattributed.

@@ -18,6 +18,23 @@ describe("cli help", () => {
     assert.doesNotMatch(short, /rebuild-edges/);
     assert.match(run(["help", "--all"]).stdout, /rebuild-edges/);
   });
+  test("--help and -h are the general help; ls --help and help ls show ls's real line; hook --help prints help and runs no hook", () => {
+    const general = run(["help"]).stdout;
+    assert.equal(run(["--help"]).stdout, general);
+    assert.equal(run(["-h"]).stdout, general);
+    for (const args of [["ls", "--help"], ["help", "ls"]]) {
+      const r = run(args);
+      assert.equal(r.status, 0);
+      assert.match(r.stdout, /^monomem ls\n\n {2}show <id> \| ls \[--ns x\]/, args.join(" "));
+    }
+    for (const c of ["edit", "forget", "unpin"]) assert.doesNotMatch(run([c, "--help"]).stdout, /no extra options/, c);
+    assert.equal(run(["help", "nosuchcmd"]).stdout, general, "an unknown word falls back to the general help");
+    const hook = spawnSync(process.execPath, [CLI, "hook", "--help"], { encoding: "utf8", input: "", env: { ...process.env, NO_COLOR: "1" } });
+    assert.equal(hook.status, 0);
+    assert.match(hook.stdout, /hook <session-start\|.*file-context>/);
+    assert.doesNotMatch(hook.stdout, /hookSpecificOutput/);
+    assert.match(run(["export", "--help"]).stdout, /the plain \{"notes": \[\.\.\.\]\} shape older importers read/);
+  });
   test("an unknown command suggests the closest one and exits non-zero without dumping help", () => {
     const r = run(["stat"]);
     assert.equal(r.status, 1);

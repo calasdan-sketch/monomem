@@ -186,7 +186,22 @@ export const SECRET_PATTERNS: ReadonlyArray<[string, RegExp]> = [
   ["Google API key", /\bAIza[0-9A-Za-z_-]{35}\b/],
   ["Slack token", /\bxox[abeoprs]-[0-9A-Za-z-]{10,}\b/],
   ["Stripe key", /\b(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{16,}\b/],
+  // A literal value only: "Bearer $TOKEN" and "Bearer <token>" are references and do not match.
+  ["Authorization header", /\bAuthorization["']?:[ \t]*["']?Bearer[ \t]+[A-Za-z0-9._~+/=-]{20,}/i],
+  ["Slack webhook", /hooks\.slack\.com\/services\/T[A-Z0-9]{6,}\/B[A-Z0-9]{6,}\/[A-Za-z0-9]{20,}/],
+  ["Discord webhook", /discord(?:app)?\.com\/api\/webhooks\/\d{15,22}\/[A-Za-z0-9_-]{50,}/],
+  ["Hugging Face token", /\bhf_[A-Za-z0-9]{30,}\b/],
+  ["Azure storage key", /\bAccountKey=[A-Za-z0-9+/]{40,}={0,2}/],
 ];
+
+// scheme://user:PASSWORD@host (postgres://, mongodb+srv://, redis://:pw@...). Placeholder passwords do not count.
+// Not in SECRET_PATTERNS: capture's redactor already blanks only the password part (redact.ts "URL password").
+const URL_PASSWORD = /\b[a-z][a-z0-9+.-]{0,20}:\/\/[^\s/:@]{0,64}:([^\s/@]{1,128})@[^\s/@]{1,253}/gi;
+const URL_PASSWORD_PLACEHOLDER = /^(?:pass(?:word)?|pwd|secret|x{3,}|\*+|<[^>]*>|\$\{?\w+\}?|\.\.\.|\[REDACTED[^\]]*\])$/i;
+export function hasUrlPassword(text: string): boolean {
+  for (const m of text.matchAll(URL_PASSWORD)) if (!URL_PASSWORD_PLACEHOLDER.test(m[1])) return true;
+  return false;
+}
 
 // Real key shapes only: Anthropic sk-ant-<kind><nn>-..., OpenAI sk-proj- /
 // sk-svcacct- / sk-admin- / legacy sk-<40+ base62>. Shape (mixed case +
@@ -283,12 +298,14 @@ export const HIGH_ENTROPY_LABEL = "high-entropy token";
 export const SECRET_ASSIGN_LABEL = "password or key written as plain text";
 export function secretAssignments(text: string, max = 20): Array<{ label: string; index: number; length: number }> {
   const re =
-    /(?<![A-Za-z0-9])(password|passwd|pwd|passcode|secret|api[ _-]?key|apikey|pin)\b["'`]?[ \t]{0,4}[:=][ \t]{0,4}["'`]?(?![^\s"'`<>]{0,120}?(?:xxx|\*\*\*|example|placeholder|your[_-]?|redacted|\$\{?[A-Za-z_]|\.\.\.))([^\s"'`<>$]{6,120})([^\n]{0,200})/gi;
+    /(?<![A-Za-z0-9])(password|passwd|pwd|passcode|secret|api[ _-]?key|apikey|pin|access[_-]?token|auth[_-]?token|token|bearer)\b["'`]?[ \t]{0,4}[:=][ \t]{0,4}["'`]?(?![^\s"'`<>]{0,120}?(?:xxx|\*\*\*|example|placeholder|your[_-]?|redacted|\$\{?[A-Za-z_]|\.\.\.))([^\s"'`<>$]{6,120})([^\n]{0,200})/gi;
   const out: Array<{ label: string; index: number; length: number }> = [];
   let m: RegExpExecArray | null;
   while (out.length < max && (m = re.exec(text)) !== null) {
     // A value of plain letters is probably a sentence ("password: required for login"); keep it only when it ends the line.
     if (/^[A-Za-z]+$/.test(m[2]) && m[3].trim() !== "") continue;
+    // "token" and "bearer" also name counts and settings ("token: required", "token = 4096"): a token value is long and has a digit.
+    if (/token|bearer/i.test(m[1]) && (m[2].length < 16 || !/\d/.test(m[2]))) continue;
     out.push({ label: m[1].toLowerCase(), index: m.index, length: m[0].length - m[3].length });
   }
   return out;
@@ -300,6 +317,7 @@ function knownSecret(t: string): string | null {
   for (const [label, re] of SECRET_PATTERNS) if (re.test(t)) return label;
   if (hasOpenAiAnthropicKey(t)) return "OpenAI/Anthropic key";
   if (hasJwt(t)) return "JWT";
+  if (hasUrlPassword(t)) return "password in a URL";
   return null;
 }
 
@@ -473,7 +491,7 @@ export function clientKey(req: IncomingMessage): string {
   // rate-limit bucket and defeat the limiter. So trust a forwarded client IP
   // ONLY when the operator has declared they run behind that proxy:
   //   - MONOMEM_TRUST_CLOUDFLARE=1 -> trust cf-connecting-ip
-  //   - MONOMEM_TRUST_PROXY=1      -> trust x-forwarded-for
+  //   - MONOMEM_TRUST_PROXY=1      -> trust x-forwarded-for (rightmost entry, or MONOMEM_TRUST_PROXY_HOPS from the right)
   // Otherwise key on the real socket address, which cannot be spoofed.
   if (process.env.MONOMEM_TRUST_CLOUDFLARE === "1") {
     const cf = req.headers["cf-connecting-ip"];
@@ -481,7 +499,15 @@ export function clientKey(req: IncomingMessage): string {
   }
   if (process.env.MONOMEM_TRUST_PROXY === "1") {
     const xff = req.headers["x-forwarded-for"];
-    if (typeof xff === "string" && xff) return xff.split(",")[0].trim();
+    // The trusted proxy APPENDS the address it saw, so the rightmost entry is the only one a client cannot forge;
+    // leftmost entries are whatever the client sent. MONOMEM_TRUST_PROXY_HOPS=N (default 1) counts N trusted proxies
+    // from the right; with fewer entries than that, the leftmost one is used.
+    if (typeof xff === "string" && xff) {
+      const parts = xff.split(",").map((p) => p.trim()).filter(Boolean);
+      const hops = Number(process.env.MONOMEM_TRUST_PROXY_HOPS);
+      const n = Number.isInteger(hops) && hops >= 1 ? hops : 1;
+      if (parts.length) return parts[Math.max(0, parts.length - n)];
+    }
   }
   return req.socket.remoteAddress || "unknown";
 }
@@ -721,9 +747,20 @@ export function audit(entry: {
     // Hash chain: `prev` = sha256 of the previous line (carried across rotation from audit.log.1).
     const prev = lastAuditLineHash(path);
     appendFileSync(path, JSON.stringify({ ts: new Date().toISOString(), prev, ...entry }) + "\n", { mode: 0o600 });
-  } catch {
-    // Audit logging must never break a request.
+  } catch (e) {
+    // Audit logging must never break a request, but a failing log must not be silent either: count it (shown in
+    // GET /stats and `monomem health`) and say so on stderr on the first failure and every 1000th after.
+    auditFailures++;
+    if (auditFailures === 1 || auditFailures % 1000 === 0) {
+      console.error(`[monomem] could not write the audit log (${(e as Error)?.message ?? e}); ${auditFailures} entr${auditFailures === 1 ? "y" : "ies"} missing so far`);
+    }
   }
+}
+
+let auditFailures = 0;
+/** Audit entries this process could not write. */
+export function auditFailureCount(): number {
+  return auditFailures;
 }
 
 /**

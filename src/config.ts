@@ -348,6 +348,46 @@ export interface TokenEntry {
   max_sensitivity?: Sensitivity;
 }
 
+/**
+ * Every access-token value configured right now (primary MONOMEM_TOKEN or .token, MONOMEM_TOKENS, tokens.json), read
+ * without side effects (unlike resolveToken, it never creates a token). The linter refuses a note that contains one.
+ * Cached on the env values and the two files' size and mtime, so a write pays two stat calls.
+ */
+let tokenValueCache: { key: string; values: string[] } | null = null;
+export function configuredTokenValues(): string[] {
+  const tokensFile = join(DATA_DIR, "tokens.json");
+  const sig = (f: string): string => {
+    try {
+      const st = statSync(f);
+      return `${st.mtimeMs}:${st.size}`;
+    } catch {
+      return "-";
+    }
+  };
+  const key = [process.env.MONOMEM_TOKEN ?? "", process.env.MONOMEM_TOKENS ?? "", TOKEN_FILE, sig(TOKEN_FILE), sig(tokensFile)].join("\0");
+  if (tokenValueCache?.key === key) return tokenValueCache.values;
+  const out = new Set<string>();
+  const add = (t: unknown): void => {
+    if (typeof t === "string" && t.trim().length >= 16) out.add(t.trim());
+  };
+  add(process.env.MONOMEM_TOKEN);
+  try {
+    add(readFileSync(TOKEN_FILE, "utf8"));
+  } catch {
+    /* no primary token file yet */
+  }
+  for (const read of [() => process.env.MONOMEM_TOKENS ?? "", () => readFileSync(tokensFile, "utf8")]) {
+    try {
+      const arr: unknown = JSON.parse(read());
+      if (Array.isArray(arr)) for (const e of arr) add((e as { token?: unknown } | null)?.token);
+    } catch {
+      /* absent or broken: resolveTokens reports that */
+    }
+  }
+  tokenValueCache = { key, values: [...out] };
+  return tokenValueCache.values;
+}
+
 function isScope(s: unknown): s is Scope {
   return s === "read" || s === "write" || s === "admin";
 }

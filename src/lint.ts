@@ -37,6 +37,7 @@
 
 import { isIPv4, isIPv6 } from "node:net";
 import { HIGH_ENTROPY_LABEL, normalizeForScan, scanForSecrets } from "./security.js";
+import { configuredTokenValues } from "./config.js";
 
 export type LintCategory = "secret" | "injection" | "entropy" | "pii" | "directive";
 export type LintAction = "block" | "quarantine" | "warn";
@@ -148,6 +149,9 @@ function parseLintPolicy(raw: string | undefined): { policy: LintPolicy; ok: boo
 // are now" alone, or "system:" alone never match. Patterns run on
 // normalizeForScan() output, where every whitespace run is one character, so
 // `\s+` never backtracks over a flood; anchored line rules use [ \t] only.
+// A reference-style image definition with a query string (badge hosts exempt), and an image that uses a reference.
+const REF_IMAGE_DEF = /^[ \t]{0,3}\[[^\]\n]{1,200}\]:[ \t]*<?https?:\/\/(?!(?:img\.shields\.io|badgen\.net|badge\.fury\.io|codecov\.io)[/:])[^\s?#]{1,300}\?\S{0,2000}=/im;
+const REF_IMAGE_USE = /!\[[^\]\n]{0,200}\](?!\()/;
 const INJECTION_PATTERNS: Array<[string, RegExp]> = [
   [
     "instruction override",
@@ -227,6 +231,17 @@ const INJECTION_PATTERNS: Array<[string, RegExp]> = [
     /!\[[^\]\n]{0,200}\]\(\s*<?https?:\/\/(?!(?:img\.shields\.io|badgen\.net|badge\.fury\.io|codecov\.io)[/:])[^\s)?#]{1,300}\?[^\s)]{0,2000}=/i,
   ],
   [
+    // The same channel as an HTML <img> tag, which many markdown renderers pass through.
+    "markdown exfiltration",
+    /<img\b[^>]{0,500}?\bsrc[ \t]*=[ \t]*["']?[ \t]*https?:\/\/(?!(?:img\.shields\.io|badgen\.net|badge\.fury\.io|codecov\.io)[/:])[^\s"'>?#]{1,300}\?[^\s"'>]{0,2000}=/i,
+  ],
+  [
+    // And as a reference-style image: `![x][ref]` plus a `[ref]: https://evil/p?d=...` definition line.
+    // Checked only when the text has an image that is not inline (REF_IMAGE_USE); a definition only plain links use needs a click.
+    "markdown exfiltration",
+    REF_IMAGE_DEF,
+  ],
+  [
     // Raw agent tool-call markup. Its OWN label, and deliberately LAST.
     //
     // It used to share the "tool-call coercion" label with the two rules above,
@@ -269,6 +284,7 @@ export function scanForInjection(text: string | undefined): string | null {
   if (/[\u{E0000}-\u{E007F}]/u.test(text.replace(FLAG_TAGS_RE, "")) || VS_RUN_RE.test(text.replace(/\p{Cf}/gu, ""))) return "hidden Unicode tag text";
   const unleeted = unLeet(prose);
   for (const [label, re] of INJECTION_PATTERNS) {
+    if (re === REF_IMAGE_DEF && !REF_IMAGE_USE.test(t)) continue;
     if (re.test(label === "system-prompt marker" ? prose : t)) return label;
     if (unleeted !== prose && label !== "system-prompt marker" && re.test(unleeted)) return label;
   }
@@ -359,6 +375,8 @@ export function scanForDirective(text: string | undefined): string | null {
   return null;
 }
 
+export const OWN_TOKEN_LABEL = "Monomem access token";
+
 /**
  * Lint a note's free-text fields. Returns every finding (at most one per
  * category per field) so the caller can apply the policy and report them.
@@ -376,8 +394,12 @@ export function lintContent(input: {
     ["source", input.source],
   ];
   const out: LintFinding[] = [];
+  const liveTokens = configuredTokenValues();
   for (const [field, text] of fields) {
-    const s = scanForSecrets(text);
+    // One of this server's own access tokens, pasted verbatim. The label never carries the value.
+    const norm = text && liveTokens.length ? normalizeForScan(text) : "";
+    const live = !!text && liveTokens.some((tok) => text.includes(tok) || norm.includes(tok));
+    const s = live ? OWN_TOKEN_LABEL : scanForSecrets(text);
     if (s) out.push({ category: s === HIGH_ENTROPY_LABEL ? "entropy" : "secret", label: s, field });
     // Provenance labels are not instructions an agent reads as prose.
     if (field === "source") continue;

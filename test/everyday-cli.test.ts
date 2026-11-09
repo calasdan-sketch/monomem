@@ -1,7 +1,7 @@
 // monomem add / show / ls / forget / edit / search-with-no-words: everyday commands that go through the normal store path.
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, chmodSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, chmodSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -74,7 +74,28 @@ describe("everyday commands", () => {
       writeFileSync(same, "");
       const n = run(dir, ["edit", "1"], undefined, { EDITOR: `"${process.execPath}" "${same}"` });
       assert.match(n.stdout, /No changes/);
-      assert.equal(run(dir, ["edit", "1"], undefined, { EDITOR: "", VISUAL: "" }).status, 1);
+      const missing = run(dir, ["edit", "999"], undefined, { EDITOR: "", VISUAL: "" });
+      assert.equal(missing.status, 1);
+      assert.match(missing.stderr + missing.stdout, /No note #999/, "the id is checked before the editor");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("edit hands the editor exactly one argument, the file path, even in a folder with a space", () => {
+    const dir = mkdtempSync(join(tmpdir(), "om everyday sp-"));
+    try {
+      run(dir, ["add", "body", "--title", "T"]);
+      const rec = join(dir, "argv.json");
+      const ed = join(dir, "rec ed.js");
+      writeFileSync(ed, `require("fs").writeFileSync(${JSON.stringify(rec)}, JSON.stringify(process.argv.slice(2)));`);
+      const r = run(dir, ["edit", "1"], undefined, { EDITOR: `"${process.execPath}" "${ed}"`, TMP: dir, TEMP: dir, TMPDIR: dir });
+      assert.equal(r.status, 0, r.stderr);
+      assert.doesNotMatch(r.stderr, /DEP0190/);
+      const argv = JSON.parse(readFileSync(rec, "utf8")) as string[];
+      assert.equal(argv.length, 1, JSON.stringify(argv));
+      assert.match(argv[0], /note-1\.md$/);
+      assert.ok(argv[0].includes(" "), "the temp folder has a space, and the path arrived whole");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

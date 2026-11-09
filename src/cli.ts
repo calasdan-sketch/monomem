@@ -206,7 +206,7 @@ function usage(all = false): void {
       "            files of deleted notes it wrote earlier (--no-prune keeps them).",
       "  export --format json [--out file] [--attest]",
       "            Full JSON backup (same shape as GET /export) to stdout or a file: {\"notes\": [...]},",
-      "            as in every release before 1.4.0. --attest adds an `export` header (this server and",
+      "            the plain {\"notes\": [...]} shape older importers read. --attest adds an `export` header (this server and",
       "            its public key) and a signed attestation per note, for another server to verify.",
       "  import --file backup.json [--no-dedupe] [--json] [--require-attestation]",
       "            Restore a JSON backup (streamed, so big files are fine). Notes whose attestation verifies against a",
@@ -772,9 +772,9 @@ async function doctor(): Promise<void> {
   console.log(
     "\n" +
       (failures > 0
-        ? `Verdict: PROBLEM - ${failures} thing(s) must be fixed${warnings ? `, ${warnings} more worth a look` : ""}. Read the Fix lines above.`
+        ? `Verdict: PROBLEM - ${failures} thing(s) must be fixed${warnings ? `, ${warnings} more worth a look` : ""}. Read the [fail] and [warn] lines above.`
         : warnings > 0
-          ? `Verdict: works, but ${warnings} thing(s) are worth a look (see the Fix lines above).`
+          ? `Verdict: works, but ${warnings} thing(s) are worth a look (see the [warn] lines above).`
           : "Verdict: All good. Nothing needs fixing.")
   );
   if (failures > 0) process.exitCode = 1;
@@ -973,7 +973,7 @@ async function init(): Promise<void> {
   console.log("\nAll set.");
   console.log("  Try it:  in one app say \"remember that I like green tea\", then in another ask \"what do I like to drink?\"");
   console.log("  See it:  monomem open        (opens your notes in the browser)");
-  console.log("  Undo it: monomem setup --undo   (puts every app's settings back as they were)");
+  console.log("  Undo it: monomem uninstall reverses every app; monomem setup --undo reverses only the last one");
 }
 
 async function reindex(): Promise<void> {
@@ -1950,6 +1950,7 @@ async function exportCmd(): Promise<void> {
         chmodQuiet(outPath, 0o600); // mode only applies on create
         console.error(`Exported ${count} note(s) to ${outPath}`);
       }
+      (await import("./security.js")).audit({ op: "export", label: "cli", kind: "export", detail: `json notes=${count}${attest ? " attest" : ""}${ns ? " namespace" : ""}${outPath ? " file" : " stdout"}` });
       return;
     }
     if (format !== "md" || !str(flags.dir)) {
@@ -1968,6 +1969,7 @@ async function exportCmd(): Promise<void> {
     console.log(
       `Exported ${r.notes} note(s) to ${r.dir}: ${r.written} written, ${r.unchanged} unchanged, ${r.removed} removed.`
     );
+    (await import("./security.js")).audit({ op: "export", label: "cli", kind: "export", detail: `md notes=${r.notes}${flags.force === true ? " force" : ""}${str(flags.namespace) ? " namespace" : ""}` });
     for (const s of r.skipped ?? []) console.error(`skipped     ${s.file} — ${s.detail}`);
     if (r.skipped?.length) {
       console.error(
@@ -2734,7 +2736,7 @@ async function deleteCmd(): Promise<void> {
 // `monomem restore <backup folder | state.db>`: put a backup back as the live database (a number is a note id: that is the other restore).
 async function restoreBackupCmd(): Promise<void> {
   const { DB_PATH, API_PORT } = await import("./config.js");
-  const { inspectBackup, dbBusy, applyRestore, RestoreError } = await import("./restore.js");
+  const { inspectBackup, dbBusy, applyRestore, RestoreError, BUSY_MESSAGE } = await import("./restore.js");
   const args = process.argv.slice(3);
   const yes = args.includes("--yes");
   const target = args.find((a) => !a.startsWith("--"))!;
@@ -2743,15 +2745,17 @@ async function restoreBackupCmd(): Promise<void> {
     console.log(`Backup: ${plan.source}`);
     console.log(`  ${plan.notes} note(s), database version ${plan.schema}${plan.schema < (await import("./store.js")).SCHEMA_VERSION ? " (older; it is upgraded the next time Monomem opens it, and a .pre-vNN-backup copy is kept)" : ""}.`);
     if (plan.encrypted) console.log("  Its notes are encrypted: you also need the key that went with it (the .key file), or they cannot be read.");
-    let up = false;
-    try {
-      up = (await fetch(`http://127.0.0.1:${API_PORT}/health`, { signal: AbortSignal.timeout(1000) })).ok;
-    } catch {
-      up = false;
-    }
-    if (up || dbBusy(DB_PATH)) {
-      console.error("Monomem looks like it is running (or an app is using the database). Close Claude Code, Claude Desktop and any other app that uses Monomem, stop the server, then run this again. Nothing was changed.");
+    // Busy is judged by the database lock alone: a server on the port that has the file open holds the lock too.
+    if (dbBusy(DB_PATH)) {
+      console.error(BUSY_MESSAGE);
       process.exit(1);
+    }
+    try {
+      if ((await fetch(`http://127.0.0.1:${API_PORT}/health`, { signal: AbortSignal.timeout(1000) })).ok) {
+        console.log(`  (Something answers on port ${API_PORT} but does not have this database open; if it is a Monomem server for this store, restart it after the restore.)`);
+      }
+    } catch {
+      /* nothing on the port */
     }
     if (!yes) {
       console.log(`\nThis replaces ${DB_PATH}. Your current database is copied aside first (${DB_PATH}.before-restore-<time>).`);
@@ -2769,7 +2773,7 @@ async function restoreBackupCmd(): Promise<void> {
     }
     const r = applyRestore(plan, DB_PATH);
     console.log(`Restored ${plan.notes} note(s).`);
-    if (r.keptCurrentAt) console.log(`Your previous database is kept at ${r.keptCurrentAt}. To go back: monomem restore ${r.keptCurrentAt} --yes`);
+    if (r.keptCurrentAt) console.log(`Your previous database is kept at ${r.keptCurrentAt}. To go back: monomem restore "${r.keptCurrentAt}" --yes`);
     console.log("Start Monomem again, then run: monomem doctor");
   } catch (e) {
     if (e instanceof RestoreError) {
@@ -3111,6 +3115,11 @@ function askYesNo(prompt: string): Promise<boolean> {
   });
 }
 
+function printCommandHelp(cmd: string): void {
+  const h = helpFor(cmd);
+  console.log(h ? `monomem ${cmd}\n\n${h}\n\nAll commands: monomem help --all` : `monomem ${cmd}: no extra options. All commands: monomem help --all`);
+}
+
 /** The help lines for one command, taken from the full help (so there is one text to keep right). */
 function helpFor(cmd: string): string | null {
   const orig = console.log;
@@ -3125,7 +3134,9 @@ function helpFor(cmd: string): string | null {
   let on = false;
   for (const line of buf.split("\n")) {
     const head = /^ {2}(\S+)/.exec(line);
-    if (head) on = head[1].split("|").includes(cmd) || (cmd === "scrub" && head[1] === "purge-deleted");
+    // Every command word on a head line counts ("  show <id> | ls [--ns x] | edit <id> | forget <id>" is ls's line too).
+    const words = head ? [...line.matchAll(/(?:^ {2}|\| )([a-z-]+)/g)].map((m) => m[1]) : [];
+    if (head) on = head[1].split("|").includes(cmd) || words.includes(cmd) || (cmd === "scrub" && head[1] === "purge-deleted");
     else if (!/^ {6,}/.test(line)) on = false;
     if (on) out.push(line);
   }
@@ -3134,9 +3145,8 @@ function helpFor(cmd: string): string | null {
 
 async function main(): Promise<void> {
   const cmd = process.argv[2] || "start";
-  if ((process.argv.includes("--help") || process.argv.includes("-h")) && process.argv.indexOf(cmd) === 2 && COMMANDS.includes(cmd) && cmd !== "help" && cmd !== "hook" && cmd !== "trust") {
-    const h = helpFor(cmd);
-    console.log(h ? `monomem ${cmd}\n\n${h}\n\nAll commands: monomem help --all` : `monomem ${cmd}: no extra options. All commands: monomem help --all`);
+  if ((process.argv.includes("--help") || process.argv.includes("-h")) && process.argv.indexOf(cmd) === 2 && COMMANDS.includes(cmd) && !cmd.startsWith("-") && cmd !== "help" && cmd !== "trust") {
+    printCommandHelp(cmd);
     return;
   }
   // Old Node: say so in plain words BEFORE anything loads node:sqlite (which would crash with a stack trace).
@@ -3417,9 +3427,13 @@ async function main(): Promise<void> {
     }
     case "help":
     case "--help":
-    case "-h":
-      usage(process.argv.includes("--all") || process.argv[3] === "all");
+    case "-h": {
+      // `monomem help <cmd>` is the same as `monomem <cmd> --help`; an unknown word falls back to the general help.
+      const sub = process.argv[3];
+      if (sub && sub !== "all" && !sub.startsWith("-") && helpFor(sub)) printCommandHelp(sub);
+      else usage(process.argv.includes("--all") || sub === "all");
       break;
+    }
     default:
       console.error(`Unknown command '${cmd}'. Run 'monomem help' to see the commands.`);
       process.exit(1);

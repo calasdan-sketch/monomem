@@ -189,7 +189,7 @@ export async function runHook(eventArg: string, stdinText: string, opts: HookOpt
   }
   const event = (HOOK_EVENTS as readonly string[]).includes(eventArg) ? (eventArg as HookEvent) : null;
   if (!event) {
-    process.stderr.write(`monomem hook: unknown event "${eventArg}" (one of ${HOOK_EVENTS.join(", ")}); ignored\n`);
+    process.stderr.write(`monomem hook: unknown event "${eventArg}" (one of ${[...HOOK_EVENTS, "file-context"].join(", ")}); ignored\n`);
     return "";
   }
   const raw = parsePayload(stdinText);

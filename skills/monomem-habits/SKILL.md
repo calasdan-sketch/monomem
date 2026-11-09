@@ -9,7 +9,7 @@ description: >-
 
 # Memory habits
 
-1. **Search first.** Before answering about this project, the user's setup or an earlier decision, call `state_search` (or `state_relevant` with the question). Quote what you found and say where it came from.
+1. **Search first.** Before answering about this project, the user's setup or an earlier decision, call `state_search` (add mode: "relevant" to pass the whole question). Quote what you found and say where it came from.
 2. **Save what will matter next time.** A decision, a port, a fix, a preference. Short specific title, the fact in the body. Not a transcript.
 3. **Do not duplicate.** If a note on the same thing exists, update it. If it is wrong, replace it with `memory_supersede_preview` then `memory_supersede_confirm` (it can be undone).
 4. **Label private things.** Names, contact details, money, health, customer data: write with `sensitivity: "private"`. When unsure, choose private. Never lower a label yourself.

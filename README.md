@@ -41,7 +41,7 @@ git clone https://github.com/calasdan-sketch/monomem && cd monomem && cp .env.ex
 
 ```bash
 npx monomem setup
-npx monomem drill   # replays 20 known poisoning attacks on a copy of your store
+npx monomem drill   # replays 22 known poisoning attacks on a copy of your store
 ```
 
 `setup` finds Claude Code, Claude Desktop, Cursor, Codex, Gemini CLI, Muse, VS Code and Zed on this computer, shows you in plain words what it will do and the exact

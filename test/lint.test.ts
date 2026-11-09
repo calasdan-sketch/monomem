@@ -35,7 +35,9 @@ describe("secret detection (extended)", () => {
     ["private key block", j("-----BEGIN ENCRYPTED PRIVATE", " KEY-----")],
     ["private key block", j("-----BEGIN DSA PRIVATE", " KEY-----")],
     ["Slack token", j("xox", "e-", "1234567890-abcdef")],
-    ["high-entropy token", j("token: ", "Zx9QwT4LmB7kR2vN", "8pHs3JdF6yUc1aEo")],
+    ["high-entropy token", j("value: ", "Zx9QwT4LmB7kR2vN", "8pHs3JdF6yUc1aEo")],
+    // "token: <value>" itself is now a blocked assignment (expert round 1):
+    ["password or key written as plain text", j("token: ", "Zx9QwT4LmB7kR2vN", "8pHs3JdF6yUc1aEo")],
   ];
   for (const [label, text] of cases) {
     test(`detects ${label}`, () => assert.equal(scanForSecrets(text), label));
@@ -188,7 +190,7 @@ describe("linter hardening (r3)", () => {
   test("bare high-entropy token warns by default (stored), quarantines on entropy=quarantine", () => {
     setPolicy(undefined);
     const s = new Store(":memory:");
-    const tok = j("token: ", "Zx9QwT4LmB7kR2vN", "8pHs3JdF6yUc1aEo");
+    const tok = j("value: ", "Zx9QwT4LmB7kR2vN", "8pHs3JdF6yUc1aEo");
     const w: any[] = [];
     assert.ok(s.create({ title: "t", body: tok }, { lintWarnings: w }));
     assert.equal(w[0].category, "entropy");

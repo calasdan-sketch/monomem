@@ -216,8 +216,8 @@ describe("tag and text hygiene", () => {
     const n3 = s.read(s.create({ title: "three", body: "z" }, { writtenBy: "alice" }).id)!;
     const out = buildSummary([n1, n2, n3]);
     assert.equal(out.split("self-declared").length - 1, 1);
-    assert.match(out, /\[two\] \(written by stdio:claude\)/);
-    assert.match(out, /written by alice \(token\)/);
+    assert.match(out, /- stdio:claude: \[two\]/);
+    assert.match(out, /- alice \(token\): \[three\]/);
     s.close();
   });
 });

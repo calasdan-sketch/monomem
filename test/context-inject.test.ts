@@ -81,7 +81,7 @@ describe("session-start context", () => {
       assert.match(await injectContext(s, { signals: noGit, includeDistrusted: true }), /Hostile observation .*DISTRUSTED WRITER/);
       s.close();
       const ctx = ctxOf(await runRecall({ dbPath: db }));
-      assert.ok(ctx.startsWith(UNTRUSTED_BANNER));
+      assert.ok(ctx.startsWith(UNTRUSTED_BANNER.replace("SECURITY NOTICE:", `SECURITY NOTICE (block ${/block ([0-9a-f]{6})/.exec(ctx)?.[1]}):`)), ctx.slice(0, 120));
       assert.match(ctx, /Trusted fact/);
       assert.doesNotMatch(ctx, /Hostile/);
     } finally {

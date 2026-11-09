@@ -14,7 +14,7 @@ test("same store, same budget: as many notes as 1.2.1, short writer labels, one 
   const m = /Showing (\d+) of (\d+)/.exec(out)!;
   assert.ok(Number(m[1]) >= 57, `shows ${m[1]}, 1.2.1 showed 57`);
   assert.equal(out.split(WRITER_LEGEND).length, 2, "the writer explanation appears once");
-  assert.match(out, /\(\d{4}-\d{2}-\d{2} by (cli|stdio|laptop-claude-code|ci-bot), ~\d+ tok\)/);
+  assert.match(out, /^#\d+ by (cli|stdio|laptop-claude-code|ci-bot): \[note\] .* \(\d{4}-\d{2}-\d{2}, ~\d+ tok\)/m);
   assert.ok(!/ by cli \(/.test(out.split("Memory index")[1] ?? ""), "no long per-line writer explanation in index lines");
   s.close();
 });

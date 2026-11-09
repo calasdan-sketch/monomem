@@ -46,7 +46,7 @@ run on your computer with no limit, so use `connect` for any app that should not
 >
 > You can name individual tools instead of `all`:
 > `"MONOMEM_TOOLS": "memory_index,memory_timeline,memory_get,session_list"`.
-> The default ten are always kept, so a typo cannot leave you unable to read
+> The default nine are always kept, so a typo cannot leave you unable to read
 > or write. See [docs/configuration.md](./docs/configuration.md).
 >
 > Working from a git clone instead? `npm install && npm run build && npm link`

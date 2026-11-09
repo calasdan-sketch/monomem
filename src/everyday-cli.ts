@@ -122,8 +122,8 @@ export async function lsCmd(args: string[]): Promise<void> {
 export async function editCmd(args: string[]): Promise<void> {
   const id = Number(args.find((a) => !a.startsWith("--")));
   if (!Number.isInteger(id) || id < 1) fail("Usage: monomem edit <id>   (opens the note in $VISUAL or $EDITOR)");
-  const editor = process.env.VISUAL || process.env.EDITOR;
-  if (!editor) fail("No editor set. Set one first, for example in PowerShell: $env:EDITOR = 'notepad'");
+  // VISUAL, then EDITOR, then the editor every system has (notepad on Windows, vi elsewhere).
+  const editor = process.env.VISUAL || process.env.EDITOR || (process.platform === "win32" ? "notepad" : "vi");
   const { DB_PATH } = await import("./config.js");
   const { Store, ValidationError, QuarantinedError } = await import("./store.js");
   const store = new Store(DB_PATH);
@@ -133,8 +133,14 @@ export async function editCmd(args: string[]): Promise<void> {
     if (!n) fail(`No note #${id}.`);
     const file = join(dir, `note-${id}.md`);
     writeFileSync(file, `${n.title}\n\n${n.body}`, { mode: 0o600 });
-    const r = spawnSync(editor, [file], { stdio: "inherit", shell: true });
-    if (r.status !== 0) fail("The editor did not finish normally; nothing was changed.");
+    // One command string through the shell (the editor setting may carry its own arguments, like "code --wait"), with the
+    // file path double-quoted so a folder with a space in it stays one argument. No args array: that is what Node's
+    // DEP0190 warns about with shell: true. The path is our own temp file, so it holds no quote character.
+    const r = spawnSync(`${editor} "${file}"`, { stdio: "inherit", shell: true });
+    if (r.error || r.status !== 0) {
+      const hint = process.platform === "win32" ? "in PowerShell: $env:EDITOR = 'notepad'" : "for example: export EDITOR=nano";
+      fail(`The editor (${editor}) did not start or did not finish normally; nothing was changed. To pick another one, ${hint}`);
+    }
     const text = readFileSync(file, "utf8").replace(/\r\n/g, "\n");
     const cut = text.indexOf("\n");
     const title = (cut < 0 ? text : text.slice(0, cut)).trim();

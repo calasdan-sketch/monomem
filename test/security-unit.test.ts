@@ -124,12 +124,29 @@ describe("clientKey (rate-limit key / IP-spoofing defense)", () => {
     assert.equal(clientKey(req({ "cf-connecting-ip": "9.9.9.9" }, "10.0.0.5")), "9.9.9.9");
   });
 
-  test("trusts the first x-forwarded-for hop only when MONOMEM_TRUST_PROXY=1", () => {
+  test("trusts the rightmost x-forwarded-for entry (the one the proxy appended) only when MONOMEM_TRUST_PROXY=1", () => {
     process.env.MONOMEM_TRUST_PROXY = "1";
-    assert.equal(
-      clientKey(req({ "x-forwarded-for": "8.8.8.8, 7.7.7.7" }, "10.0.0.5")),
-      "8.8.8.8"
-    );
+    delete process.env.MONOMEM_TRUST_PROXY_HOPS;
+    assert.equal(clientKey(req({ "x-forwarded-for": "8.8.8.8, 7.7.7.7" }, "10.0.0.5")), "7.7.7.7");
+    // A client forging the leftmost entry does not get a fresh bucket per forged value.
+    const keys = new Set<string>();
+    for (let i = 0; i < 20; i++) keys.add(clientKey(req({ "x-forwarded-for": `10.0.0.${i}, 192.168.1.1` }, "10.0.0.5")));
+    assert.deepEqual([...keys], ["192.168.1.1"]);
+  });
+
+  test("MONOMEM_TRUST_PROXY_HOPS picks the Nth entry from the right; too few entries use the leftmost; invalid means 1", () => {
+    process.env.MONOMEM_TRUST_PROXY = "1";
+    try {
+      process.env.MONOMEM_TRUST_PROXY_HOPS = "2";
+      assert.equal(clientKey(req({ "x-forwarded-for": "6.6.6.6, 5.5.5.5, 4.4.4.4" }, "10.0.0.5")), "5.5.5.5");
+      assert.equal(clientKey(req({ "x-forwarded-for": "4.4.4.4" }, "10.0.0.5")), "4.4.4.4");
+      process.env.MONOMEM_TRUST_PROXY_HOPS = "0";
+      assert.equal(clientKey(req({ "x-forwarded-for": "6.6.6.6, 4.4.4.4" }, "10.0.0.5")), "4.4.4.4");
+      process.env.MONOMEM_TRUST_PROXY_HOPS = "abc";
+      assert.equal(clientKey(req({ "x-forwarded-for": "6.6.6.6, 4.4.4.4" }, "10.0.0.5")), "4.4.4.4");
+    } finally {
+      delete process.env.MONOMEM_TRUST_PROXY_HOPS;
+    }
   });
 });
 

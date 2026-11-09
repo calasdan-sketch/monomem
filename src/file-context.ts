@@ -1,6 +1,6 @@
 // `monomem hook file-context`: Claude Code's PreToolUse hook on Read. Just before the agent reads a file, tell it what
 // Monomem already knows about that file: the newest observations, summaries and notes linked to the path (note_files),
-// one compact index line each, so it can open the relevant ones with memory_get instead of re-learning them.
+// one compact index line each, so it can open the relevant ones (state_read, or memory_get when enabled) instead of re-learning them.
 //
 // ADVISORY ONLY: the output never carries a permissionDecision (no deny, no allow, no rewritten input), so the Read runs
 // exactly as it would without us, permission prompt included. Each file is announced once per session (file_context_seen);
@@ -68,12 +68,13 @@ async function fileContext(payload: Record<string, unknown>, opts: HookOptions):
     const claimed = store.captureDb().prepare("INSERT OR IGNORE INTO file_context_seen (session_id, path) VALUES (?, ?)").run(sessionId, rel).changes;
     if (Number(claimed) !== 1) return "";
     store.logAccess({ tool: "hook:file-context", namespaces: notes.map((n) => n.namespace), query: rel, results: notes.length });
-    const { indexLine } = await import("./context-inject.js");
+    const { indexLine, openToolName } = await import("./context-inject.js");
     const { UNTRUSTED_BANNER } = await import("./security.js");
     const text =
       `Monomem has earlier memory about ${rel} (advisory; read the file as usual):\n` +
       notes.map((n) => indexLine(n)).join("\n") +
-      `\nOpen any with memory_get ids=[${notes.map((n) => n.id).join(",")}]`;
+      // Name only a tool this install registers (memory_get is not in the default set); state_read takes one id.
+      (openToolName() === "memory_get" ? `\nOpen any with memory_get ids=[${notes.map((n) => n.id).join(",")}]` : `\nOpen any with state_read id=N (${notes.map((n) => n.id).join(", ")})`);
     return JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: UNTRUSTED_BANNER + text } });
   } finally {
     store.close();

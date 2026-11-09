@@ -6,6 +6,65 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- **Rate-limit key behind a proxy:** with `MONOMEM_TRUST_PROXY=1` the bucket is the rightmost `X-Forwarded-For` entry (the one your
+  proxy appended), not the leftmost one, which the client controls: a client could get a fresh bucket for every forged value.
+  `MONOMEM_TRUST_PROXY_HOPS=N` (default 1) picks the Nth entry from the right (the leftmost one if there are fewer). No change when
+  `MONOMEM_TRUST_PROXY` is unset.
+- **Secret guard:** refuses a note that contains one of this server's own access tokens verbatim (the main token and every
+  `tokens.json` / `MONOMEM_TOKENS` entry; the message never shows the value), so the snippet `POST /tokens` prints cannot be saved as a
+  note. Also refused now: `token` / `access_token` / `auth_token` / `bearer` written with a value of 16+ characters that has a digit
+  (`MONOMEM_TOKEN=<64 hex>`, `{"token":"..."}`), a literal `Authorization: Bearer <20+ chars>`, a password in a URL
+  (`postgres://user:pw@host`; placeholders such as `<password>` or `$PW` pass), Slack and Discord webhook URLs, Hugging Face `hf_`
+  tokens and Azure `AccountKey=` values. `token: <your token here>`, `Bearer $TOKEN`, `max_tokens: 4096` and `postgres://localhost/app`
+  still pass.
+- **Markdown exfiltration rule** also covers `<img src="https://host/p?x=...">` and reference-style images (`![x][ref]` with a
+  `[ref]: https://host/p?x=...` line). Badge hosts stay exempt; a reference used only by plain links still passes.
+- **Audit log:** making and removing an app token (`monomem token add|remove`, the dashboard, `POST /tokens`, `DELETE /tokens/<name>`)
+  writes `token.add` / `token.remove` with the caller's label and the new token's name, scope, namespace and limit (never the token).
+  `GET /export` and `monomem export` write `export` with the note count and flags.
+- **`POST /tokens`** with `admin: true` or `no_limit: true` now needs the main (`primary`) token; any other admin gets 403. The CLI is
+  unchanged.
+- A failed audit write still never fails a request, but it is no longer silent: it is counted (`audit_failures` in `GET /stats`), printed
+  to stderr on the first failure and every 1000th, and `monomem health` warns when the audit log cannot be written or this process
+  failed to write an entry.
+- **Session-start context:** each line starts with the server-stamped writer (`- webagent (token): [title] ...`, index lines
+  `#12 by webagent: [note] title (...)`), so a title can no longer print a fake "(written by cli)" ahead of the real writer; `[` and `]`
+  in a title print as `(` and `)`, and a title is one line. The opening notice and the closing "END OF STORED NOTES" line carry the same
+  random block id, new for each output, so a note that copies the old closing line does not match the real one. `monomem drill` checks
+  both (FORGE, TERM), so it now reports 22 attacks instead of 20.
+
+### Fixed
+
+- **`monomem restore`** works on a damaged database (it is moved aside as-is, with its `-wal` / `-shm`, instead of failing on the
+  checkpoint) and refuses while another program has the database open even when idle (it tests the database lock; it no longer refuses
+  just because something answers on the API port). A file another program holds gives the "close the apps" message, never a stack
+  trace, and no `.restore-*.tmp` is left behind. The "To go back" line quotes the path. The damaged-database message points to
+  `monomem restore <backup folder>`.
+- **Help:** `monomem --help` and `-h` print the same as `monomem help`; `monomem help <command>` is the same as `monomem <command> --help`;
+  `ls`, `edit`, `forget` and `unpin --help` show their own line; `monomem hook --help` prints help instead of running a hook; the unknown
+  hook event message lists `file-context`. `doctor`'s verdict points at the `[warn]` lines. INSTALL.md said ten default tools; there are
+  nine.
+- **Setup:** a `MONOMEM_HOME` that is not `~/.monomem` is written into every app entry setup or connect writes (as `MONOMEM_DB_PATH`
+  already was), and setup says so; before, the app used `~/.monomem`. Claude Code's start-of-session hook also runs after `/compact`
+  (matcher `startup|clear|compact`, in setup and the plugin's `hooks/hooks.json`); running setup again upgrades a `startup|clear` entry
+  it wrote earlier in place. Re-printing costs one more recall block per compaction. `init` says `monomem uninstall` reverses every app
+  and `setup --undo` only the last run.
+- **`monomem edit`:** a missing note is reported before anything else; with no `VISUAL` / `EDITOR` it opens `notepad` on Windows and
+  `vi` elsewhere; the file path is quoted, so a temp folder with a space works and Node prints no DEP0190 warning.
+- **Agent-facing text names only tools a default install has:** the file-context hook says `state_read id=N` unless `memory_get` is
+  enabled; the snippet and the habits skill say `state_search` (add mode: "relevant") instead of `state_relevant`; `catch_up`'s
+  description mentions `task_get`, `memory_since` and `memory_ack` only when they are enabled.
+
+### Changed
+
+- **MCP results are smaller.** `state_search` and `state_list` cut each note body to 600 characters (`body_truncated: true`,
+  `body_chars: N`); `state_read` is unchanged. MCP JSON is no longer indented (REST is unchanged). `state_write` returns the note without
+  its body. `memory_supersede_preview` returns one block (the JSON with `warning`, `token`, `expires_at`) instead of the warning twice.
+  Measured on 5 notes of 54,000 characters each (characters of tool output): `state_search` 273,089 to 5,548, `state_list` 272,805 to
+  5,384, `state_write` 54,979 to 852, `memory_supersede_preview` 5,685 to 3,595, `state_read` 54,893 to 54,783 (no indent only).
+
 ## [1.3.0] - 2026-11-08
 
 Not published yet. Upgrade notes: the first start migrates the database from schema v18 to v19 (one way: older builds refuse it) after

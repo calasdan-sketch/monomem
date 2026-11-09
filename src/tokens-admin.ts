@@ -7,6 +7,7 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { API_PORT, BIND_HOST, DATA_DIR, MCP_HTTP_PORT, resolveTokens, type Scope } from "./config.js";
+import { audit } from "./security.js";
 import { DEFAULT_SENSITIVITY, SENSITIVITY_HELP, parseSensitivity, type Sensitivity } from "./sensitivity.js";
 
 export class TokenAdminError extends Error {}
@@ -147,6 +148,8 @@ export interface AddOptions {
   admin?: boolean;
   /** Make a key with NO sensitivity limit (it can read private notes and change labels). Only for a caller that has none itself. */
   noLimit?: boolean;
+  /** Label of whoever asked (the REST caller's token label); "cli" when unset. Goes to the audit log, never the secret. */
+  by?: string;
 }
 
 export function addApp(o: AddOptions): { token: string; app: ListedApp; ceilingWasDefault: boolean } {
@@ -185,6 +188,7 @@ export function addApp(o: AddOptions): { token: string; app: ListedApp; ceilingW
   const token = newTokenValue();
   const entry: RawEntry = { token, scope, label, ...(ns ? { namespace: ns } : {}), ...(max !== undefined ? { max_sensitivity: max } : {}), created_at: new Date().toISOString() };
   writeRaw([...entries, entry]);
+  audit({ op: "token.add", label: o.by ?? "cli", kind: "token", detail: `${label} scope=${scope} ns=${ns ?? "-"} max=${max ?? "none"}` });
   return {
     token,
     ceilingWasDefault,
@@ -193,12 +197,13 @@ export function addApp(o: AddOptions): { token: string; app: ListedApp; ceilingW
   });
 }
 
-export function removeApp(label: string): boolean {
+export function removeApp(label: string, by = "cli"): boolean {
   return withLock(() => {
     const entries = readRaw();
     const keep = entries.filter((e) => (e.label ?? "").toLowerCase() !== label.trim().toLowerCase());
     if (keep.length === entries.length) return false;
     writeRaw(keep, { keepBackup: false });
+    audit({ op: "token.remove", label: by, kind: "token", detail: label.trim() });
     return true;
   });
 }

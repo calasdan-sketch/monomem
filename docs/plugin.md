@@ -14,7 +14,7 @@ Nothing is built or installed from the checkout: the plugin only contains config
 What it adds:
 
 - **MCP server** `monomem` (`.mcp.json`): `npx -y monomem@<version> mcp` with `MONOMEM_CLIENT=claude-code`, so writes are stamped `stdio:claude-code`.
-- **SessionStart hook** (`hooks/hooks.json`, events `startup|clear`, `timeout` 20 seconds): `npx -y monomem@<version> hook session-start`, which shows recent notes at the start of a session. It reads the session id Claude Code passes in, so receipts (`monomem receipts`) and the meter work; this is the same command `monomem setup --capture` writes for the start hook.
+- **SessionStart hook** (`hooks/hooks.json`, events `startup|clear|compact`, `timeout` 20 seconds): `npx -y monomem@<version> hook session-start`, which shows recent notes at the start of a session. It reads the session id Claude Code passes in, so receipts (`monomem receipts`) and the meter work; this is the same command `monomem setup --capture` writes for the start hook.
 - **Skills**: the root `SKILL.md` and `skills/monomem-mem/SKILL.md`, loaded from the repo, not copied. The second one needs `MONOMEM_TOOLS=all` on the server, which the plugin does not set.
 
 `claude plugin validate` passes on the plugin folder.

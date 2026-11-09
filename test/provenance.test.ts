@@ -491,7 +491,7 @@ describe("recall + banner text", () => {
       { ...base, id: 1, title: "A", written_by: "claude-desktop", source: "cursor" },
       { ...base, id: 2, title: "B", written_by: "" , source: "cursor" },
     ]);
-    assert.match(s, /- \[A\] \(written by claude-desktop \(token\), claims source="cursor"\): B/);
+    assert.match(s, /- claude-desktop \(token\), claims source="cursor": \[A\]: B/);
     assert.match(s, /- \[B\]: B/);
   });
   test("provenanceBanner is capped, one-line per entry and strips injected line breaks", () => {

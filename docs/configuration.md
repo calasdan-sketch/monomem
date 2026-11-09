@@ -57,6 +57,7 @@ All environment variables are optional. This table lists **every** `MONOMEM_*` v
 | `MONOMEM_PORT` | `8790` | HTTP API + dashboard port |
 | `MONOMEM_MCP_PORT` | `8791` | MCP-over-HTTP port (tunnel this one) |
 | `MONOMEM_TRUST_PROXY` | unset | Set to `1` only behind a trusted proxy that sets `x-forwarded-for`. It also lets requests that carry forwarding headers pass the host check without being listed in `MONOMEM_ALLOWED_HOSTS`; leave it unset unless a proxy you control is the only way to reach the port. |
+| `MONOMEM_TRUST_PROXY_HOPS` | `1` | With `MONOMEM_TRUST_PROXY=1`, how many trusted proxies sit in front: the rate-limit key is the Nth `x-forwarded-for` entry from the right (the leftmost one if there are fewer). Invalid or below 1 means 1. |
 | `MONOMEM_TRUST_CLOUDFLARE` | unset | Set to `1` behind Cloudflare so per-client rate limiting keys on `cf-connecting-ip` |
 | `MONOMEM_EMBEDDINGS` | unset (off) | `on` to enable optional semantic search; `auto` = use it when the embedding endpoint answers and stay keyword-only (silently, retrying once a minute) when it does not |
 | `MONOMEM_EMBED_URL` | `http://localhost:11434/v1/embeddings` | OpenAI-compatible embeddings endpoint |

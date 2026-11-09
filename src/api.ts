@@ -33,7 +33,7 @@ import {
   DEFAULT_NAMESPACE,
 } from "./store.js";
 import { truthyParam } from "./trust.js";
-import { originAllowed, hostAllowed, hostRefusal, RateLimiter, AuthTarpit, clientKey, tokenKey, authenticateEntry, scopeAllows, LIMITS, audit, printable } from "./security.js";
+import { originAllowed, hostAllowed, hostRefusal, RateLimiter, AuthTarpit, clientKey, tokenKey, authenticateEntry, scopeAllows, LIMITS, audit, auditFailureCount, printable } from "./security.js";
 import { type Scope, type TokenEntry, TIME_ZONE, PROJECT_ROOT, DATA_DIR, resolveToken } from "./config.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -693,6 +693,11 @@ export function createApiServer(
               sendJson(res, 400, { error: "send max_sensitivity or max, not two different values" });
               return;
             }
+            // An admin key or a key with no sensitivity limit is as strong as the main key: only the main key may make one here.
+            if ((b.admin === true || b.no_limit === true) && principal.label !== "primary") {
+              sendJson(res, 403, { error: "only the main (primary) token can make an administrator app or an app with no sensitivity limit over REST; use: monomem token add <name> --admin / --no-limit" });
+              return;
+            }
             const made = addApp({
               label: String(b.label ?? ""),
               ...(typeof b.scope === "string" ? { scope: b.scope } : {}),
@@ -701,6 +706,7 @@ export function createApiServer(
               admin: b.admin === true,
               // Only reachable here: this branch already requires a caller with no limit and no namespace pin.
               noLimit: b.no_limit === true,
+              by: principal.label || "(unnamed)",
             });
             // Take effect now, not at the next 2-second check (only this change is applied, nothing else is re-read).
             tokens.push({ token: made.token, scope: made.app.scope, label: made.app.label, ...(made.app.namespace ? { namespace: made.app.namespace } : {}), ...(made.app.max_sensitivity ? { max_sensitivity: made.app.max_sensitivity } : {}) });
@@ -720,7 +726,7 @@ export function createApiServer(
               sendJson(res, 400, { error: "the main token cannot be removed here; it is set outside Monomem (MONOMEM_TOKEN or the token file)" });
               return;
             }
-            if (!removeApp(label)) {
+            if (!removeApp(label, principal.label || "(unnamed)")) {
               sendJson(res, 404, { error: `no app called "${label}" in tokens.json (apps set in the environment cannot be removed here)` });
               return;
             }
@@ -1615,6 +1621,7 @@ export function createApiServer(
         }
         sendJson(res, 200, {
           ...store.accessStats(namespaces, { hideDistrusted: !isAdmin }),
+          audit_failures: auditFailureCount(),
           ...(currentCeiling() === undefined ? { meter: meterStats(store, namespaces) } : {}), // token totals are not split by label, so a ceilinged caller does not get them
           searchedNamespaces,
         });
@@ -2146,6 +2153,7 @@ export function createApiServer(
         }
         res.end("]}");
         store.logAccess({ tool: "GET /export", namespaces: exportNs, results: exported });
+        audit({ op: "export", label: principal.label || "(unnamed)", kind: "export", detail: `rest notes=${exported}${attest ? " attest" : ""}${skipUnreadable ? " skipUnreadable" : ""}${url.searchParams.get("history") === "0" ? " no-history" : ""}${exportNs ? ` namespaces=${exportNs.length}` : ""}` });
         return;
       }
 

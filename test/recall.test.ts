@@ -278,7 +278,7 @@ describe("recall: namespace isolation (regression)", () => {
       try {
         const ctx = contextOf(await runRecall({ dbPath: dbFile }));
         assert.ok(
-          ctx.startsWith(UNTRUSTED_BANNER),
+          ctx.startsWith(UNTRUSTED_BANNER.replace("SECURITY NOTICE:", `SECURITY NOTICE (block ${/block ([0-9a-f]{6})/.exec(ctx)?.[1]}):`)),
           `banner missing from hook output: ${ctx.slice(0, 120)}`
         );
         assert.ok(ctx.includes("Inject"));

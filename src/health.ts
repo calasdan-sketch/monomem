@@ -3,14 +3,14 @@
 // re-compute from the lines. The store is opened to count things (opening an older database file upgrades its schema once)
 // and drill works on a copy. The only thing health writes is one small row noting how long the audit log was.
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { accessSync, constants as fsc, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { BIND_HOST, DATA_DIR, DB_PATH } from "./config.js";
 import { runDrill, DRILL_SCOPE, type DrillReport } from "./drill.js";
 import { meterStats } from "./meter.js";
 import { cardBrand, cardFooter, esc, svgLines } from "./receipts.js";
-import { auditPath as defaultAuditPath, printable, verifyAuditChain } from "./security.js";
+import { auditFailureCount, auditPath as defaultAuditPath, printable, verifyAuditChain } from "./security.js";
 import { Store } from "./store.js";
 import { embeddingsConfig } from "./embeddings.js";
 import { acceptLegacyHeartbeats } from "./liveness.js";
@@ -307,6 +307,20 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
     } catch (e) {
       add("audit", "Audit chain", "warn", `could not read the audit log: ${(e as Error).message}`);
     }
+  }
+
+  // Audit writes never fail a request, so a log that cannot be written is otherwise silent. This checks it can be written
+  // now, and counts this process's failed entries (a running server reports its own count in GET /stats audit_failures).
+  {
+    const p = o.auditPath ?? defaultAuditPath();
+    let writable = true;
+    try {
+      accessSync(existsSync(p) ? p : dirname(p), fsc.W_OK);
+    } catch {
+      writable = existsSync(p) || existsSync(dirname(p)) ? false : true; // a folder that does not exist yet is made on the first write
+    }
+    const failed = auditFailureCount();
+    if (!writable || failed > 0) add("audit-write", "Audit writes", "warn", `${!writable ? `the audit log ${p} cannot be written, so operations go unrecorded` : ""}${!writable && failed ? "; " : ""}${failed ? `${failed} audit entr${failed === 1 ? "y" : "ies"} could not be written by this process` : ""}`);
   }
 
   if (dbOk) {

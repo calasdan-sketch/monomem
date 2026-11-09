@@ -282,7 +282,8 @@ describe("setup: making the change", () => {
     assert.equal(j.mcpServers.other.command, "npx");
     assert.equal(j.mcpServers.monomem.command, "/usr/local/bin/node");
     assert.equal(j.mcpServers.monomem.type, "stdio");
-    assert.deepEqual(j.mcpServers.monomem.env, { MONOMEM_CLIENT: "claude-code", MONOMEM_DB_PATH: s.db });
+    // The sandbox sets MONOMEM_HOME to a folder that is not ~/.monomem, so the entry carries it too (expert round 1).
+    assert.deepEqual(j.mcpServers.monomem.env, { MONOMEM_CLIENT: "claude-code", MONOMEM_DB_PATH: s.db, MONOMEM_HOME: resolve(join(s.root, "om-home")) });
     const b = listBackups(ccFile(s.home));
     assert.equal(b.length, 1);
     assert.equal(readFileSync(b[0], "utf8"), REAL_CLAUDE_JSON, "the backup is the original, byte for byte");

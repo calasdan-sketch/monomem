@@ -73,10 +73,33 @@ function textResult(payload: unknown) {
     content: [
       {
         type: "text" as const,
-        text: JSON.stringify(payload, null, 2),
+        text: JSON.stringify(payload),
       },
     ],
   };
+}
+
+/** Longest note body state_search / state_list return; state_read always returns the whole note. */
+export const LIST_BODY_CHARS = 600;
+const CUT_NOTE = `Long bodies are cut to ${LIST_BODY_CHARS} characters (body_truncated, body_chars); state_read id=N for the full text.`;
+/** The same payload with each note body in `results` / `notes` cut to LIST_BODY_CHARS (a host caps how much tool output it shows). */
+function cutBodies(payload: Record<string, unknown>): Record<string, unknown> {
+  const cut = (v: unknown): unknown =>
+    Array.isArray(v)
+      ? v.map((n) => {
+          const b = (n as { body?: unknown } | null)?.body;
+          return typeof b === "string" && b.length > LIST_BODY_CHARS ? { ...(n as object), body: b.slice(0, LIST_BODY_CHARS), body_truncated: true, body_chars: b.length } : n;
+        })
+      : v;
+  return { ...payload, ...("results" in payload ? { results: cut(payload.results) } : {}), ...("notes" in payload ? { notes: cut(payload.notes) } : {}) };
+}
+/** A written note as state_write returns it: everything but the body the caller just sent (state_read has it). */
+function noBody<T extends { body?: unknown }>(n: T): Omit<T, "body"> {
+  const { body: _body, ...rest } = n;
+  return rest;
+}
+function untrustedResultCut(payload: Record<string, unknown>) {
+  return untrustedResult(cutBodies(payload));
 }
 
 // Injection-on-read guard: the banner lives in security.ts as the single
@@ -89,7 +112,7 @@ function untrustedResult(payload: unknown) {
     content: [
       {
         type: "text" as const,
-        text: UNTRUSTED_BANNER + JSON.stringify(payload, null, 2),
+        text: UNTRUSTED_BANNER + JSON.stringify(payload),
       },
       // A second block, so the first stays "banner + JSON" for every client.
       ...(who ? [{ type: "text" as const, text: who }] : []),
@@ -349,6 +372,8 @@ export function createMcpServer(
   const enabled =
     opts.tools === "all" ? null : opts.tools ? new Set(opts.tools) : enabledToolNames();
   const localGuard = conn.local === true && !stdioAdminToolsAllowed();
+  /** Whether a tool is offered on this server: descriptions name only tools the model was actually given. */
+  const has = (name: string): boolean => !enabled || enabled.has(name);
   const registerRaw = server.registerTool.bind(server) as (...a: unknown[]) => unknown;
   (server as unknown as { registerTool: (...a: unknown[]) => unknown }).registerTool = (name: unknown, cfg: unknown, handler: unknown) => {
     // Every registered tool's name and description is sent to the model on
@@ -484,7 +509,7 @@ export function createMcpServer(
     {
       title: "Write shared state",
       description:
-        "Create a new note in the shared cross-surface state store, or update an existing one if `id` is given. Returns the resulting note." +
+        "Create a new note in the shared cross-surface state store, or update an existing one if `id` is given. Returns the resulting note without its body (state_read id=N has it)." +
         " When the note records a decision or setting, also pass `facts`: other agents then read the exact value, and a disagreement is caught." +
         (nsActive
           ? " SERVER-RESOLVED NAMESPACE: this server writes to its own namespace; no `namespace` parameter is accepted."
@@ -593,7 +618,7 @@ export function createMcpServer(
           await maybeEmbed(store, updated);
           // A partial update echoes back the merged note, which can include a
           // pre-existing body planted by someone else -- wrap it as untrusted.
-          return untrustedResult(withConflicts(withWarnings({ note: updated }, warnings), store, updated, facts));
+          return untrustedResult(withConflicts(withWarnings({ note: noBody(updated) }, warnings), store, updated, facts));
         }
         if (!title || !title.trim()) {
           return errorResult("title is required when creating a new note");
@@ -609,7 +634,7 @@ export function createMcpServer(
         );
         await maybeEmbed(store, created);
         const sim = store.similarNote(created.id);
-        return untrustedResult(withConflicts(withWarnings({ note: created, ...(sim ? { similar_note: { id: sim.id, title: sim.title, hint: `looks similar to #${sim.id} - consider updating it (state_write with id=${sim.id}) if this is the same thing` } } : {}) }, warnings), store, created, facts));
+        return untrustedResult(withConflicts(withWarnings({ note: noBody(created), ...(sim ? { similar_note: { id: sim.id, title: sim.title, hint: `looks similar to #${sim.id} - consider updating it (state_write with id=${sim.id}) if this is the same thing` } } : {}) }, warnings), store, created, facts));
       } catch (e) {
         if (e instanceof QuarantinedError) return quarantinedResult(e);
         return errorFor(e);
@@ -682,7 +707,7 @@ export function createMcpServer(
     {
       title: "Search shared state",
       description:
-        "Search notes in the shared state store by title/body/tags. Keyword (full-text) by default; set mode to 'semantic' or 'hybrid' for meaning-based search when embeddings are enabled (falls back to keyword otherwise). Set mode to 'relevant' and pass a natural conversational message as `query` to extract keywords from it and return notes matching ANY of them (default limit 5; returns the extracted keywords too). Always reflects the latest writes." +
+        "Search notes in the shared state store by title/body/tags. Keyword (full-text) by default; set mode to 'semantic' or 'hybrid' for meaning-based search when embeddings are enabled (falls back to keyword otherwise). Set mode to 'relevant' and pass a natural conversational message as `query` to extract keywords from it and return notes matching ANY of them (default limit 5; returns the extracted keywords too). Always reflects the latest writes. " + CUT_NOTE +
         (nsActive
           ? " The `namespace` parameter is an untrusted hint: only namespaces this server may read are searched."
           : ""),
@@ -748,7 +773,7 @@ export function createMcpServer(
           const spaces = nsActive ? (hint ? [hint] : readable()) : hint ? [hint] : undefined;
           const view = asOfView(store, at, { ...(spaces ? { namespaces: spaces } : {}), ...(include_distrusted === true ? { includeDistrusted: true } : {}) });
           const hits = asOfSearch(view, query, clampInt(limit, 20, 1, 200));
-          return untrustedResult({
+          return untrustedResultCut({
             as_of: at.toISOString(),
             note: "Reconstructed from note history; hard-deleted notes cannot be shown.",
             not_kept: view.notKept,
@@ -761,7 +786,7 @@ export function createMcpServer(
           if (when !== undefined || explain !== undefined || include_superseded !== undefined) {
             return errorResult("when, explain and include_superseded do not apply to mode 'relevant'");
           }
-          return await relevantTool({ message: query, limit, namespace, written_by, not_written_by, include_distrusted });
+          return await relevantTool({ message: query, limit, namespace, written_by, not_written_by, include_distrusted, cut: true });
         }
         const denied = denyIfUnder("read");
         if (denied) return errorResult(denied);
@@ -779,7 +804,7 @@ export function createMcpServer(
           : undefined;
         const resolvedMode = mode ?? parseMode(undefined);
         const semNotice = semanticNotice(mode);
-        const untrustedResultN = (p: Record<string, unknown>) => untrustedResult(semNotice ? { ...p, notice: semNotice } : p);
+        const untrustedResultN = (p: Record<string, unknown>) => untrustedResultCut(semNotice ? { ...p, notice: semNotice } : p);
         const wf = { ...writerFilterArgs(written_by, not_written_by, include_distrusted), ...supersededArg(include_superseded) };
         if (explain === true && currentCeiling() === undefined) {
           // Explained twin of the branches below: same namespace gating, the
@@ -896,6 +921,7 @@ export function createMcpServer(
     written_by,
     not_written_by,
     include_distrusted,
+    cut = false,
   }: {
     message: string;
     limit?: number;
@@ -903,7 +929,10 @@ export function createMcpServer(
     written_by?: string;
     not_written_by?: string;
     include_distrusted?: boolean;
+    /** Cut long bodies (state_search mode "relevant"); state_relevant keeps them whole as before. */
+    cut?: boolean;
   }) {
+    const out$ = cut ? untrustedResultCut : untrustedResult;
     try {
       const denied = denyIfUnder("read");
       if (denied) return errorResult(denied);
@@ -934,16 +963,16 @@ export function createMcpServer(
             limit: effLimit,
             ...writerFilterArgs(written_by, not_written_by, include_distrusted),
           });
-          return untrustedResult({ ...withStaleness(out), searchedNamespaces: [hint] });
+          return out$({ ...withStaleness(out), searchedNamespaces: [hint] });
         }
         const out = await relevantReadable(message, { limit: effLimit, ...writerFilterArgs(written_by, not_written_by, include_distrusted) });
-        return untrustedResult({
+        return out$({
           ...withStaleness(out),
           searchedNamespaces: out.searchedNamespaces,
         });
       }
       const out = await runRelevantSearch(store, message, { namespace, limit: effLimit, ...writerFilterArgs(written_by, not_written_by, include_distrusted) });
-      return untrustedResult({
+      return out$({
         ...withStaleness(out),
         searchedNamespaces: namespace ? [namespace] : [],
       });
@@ -957,7 +986,7 @@ export function createMcpServer(
     {
       title: "List shared state",
       description:
-        "List the notes in memory, newest first. Optionally only one namespace (a named space)." +
+        "List the notes in memory, newest first. Optionally only one namespace (a named space). " + CUT_NOTE +
         (nsActive
           ? " The `namespace` parameter is an untrusted hint: only namespaces this server may read are listed."
           : ""),
@@ -985,18 +1014,18 @@ export function createMcpServer(
           // Untrusted hint intersected with the readable set, like search.
           const hint = trustedHint(namespace);
           if (hint) {
-            return untrustedResult({
+            return untrustedResultCut({
               ...store.list({ namespace: hint, limit, offset, ...wf }),
               searchedNamespaces: [hint],
             });
           }
-          return untrustedResult({
+          return untrustedResultCut({
             ...listReadable(limit, offset, wf),
             searchedNamespaces: readable(),
           });
         }
         const result = store.list({ namespace, limit, offset, ...wf });
-        return untrustedResult({
+        return untrustedResultCut({
           ...result,
           searchedNamespaces: namespace ? [namespace] : [],
         });
@@ -1789,11 +1818,11 @@ export function createMcpServer(
       // Not readOnlyHint: it advances this consumer's marker (unless ack_mode is manual).
       description:
         "One call to learn where things stand: what changed since THIS consumer last called (titles only; the " +
-        "marker then advances), the open tasks (compact: title, status, owner, next step -- task_get for the rest), " +
+        `marker then advances), the open tasks (compact: title, status, owner, next step${has("task_get") ? " -- task_get for the rest" : ""}), ` +
         "and the latest handoffs. Call it first in a new session, passing " +
         'a stable `consumer` label for this device/model (e.g. "phone", "claude-code-pc"). The first call for a ' +
         "label covers the last 24h. If your client may die before it has handled the result, pass " +
-        '`ack_mode:"manual"`: the marker then moves only when you send the returned `ack_token` back (next catch_up, memory_since or memory_ack).' +
+        `\`ack_mode:"manual"\`: the marker then moves only when you send the returned \`ack_token\` back (${["memory_since", "memory_ack"].filter(has).length ? `next catch_up, ${["memory_since", "memory_ack"].filter(has).join(" or ")}` : "on your next catch_up"}).` +
         (nsActive ? " The `namespace` parameter is an untrusted hint: only readable namespaces are included." : ""),
       inputSchema: {
         consumer: z.string().optional().describe('Label for the "last" marker (default "default").'),
@@ -2028,7 +2057,7 @@ export function createMcpServer(
       title: "Step 1 of replacing a memory: show what would be lost",
       annotations: { readOnlyHint: true },
       description:
-        "STEP 1 of replacing one or more notes with a newer one. This changes NOTHING. It returns a plain-language warning " +
+        "STEP 1 of replacing one or more notes with a newer one. This changes NOTHING. It returns JSON whose `warning` field is a plain-language warning " +
         "('Are you sure you want to replace this?') that says exactly which notes would stop appearing in search, what they say, who wrote " +
         "them, how many notes are similar to them, and what is NOT lost (nothing is deleted; the old note is kept and can be brought back). " +
         "It also returns a one-time confirmation `token` (good for a few minutes, once, only for you). " +
@@ -2052,12 +2081,8 @@ export function createMcpServer(
           { old_ids: a.old_ids, new_note: newNoteFrom(a), new_id: a.new_id },
           "To go ahead, ONLY after the person says yes: call memory_supersede_confirm with this code: {token}"
         );
-        return {
-          content: [
-            { type: "text" as const, text: out.warning },
-            { type: "text" as const, text: UNTRUSTED_BANNER + JSON.stringify(out, null, 2) },
-          ],
-        };
+        // One block: the warning is inside the JSON ({ok, token, expires, warning}); a second plain copy of it doubled the size.
+        return { content: [{ type: "text" as const, text: UNTRUSTED_BANNER + JSON.stringify(out) }] };
       } catch (e) {
         return supersedeFailure(e);
       }
