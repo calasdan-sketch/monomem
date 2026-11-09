@@ -8,6 +8,25 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`setup` deleted notes it had not written.** Its test-note step also deleted every note tagged `setup-check` that an earlier
+  installer had left (for example a pinned "OneMemory is connected" note #1). On a store where that note was pinned, the delete was
+  refused and setup stopped with "the database could not be opened". Setup now deletes only the one test note it wrote in the same
+  run, by its id; older installer notes are left as they are (not deleted, archived or unpinned) and named in one line with how to
+  archive them yourself (`monomem forget <id>`). The plan line no longer claims "your store is left empty".
+- **Claude Desktop from the Microsoft Store (MSIX) was not found.** Its config lives at
+  `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\claude_desktop_config.json`. Setup now looks there too (beside the
+  usual `%APPDATA%\Claude` file), shows it as "Claude Desktop (Microsoft Store)", and treats a `monomem` entry in it like any other
+  app's (labelled, pinned to the data folder, backup and undo as usual). Only checked against a simulated folder layout, not a
+  real Store install.
+- **Codex: an old `[mcp_servers.onememory]` table got a second server beside it.** It is now replaced by `[mcp_servers.monomem]`
+  with the same data settings (`ONEMEMORY_*` env renamed to `MONOMEM_*`), with a backup and `setup --undo` restoring the exact bytes.
+  An inline `onememory = { ... }`, or an `onememory` table beside an existing `monomem` one, is not edited: setup says what to remove.
+- **The merge hint for two stores that both hold notes pointed the wrong way.** It said to import the old entry's store into the
+  `monomem` one whatever their sizes, so a 3-note store could be told to absorb an 800-note one. It now names both stores with their
+  note counts, keeps the larger one as the main data and imports the smaller one into it, and says to delete the smaller one's entry.
+- **The `claude-bridge` import hint named the wrong database** when a database was pinned in the shell (`MONOMEM_DB_PATH` or `--db`):
+  it showed the pinned store and its count instead of claude-bridge's own. It now names claude-bridge's own database.
+
 - **`setup` on an upgrade from OneMemory kept pointing apps at an empty store.** When the notes are in `~/.onememory/state.db`
   and there is no `~/.monomem/state.db` (the folder the server already falls back to), setup planned the migrated entry on the empty
   `~/.monomem` and judged the old entry by that empty folder. It now uses the same rule as the server (one shared function), says so

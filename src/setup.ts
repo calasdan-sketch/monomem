@@ -142,6 +142,20 @@ export function detectClients(e: SetupEnv): ClientTarget[] {
   else if (e.platform === "darwin") desk = join(e.home, "Library", "Application Support", "Claude", "claude_desktop_config.json");
   else desk = join(xdgConfig(e), "Claude", "claude_desktop_config.json");
   out.push({ id: "claude-desktop", label: "Claude Desktop", file: desk, exists: existsSync(desk), present: existsSync(desk) || existsSync(dirname(desk)) });
+  // Claude Desktop from the Microsoft Store (MSIX) reads its config from its package's virtualised AppData instead.
+  if (e.platform === "win32") {
+    const pkgs = join(e.env.LOCALAPPDATA?.trim() || join(e.home, "AppData", "Local"), "Packages");
+    let names: string[] = [];
+    try {
+      names = readdirSync(pkgs).filter((n) => n.startsWith("Claude_"));
+    } catch {
+      /* no Packages folder */
+    }
+    for (const n of names) {
+      const f = join(pkgs, n, "LocalCache", "Roaming", "Claude", "claude_desktop_config.json");
+      if (existsSync(f) || existsSync(dirname(f))) out.push({ id: "claude-desktop", label: "Claude Desktop (Microsoft Store)", file: f, exists: existsSync(f), present: true });
+    }
+  }
   const cur = join(e.home, ".cursor", "mcp.json");
   out.push({ id: "cursor", label: "Cursor", file: cur, exists: existsSync(cur), present: existsSync(cur) || existsSync(dirname(cur)) });
   const add = (id: ClientId, label: string, file: string, dir = dirname(file)): void => void out.push({ id, label, file, exists: existsSync(file), present: existsSync(file) || existsSync(dir) });
@@ -339,15 +353,21 @@ function pickLegacyKeepers(
   const replace = new Map<Found, { old: Found; line: string; ask: string }>();
   const at = (s: { path: string[] }): string => s.path.join("\u0000");
   const dbOf = (entry: Record<string, unknown>): string => resolve(opts.db ?? migrateEntry(e, opts, entry, withType).db ?? join(opts.home ?? runtimeHome(e), "state.db"));
-  const merge = (from: string, into: string, entryName: string): string =>
-    `To keep both sets: copy ${from} first, then  monomem export --format json --out other.json  with MONOMEM_DB_PATH=<the copy>, then  monomem import --file other.json  with MONOMEM_DB_PATH=${into}; then delete the "${entryName}" entry from ${target.file} and run monomem setup again`;
+  // The larger store stays the main data; the smaller one is imported into it (fewer notes moved, less to go wrong).
+  type Side = { db: string; notes: number; name: string };
+  const merge = (a: Side, b: Side): string => {
+    const [big, small] = a.notes >= b.notes ? [a, b] : [b, a];
+    return `To keep both sets, keep the larger store as your main data: ${big.db} ("${big.name}", ${big.notes} notes), and import the smaller one into it: ${small.db} ("${small.name}", ${small.notes} notes). Copy ${small.db} first, then  monomem export --format json --out other.json  with MONOMEM_DB_PATH=<the copy>, then  monomem import --file other.json  with MONOMEM_DB_PATH=${big.db}; then delete the "${small.name}" entry from ${target.file} and run monomem setup again`;
+  };
   const groups = new Map<string, Array<{ s: Found; db: string; notes: number; bridgeDb: boolean }>>();
   for (const s of servers) {
     const entry = safeParseEntry(base, s);
     if (!entry || classifyEntry(s.name, entry) !== "legacy") continue;
-    const db = dbOf(entry);
+    // A claude-bridge entry with its own database is judged (and named in the hint) by THAT database, never by --db.
+    const own = isBridge(s.name, entry) ? migrateEntry(e, opts, entry, withType).db : null;
+    const db = own !== null ? resolve(own) : dbOf(entry);
     const list = groups.get(at(s)) ?? [];
-    list.push({ s, db, notes: noteCount(db), bridgeDb: isBridge(s.name, entry) && migrateEntry(e, opts, entry, withType).db !== null });
+    list.push({ s, db, notes: noteCount(db), bridgeDb: own !== null });
     groups.set(at(s), list);
   }
   for (const all of groups.values()) {
@@ -370,7 +390,7 @@ function pickLegacyKeepers(
       if (!full.length) continue; // same data, or the old one is empty: the usual "remove the old entry" (asked first)
       const x = full[0];
       if (mNotes > 0 || full.length > 1) {
-        return { drop, aside, replace, conflict: `${target.label}: "monomem" (${mDb}, ${mNotes} notes) and "${x.s.name}" (${x.db}, ${x.notes} notes)${where} both hold notes, so I did not change ${target.file}. ${merge(x.db, mDb, x.s.name)}` };
+        return { drop, aside, replace, conflict: `${target.label}: "monomem" (${mDb}, ${mNotes} notes) and "${x.s.name}" (${x.db}, ${x.notes} notes)${where} both hold notes, so I did not change ${target.file}. ${merge({ db: x.db, notes: x.notes, name: x.s.name }, { db: mDb, notes: mNotes, name: mono.name })}` };
       }
       replace.set(x.s, {
         old: mono,
@@ -384,7 +404,7 @@ function pickLegacyKeepers(
     const withNotes = [...new Set(list.filter((x) => x.notes > 0).map((x) => x.db))];
     if (withNotes.length > 1) {
       const names = list.map((x) => `"${x.s.name}" (${x.db}, ${x.notes} notes)`).join(" and ");
-      return { drop, aside, replace, skip: `${target.label}: ${names} both hold notes, so I did not change ${target.file}. ${merge(withNotes[1], withNotes[0], list.find((x) => x.db === withNotes[1])!.s.name)}` };
+      return { drop, aside, replace, skip: `${target.label}: ${names} both hold notes, so I did not change ${target.file}. ${merge(...withNotes.slice(0, 2).map((db) => { const x = list.find((y) => y.db === db)!; return { db, notes: x.notes, name: x.s.name }; }) as [Side, Side])}` };
     }
     const keep = list.find((x) => x.notes > 0) ?? list.find((x) => x.s.name === "claude-bridge") ?? list[0];
     for (const x of list) {
@@ -666,6 +686,40 @@ function tomlString(text: string, k: string): string | undefined {
   }
 }
 
+/**
+ * A Codex server table ([mcp_servers.x] plus its [mcp_servers.x.env], or an inline `env = { ... }`) as an entry: command,
+ * args, env and other plain `key = "string" | number | bool` settings. Enough to migrate it; undo restores the exact
+ * bytes from the backup.
+ */
+function readTomlEntry(block: string): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const env: Record<string, string> = {};
+  const strings = (s: string): string[] => [...s.matchAll(/"((?:[^"\\]|\\.)*)"|'([^']*)'/g)].map((m) => (m[2] !== undefined ? m[2] : (JSON.parse(`"${m[1]}"`) as string)));
+  let inEnv = false;
+  for (const raw of block.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    if (line.startsWith("[")) {
+      inEnv = /\.\s*"?env"?\s*\]$/.test(line);
+      continue;
+    }
+    const kv = /^"?([A-Za-z0-9_-]+)"?\s*=\s*(.*)$/.exec(line);
+    if (!kv) continue;
+    const [, k, v] = kv;
+    if (inEnv) {
+      const s = strings(v);
+      if (s.length) env[k] = s[0];
+    } else if (k === "args") out.args = strings(v.replace(/#.*$/, ""));
+    else if (k === "env") {
+      for (const m of v.matchAll(/"?([A-Za-z0-9_]+)"?\s*=\s*("(?:[^"\\]|\\.)*"|'[^']*')/g)) env[m[1]] = strings(m[2])[0];
+    } else if (/^["']/.test(v)) out[k] = strings(v)[0];
+    else if (/^(true|false)\b/.test(v)) out[k] = v.startsWith("true");
+    else if (/^-?\d+(\.\d+)?\b/.test(v)) out[k] = Number(/^-?\d+(\.\d+)?/.exec(v)![0]);
+  }
+  if (Object.keys(env).length) out.env = env;
+  return out;
+}
+
 /** The plan line for adding env keys to an existing entry. */
 function envLine(name: string, where: string, add: Record<string, string>, app: string): string {
   const parts: string[] = [];
@@ -708,6 +762,35 @@ function planToml(e: SetupEnv, opts: SetupOptions, target: ClientTarget, text: s
       warnings: [],
     };
   }
+  // The package's previous name: [mcp_servers.onememory] becomes [mcp_servers.monomem] with the same data, not a second server.
+  const oldTable = text !== null ? findTable(text, ["mcp_servers", "onememory"]) : null;
+  if (text !== null && hasServer(text, "onememory") && !oldTable) {
+    return { change: null, already: [], conflicts: [], warnings: [`${target.label}: the old "onememory" server is written inline, so I did not change ${target.file}. Rewrite it as an [mcp_servers.onememory] table (or delete it), then run monomem setup again`] };
+  }
+  if (text !== null && oldTable) {
+    const old = readTomlEntry(text.slice(oldTable.start, oldTable.end));
+    const m = migrateEntry(e, opts, old, false);
+    m.entry.env = { MONOMEM_CLIENT: target.id, ...(m.entry.env ?? {}), ...(opts.db ? { MONOMEM_DB_PATH: opts.db } : {}), ...(opts.home ? { MONOMEM_HOME: opts.home } : {}) };
+    const dbToCheck = opts.db ?? m.db;
+    if (dbToCheck) shared.dbs.add(dbToCheck);
+    const where = m.db ? `your data stays where it is (${m.db})` : m.entry.env.MONOMEM_HOME ? `data folder ${m.entry.env.MONOMEM_HOME}` : `standard data location (${runtimeHome(e)})`;
+    return {
+      change: {
+        client: target.id,
+        label: target.label,
+        file: target.file,
+        before: text,
+        ops: [{ op: "remove", path: ["mcp_servers"], key: "onememory" }, { op: "set", path: ["mcp_servers"], key: "monomem", value: m.entry }],
+        lines: [`replace the old "onememory" server with "monomem"; ${where}`, ...m.notes.map((n) => "note: " + n)],
+        inverse: [{ op: "remove", path: ["mcp_servers"], key: "monomem" }, { op: "set", path: ["mcp_servers"], key: "onememory", value: old }],
+        allowEmpty: opts.forceEmpty,
+        format: "toml",
+      },
+      already: [],
+      conflicts: [],
+      warnings: [],
+    };
+  }
   const entry = buildServerEntry(e, opts, { MONOMEM_CLIENT: target.id, ...(opts.db ? { MONOMEM_DB_PATH: opts.db } : {}), ...(opts.home ? { MONOMEM_HOME: opts.home } : {}) });
   if (opts.db) shared.dbs.add(opts.db);
   const ops: Op[] = [{ op: "set", path: ["mcp_servers"], key: "monomem", value: entry }];
@@ -718,7 +801,11 @@ function planToml(e: SetupEnv, opts: SetupOptions, target: ClientTarget, text: s
 export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, shared: SharedPlan): { change: FileChange | null; already: string[]; conflicts: string[]; warnings: string[] } {
   const text = readTextFile(target.file);
   if (text === "" && !opts.forceEmpty) return { change: null, already: [], conflicts: [EMPTY_FILE_MSG(target.file)], warnings: [] };
-  if (target.id === "codex") return planToml(e, opts, target, text, shared);
+  if (target.id === "codex") {
+    const r = planToml(e, opts, target, text, shared);
+    if (text && hasServer(text, "monomem") && hasServer(text, "onememory")) r.warnings.push(`${target.label}: the old "onememory" server is still there beside "monomem". If both use the same notes, delete the [mcp_servers.onememory] table (and its env table) from ${target.file}`);
+    return r;
+  }
   const base = text ?? "";
   const key = serversKey(target.id, base);
   const already: string[] = [];
@@ -1676,7 +1763,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   let n = 1;
   for (const c of plan.changes) for (const l of c.lines) io.out(`  ${l.startsWith("note:") ? "   " : `${n++}. ${c.label}: `}${l}`);
   for (const d of dbs) io.out(`  ${n++}. Database ${d}: ${describeSchema(Store.peekSchemaVersion(d), SCHEMA_VERSION)}`);
-  if (!opts.noTestNote) io.out(`  ${n++}. Write a test note, read it back and delete it, so you know writing, reading and deleting all work (your store is left empty)`);
+  if (!opts.noTestNote) io.out(`  ${n++}. Write a test note, read it back and delete it, so you know writing, reading and deleting all work (only that one note is deleted; no other note is touched)`);
   io.out(`  ${n++}. Run \`monomem doctor\` and tell you how to check the connection in your assistant`);
   for (const a of plan.already) io.out(`  (already fine) ${a}`);
   for (const w of plan.warnings) io.out(`  (careful) ${w}`);
@@ -1754,14 +1841,10 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
         const s = new Store(d);
         try {
           if (!opts.noTestNote) {
-            // An install from before 2.1.0 still holds the note setup used to
-            // leave behind. Clear it, or every existing user keeps the
-            // installer's note about the installer for good and never gets the
-            // cleaned-up behaviour -- the earlier fix only helped new stores.
-            const old = s.list({ limit: 50, withTags: ["setup-check"] });
-            let removed = 0;
-            for (const n of old.notes) if (s.delete(n.id)) removed++;
-            if (removed) io.out(`Database ${d}: removed ${removed} leftover test note${removed === 1 ? "" : "s"} from an earlier install — your store is yours now.`);
+            // A note an earlier installer left behind is the person's now (they may have pinned it): setup only ever
+            // deletes the one note it writes below, by its id. The old ones are named, never touched.
+            const old = s.list({ limit: 50, withTags: ["setup-check"] }).notes;
+            if (old.length) io.out(`Database ${d}: an earlier installer left ${old.map((n) => `#${n.id} "${n.title}"`).join(", ")}; I left ${old.length === 1 ? "it" : "them"} as ${old.length === 1 ? "it is" : "they are"} (archive with  monomem forget <id>  if you do not want ${old.length === 1 ? "it" : "them"}).`);
             {
               const note = s.create({
                 title: "Monomem is connected",
