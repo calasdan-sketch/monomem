@@ -491,8 +491,8 @@ describe("recall + banner text", () => {
       { ...base, id: 1, title: "A", written_by: "claude-desktop", source: "cursor" },
       { ...base, id: 2, title: "B", written_by: "" , source: "cursor" },
     ]);
-    assert.match(s, /- claude-desktop \(token\), claims source="cursor": \[A\]: B/);
-    assert.match(s, /- \[B\]: B/);
+    assert.match(s, /#1 claude-desktop \(token\), claims source="cursor": \[A\]: B/);
+    assert.match(s, /#2 \[B\]$/m); // a body that only repeats the title is not printed twice
   });
   test("provenanceBanner is capped, one-line per entry and strips injected line breaks", () => {
     const many = Array.from({ length: 60 }, (_, i) => ({ id: i + 1, written_by: "w", source: "s" }));

@@ -145,7 +145,7 @@ test("3. monomem edit deletes its temp copy when the editor fails", () => {
   const t = tmp("om-r2-edit-tmp-");
   assert.equal(cli(home, ["add", "edit me", "--title", "Edit me"]).status, 0);
   const id = (JSON.parse(cli(home, ["ls", "--json"]).stdout) as Array<{ id: number }>)[0].id;
-  const r = cli(home, ["edit", String(id)], { EDITOR: `"${process.execPath}" -e "process.exit(2)"`, VISUAL: "", TMP: t, TEMP: t, TMPDIR: t });
+  const r = cli(home, ["edit", String(id), "--editor"], { EDITOR: `"${process.execPath}" -e "process.exit(2)"`, VISUAL: "", TMP: t, TEMP: t, TMPDIR: t });
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /did not start or did not finish normally/);
   assert.deepEqual(readdirSync(t).filter((f) => f.startsWith("monomem-edit-")), []);
@@ -226,7 +226,7 @@ describe("6. session-start recall", () => {
     try {
       for (let i = 0; i < 3; i++) s.create({ title: `deploy note ${i}`, body: "how we deploy" });
       const text = await withEnv({ MONOMEM_TOOLS: undefined }, () => injectContext(s, { signals: {} }));
-      assert.match(text, /Open any with state_read id=N \(/);
+      assert.match(text, /Open any with state_read id=N$/);
       const client = await mcp(s);
       const r = toolJson(await client.callTool({ name: "state_read", arguments: { ids: [1] } }));
       assert.equal((r.note as { id: number }).id, 1);

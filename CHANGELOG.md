@@ -37,8 +37,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Names a terminal could misprint are refused:** a namespace or tag with a control, line-separator or text-direction character
   (anything `printable()` would replace) is refused on every write path (notes, tasks, handoffs: `Store.create` / `update`), as is
-  a namespace over 100 characters and the namespace `*`. A restore or `import --file` still brings such rows in as they were; for
-  rows already stored, `monomem audit`, `ls`, `show`, `search` and the other note listings print namespace, label and tags through
+  a namespace over 100 characters and the namespace `*`. Imports (`import --file` and admin `POST /import`) apply the same rule:
+  each such row is listed in the report's `rejected` with the reason and the rest of the file is imported. A database-file restore
+  (`monomem restore <backup>`) copies the file as it is. For rows already stored, `monomem audit`, `ls`, `show`, `search` and the other note listings print namespace, label and tags through
   `printable()`. JSON responses (and the `/export` stream) carry `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`.
 - **Two app tokens with the same name are refused.** Tokens whose labels match after cleaning (letter case and spacing aside; two
   unnamed tokens count too) would stamp the same `written_by`, so both stop working and the server says so on stderr (doctor and
@@ -49,6 +50,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   only); another writer posting to it gets 409, so it cannot add events or end the session with its own summary.
 - **Session-start notes:** the opening notice now says that the closing line carries the same block id. The drill's TERM check now
   uses a note that knows this output's block id and checks that no printed line equals the real closing line.
+- **Backdating needs admin:** `POST /notes` with `created_at` from a non-admin key gets 400 (nothing is stored). Admin keys, imports
+  and consolidation may still set it, but a `created_at` more than 5 minutes in the future is refused (an import lists that row in
+  `rejected`).
+- **A forget date on someone else's note needs admin:** a non-admin key may set a non-zero `forget_after` only on a note whose
+  `written_by` is its own; otherwise the update is refused with the same "lacks the required 'admin' scope" message `state_delete`
+  gives. This applies in every namespace. The CLI, stdio and admin keys are not limited. `forget_after: 0` stays allowed.
+- **Expiry sweep audit:** `sweep-expire` is written once per archived note (its id, namespace and the note's last writer as
+  `last written by <name>`; who set the deadline is not stored), instead of one line with a count.
+- **Strict ids in MCP tools:** an id is accepted as a number or a digit-only string (`"5"`). `true`, `null`, `""` and `[5]` are
+  validation errors; before, they became 1, 0, 0 and 5, so `state_delete {"id": true}` archived note 1.
 
 ### Fixed
 
@@ -96,8 +107,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   then cannot tell rotation from removal). `monomem backup` leaves health's remembered line out of the copy and `monomem restore`
   clears it. The audit-write check counts only this process's failed audit entries (a running server reports its own in
   `GET /stats` `audit_failures`); it now has a test.
-- **Session-start notes:** the closing hint says `Open any with state_read id=N (...)` (as the file-context hook does) unless
-  `memory_get` is enabled; it used to name `state_read ids=[...]`, a parameter `state_read` did not take. A second recall for the same
+- **Session-start notes:** the closing hint says `Open any with state_read id=N` (as the file-context hook does) unless
+  `memory_get` is enabled (`Open any with memory_get ids=[N]`); it used to name `state_read ids=[...]`, a parameter `state_read` did not take. A second recall for the same
   session (after `/compact` or `/clear`) no longer adds to the meter's "saved" estimate again; the injection itself is still counted.
 - **Audit lines only for committed writes:** a write inside a transaction that is rolled back (a failing batch, for example) leaves no
   audit line; lines from a transaction are written when it commits.
@@ -110,8 +121,48 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   health's drill line reads "20 of 22 known attacks blocked; the 2 that get through are known limits"; doctor's no-edges warning names
   imports and restores, which skip linking. README: a line about `npx monomem demo`, and the benchmark is "above" the honest numbers;
   `demo` is in the short help.
+- **`MONOMEM_HOME` / `ONEMEMORY_HOME`:** set but blank is an error (`MONOMEM_HOME is set but empty; set it to a folder or unset it`,
+  naming the variable that is blank) instead of silently falling back; one pair of surrounding quotes is removed; a value that still
+  holds `%NAME%`, `$NAME` or `${NAME}` is an error that says to write the full path (an app's config file does not expand variables).
+- **First-run token:** the `.token` file is created with `wx`, so several processes starting at once all use the one value written
+  first (before, two could each write their own value, and the one whose write landed first then held a key the file no longer had).
+- **Hard delete and the WAL:** after `Store.delete` (and `purgeHistory`) Monomem runs a non-waiting `PRAGMA wal_checkpoint(TRUNCATE)`,
+  so the deleted text does not stay in `state.db-wal`; `PRAGMA journal_size_limit = 4194304` caps the WAL left after a checkpoint.
+  If another app's open read keeps part of the log, `monomem delete` says the text can stay in `state.db-wal` until every app
+  disconnects.
+- **The stdio server closes the store when the app closes the pipe** (stdin end/close) and on SIGHUP, not only on SIGINT/SIGTERM, so
+  buffered read counts are written. Its hourly sweep now also prunes the change log, so the 90-day limit in the README holds for
+  stdio-only installs. `monomem start` also stops cleanly on SIGHUP.
+- **Stale or outdated app entries:** setup rewrites a Monomem entry whose absolute command or `cli.js` no longer exists, or whose npx
+  pin (`monomem@X.Y.Z`) is another version, and says why ("points at C:\nope\cli.js, which no longer exists", "launches monomem 1.2.0,
+  this is 1.3.0") instead of "already fine"; an old npx-pinned start-of-session hook is rewritten too. Codex's TOML entry gets a
+  by-hand instruction instead (not rewritten). `monomem doctor` prints a `[warn]` per stale entry and per hook file with an
+  npx-pinned hook of another version (setup rewrites only the start-of-session one; the capture hooks are reported, not rewritten),
+  and `monomem health` counts them as one warning. The data-folder comparison expands `~` and ignores
+  letter case on Windows. Health finds Claude Code by `~/.claude.json` or `~/.claude` (as setup does); with only the config file it
+  says to run `monomem setup --hook`. With a database that exists but is damaged, the drill and audit lines say so instead of "no
+  database".
+- **Archived notes explain themselves to agents:** `state_read`, `state_write` and `state_delete` on an archived (not replaced) note
+  in a namespace the caller can read say `note N is archived (hidden, not erased); a person can restore it with monomem restore N; ...`;
+  other namespaces still get `no note with id N`. `monomem ls --archived` lists archived notes with the `restore <id>` command for each.
+- **Search results with no notes carry no SECURITY NOTICE banner** (there is no stored text in them); any result with a note keeps it.
 
 ### Changed
+
+- **`state_read` with several `ids`** reads up to 10 through the same checks as one id and returns `{notes, missing}` (and `archived`
+  for archived ones); `max_chars` is shared by all bodies; ids past 10 come back in `ignored_ids` with a hint.
+- **MCP tools report arguments they do not have** as `ignored_arguments` with a hint (and a did-you-mean for `text`, `content`, `note`
+  (body), `ns`, `namespaces` (namespace), `q`, `search` (query), `tag` (tags)); these names are not accepted. `state_write` with no
+  title or body but such an argument holding text is refused (`a new note needs a title or a body (you sent \`text\`; use \`body\`)`);
+  `state_search` with an ignored `namespaces` says the search was not limited to a namespace.
+- **Session-start lines start with `#<id>`**, a body that begins with its own title does not print the title again, and the footer no
+  longer lists the ids.
+- **`monomem edit <id> -`** reads the new text from a pipe (first line the title, the rest the body), with the same "changed meanwhile"
+  check. Without a terminal and without `-`, `edit` exits at once with that hint instead of starting an editor; `--editor` starts
+  `$VISUAL` / `$EDITOR` anyway.
+- **Import yield:** a longer pause between import batches (110 ms) was tried in round 2 and rejected: a write from another process
+  during a 10,000-note import already finished in about 0.5 s with the `setImmediate` gap, and the pause added about 2.5 s per 10,000
+  notes. `setImmediate` is kept.
 
 - **MCP results are smaller.** `state_search` and `state_list` cut each note body to 600 characters (`body_truncated: true`,
   `body_chars: N`); `state_read` is unchanged. MCP JSON is no longer indented (REST is unchanged). `state_write` returns the note without
@@ -123,7 +174,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   comma-separated string, fact values as numbers or true/false, and `facts` as a JSON string; every limit (10 facts, 80-character
   values, tag counts) still applies after. `state_write` creating a note with no title takes the body's first line (about 60
   characters, cut at a word) and says so in `title_generated`; no title and no body is still an error. `state_read` also takes `ids`
-  (the first one is read) and returns at most `max_chars` (default 40,000) of the body, from `offset`, with `body_truncated`,
+  (one id reads like `id`; several: see below) and returns at most `max_chars` (default 40,000) of the body, from `offset`, with `body_truncated`,
   `body_chars` and `next_offset` when there is more (round 1 said `state_read` is never cut; that is no longer true above 40,000).
 - **`catch_up`, `memory_since` and `memory_ack` with no `consumer`** use this connection's own writer name (the token label, or
   `stdio:<app>` written as `stdio_<app>`), so two apps on one store each keep their own "last" marker; before, they shared

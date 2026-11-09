@@ -6,7 +6,7 @@ import "./quiet-sqlite.js"; // first: hide the node:sqlite ExperimentalWarning
 import "./legacy-env.js"; // second: read the old CLAUDE_BRIDGE_* variables as MONOMEM_*
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { Store } from "./store.js";
-import { createMcpServer } from "./mcp-server-core.js";
+import { createMcpServer, stdioSweep } from "./mcp-server-core.js";
 import { DB_PATH, prepareDataDir } from "./config.js";
 import { resolveStartupNamespace } from "./namespace.js";
 import { setProcessWriter, stdioWriter } from "./actor.js";
@@ -28,16 +28,10 @@ try {
   process.exit(1);
 }
 // Most people never run the HTTP server (which sweeps hourly), so expired notes are archived here too:
-// at startup and then hourly, idempotent, and a failure never stops the MCP server.
-const sweepExpired = (): void => {
-  try {
-    store.sweepExpired();
-  } catch (e) {
-    process.stderr.write(`[monomem] expiry sweep failed: ${(e as Error).message}\n`);
-  }
-};
-sweepExpired();
-setInterval(sweepExpired, 3_600_000).unref();
+// at startup and then hourly, idempotent, and a failure never stops the MCP server. The change log is pruned here too.
+const sweep = (): void => stdioSweep(store);
+sweep();
+setInterval(sweep, 3_600_000).unref();
 // Server-side namespace resolution: resolved ONCE at startup from the
 // process working directory. Null when unconfigured (legacy behavior).
 const nsOpts = resolveStartupNamespace(process.cwd());
@@ -110,9 +104,17 @@ if (nsOpts) {
   console.error(`[monomem] namespace resolution ACTIVE: namespace="${nsOpts.namespace}"`);
 }
 
+// The app closing its end of the pipe is the normal way a stdio server ends: close the store then too (buffered read
+// counts are written), not only on a signal. Runs once.
+let closed = false;
 function shutdown(): void {
+  if (closed) return;
+  closed = true;
   store.close();
   process.exit(0);
 }
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
+process.on("SIGHUP", shutdown);
+process.stdin.on("end", shutdown);
+process.stdin.on("close", shutdown);

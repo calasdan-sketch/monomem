@@ -71,7 +71,7 @@ export const RENDER_ATTACKS: Array<{ id: string; title: string; blocked: () => b
       const line = buildSummary([n]).split("\n")[1] ?? "";
       const idx = indexLine(n);
       const realFirst = (l: string, mark: string): boolean => l.indexOf(mark) >= 0 && (l.indexOf("written by cli") < 0 || l.indexOf(mark) < l.indexOf("written by cli"));
-      return line.startsWith("- webagent") && realFirst(line, "webagent") && idx.startsWith("#7 by webagent:") && !/\[Deploy\]/.test(line + idx);
+      return line.startsWith("#7 webagent") && realFirst(line, "webagent") && idx.startsWith("#7 by webagent:") && !/\[Deploy\]/.test(line + idx);
     },
   },
   {

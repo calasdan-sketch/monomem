@@ -229,6 +229,8 @@ export interface HealthOpts {
   auditPath?: string;
   now?: Date;
   drill?: typeof runDrill;
+  /** Where the app configs are looked for (tests); default the real home folder. */
+  setupEnv?: import("./setup.js").SetupEnv;
 }
 
 export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
@@ -293,12 +295,28 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
   } else add("database", "Database", "info", `no database yet at ${dbPath}: nothing is stored, and it is created on first use (monomem setup)`);
   if (dbOk) add("database", "Database", "ok", `database opens (${plural(notes, "note")})`);
 
+  // A database file that exists but did not open cleanly is damaged, not missing: the later lines say which.
+  const dbDamaged = !dbOk && existsSync(dbPath);
   const settingsPath = o.settingsPath ?? join(homedir(), ".claude", "settings.json");
+  // Claude Code is here when either its config file (~/.claude.json) or its folder (~/.claude) exists, as setup decides.
+  const claudeJson = join(dirname(dirname(settingsPath)), ".claude.json");
   if (hookWired(settingsPath)) add("hooks", "Hooks", "ok", "SessionStart hook wired in ~/.claude/settings.json");
   else if (pluginInstalled(o.pluginsPath ?? join(homedir(), ".claude", "plugins", "installed_plugins.json"), settingsPath)) add("hooks", "Hooks", "ok", "the monomem Claude Code plugin is installed (its SessionStart hook comes with it)");
-  else if (!existsSync(dirname(settingsPath))) add("hooks", "Hooks", "info", "Claude Code does not seem to be installed here (no ~/.claude folder), so there is no Claude Code hook to check");
+  else if (!existsSync(dirname(settingsPath)) && existsSync(claudeJson)) add("hooks", "Hooks", "info", "Claude Code is connected but has no hooks folder yet; run monomem setup --hook");
+  else if (!existsSync(dirname(settingsPath))) add("hooks", "Hooks", "info", "Claude Code does not seem to be installed here (no ~/.claude folder or ~/.claude.json), so there is no Claude Code hook to check");
   else if (existsSync(join(o.dataDir ?? DATA_DIR, HOOKS_DECLINED_FILE))) add("hooks", "Hooks", "info", "you chose no Claude Code hook when you ran setup, so Claude Code gets no memory at session start (run monomem setup --hook to add it)");
   else add("hooks", "Hooks", "info", "optional: no monomem SessionStart hook in ~/.claude/settings.json and no monomem plugin in Claude Code's plugin list, so Claude Code does not get your notes at session start (add it with monomem setup --hook)");
+
+  // App entries / hooks that point at a removed install or launch another version: one warning however many there are.
+  try {
+    const { appEntryProblems, realEnv } = await import("./setup.js");
+    const { PACKAGE_VERSION } = await import("./config.js");
+    const { fileURLToPath } = await import("node:url");
+    const probs = appEntryProblems(o.setupEnv ?? realEnv(PACKAGE_VERSION, fileURLToPath(new URL("./cli.js", import.meta.url))));
+    if (probs.length) add("apps", "App connections", "warn", `${probs.join("; ")}: run monomem setup`);
+  } catch {
+    /* configs could not be inspected */
+  }
 
   const sec = await securityFindings(o.dataDir ?? DATA_DIR, o.bindHost ?? BIND_HOST);
   if (sec.length) for (const f of sec) add(`security:${f.id}`, f.label, f.status, `${f.short} (monomem doctor has the detail)`);
@@ -312,7 +330,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
     } catch (e) {
       add("drill", "Drill", "warn", `could not run: ${(e as Error).message}`);
     }
-  } else add("drill", "Drill", "info", "not run: there is no database to replay the attacks against yet");
+  } else add("drill", "Drill", "info", dbDamaged ? "not run: the database is damaged (see the Database line)" : "not run: there is no database to replay the attacks against yet");
 
   if (dbOk) {
     // Exposure: reasons the notes are more reachable than the labels suggest. One check, so it costs at most one grade step however many reasons it lists.
@@ -349,7 +367,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
   else {
     try {
       const a = verifyAuditChain(o.auditPath);
-      add("audit", "Audit chain", a.breaks > 0 ? "fail" : "info", a.breaks > 0 ? `${plural(a.breaks, "break")} (first at line ${a.brokenLine}): a log line was edited or removed` : a.lines === 0 ? "no audit log yet" : `${plural(a.lines, "line")}, no breaks (no database, so the log length was not recorded)`);
+      add("audit", "Audit chain", a.breaks > 0 ? "fail" : "info", a.breaks > 0 ? `${plural(a.breaks, "break")} (first at line ${a.brokenLine}): a log line was edited or removed` : a.lines === 0 ? "no audit log yet" : `${plural(a.lines, "line")}, no breaks (${dbDamaged ? "the database is damaged, so the log length was not checked" : "no database, so the log length was not recorded"})`);
     } catch (e) {
       add("audit", "Audit chain", "warn", `could not read the audit log: ${(e as Error).message}`);
     }

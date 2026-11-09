@@ -54,12 +54,12 @@ describe("setup names each app (MONOMEM_CLIENT)", () => {
     const s = sandbox();
     const file = join(s.e.home, ".cursor", "mcp.json");
     mkdirSync(dirname(file), { recursive: true });
-    const old = JSON.stringify({ mcpServers: { monomem: { command: "npx", args: ["-y", "monomem@1.1.0", "mcp"], env: { MONOMEM_DB_PATH: s.db } } } }, null, 2) + "\n";
+    const old = JSON.stringify({ mcpServers: { monomem: { command: "npx", args: ["-y", "monomem@2.0.0", "mcp"], env: { MONOMEM_DB_PATH: s.db } } } }, null, 2) + "\n";
     writeFileSync(file, old);
     assert.equal(await runSetup(s.e, io(), opts(s, { only: ["cursor"] })), 0);
     const j = parseJsonc(readFileSync(file, "utf8")) as { mcpServers: { monomem: { env: Record<string, string>; args: string[] } } };
     assert.deepEqual(j.mcpServers.monomem.env, { MONOMEM_DB_PATH: s.db, MONOMEM_CLIENT: "cursor" });
-    assert.deepEqual(j.mcpServers.monomem.args, ["-y", "monomem@1.1.0", "mcp"], "nothing else about the entry changes");
+    assert.deepEqual(j.mcpServers.monomem.args, ["-y", "monomem@2.0.0", "mcp"], "nothing else about the entry changes");
     const once = readFileSync(file, "utf8");
     assert.equal(await runSetup(s.e, io(), opts(s, { only: ["cursor"] })), 0);
     assert.equal(readFileSync(file, "utf8"), once);
@@ -86,7 +86,7 @@ describe("setup names each app (MONOMEM_CLIENT)", () => {
     const s = sandbox();
     const file = join(s.e.home, ".codex", "config.toml");
     mkdirSync(dirname(file), { recursive: true });
-    const old = '[mcp_servers.monomem]\ncommand = "npx"\nargs = ["-y", "monomem@1.1.0", "mcp"]\n';
+    const old = '[mcp_servers.monomem]\ncommand = "npx"\nargs = ["-y", "monomem@2.0.0", "mcp"]\n';
     writeFileSync(file, old);
     assert.equal(await runSetup(s.e, io(), opts(s, { only: ["codex"] })), 0);
     const once = readFileSync(file, "utf8");

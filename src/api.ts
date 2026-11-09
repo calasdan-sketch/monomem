@@ -767,6 +767,11 @@ export function createApiServer(
           sendJson(res, 400, { error: "title is required" });
           return;
         }
+        // A backdate rewrites history: only an admin key (restores use POST /import, also admin) may set it.
+        if (parsed.created_at !== undefined && !isAdmin) {
+          sendJson(res, 400, { error: "created_at needs the 'admin' scope; leave it out and the note is dated now" });
+          return;
+        }
         if (parsed.forget_after !== undefined) parsed.forget_after = coerceNumeric(parsed.forget_after) as number;
         if (parsed.confidence !== undefined) parsed.confidence = coerceNumeric(parsed.confidence) as number;
         try {

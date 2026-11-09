@@ -66,13 +66,13 @@ describe("everyday commands", () => {
       run(dir, ["add", "old body", "--title", "Old title"]);
       const ed = join(dir, "ed.js");
       writeFileSync(ed, 'const fs=require("fs");const f=process.argv[2];fs.writeFileSync(f,"New title\\n\\nnew body");');
-      const r = run(dir, ["edit", "1"], undefined, { EDITOR: `"${process.execPath}" "${ed}"` });
+      const r = run(dir, ["edit", "1", "--editor"], undefined, { EDITOR: `"${process.execPath}" "${ed}"` });
       assert.equal(r.status, 0, r.stderr);
       assert.match(r.stdout, /Saved #1 \(version 2\)/);
       assert.match(run(dir, ["show", "1"]).stdout, /new body/);
       const same = join(dir, "same.js");
       writeFileSync(same, "");
-      const n = run(dir, ["edit", "1"], undefined, { EDITOR: `"${process.execPath}" "${same}"` });
+      const n = run(dir, ["edit", "1", "--editor"], undefined, { EDITOR: `"${process.execPath}" "${same}"` });
       assert.match(n.stdout, /No changes/);
       const missing = run(dir, ["edit", "999"], undefined, { EDITOR: "", VISUAL: "" });
       assert.equal(missing.status, 1);
@@ -89,7 +89,7 @@ describe("everyday commands", () => {
       const rec = join(dir, "argv.json");
       const ed = join(dir, "rec ed.js");
       writeFileSync(ed, `require("fs").writeFileSync(${JSON.stringify(rec)}, JSON.stringify(process.argv.slice(2)));`);
-      const r = run(dir, ["edit", "1"], undefined, { EDITOR: `"${process.execPath}" "${ed}"`, TMP: dir, TEMP: dir, TMPDIR: dir });
+      const r = run(dir, ["edit", "1", "--editor"], undefined, { EDITOR: `"${process.execPath}" "${ed}"`, TMP: dir, TEMP: dir, TMPDIR: dir });
       assert.equal(r.status, 0, r.stderr);
       assert.doesNotMatch(r.stderr, /DEP0190/);
       const argv = JSON.parse(readFileSync(rec, "utf8")) as string[];

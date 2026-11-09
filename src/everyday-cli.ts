@@ -100,8 +100,8 @@ export async function showCmd(args: string[]): Promise<void> {
 }
 
 export async function lsCmd(args: string[]): Promise<void> {
-  const { flags, bad } = parseArgs(args, ["ns", "namespace", "limit"], ["json"]);
-  if (bad) fail(`${bad}\nUsage: monomem ls [--ns x] [--limit 20] [--json]`);
+  const { flags, bad } = parseArgs(args, ["ns", "namespace", "limit"], ["json", "archived"]);
+  if (bad) fail(`${bad}\nUsage: monomem ls [--ns x] [--limit 20] [--archived] [--json]`);
   const limit = flags.limit === undefined ? 20 : Number(flags.limit);
   if (!Number.isInteger(limit) || limit < 1) fail("--limit must be a whole number, 1 or more.");
   const ns = (flags.ns ?? flags.namespace) as string | undefined;
@@ -110,8 +110,14 @@ export async function lsCmd(args: string[]): Promise<void> {
   const { printable } = await import("./security.js");
   const store = new Store(DB_PATH);
   try {
-    const notes = store.list({ ...(ns ? { namespace: ns } : {}), limit }).notes;
+    const archived = flags.archived === true;
+    const notes = store.list({ ...(ns ? { namespace: ns } : {}), limit, ...(archived ? { archivedOnly: true } : {}) }).notes;
     if (flags.json) return void console.log(JSON.stringify(notes.map((n) => ({ id: n.id, namespace: n.namespace, title: n.title, updated_at: n.updated_at, sensitivity: n.sensitivity ?? "internal" })), null, 2));
+    if (archived) {
+      if (!notes.length) return void console.log(`No archived notes${ns ? ` in namespace "${printable(ns, 100)}"` : ""}.`);
+      for (const n of notes) console.log(`#${n.id} [${printable(n.namespace, 100)}] ${printable(n.title, 70)}   (bring back: monomem restore ${n.id})`);
+      return;
+    }
     if (!notes.length && ns) {
       const used = store.rebuildPlan().map((r) => printable(r.namespace, 100));
       return void console.log(`No notes in namespace "${printable(ns, 100)}". ${used.length ? `Namespaces in use: ${used.slice(0, 30).join(", ")}${used.length > 30 ? ", ..." : ""}` : "There are no notes in any namespace yet."}`);
@@ -124,8 +130,11 @@ export async function lsCmd(args: string[]): Promise<void> {
 }
 
 export async function editCmd(args: string[]): Promise<void> {
-  const id = Number(args.find((a) => !a.startsWith("--")));
-  if (!Number.isInteger(id) || id < 1) fail("Usage: monomem edit <id>   (opens the note in $VISUAL or $EDITOR)");
+  const id = Number(args.find((a) => !a.startsWith("--") && a !== "-"));
+  if (!Number.isInteger(id) || id < 1) {
+    fail("Usage: monomem edit <id>     (opens the note in $VISUAL or $EDITOR)\n       monomem edit <id> -   (reads the new text from a pipe: first line the title, the rest the body)");
+  }
+  const piped = args.includes("-");
   // VISUAL, then EDITOR, then the editor every system has (notepad on Windows, vi elsewhere).
   const editor = process.env.VISUAL || process.env.EDITOR || (process.platform === "win32" ? "notepad" : "vi");
   const { DB_PATH } = await import("./config.js");
@@ -140,17 +149,26 @@ export async function editCmd(args: string[]): Promise<void> {
   try {
     const n = store.readVisible(id, { includeDistrusted: true });
     if (!n) return stop(`No note #${id}.`);
-    const file = join(dir, `note-${id}.md`);
-    writeFileSync(file, `${n.title}\n\n${n.body}`, { mode: 0o600 });
-    // One command string through the shell (the editor setting may carry its own arguments, like "code --wait"), with the
-    // file path double-quoted so a folder with a space in it stays one argument. No args array: that is what Node's
-    // DEP0190 warns about with shell: true. The path is our own temp file, so it holds no quote character.
-    const r = spawnSync(`${editor} "${file}"`, { stdio: "inherit", shell: true });
-    if (r.error || r.status !== 0) {
-      const hint = process.platform === "win32" ? "in PowerShell: $env:EDITOR = 'notepad'" : "for example: export EDITOR=nano";
-      return stop(`The editor (${editor}) did not start or did not finish normally; nothing was changed. To pick another one, ${hint}`);
+    // No terminal to show an editor in (a script, an agent, a pipe): never launch one and hang.
+    // --editor forces one anyway (a window editor such as "code --wait" started from a script).
+    if (!piped && !args.includes("--editor") && (!process.stdin.isTTY || !process.stdout.isTTY)) {
+      return stop(`No terminal for an editor here. Pipe the new text in instead: monomem edit ${id} -   (first line the title, the rest the body), or add --editor to open $VISUAL/$EDITOR anyway`);
     }
-    const text = readFileSync(file, "utf8").replace(/\r\n/g, "\n");
+    let text: string;
+    if (piped) text = readStdin().replace(/\r\n/g, "\n");
+    else {
+      const file = join(dir, `note-${id}.md`);
+      writeFileSync(file, `${n.title}\n\n${n.body}`, { mode: 0o600 });
+      // One command string through the shell (the editor setting may carry its own arguments, like "code --wait"), with the
+      // file path double-quoted so a folder with a space in it stays one argument. No args array: that is what Node's
+      // DEP0190 warns about with shell: true. The path is our own temp file, so it holds no quote character.
+      const r = spawnSync(`${editor} "${file}"`, { stdio: "inherit", shell: true });
+      if (r.error || r.status !== 0) {
+        const hint = process.platform === "win32" ? "in PowerShell: $env:EDITOR = 'notepad'" : "for example: export EDITOR=nano";
+        return stop(`The editor (${editor}) did not start or did not finish normally; nothing was changed. To pick another one, ${hint}`);
+      }
+      text = readFileSync(file, "utf8").replace(/\r\n/g, "\n");
+    }
     const cut = text.indexOf("\n");
     const title = (cut < 0 ? text : text.slice(0, cut)).trim();
     const body = cut < 0 ? "" : text.slice(cut).replace(/^\n+/, "").replace(/\s+$/, "");

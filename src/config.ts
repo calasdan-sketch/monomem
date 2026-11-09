@@ -78,9 +78,24 @@ export function resolveDataDir(
   env: NodeJS.ProcessEnv = process.env,
   root: string = PROJECT_ROOT
 ): { dir: string; why: "env" | "checkout" | "home" | "legacy-home" } {
+  // A variable that is set but blank is a mistake (often a config file with "MONOMEM_HOME": ""), not "use the default":
+  // falling through would put the data somewhere the person did not choose, or silently use the other variable.
+  for (const name of ["MONOMEM_HOME", "ONEMEMORY_HOME"] as const) {
+    if (env[name] !== undefined && !env[name]!.trim()) throw new Error(`${name} is set but empty; set it to a folder or unset it`);
+  }
+  const name = env.MONOMEM_HOME !== undefined ? "MONOMEM_HOME" : "ONEMEMORY_HOME";
   const home = env.MONOMEM_HOME ?? env.ONEMEMORY_HOME;
-  if (home && home.trim()) {
-    const dir = expandHome(home.trim());
+  if (home) {
+    let raw = home.trim();
+    // One pair of matching quotes, as a config file or a shell line copied with its quotes leaves them.
+    if (raw.length >= 2 && (raw[0] === '"' || raw[0] === "'") && raw[raw.length - 1] === raw[0]) raw = raw.slice(1, -1).trim();
+    // An app's JSON config does not expand variables: %USERPROFILE% or $HOME arrive as literal text.
+    if (/%[A-Za-z_][A-Za-z0-9_]*%|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/.test(raw)) {
+      throw new Error(
+        `${name}=${raw} is not a full path (an app's config file does not expand variables); write the full path, e.g. C:\\Users\\you\\.monomem`
+      );
+    }
+    const dir = expandHome(raw);
     if (!isAbsolute(dir)) process.stderr.write(`[monomem] warning: MONOMEM_HOME is a relative path (${dir}); it depends on the folder you start from. Use a full path.\n`);
     return { dir: resolve(dir), why: "env" };
   }
@@ -304,7 +319,19 @@ export function resolveToken(): string {
   }
   const token = randomBytes(32).toString("hex");
   privateDir(dirname(TOKEN_FILE));
-  writeFileSync(TOKEN_FILE, token, { mode: 0o600 });
+  try {
+    // "wx": only the first of several processes starting at once creates the file; the others use its value.
+    writeFileSync(TOKEN_FILE, token, { mode: 0o600, flag: "wx" });
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+    // The winner may not have written its bytes yet: re-read briefly while the file is empty.
+    for (let i = 0; i < 50; i++) {
+      const won = readFileSync(TOKEN_FILE, "utf8").trim();
+      if (won) return won;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+    writeFileSync(TOKEN_FILE, token, { mode: 0o600 }); // left empty by an earlier crash: replace it, as before
+  }
   // Never print the token value itself -- this line may be captured by a
   // Windows Scheduled Task's redirected output, a service manager's logs, or
   // future log-shipping, and the token is a full-access credential valid

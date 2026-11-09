@@ -69,7 +69,7 @@ function shortUsage(): void {
       "  changes                 What changed while you were away",
       "  history <id>            A note's earlier versions (history restore <id> <version> puts one back)",
       "  add \"text\" [--title T] [--ns work] [--tag a,b] [--private]   Save a note (\"-\" reads the text from a pipe)",
-      "  show <id> | ls [--ns x] [--limit 20] | edit <id> | forget <id>   Look at, list, change or archive notes (forget can be undone with restore)",
+      "  show <id> | ls [--ns x] [--limit 20] [--archived] | edit <id> [-] | forget <id>   Look at, list, change or archive notes (forget can be undone with restore; ls --archived lists them)",
       "  pin <id> | unpin <id>   Pin a note so agents can read it but not change it",
       "",
       "Trust",
@@ -269,14 +269,16 @@ function usage(all = false): void {
       "            MONOMEM_DECAY_SUMMARY_DAYS (180). Never: your own notes, decisions, anything tagged \"pinned\".",
       "            Also runs on its own in the expiry sweep and at the end of a captured session.",
       "  archive <id> | restore <id>",
-      "            Soft-archive a note, or bring an archived one back (the undo for decay and archive).",
+      "            Soft-archive a note, or bring an archived one back (the undo for decay and archive). monomem ls --archived lists them.",
       "  restore <backup folder | state.db file> [--yes]",
       "            Put a backup back as your database. Refuses while Monomem or an app is using it; copies the current database aside first",
       "            (state.db.before-restore-<time>), removes the stale -wal/-shm files and checks the result. Also works with state.db.pre-vNN-backup.",
       "  add \"text\" [--title T] [--ns work] [--tag a,b] [--private | --sens public|internal|private]",
       "            Save a note from the shell (\"-\" reads a pipe). Same linter, secret refusal and quarantine as any other writer; written as \"cli\".",
-      "  show <id> | ls [--ns x] [--limit 20] | edit <id> | forget <id>",
+      "  show <id> | ls [--ns x] [--limit 20] [--archived] | edit <id> [- | --editor] | forget <id>",
       "            Read, list, change (in $EDITOR, refused if the note changed meanwhile) or archive a note. The CLI is you, the owner: sensitivity limits apply to apps, not to it.",
+      "            edit <id> - reads the new text from a pipe (first line the title); without a terminal edit needs - or --editor.",
+      "            ls --archived lists forgotten notes with the restore <id> that brings each back.",
       "  audit [--since 24h] [--op create|update|delete|...] [--label <key name>] [--limit n] [--json]",
       "            Who changed what: the change log in plain words (never note text).",
       "  audit verify [--expect <head-hash>]",
@@ -740,6 +742,15 @@ async function doctor(): Promise<void> {
     }
   } catch {
     /* settings could not be inspected: not a problem with Monomem */
+  }
+
+  // An app entry or hook that points at a removed install, or launches another version with npx.
+  try {
+    const { appEntryProblems, realEnv } = await import("./setup.js");
+    const { PACKAGE_VERSION } = await import("./config.js");
+    for (const p of appEntryProblems(realEnv(PACKAGE_VERSION, fileURLToPath(import.meta.url)))) warn(p, "run monomem setup");
+  } catch {
+    /* configs could not be inspected: not a problem with Monomem */
   }
 
   // Automatic memory: when did a hook last record something, and is anything waiting in the spool?
@@ -2775,6 +2786,10 @@ async function deleteCmd(): Promise<void> {
     store.delete(id);
     audit({ op: "note.delete", id, namespace: note.namespace, label: "cli", kind: "note" });
     console.log(`Deleted #${id} "${note.title}" permanently.`);
+    // Store.delete already tried; a second try answers whether another app is still holding part of the log.
+    if (!store.checkpointWal()) {
+      console.log("Its text can stay in state.db-wal until every app using Monomem disconnects (the last one to close clears it); after that, `monomem scrub` also clears it.");
+    }
   } finally {
     store.close();
   }

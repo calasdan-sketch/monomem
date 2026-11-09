@@ -77,7 +77,7 @@ describe("why was this shown? / never show again", () => {
     s.create({ title: "A plain note", body: "remember this" });
     const text = await injectContext(s, { signals: { branch: "feat/tokenizer", diffFiles: ["src/tokenizer.ts"] } });
     assert.match(text, new RegExp(`#${old.id} \\[feature\\] Tokenizer handles CJK input \\([^)]*\\) \\{kw,files(,recent)? 20d\\}`));
-    assert.match(text, /- \[A plain note\] \{recent 0d\}: remember this/);
+    assert.match(text, /#\d+ \[A plain note\] \{recent 0d\}: remember this/);
     assert.equal(text.split(WHY_LEGEND).length, 2, "one legend");
     s.close();
   });

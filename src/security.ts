@@ -728,6 +728,10 @@ export function verifyAuditChain(path: string = auditPath(), expect?: string): {
   return { ok: breaks === 0, lines: n, ...(expect !== undefined ? { anchor: { found: anchorAt > 0, linesAfter: anchorAt > 0 ? n - anchorAt : 0 } } : {}), breaks, forks, unchained, ...(brokenLine !== undefined ? { brokenLine, file } : {}), ...(recent.length ? { head: recent[recent.length - 1] } : {}) };
 }
 
+/** The refusal for a call that needs the admin scope (state_delete, a forget date on someone else's note). */
+export const ADMIN_SCOPE_NEEDED =
+  "this token lacks the required 'admin' scope. Deleting and managing need an administrator key (the person can make one with: monomem token add <name> --admin).";
+
 export function audit(entry: {
   op: string;
   id?: number;
@@ -775,8 +779,10 @@ export const NAMESPACE_MAX = 100;
 
 /**
  * A namespace or tag that printable() would have to mangle (control, bidi or line-separator characters), a namespace
- * longer than NAMESPACE_MAX, or the reserved namespace "*": the reason, else null. Every write path (notes, tasks,
- * handoffs) goes through Store.create/update, which calls this.
+ * longer than NAMESPACE_MAX, or the reserved namespace "*": the reason, else null. Store.create and Store.update call
+ * it, so it covers every write path that goes through them: notes (MCP, REST, CLI), tasks, handoffs, and imports
+ * (CLI import --file, admin POST /import), where importNotes lists a refused row in report.rejected and imports the rest.
+ * It does not touch rows already in the database, and a database-file restore (monomem restore <backup>) copies the file as it is.
  */
 export function checkNames(input: { namespace?: string; tags?: string[] }): string | null {
   const ns = input.namespace?.trim();

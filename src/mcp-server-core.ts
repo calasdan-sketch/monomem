@@ -44,7 +44,7 @@ import { withFacts, factFeedback, COMMON_FACT_KEYS, type FactFeedback } from "./
 import { waitForChanges, parseWait, WAIT_MAX_SECONDS, WAIT_RECOMMENDED_SECONDS } from "./change-wait.js";
 import { type Scope, PACKAGE_VERSION } from "./config.js";
 export { PACKAGE_VERSION };
-import { scopeAllows, UNTRUSTED_BANNER, provenanceBanner, audit, printableWords } from "./security.js";
+import { ADMIN_SCOPE_NEEDED, scopeAllows, UNTRUSTED_BANNER, provenanceBanner, audit, printableWords } from "./security.js";
 import { runSearch, runSearchExplained, semanticNotice, parseMode, maybeEmbed, runRelevantSearch, roundRobin, describeWhen, SEARCH_MODES, type SearchOpts, type RelevantOpts, type ExplainedHit } from "./search-service.js";
 import {
   type ServerNamespaceOpts,
@@ -84,7 +84,10 @@ export const LIST_BODY_CHARS = 600;
 
 // Models often send "5" for 5, "deploy,ci" for ["deploy","ci"], 8080 or true as a fact value, or the facts object as a JSON
 // string. The default tools accept those shapes; every limit (10 facts, 80-char values, tag counts) still applies after.
-const zInt = () => z.coerce.number().int();
+// Only a digit-only string ("5", " 12 ") becomes a number; true, null, "", [5] stay as sent and fail validation
+// (z.coerce turned them into 1, 0, 0 and 5: state_delete {id:true} archived note 1).
+const zInt = (min?: number) =>
+  z.preprocess((v) => (typeof v === "string" && /^\s*\d+\s*$/.test(v) ? Number(v) : v), min === undefined ? z.number().int() : z.number().int().min(min));
 const zTags = () => z.preprocess((v) => (typeof v === "string" ? v.split(",").map((t) => t.trim()).filter(Boolean) : v), z.array(z.string()));
 const zFacts = () =>
   z.preprocess((v) => {
@@ -101,6 +104,8 @@ const zFacts = () =>
   }, z.record(z.string(), z.string()));
 /** state_read returns at most this much body by default; the rest comes with offset (next_offset). */
 const READ_MAX_CHARS = 40_000;
+/** state_read ids: at most this many notes per call. */
+const MULTI_READ_MAX = 10;
 const CUT_NOTE = `Long bodies are cut to ${LIST_BODY_CHARS} characters (body_truncated, body_chars); state_read id=N for the full text.`;
 /** The same payload with each note body in `results` / `notes` cut to LIST_BODY_CHARS (a host caps how much tool output it shows). */
 function cutBodies(payload: Record<string, unknown>): Record<string, unknown> {
@@ -122,6 +127,16 @@ function untrustedResultCut(payload: Record<string, unknown>) {
   return untrustedResult(cutBodies(payload));
 }
 
+/** False only for a payload with a results / notes / recent list and no record anywhere (every list empty or plain strings): no stored text is in it. */
+function carriesNoteText(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object") return true;
+  const p = payload as Record<string, unknown>;
+  if ("note" in p) return true;
+  if (!["results", "notes", "recent"].some((k) => Array.isArray(p[k]))) return true;
+  // Empty note lists, and nothing else that holds records (keyword or namespace lists of plain strings are fine).
+  return Object.values(p).some((v) => (Array.isArray(v) ? v.some((x) => x !== null && typeof x === "object") : v !== null && typeof v === "object"));
+}
+
 // Injection-on-read guard: the banner lives in security.ts as the single
 // source of truth. Since 1.3.3 a "who wrote this" block follows it whenever
 // the payload carries notes, as a second content block: the server-stamped writer
@@ -132,7 +147,7 @@ function untrustedResult(payload: unknown) {
     content: [
       {
         type: "text" as const,
-        text: UNTRUSTED_BANNER + JSON.stringify(payload),
+        text: (carriesNoteText(payload) ? UNTRUSTED_BANNER : "") + JSON.stringify(payload),
       },
       // A second block, so the first stays "banner + JSON" for every client.
       ...(who ? [{ type: "text" as const, text: who }] : []),
@@ -232,6 +247,53 @@ function withConflicts<T extends object>(payload: T, store: Store, note: NoteRec
 /** Attach linter warnings (MONOMEM_LINT=warn) to a write payload. */
 function withWarnings<T extends object>(payload: T, warnings: LintFinding[]): T & { warnings?: LintFinding[] } {
   return warnings.length ? { ...payload, warnings } : payload;
+}
+
+/** Names agents often use for an argument a tool spells differently. Only suggested, never accepted. */
+const ARG_ALIASES: Record<string, string> = { text: "body", content: "body", note: "body", ns: "namespace", namespaces: "namespace", q: "query", search: "query", tag: "tags" };
+
+/** The call's arguments the tool has, and the names of the ones it does not. */
+function splitIgnored(raw: unknown, shape: z.ZodRawShape): { args: unknown; ignored: string[] } {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { args: raw, ignored: [] };
+  const entries = Object.entries(raw as Record<string, unknown>);
+  const ignored = entries.filter(([k]) => !(k in shape)).map(([k]) => k);
+  return ignored.length ? { args: Object.fromEntries(entries.filter(([k]) => k in shape)), ignored } : { args: raw, ignored };
+}
+
+function didYouMean(k: string, shape: z.ZodRawShape): string {
+  const to = ARG_ALIASES[k.toLowerCase()];
+  return to && to in shape ? ` (did you mean \`${to}\`?)` : "";
+}
+
+/** A call that would do the wrong thing because of an ignored argument: refuse it instead. */
+function ignoredRefusal(tool: string, raw: Record<string, unknown>, args: Record<string, unknown>, ignored: string[]): string | null {
+  if (tool !== "state_write" || args.id !== undefined) return null;
+  const hasText = (v: unknown): boolean => typeof v === "string" && v.trim() !== "";
+  if (hasText(args.title) || hasText(args.body)) return null;
+  const sent = ignored.find((k) => hasText(raw[k]));
+  return sent ? `a new note needs a title or a body (you sent \`${sent}\`; use \`body\`)` : null;
+}
+
+/** Adds ignored_arguments (and what each probably meant) to a tool's JSON result. */
+function withIgnored(r: unknown, tool: string, ignored: string[], shape: z.ZodRawShape): unknown {
+  const res = r as { content?: Array<{ type: string; text?: string }> } | undefined;
+  const text = res?.content?.[0]?.text;
+  if (typeof text !== "string") return r;
+  const banner = text.startsWith(UNTRUSTED_BANNER) ? UNTRUSTED_BANNER : "";
+  let payload: unknown;
+  try {
+    payload = JSON.parse(text.slice(banner.length));
+  } catch {
+    return r;
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return r;
+  const hint = ignored.map((k) => `\`${k}\` is not an argument of ${tool} and was ignored${didYouMean(k, shape)}`).join("; ");
+  const unscoped = tool === "state_search" && ignored.some((k) => ARG_ALIASES[k.toLowerCase()] === "namespace");
+  const extra = {
+    ignored_arguments: ignored,
+    ignored_hint: hint + (unscoped ? ". The search was NOT limited to a namespace: pass `namespace` (one name) to scope it." : ""),
+  };
+  return { ...res, content: [{ ...res!.content![0], text: banner + JSON.stringify({ ...payload, ...extra }) }, ...res!.content!.slice(1)] };
 }
 
 function errorResult(message: string) {
@@ -376,6 +438,20 @@ export function enabledToolNames(env: NodeJS.ProcessEnv = process.env): Set<stri
   return new Set([...DEFAULT_TOOLS, ...extra]);
 }
 
+/** The stdio server's hourly housekeeping (most installs never run the HTTP server, which does the same): expiry and change-log pruning. Never throws. */
+export function stdioSweep(store: Store, log: (msg: string) => void = (m) => process.stderr.write(m + "\n")): void {
+  try {
+    store.sweepExpired();
+  } catch (e) {
+    log(`[monomem] expiry sweep failed: ${(e as Error).message}`);
+  }
+  try {
+    store.purgeChangeLog();
+  } catch (e) {
+    log(`[monomem] change-log purge failed: ${(e as Error).message}`);
+  }
+}
+
 export function createMcpServer(
   store: Store,
   scope: Scope = "admin",
@@ -403,7 +479,26 @@ export function createMcpServer(
     // (several hosts also cap how many tools they will accept).
     if (enabled && !enabled.has(name as string)) return undefined;
     if (localGuard && OPERATOR_ONLY_TOOLS.includes(name as string)) return undefined;
-    return registerRaw(name, cfg, (...args: unknown[]) => {
+    // A raw shape is parsed loosely so an argument the tool does not have reaches here and is reported back
+    // (ignored_arguments) instead of being dropped without a word. It is removed before the tool sees the call.
+    const c = cfg as { inputSchema?: unknown };
+    const shape = c.inputSchema && !(c.inputSchema instanceof z.ZodType) ? (c.inputSchema as z.ZodRawShape) : undefined;
+    const looseCfg = shape ? { ...c, inputSchema: z.looseObject(shape) } : cfg;
+    return registerRaw(name, looseCfg, (...rawArgs: unknown[]) => {
+      const known = shape ? splitIgnored(rawArgs[0], shape) : { args: rawArgs[0], ignored: [] };
+      const args = [known.args, ...rawArgs.slice(1)];
+      if (known.ignored.length) {
+        const early = ignoredRefusal(name as string, rawArgs[0] as Record<string, unknown>, known.args as Record<string, unknown>, known.ignored);
+        if (early) return errorResult(early);
+        const out = runTool(name as string, handler, args);
+        return out instanceof Promise ? out.then((r) => withIgnored(r, name as string, known.ignored, shape!)) : withIgnored(out, name as string, known.ignored, shape!);
+      }
+      return runTool(name as string, handler, args);
+    });
+  };
+
+  const runTool = (name: string, handler: unknown, args: unknown[]): unknown => {
+    {
       // include_distrusted turns the trust policy OFF for the call: admin only, for every tool.
       // A read/write connection (or an agent a hostile note talked into asking) gets a refusal.
       const first = args[0] as { include_distrusted?: unknown; namespace?: unknown } | undefined;
@@ -439,7 +534,7 @@ export function createMcpServer(
           const out = (handler as (...x: unknown[]) => unknown)(...args);
           return READ_TOOLS.has(name as string) ? logRead(name as string, args[0] as Record<string, unknown> | undefined, out) : out;
       });
-    });
+    }
   };
 
   // Read access log (Store.logAccess): one row per successful read tool call, written inside the caller's actor context
@@ -468,7 +563,7 @@ export function createMcpServer(
       ? null
       : `this token lacks the required '${need}' scope. ` +
         (need === "admin"
-          ? "Deleting and managing need an administrator key (the person can make one with: monomem token add <name> --admin)."
+          ? ADMIN_SCOPE_NEEDED.slice(ADMIN_SCOPE_NEEDED.indexOf("Deleting"))
           : "This app's key can only read; a key that can also write is made with: monomem token add <name> --scope write.");
 
   // Server-side namespace resolution, active only when the entry point
@@ -522,6 +617,54 @@ export function createMcpServer(
   // exact (the old merge-in-memory capped each namespace at 500 notes).
   function listReadable(limit?: number, offset?: number, wf: WriterFilterArgs = {}): { notes: NoteRecord[]; total: number } {
     return store.list({ namespaces: readable(), limit, offset, ...wf });
+  }
+
+  // An archived (forgotten, not replaced) note the caller may read gets a plain explanation instead of "no note", so an
+  // agent does not quietly re-create it. Unreadable namespaces and distrusted writers keep the plain "no note".
+  const archivedMessage = (id: number | string, already = ""): string =>
+    `note ${id} is ${already}archived (hidden, not erased); a person can restore it with \`monomem restore ${id}\`; write a new note only if the user wants a fresh one`;
+  const isArchivedVisible = (id: number, includeDistrusted = false): boolean => {
+    const n = store.readVisible(id, { includeDistrusted }); // gate-ok: archived check, only a yes/no leaves here
+    return Boolean(n?.archived_at && n.superseded_by == null && (!nsActive || canRead(grants, ownNs, n.namespace)));
+  };
+  const noNote = (id: number, includeDistrusted = false): string =>
+    isArchivedVisible(id, includeDistrusted) ? archivedMessage(id) : `no note with id ${id}`;
+
+  // The one gated by-id read behind state_read (a single id, or each of several).
+  function readOne(
+    id: number,
+    start: number,
+    max: number,
+    neighbors: boolean,
+    wantDistrusted: boolean
+  ): { note: Record<string, unknown> } | { error: string; archived?: true } {
+    // BLOCKER 4 / S-LOW-1: gate before tracking. The probe is an
+    // untracked read -- no access-counter writes and no neighbor
+    // computation -- so a denied cross-namespace read leaves
+    // access_count, last_accessed, and search ranking untouched, and
+    // existing-vs-missing ids cost the same.
+    const probe = store.read(id); // gate-ok: access probe: readVisible decides before anything is returned
+    // Uniform "no note": a distinct denial would let the caller probe
+    // which ids exist in namespaces it cannot read.
+    if (!probe || (nsActive && !canRead(grants, ownNs, probe.namespace))) return { error: `no note with id ${id}` };
+    // Authorized: the ONE gated read, with tracking (and neighbors, when asked)
+    // so the returned counters include this read. A distrusted writer's note
+    // reads as "no note" unless an admin opts in (then it is marked).
+    const includeDistrusted = wantDistrusted && (!nsActive || probe.namespace === ownNs);
+    const note = store.readVisible(id, { hideArchived: true, trackAccess: true, withNeighbors: neighbors, includeDistrusted });
+    if (!note) return isArchivedVisible(id, includeDistrusted) ? { error: archivedMessage(id), archived: true } : { error: `no note with id ${id}` };
+    // Round edge scores to 3 decimals for readability (stored raw in
+    // SQLite), mirroring memory_consolidation_candidates.
+    const annotated = withWhen(note);
+    const payload: Record<string, unknown> = note.neighbors
+      ? { ...annotated, neighbors: note.neighbors.map((n) => ({ ...n, score: Math.round(n.score * 1000) / 1000 })) }
+      : annotated;
+    const full = typeof note.body === "string" ? note.body : "";
+    if (start > 0 || full.length > max) {
+      const end = Math.min(full.length, start + max);
+      return { note: { ...payload, body: full.slice(start, end), body_truncated: true, body_chars: full.length, ...(end < full.length ? { next_offset: end } : {}) } };
+    }
+    return { note: payload };
   }
 
   server.registerTool(
@@ -621,7 +764,7 @@ export function createMcpServer(
           // A note the distrust list hides reads as missing here too (only an admin may rewrite it).
           // hideArchived: updating a forgotten note would echo its text back; it must be restored first.
           const target = store.readVisible(id, { hideArchived: true, includeDistrusted: scopeAllows(scope, "admin") });
-          if (!target) return errorResult(`no note with id ${id}`);
+          if (!target) return errorResult(noNote(id, scopeAllows(scope, "admin")));
           if (nsActive && target.namespace !== ownNs) {
             return errorResult(`no note with id ${id}`);
           }
@@ -670,9 +813,9 @@ export function createMcpServer(
         `Open one note from memory by its id. Pass \`neighbors: true\` to also get up to 10 similar notes. A body longer than max_chars (default ${READ_MAX_CHARS}) comes in parts: body_truncated, body_chars and next_offset say where to continue (pass it as offset).`,
       inputSchema: {
         id: zInt().optional().describe("Id of the note to read."),
-        ids: z.array(zInt()).optional().describe("Same as id, for older prompts: the first id is read."),
-        offset: zInt().min(0).optional().describe("Start the body at this character (from next_offset). Default 0."),
-        max_chars: zInt().min(1).optional().describe(`Most body characters to return (default ${READ_MAX_CHARS}).`),
+        ids: z.array(zInt()).optional().describe(`Several ids at once (up to ${MULTI_READ_MAX}): returns notes, missing (and ignored_ids past ${MULTI_READ_MAX}); max_chars is shared by all bodies. One id reads like id.`),
+        offset: zInt(0).optional().describe("Start the body at this character (from next_offset). Default 0."),
+        max_chars: zInt(1).optional().describe(`Most body characters to return (default ${READ_MAX_CHARS}).`),
         neighbors: z
           .boolean()
           .optional()
@@ -684,50 +827,40 @@ export function createMcpServer(
     },
     async ({ id: oneId, ids, offset, max_chars, neighbors, include_distrusted }) => {
       try {
-        const id = oneId ?? ids?.[0];
-        if (id === undefined) return errorResult("id is required");
         // Uniform scope gate on the read tools too (defense-in-depth: the
         // scope floor is "read" today, but the check must not silently rot
         // if a narrower floor is ever introduced).
         const denied = denyIfUnder("read");
         if (denied) return errorResult(denied);
-        // BLOCKER 4 / S-LOW-1: gate before tracking. The probe is an
-        // untracked read -- no access-counter writes and no neighbor
-        // computation -- so a denied cross-namespace read leaves
-        // access_count, last_accessed, and search ranking untouched, and
-        // existing-vs-missing ids cost the same.
-        const probe = store.read(id); // gate-ok: access probe: readVisible decides before anything is returned
-        if (!probe) return errorResult(`no note with id ${id}`);
-        if (nsActive && !canRead(grants, ownNs, probe.namespace)) {
-          // Uniform "no note": a distinct denial would let the caller probe
-          // which ids exist in namespaces it cannot read.
-          return errorResult(`no note with id ${id}`);
-        }
-        // Authorized: the ONE gated read, with tracking (and neighbors, when asked)
-        // so the returned counters include this read. A distrusted writer's note
-        // reads as "no note" unless an admin opts in (then it is marked).
-        const note = store.readVisible(id, { hideArchived: true, trackAccess: true, withNeighbors: neighbors === true, includeDistrusted: include_distrusted === true && (!nsActive || probe.namespace === ownNs) });
-        if (!note) return errorResult(`no note with id ${id}`);
-        // Round edge scores to 3 decimals for readability (stored raw in
-        // SQLite), mirroring memory_consolidation_candidates.
-        const annotated = withWhen(note);
-        const payload = note.neighbors
-          ? {
-              ...annotated,
-              neighbors: note.neighbors.map((n) => ({
-                ...n,
-                score: Math.round(n.score * 1000) / 1000,
-              })),
-            }
-          : annotated;
-        const full = typeof note.body === "string" ? note.body : "";
-        const start = Math.max(0, offset ?? 0);
         const max = clampInt(max_chars, READ_MAX_CHARS, 1, 1_000_000);
-        if (start > 0 || full.length > max) {
-          const end = Math.min(full.length, start + max);
-          return untrustedResult({ note: { ...payload, body: full.slice(start, end), body_truncated: true, body_chars: full.length, ...(end < full.length ? { next_offset: end } : {}) } });
+        if (oneId === undefined && ids !== undefined && ids.length > 1) {
+          // Several ids: each through the same gated path, one max_chars budget shared by all bodies.
+          const take = ids.slice(0, MULTI_READ_MAX);
+          const notes: Record<string, unknown>[] = [];
+          const missing: number[] = [];
+          const archived: number[] = [];
+          let left = max;
+          for (const one of take) {
+            const r = readOne(one, 0, left, neighbors === true, include_distrusted === true);
+            if ("error" in r) {
+              (r.archived ? archived : missing).push(one);
+              continue;
+            }
+            notes.push(r.note);
+            left = Math.max(0, left - (typeof r.note.body === "string" ? r.note.body.length : 0));
+          }
+          const ignored = ids.slice(MULTI_READ_MAX);
+          return untrustedResult({
+            notes,
+            missing,
+            ...(archived.length ? { archived, archived_hint: "archived (hidden, not erased); a person can restore one with `monomem restore <id>`; write a new note only if the user wants a fresh one" } : {}),
+            ...(ignored.length ? { ignored_ids: ignored, hint: `at most ${MULTI_READ_MAX} ids per call; read the rest in another call` } : {}),
+          });
         }
-        return untrustedResult({ note: payload });
+        const id = oneId ?? ids?.[0];
+        if (id === undefined) return errorResult("id is required");
+        const r = readOne(id, Math.max(0, offset ?? 0), max, neighbors === true, include_distrusted === true);
+        return "error" in r ? errorResult(r.error) : untrustedResult({ note: r.note });
       } catch (e) {
         return errorFor(e);
       }
@@ -1097,7 +1230,7 @@ export function createMcpServer(
         // An agent never erases: archive keeps the row so a mistaken or injected "forget" can be undone.
         const before = store.read(id); // gate-ok: admin forget: existence + archived check only, nothing returned
         if (!before) return errorResult(`no note with id ${id}`);
-        if (before.archived_at) return errorResult(`note ${id} is already archived`);
+        if (before.archived_at) return errorResult(before.superseded_by == null ? archivedMessage(id, "already ") : `note ${id} is already archived`);
         store.archive(id);
         audit({ op: "note.archive", id, namespace: before.namespace, label: conn.label, kind: "note", detail: "state_delete" });
         return textResult({

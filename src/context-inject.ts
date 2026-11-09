@@ -73,9 +73,9 @@ export interface InjectOptions {
   skipTags?: string[];
 }
 
-/** "Open any with ..." naming only a tool this install registers; state_read takes one id. */
-export function openHint(ids: number[]): string {
-  return openToolName() === "memory_get" ? `Open any with memory_get ids=[${ids.join(",")}]` : `Open any with state_read id=N (${ids.join(", ")})`;
+/** "Open any with ..." naming only a tool this install registers. Every line already starts with its #id. */
+export function openHint(): string {
+  return openToolName() === "memory_get" ? "Open any with memory_get ids=[N]" : "Open any with state_read id=N";
 }
 
 /** The profile's share of the budget (MONOMEM_PROFILE_TOKENS, default 300); 0 = off (MONOMEM_PROFILE=off). */
@@ -320,11 +320,10 @@ export async function injectContext(store: Store, opts: InjectOptions = {}): Pro
   const body = parts.join("\n\n");
   const notesChars = shown.reduce((a, n) => a + n.title.length + n.body.length, 0);
   const fullChars = notesChars + captured;
-  const ids = shown.slice(0, 20).map((n) => n.id);
   const shownTok = Math.ceil(body.length / CHARS_PER_TOKEN);
   const rawTok = Math.ceil(fullChars / CHARS_PER_TOKEN);
   // Estimates, ~4 characters a token. The block adds headers and index lines, so it can be longer than the notes it summarises: say that plainly.
-  const open = openHint(ids);
+  const open = openHint();
   const lead = `Showing ${shown.length} of ${Math.max(total, shown.length)} memories in ~${shownTok} tokens (estimate)`;
   const footer =
     shownTok <= rawTok

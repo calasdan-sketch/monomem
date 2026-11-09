@@ -477,12 +477,84 @@ function pinFor(opts: SetupOptions): Record<string, string> {
 const pinText = (pin: Record<string, string>): string => Object.entries(pin).map(([k, v]) => `${k}=${v}`).join(", ");
 
 /** An existing entry against the pin: "none" (nothing to pin), "ok" (same place), "missing" (entry names no place), "differs". */
-function pinMismatch(pin: Record<string, string>, read: (k: string) => string | undefined): "none" | "ok" | "missing" | "differs" {
+export function pinMismatch(e: Pick<SetupEnv, "home" | "platform">, pin: Record<string, string>, read: (k: string) => string | undefined): "none" | "ok" | "missing" | "differs" {
   if (!Object.keys(pin).length) return "none";
   const has = ["MONOMEM_HOME", "MONOMEM_DB_PATH"].filter((k) => read(k) !== undefined);
   if (!has.length) return "missing";
-  for (const k of has) if (pin[k] === undefined || resolve(String(read(k))) !== resolve(pin[k])) return "differs";
+  // "~/x" and "C:\Users\Me\x" vs "c:\users\me\x" are the same folder (Windows paths ignore case).
+  const norm = (p: string): string => {
+    const t = p.trim();
+    const r = resolve(t === "~" || t.startsWith("~/") || t.startsWith("~\\") ? join(e.home, t.slice(1)) : t);
+    return e.platform === "win32" ? r.toLowerCase() : r;
+  };
+  for (const k of has) if (pin[k] === undefined || norm(String(read(k))) !== norm(pin[k])) return "differs";
   return "ok";
+}
+
+const PINNED_VERSION = /monomem@(\d+\.\d+\.\d+)/i;
+
+/**
+ * Why an app's Monomem entry would not start this version, else null: an absolute command or a .js argument (cli.js) that
+ * no longer exists (stale: the install moved or was removed), or an npx pin to another version (outdated).
+ */
+export function entryProblem(entry: Record<string, unknown>, version: string, exists: (p: string) => boolean = existsSync): string | null {
+  const cmd = typeof entry.command === "string" ? entry.command : "";
+  const args = Array.isArray(entry.args) ? entry.args.map(String) : [];
+  const absolute = (p: string): boolean => /^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(p);
+  for (const p of [cmd, ...args.filter((a) => /\.js$/i.test(a))]) {
+    if (p && absolute(p) && !exists(p)) return `points at ${p}, which no longer exists`;
+  }
+  return pinProblem([cmd, ...args].join(" "), version);
+}
+
+/** "launches monomem X, this is Y" when the text pins another version with npx (monomem@X.Y.Z), else null. */
+export function pinProblem(text: string, version: string): string | null {
+  const m = PINNED_VERSION.exec(text);
+  return m && m[1] !== version ? `launches monomem ${m[1]}, this is ${version}` : null;
+}
+
+/** entryProblem for Codex's [mcp_servers.monomem] TOML table text. */
+function tomlEntryProblem(ours: string, version: string): string | null {
+  const command = /\bcommand\s*=\s*["']([^"']*)["']/.exec(ours)?.[1] ?? "";
+  return entryProblem({ command, args: [...ours.matchAll(/["']([^"']+\.js)["']/gi)].map((m) => m[1]) }, version) ?? pinProblem(ours, version);
+}
+
+/**
+ * doctor / health: every detected app whose Monomem entry is stale or outdated (entryProblem), and every hook file whose
+ * Monomem hook command pins another version. One line each: "<app>: <reason>".
+ */
+export function appEntryProblems(e: SetupEnv): string[] {
+  const out: string[] = [];
+  for (const c of detectClients(e)) {
+    const text = c.exists ? readTextFile(c.file) : null;
+    if (!text) continue;
+    if (c.id === "codex") {
+      const table = findTable(text, ["mcp_servers", "monomem"]);
+      const ours = table ? text.slice(table.start, table.end) : "";
+      const r = ours ? tomlEntryProblem(ours, e.version) : null;
+      if (r) out.push(`${c.label}: "monomem" ${r}`);
+      continue;
+    }
+    let servers: FoundServer[] = [];
+    try {
+      servers = findServers(text, c.id === "claude-code", serversKey(c.id, text));
+    } catch {
+      continue;
+    }
+    for (const s of servers) {
+      const entry = safeParseEntry(text, s);
+      if (!entry || classifyEntry(s.name, entry) !== "monomem") continue;
+      const r = entryProblem(entry, e.version);
+      if (r) out.push(`${c.label}: "${s.name}"${s.path.length === 1 ? "" : ` (project ${s.path[1]})`} ${r}`);
+    }
+  }
+  for (const h of hookHosts(e)) {
+    const text = readTextFile(h.file);
+    if (!text) continue;
+    const r = pinProblem([...text.matchAll(/"command"\s*:\s*"([^"]*monomem@[^"]*)"/gi)].map((m) => m[1]).join(" "), e.version);
+    if (r) out.push(`${h.label}: a Monomem hook ${r}`);
+  }
+  return out;
 }
 
 /** `KEY = "..."` (basic string, JSON-style escapes) or `KEY = '...'` (literal) in TOML text: the value, else undefined. */
@@ -516,9 +588,14 @@ function planToml(e: SetupEnv, opts: SetupOptions, target: ClientTarget, text: s
     const ours = (table ? text.slice(table.start, table.end) : "") + (envTable ? text.slice(envTable.start, envTable.end) : "");
     const want: Record<string, string> = /MONOMEM_CLIENT/.test(ours || text) ? {} : { MONOMEM_CLIENT: "codex" };
     const pin = pinFor(opts);
-    const pinned = pinMismatch(pin, (k) => tomlString(ours, k));
+    const pinned = pinMismatch(e, pin, (k) => tomlString(ours, k));
     if (pinned === "differs") return { ...already, already: [], conflicts: [`${target.label}: "monomem" uses a different data folder than the one set in this shell (${pinText(pin)}). Make them the same in ${target.file}, or unset MONOMEM_HOME / MONOMEM_DB_PATH here, then run setup again`] };
     if (pinned === "missing") Object.assign(want, pin);
+    const stale = tomlEntryProblem(ours, e.version);
+    if (stale) {
+      // TOML tables are not rewritten in place; say exactly what to do instead of calling a broken entry fine.
+      return { ...already, already: [], warnings: [`${target.label}: "monomem" ${stale}. Delete the [mcp_servers.monomem] table (and its env table) from ${target.file}, then run monomem setup again`] };
+    }
     if (!Object.keys(want).length) return already;
     // An entry from before per-app labels gets an [mcp_servers.monomem.env] table, but only when that cannot clash with
     // what is there: the entry is a table of its own and has no env yet (an inline `env = {...}` or an inline entry is
@@ -602,12 +679,24 @@ export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, 
       const add: Record<string, string> = env && "MONOMEM_CLIENT" in env ? {} : { MONOMEM_CLIENT: appLabel(target.id) };
       // MONOMEM_HOME / MONOMEM_DB_PATH set in this shell: an entry that names no data folder would use ~/.monomem instead.
       const pin = pinFor(opts);
-      const pinned = pinMismatch(pin, (k) => (env && typeof env[k] === "string" ? (env[k] as string) : undefined));
+      const pinned = pinMismatch(e, pin, (k) => (env && typeof env[k] === "string" ? (env[k] as string) : undefined));
       if (pinned === "differs") {
         conflicts.push(`${target.label}: "${s.name}"${where} uses a different data folder than the one set in this shell (${pinText(pin)}). Make them the same in ${target.file}, or unset MONOMEM_HOME / MONOMEM_DB_PATH here, then run setup again`);
         continue;
       }
       if (pinned === "missing") Object.assign(add, pin);
+      // An entry that would not start this version (its cli.js is gone, or npx pins another version) is rewritten: same
+      // name, same env and extra settings, this version's launch command.
+      const problem = entryProblem(entry, e.version);
+      const fresh: ServerEntry = { ...entry, ...buildServerEntry(e, opts, { ...((env as Record<string, string> | null) ?? {}), ...add }, withType && "type" in entry) };
+      // Only when rewriting changes something: an entry that already is what setup writes now stays (no rewrite loop).
+      if (problem && JSON.stringify(fresh) !== JSON.stringify(entry)) {
+        ops.push({ op: "set", path: s.path, key: s.name, value: fresh });
+        inverse.unshift({ op: "set", path: s.path, key: s.name, value: entry });
+        lines.push(`rewrite "${s.name}"${where}: it ${problem}`);
+        labelled++;
+        continue;
+      }
       if (!Object.keys(add).length) {
         already.push(`${target.label}: "${s.name}"${where} is already set up`);
         continue;
@@ -699,6 +788,9 @@ const TOOL_NAMES = "(?:monomem|onememory|claude-bridge)";
 // setup miss its own hook and plan a duplicate -- found by CI, whose checkout
 // directory is capitalised, on a machine where the local one is not.
 const OLD_NPX_HOOK = /npx -y onememory-mcp@[^\s"]+ (?:recall|hook session-start)/;
+/** The start-of-session hook of the old package, or an npx-pinned Monomem one of another version (outdated). */
+const oldStartHook = (version: string): RegExp =>
+  new RegExp(OLD_NPX_HOOK.source + "|npx -y monomem@(?!" + version.replace(/\./g, "\\.") + "[\\s\"])\\d+\\.\\d+\\.\\d+ (?:recall|hook session-start)");
 const startRange = (doc: ReturnType<typeof parseDoc>, on: string): [number, number] => {
   const n = getPath(doc, ["hooks", on]);
   return n ? [n.start, n.end] : [0, 0];
@@ -831,7 +923,7 @@ export function planHooks(e: SetupEnv, opts: SetupOptions, dbForHook: string | u
   const inverse: Op[] = [];
   const lines: string[] = [];
   // The old package's start-of-session hook (`npx -y onememory-mcp@<v> recall|hook session-start`) is rewritten to the current command.
-  const oldNpx = want.recall && doc ? OLD_NPX_HOOK.exec(text!.slice(...startRange(doc, host.start.on))) : null;
+  const oldNpx = want.recall && doc ? oldStartHook(e.version).exec(text!.slice(...startRange(doc, host.start.on))) : null;
   const oldEntry = oldNpx ? getPath(doc!, ["hooks", host.start.on])?.items?.find((i) => text!.slice(i.start, i.end).includes(oldNpx[0])) : undefined;
   if (oldNpx && oldEntry) {
     let old: { hooks?: Array<{ command?: unknown }> } | null = null;
@@ -846,7 +938,11 @@ export function planHooks(e: SetupEnv, opts: SetupOptions, dbForHook: string | u
       ops.push({ op: "unappend", path: ["hooks"], key: host.start.on, marker: oldNpx[0] }, { op: "append", path: ["hooks"], key: host.start.on, value: nu });
       inverse.unshift({ op: "append", path: ["hooks"], key: host.start.on, value: old });
       inverse.unshift({ op: "unappend", path: ["hooks"], key: host.start.on, marker: want.capture ? "hook session-start" : HOOK_MARKER });
-      lines.push(`replace the start-of-session hook from the old onememory-mcp package with the current Monomem one (same place, same settings)`);
+      lines.push(
+        /onememory-mcp/.test(oldNpx[0])
+          ? `replace the start-of-session hook from the old onememory-mcp package with the current Monomem one (same place, same settings)`
+          : `rewrite the start-of-session hook: it ${pinProblem(oldNpx[0], e.version)} (same place, same settings)`
+      );
     }
   } else if (doc && host.start.matcher === CLAUDE_START_MATCHER && has(host.start.on, HOOK_DETECT)) {
     // Ours is already there: replace a "startup|clear" entry setup wrote earlier (it moves to the end of the list; no second entry).

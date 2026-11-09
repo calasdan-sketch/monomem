@@ -548,7 +548,7 @@ describe("recall: task board in the SessionStart hook", () => {
       // cwd outside any git repo: recall ranks by the current branch name, so running from the
       // checkout made this test pass or fail depending on what the branch happened to be called.
       const ctx = ctxOf(await runRecall({ dbPath: db, cwd: dir }));
-      assert.ok(ctx.includes("Recent memory (1 note):\n- [Only] {recent 0d}: note"));
+      assert.ok(ctx.includes("Recent memory (1 note):\n#1 [Only] {recent 0d}: note"));
       assert.ok(!ctx.includes("Open tasks") && !ctx.includes("handoff"));
     } finally {
       rmSync(dir, { recursive: true, force: true });

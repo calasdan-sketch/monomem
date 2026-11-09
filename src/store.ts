@@ -15,7 +15,7 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, statSync, statfsSync, readdirSync, renameSync, linkSync, existsSync, copyFileSync, unlinkSync } from "node:fs";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { dirname, basename, join } from "node:path";
-import { checkSizes, checkNames, audit } from "./security.js";
+import { checkSizes, checkNames, audit, ADMIN_SCOPE_NEEDED } from "./security.js";
 import { chmodQuiet } from "./config.js";
 import { SECRET_ASSIGN_LABEL } from "./security.js";
 import { lintContent, lintPolicy, describeFindings, type LintFinding, type LintAction, type LintCategory } from "./lint.js";
@@ -1516,6 +1516,8 @@ export class Store {
       // failure of an existing database is exactly here (the WAL switch), and it must get the readable message too.
       this.db.exec(`PRAGMA busy_timeout = ${Math.floor(opts.busyTimeoutMs ?? Store.BUSY_TIMEOUT_MS)};`);
       this.db.exec("PRAGMA journal_mode = WAL;");
+      // A checkpoint leaves the -wal file at its high-water size (old page images, deleted text included); cap what it keeps.
+      this.db.exec("PRAGMA journal_size_limit = 4194304;");
       this.db.exec("PRAGMA foreign_keys = ON;");
       // Zero freed pages: without this a deleted note's text stays readable in the file until reused.
       this.db.exec("PRAGMA secure_delete = ON;");
@@ -2786,10 +2788,15 @@ export class Store {
       throw new ValidationError("title is required");
     }
     validateSizes(input);
-    // A restore keeps rows that were stored before this check existed; the CLI prints them through printable().
-    if (!opts.bulkImport) validateNames(input);
+    // Imports too (importNotes reports the row as rejected and keeps going): a backup or a hand-made file must not bring
+    // in a namespace or tag no live write could create.
+    validateNames(input);
     validateForgetAfter(input.forget_after);
     validateConfidence(input.confidence);
+    const backdate = isoOrNull(input.created_at);
+    if (backdate && Date.parse(backdate) > Date.now() + 5 * 60_000) {
+      throw new ValidationError(`created_at ${input.created_at} is more than 5 minutes in the future`);
+    }
     const sensitivity = this.labelForNew(input.sensitivity);
     const findings = lintFor(input, opts.lint ?? "full");
     const linted = applyLintPolicy(findings, opts);
@@ -3490,6 +3497,14 @@ export class Store {
     // forgetting there is the operator's alone, so an agent is refused (0 = keep forever, harmless, stays allowed).
     if (patch.forget_after !== undefined && patch.forget_after !== 0) {
       refuseAgentInApproveFirst(this, existing.namespace, "setting a forget date on a note");
+      // A delayed forget of someone else's note is removal: admin only (a non-admin key may set one on its own notes).
+      if (
+        !isOperatorWrite(opts.lint ?? "full") &&
+        actorStore.getStore()?.canDeclassify === false &&
+        (existing.written_by ?? "") !== currentWriter()
+      ) {
+        throw new ValidationError(ADMIN_SCOPE_NEEDED);
+      }
     }
     const movedTo = patch.namespace?.trim();
     if (
@@ -3712,7 +3727,31 @@ export class Store {
     if (ns !== undefined) refuseAgentInApproveFirst(this, ns, "deleting a note");
     const ok = this.deleteWhere(id, null);
     if (ok) this.reviveAfterReplacementDeleted(id);
+    if (ok) this.checkpointWal();
     return ok;
+  }
+
+  /**
+   * Best effort after a hard delete: copy the write-ahead log into the database file and empty it, so the deleted text
+   * (secure_delete zeroes it in the file) does not stay readable in state.db-wal. Never waits: busy_timeout is 0 for the
+   * call. False when another connection kept part of the log (an open read; it is cleared once that app lets go).
+   */
+  checkpointWal(): boolean {
+    if (this.dbPath === ":memory:") return true;
+    const prev = Number((this.db.prepare("PRAGMA busy_timeout").get() as Record<string, unknown> | undefined)?.timeout ?? Store.BUSY_TIMEOUT_MS);
+    try {
+      this.db.exec("PRAGMA busy_timeout = 0;");
+      const r = this.db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as { busy?: number } | undefined;
+      return Number(r?.busy ?? 0) === 0;
+    } catch {
+      return false;
+    } finally {
+      try {
+        this.db.exec(`PRAGMA busy_timeout = ${prev};`);
+      } catch {
+        /* the connection is gone; nothing to restore */
+      }
+    }
   }
 
   /**
@@ -3758,17 +3797,21 @@ export class Store {
     // A namespace-pinned caller may only retire its own notes.
     if (namespaces && namespaces.length === 0) return 0;
     const nsSql = namespaces ? ` AND namespace IN (${namespaces.map(() => "?").join(",")})` : "";
-    const res = this.db
+    const rows = this.db
       .prepare(
         `UPDATE notes SET archived_at = ?
-         WHERE expires_at IS NOT NULL AND expires_at <= ? AND archived_at IS NULL AND pinned = 0${nsSql}${this.ceilingSql()}`
+         WHERE expires_at IS NOT NULL AND expires_at <= ? AND archived_at IS NULL AND pinned = 0${nsSql}${this.ceilingSql()}
+         RETURNING id, namespace, written_by`
       )
-      .run(iso, iso, ...(namespaces ?? []));
-    const n = Number(res.changes ?? 0);
+      .all(iso, iso, ...(namespaces ?? [])) as Array<{ id: number; namespace: string; written_by: string | null }>;
+    const n = rows.length;
     if (n > 0) {
       this.edgeIndexes.clear(); // archived notes leave the similarity index
       this.announceChange();
-      this.audit({ op: "sweep-expire", bytes: n }); // `bytes` holds the count, as in supersede
+      // One line per note. Who set the deadline is not stored; the note's last writer is the closest known name.
+      for (const r of rows) {
+        this.audit({ op: "sweep-expire", id: Number(r.id), namespace: r.namespace, ...(r.written_by ? { detail: `last written by ${r.written_by}` } : {}) });
+      }
     }
     this.sweepCaptureEvents(now, namespaces);
     if (!namespaces) this.sweepAccessLog(now); // retention is store-wide: only the unscoped (hourly) sweep runs it
@@ -4091,7 +4134,10 @@ export class Store {
       for (const g of gone) this.recordDropped(noteId, g.saved_by, g.saved_at);
       return Number(this.db.prepare("DELETE FROM note_history WHERE note_id = ?").run(noteId).changes ?? 0);
     });
-    if (n > 0) this.audit({ op: "history-purge", id: noteId, bytes: n });
+    if (n > 0) {
+      this.audit({ op: "history-purge", id: noteId, bytes: n });
+      this.checkpointWal();
+    }
     return n;
   }
 

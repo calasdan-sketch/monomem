@@ -74,7 +74,7 @@ async function fileContext(payload: Record<string, unknown>, opts: HookOptions):
       `Monomem has earlier memory about ${rel} (advisory; read the file as usual):\n` +
       notes.map((n) => indexLine(n)).join("\n") +
       // Name only a tool this install registers (memory_get is not in the default set); state_read takes one id.
-      "\n" + openHint(notes.map((n) => n.id));
+      "\n" + openHint();
     return JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: UNTRUSTED_BANNER + text } });
   } finally {
     store.close();
