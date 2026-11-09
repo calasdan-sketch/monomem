@@ -78,7 +78,7 @@ describe("read access log", () => {
   test("the preview is one line of at most 120 characters, and a failed read is not logged", async () => {
     const store = new Store(":memory:");
     const c = await connect(store, { label: "bot-a", authed: true });
-    await c.callTool({ name: "state_search", arguments: { query: "a\nb ".repeat(200) } });
+    await c.callTool({ name: "state_search", arguments: { query: "abcdefghi\nb ".repeat(25) } });
     assert.equal(store.accessLog()[0].query.length, 120);
     assert.ok(!store.accessLog()[0].query.includes("\n"));
     const bad: any = await c.callTool({ name: "state_read", arguments: { id: 999 } });
@@ -228,8 +228,8 @@ describe("schema v17", () => {
       } finally {
         console.error = quiet;
       }
-      assert.equal(Store.peekSchemaVersion(path), 18);
-      assert.equal(Store.peekSchemaVersion(path + ".pre-v18-backup"), 16);
+      assert.equal(Store.peekSchemaVersion(path), 19);
+      assert.equal(Store.peekSchemaVersion(path + ".pre-v19-backup"), 16);
       assert.deepEqual(s.list({}).notes.map((n) => n.title), ["kept"]);
       s.logAccess({ tool: "state_list", results: 1 });
       assert.equal(s.accessLog().length, 1);
@@ -310,7 +310,7 @@ describe("flood guard", () => {
       });
       s.close();
       s = new Store(db);
-      assert.equal(SCHEMA_VERSION, 18);
+      assert.equal(SCHEMA_VERSION, 19);
       assert.deepEqual(s.pausedWriters(), ["stdio"]);
       setProcessWriter("stdio");
       assert.throws(() => s.create({ title: "three" }), WriterPausedError, "still paused at the default threshold");

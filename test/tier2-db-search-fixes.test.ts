@@ -134,7 +134,7 @@ describe("D-HIGH-3: importNotes skips per-note scoring, links only imported note
       { title: "solar panel installers winnipeg", body: "residential quotes" },
       { title: "solar panel maintenance", body: "winnipeg residential" },
       { title: "unrelated dentist appointment", body: "thursday afternoon" },
-    ]);
+    ], { dedupe: false }); // the first two repeat existing notes on purpose; without created_at they would be skipped as twins
     // v1.1: a full-store rebuild per import was O(n^2) on the whole store
     // (a 1-note import into 20k notes took minutes); only the imported
     // notes are scored now.

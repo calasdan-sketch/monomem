@@ -12,7 +12,7 @@ const asOf = new Date("2023-08-01T12:00:00Z");
 test("a note written in the named month outranks an equal match from another month", async () => {
   const store = new Store(":memory:");
   const march = store.create({ title: "Camping trip", body: "We went camping by the lake, camping all weekend.", created_at: "2023-03-10T12:00:00Z" });
-  const june = store.create({ title: "Camping", body: "We went camping by the lake.", created_at: "2023-06-10T12:00:00Z" });
+  const june = store.create({ title: "Lake weekend", body: "We went camping by the lake.", created_at: "2023-06-10T12:00:00Z" });
   // Without a date phrase the March note (more matches) is first; "in June" lifts the June note above it.
   assert.equal((await runSearch(store, "when did we go camping", { mode: "keyword", limit: 5, asOf }))[0]?.id, march.id);
   const hits = await runSearch(store, "when did we go camping in June", { mode: "keyword", limit: 5, asOf });

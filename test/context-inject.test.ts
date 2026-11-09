@@ -49,9 +49,9 @@ describe("session-start context", () => {
     const text = await injectContext(s, { signals: noGit, tokens: 300 });
     assert.ok(text.length <= 300 * 4 + 400, `too long: ${text.length}`);
     assert.ok(text.startsWith(`What I know about this project:\nLast session: Session: refactor\n\nLatest session summary (#${sum.id}`), text.slice(0, 120));
-    assert.ok(text.indexOf("Recent memory (1 note):\n- [A plain note] {recent 0d}: remember this") > 0);
+    assert.ok(text.indexOf("Recent memory (1 note):\n#81 [A plain note] {recent 0d}: remember this") > 0);
     assert.match(text, /\n#\d+ \[change\] Observation number \d+ \(\d{4}-\d\d-\d\d, ~\d+ tok\)/);
-    assert.match(text, /Showing \d+ of 82 memories in ~\d+ tokens \(estimate\)(?:, condensed from ~\d+ tokens of notes and captured events|\. The notes themselves are only ~\d+ tokens; the rest is headers and index lines)\. Open any with memory_get ids=\[/);
+    assert.match(text, /Showing \d+ of 82 memories in ~\d+ tokens \(estimate\)(?:, condensed from ~\d+ tokens of notes and captured events|\. The notes themselves are only ~\d+ tokens; the rest is headers and index lines)\. Open any with memory_get ids=\[N\]$/);
     const big = await injectContext(s, { signals: noGit, tokens: 3000 });
     assert.ok(big.length > text.length, "a bigger budget shows more");
     assert.equal(indexLine(sum).startsWith(`#${sum.id} [summary] Session: refactor`), true);
@@ -65,7 +65,7 @@ describe("session-start context", () => {
     const text = await injectContext(s, { signals: noGit });
     assert.doesNotMatch(text, new RegExp(`\\n#${sum.id} \\[summary\\]`));
     assert.match(text, /Showing 2 of 2 memories/);
-    assert.match(text, new RegExp(`memory_get ids=\\[${sum.id},\\d+\\]`));
+    assert.match(text, /memory_get ids=\[N\]$/);
     s.close();
   });
 
@@ -81,7 +81,7 @@ describe("session-start context", () => {
       assert.match(await injectContext(s, { signals: noGit, includeDistrusted: true }), /Hostile observation .*DISTRUSTED WRITER/);
       s.close();
       const ctx = ctxOf(await runRecall({ dbPath: db }));
-      assert.ok(ctx.startsWith(UNTRUSTED_BANNER));
+      assert.ok(ctx.startsWith(UNTRUSTED_BANNER.replace("SECURITY NOTICE:", `SECURITY NOTICE (block ${/block ([0-9a-f]{6})/.exec(ctx)?.[1]}):`)), ctx.slice(0, 120));
       assert.match(ctx, /Trusted fact/);
       assert.doesNotMatch(ctx, /Hostile/);
     } finally {

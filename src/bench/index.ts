@@ -73,6 +73,7 @@ export const BENCH_USAGE = [
   "  stale memory, contradiction recovery, permission isolation, provenance retention, memory poisoning.",
   "  Offline, no model, same result every run. Exits 1 if any scenario fails.",
   "",
+  "  --html <file>        Also write a one-page HTML receipt (versions, date, every suite, what it does not measure).",
   "  --json               Print the full machine-readable report (every scenario, expected vs actual).",
   "  --suite <name>       Only one suite: stale, contradiction, isolation, provenance or poison (repeatable).",
   "  --only <id-prefix>   Only scenarios whose id starts with this, e.g. B or A07 (repeatable).",
@@ -94,6 +95,7 @@ export async function benchMain(argv: string[], out: (s: string) => void = conso
   const o: BenchOptions = {};
   let json = false;
   let verbose = false;
+  let htmlOut: string | undefined;
   const take = (i: number, flag: string): string => {
     const v = argv[i + 1];
     if (v === undefined || v.startsWith("--")) throw new Error(`${flag} needs a value`);
@@ -107,6 +109,7 @@ export async function benchMain(argv: string[], out: (s: string) => void = conso
         return 0;
       } else if (a === "--json") json = true;
       else if (a === "--verbose") verbose = true;
+      else if (a === "--html") htmlOut = resolve(take(i++, a));
       else if (a === "--strict-gaps") o.strictGaps = true;
       else if (a === "--seed") {
         const n = Number(take(i++, a));
@@ -123,6 +126,12 @@ export async function benchMain(argv: string[], out: (s: string) => void = conso
     }
     const { report } = await runBench(o);
     out(json ? JSON.stringify(report, null, 2) : renderTable(report, { verbose }));
+    if (htmlOut) {
+      const { writeFileSync } = await import("node:fs");
+      const { renderBenchHtml } = await import("./html.js");
+      writeFileSync(htmlOut, renderBenchHtml(report, { date: new Date().toISOString().slice(0, 10), command: `monomem bench --seed ${report.seed}` }));
+      out(`Receipt written to ${htmlOut}`);
+    }
     return report.ok ? 0 : 1;
   } catch (e) {
     console.error(`bench: ${(e as Error).message}`);

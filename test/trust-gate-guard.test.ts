@@ -72,6 +72,7 @@ const EXPECTED_SITES: Record<string, string[]> = {
   "facts.ts": ["local CLI, full trust like every command"],
   "health.ts": ["operator CLI, counts redaction markers only; no note content is returned or printed"],
   "llm.ts": ["the capture writer re-reads its own summary note"],
+  "phase-b-cli.ts": ["local command, full local trust"],
   "progressive.ts": ["access probe: readVisible decides before anything is returned"],
   "rollback.ts": [
     "operator rollback (admin), confined to the caller's namespaces by rollbackCandidates",
@@ -98,7 +99,7 @@ export function rawSites(text: string): Array<[number, string]> {
 }
 
 /** Unconditional `includeDistrusted: true` (not behind a `? { includeDistrusted: true } : {}` pass-through of an admin-gated flag), per file. */
-const INTERNAL_OPT_IN: Record<string, number> = { "api.ts": 1, "liveness.ts": 2, "mcp-server-core.ts": 1, "runner.ts": 2, "tasks.ts": 2 };
+const INTERNAL_OPT_IN: Record<string, number> = { "api.ts": 1, "cli.ts": 1, "everyday-cli.ts": 2, /* show/edit: the local shell is the owner, as in label */ "liveness.ts": 2, "mcp-server-core.ts": 1, "runner.ts": 2, "tasks.ts": 2 };
 
 describe("B: one gate for reading a note", () => {
   test("the scanner itself: it matches aliased receivers and ignores comments (positive control)", () => {
@@ -142,8 +143,9 @@ describe("B: one gate for reading a note", () => {
       const n = t.split("\n").filter((l) => /includeDistrusted: ?true/.test(l) && !/\? \{ includeDistrusted: true \} : \{\}/.test(l) && !/^\s*\/\//.test(l)).length;
       if (n) optIn[f] = n;
     }
-    // backup.ts only counts the notes of the COPY it just made.
-    assert.deepEqual(sql.sort(), ["backup.ts"], "SQL on the notes table belongs in store.ts, behind the gate");
+    // backup.ts only counts the notes of the COPY it just made; restore.ts only counts (and checks for encryption) the BACKUP FILE it is about to put
+    // in place, before any store opens it: neither reads a note into a response.
+    assert.deepEqual(sql.sort(), ["backup.ts", "restore.ts"], "SQL on the notes table belongs in store.ts, behind the gate");
     assert.deepEqual(optIn, INTERNAL_OPT_IN, "an unconditional includeDistrusted: true was added or removed: review it, then update INTERNAL_OPT_IN");
   });
 
@@ -157,7 +159,7 @@ describe("B: one gate for reading a note", () => {
     if (/req\.method === "GET" && sessMatch/.test(api)) routes.add("/sessions/:id");
     const NOTE_ROUTES = ["/notes", "/notes/:id", "/search", "/stats", "/changes", "/tasks", "/tasks/:id", "/handoffs", "/catch-up", "/export", "/index", "/timeline", "/sessions", "/sessions/:id", "/files/timeline", "/quality", "/quarantine"];
     // /access: the read access log holds writer labels and redacted query previews, never note text.
-    const NO_NOTE_CONTENT = ["/health", "/ready", "/", "/dashboard.js", "/favicon.ico", "(sign pages)", "/runner/status", "/trust", "/access"];
+    const NO_NOTE_CONTENT = ["/health", "/ready", "/", "/dashboard.js", "/favicon.ico", "(sign pages)", "/runner/status", "/trust", "/access", "/whoami", "/audit", "/insights", "/tokens"];
     assert.deepEqual([...routes].sort(), [...NOTE_ROUTES, ...NO_NOTE_CONTENT].sort(), "a GET route was added: add it to NOTE_ROUTES (and to the canary test below) or NO_NOTE_CONTENT");
 
     const mcp = read("mcp-server-core.ts");

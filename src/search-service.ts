@@ -9,7 +9,8 @@
 // embedded, every mode degrades to keyword search -- a query must never fail
 // because an optional embedding server is unavailable.
 
-import { Store, NoteRecord, clampInt } from "./store.js";
+import { mayEmbed } from "./sensitivity.js";
+import { Store, NoteRecord, clampInt, queryTooLong, ValidationError } from "./store.js";
 import { embed, embeddingsEnabled, embeddingsConfig, noteEmbeddingText } from "./embeddings.js";
 import { filterByTimeRange, parseTimePhrase, type TimeRange } from "./time-parse.js";
 import { TIME_ZONE } from "./config.js";
@@ -32,7 +33,7 @@ export type SearchMode = (typeof SEARCH_MODES)[number];
  * a write.
  */
 export async function maybeEmbed(store: Store, note: NoteRecord): Promise<void> {
-  if (!embeddingsEnabled()) return;
+  if (!embeddingsEnabled() || !mayEmbed(note)) return;
   try {
     const cfg = embeddingsConfig();
     const vec = await embed(noteEmbeddingText(note.title, note.body), cfg);
@@ -40,6 +41,13 @@ export async function maybeEmbed(store: Store, note: NoteRecord): Promise<void> 
   } catch {
     /* swallow: the write succeeded; the embedding is best-effort */
   }
+}
+
+/** Said when someone asks for semantic or hybrid search but no embedding service is set up: the results are keyword results. Undefined when nothing needs saying. */
+export const SEMANTIC_NOTICE = "semantic search is not set up; showing keyword results. See docs/search.md (needs MONOMEM_EMBEDDINGS=on and a local Ollama).";
+export function semanticNotice(raw: string | undefined | null): string | undefined {
+  const m = (raw || "").trim().toLowerCase();
+  return (m === "semantic" || m === "hybrid") && !embeddingsEnabled() ? SEMANTIC_NOTICE : undefined;
 }
 
 export function parseMode(raw: string | undefined | null): SearchMode {
@@ -234,7 +242,12 @@ function boostAndRank(
 ): Array<{ note: NoteRecord; score: number }> {
   return hits
     .map((h) => ({ ...h, score: accessBoost(h.score, h.note.access_count, h.note.last_accessed) }))
-    .sort((a, b) => b.score - a.score);
+    .sort((a, b) => b.score - a.score || newerFirst(a.note, b.note));
+}
+
+/** Tie-break for equal scores: the newest note first (updated_at, then id), as the keyword query orders them. */
+function newerFirst(a: NoteRecord, b: NoteRecord): number {
+  return a.updated_at < b.updated_at ? 1 : a.updated_at > b.updated_at ? -1 : b.id - a.id;
 }
 
 /**
@@ -905,12 +918,19 @@ export function keywordCoverage(note: NoteRecord, keywords: string[]): number {
 // The public entry points. A caller that opted in with includeDistrusted gets
 // notes whose writer the admin distrusts back flagged `distrusted: true`, so no
 // surface can show one without the mark.
+export function assertQueryLength(query: unknown): void {
+  const why = queryTooLong(query);
+  if (why) throw new ValidationError(why);
+}
+
 export async function runSearch(store: Store, query: string, opts: SearchOpts = {}): Promise<NoteRecord[]> {
+  assertQueryLength(query);
   const r = await runSearchInner(store, query, opts);
   return opts.includeDistrusted ? store.markDistrusted(r) : r;
 }
 
 export async function runSearchExplained(store: Store, query: string, opts: SearchOpts = {}): Promise<ExplainedHit[]> {
+  assertQueryLength(query);
   const r = await runSearchExplainedInner(store, query, opts);
   if (!opts.includeDistrusted) return r;
   const marked = new Map(store.markDistrusted(r.map((h) => h.note)).map((n) => [n.id, n]));
@@ -922,6 +942,7 @@ export async function runRelevantSearch(
   message: string,
   opts: RelevantOpts = {}
 ): Promise<{ keywords: string[]; results: NoteRecord[] }> {
+  assertQueryLength(message);
   const r = await runRelevantSearchInner(store, message, opts);
   return opts.includeDistrusted ? { ...r, results: store.markDistrusted(r.results) } : r;
 }

@@ -204,7 +204,7 @@ describe("setup: recognising the old claude-bridge entry", () => {
     const s = sandbox();
     const m = migrateEntry(s.e, { command: "auto" }, { command: "node", args: ["/nowhere/dist/src/mcp-stdio.js"] }, false);
     assert.equal(m.entry.env, undefined);
-    assert.match(m.notes.join(" "), /start with the standard location/);
+    assert.match(m.notes.join(" "), /none was found next to it: the new entry will use .+/);
   });
 });
 
@@ -282,7 +282,8 @@ describe("setup: making the change", () => {
     assert.equal(j.mcpServers.other.command, "npx");
     assert.equal(j.mcpServers.monomem.command, "/usr/local/bin/node");
     assert.equal(j.mcpServers.monomem.type, "stdio");
-    assert.deepEqual(j.mcpServers.monomem.env, { MONOMEM_CLIENT: "claude-code", MONOMEM_DB_PATH: s.db });
+    // The sandbox sets MONOMEM_HOME to a folder that is not ~/.monomem, so the entry carries it too (expert round 1).
+    assert.deepEqual(j.mcpServers.monomem.env, { MONOMEM_CLIENT: "claude-code", MONOMEM_DB_PATH: s.db, MONOMEM_HOME: resolve(join(s.root, "om-home")) });
     const b = listBackups(ccFile(s.home));
     assert.equal(b.length, 1);
     assert.equal(readFileSync(b[0], "utf8"), REAL_CLAUDE_JSON, "the backup is the original, byte for byte");
@@ -546,8 +547,8 @@ describe("setup: moving from claude-bridge", () => {
     const { oldDb } = legacyHome(s, {});
     const io = makeIO();
     await runSetup(s.e, io, opts({ dryRun: true }));
-    assert.match(io.all(), /schema v13; this version upgrades it to v18/);
-    assert.match(io.all(), /pre-v18-backup/);
+    assert.match(io.all(), /schema v13; this version upgrades it to v19/);
+    assert.match(io.all(), /pre-v19-backup/);
     assert.match(io.all(), /close Claude Code/i);
     assert.equal(Store.peekSchemaVersion(oldDb), 13, "a dry run did not upgrade it");
   });

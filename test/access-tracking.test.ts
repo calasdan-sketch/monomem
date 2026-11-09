@@ -115,8 +115,9 @@ describe("access tracking: search bumps + ranking boost", () => {
     const first = store.create({ title: "stable order", body: "word" });
     const second = store.create({ title: "stable order", body: "word" });
     const baseline = await runSearch(store, "stable order", { mode: "keyword" });
-    assert.equal(baseline[0].id, first.id);
-    assert.equal(baseline[1].id, second.id);
+    // Equal scores come newest first (updated_at, then id).
+    assert.equal(baseline[0].id, second.id);
+    assert.equal(baseline[1].id, first.id);
   });
 
   test("boost math: score * (1 + 0.1 * log10(1 + access_count))", async () => {
@@ -179,10 +180,10 @@ describe("access tracking: accessStats", () => {
     assert.equal(stats.totalNotes, 3);
     assert.equal(stats.totalAccesses, 7);
     assert.equal(stats.neverAccessed, 1);
-    assert.equal(stats.mostAccessed.length, 3);
+    assert.equal(stats.mostAccessed.length, 2, "a note nobody has read is not 'most accessed'");
     assert.deepEqual(stats.mostAccessed[0], { id: a.id, title: "hot", access_count: 5 });
     assert.deepEqual(stats.mostAccessed[1], { id: b.id, title: "warm", access_count: 2 });
-    assert.deepEqual(stats.mostAccessed[2], { id: c.id, title: "cold", access_count: 0 });
+    assert.ok(!stats.mostAccessed.some((m) => m.id === c.id));
     // mostAccessed leaks no bodies.
     for (const m of stats.mostAccessed) {
       assert.deepEqual(Object.keys(m).sort(), ["access_count", "id", "title"]);

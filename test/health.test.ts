@@ -37,18 +37,18 @@ describe("grade rule", () => {
 });
 
 describe("monomem health", () => {
-  test("clean store: grade A, exit 0, ten lines", async () => {
+  test("clean store: grade A, exit 0, eleven lines", async () => {
     const { dir, opts } = setup();
     try {
       const r = await runHealth(opts);
       assert.equal(r.grade, "A", JSON.stringify(r.checks));
       assert.equal(r.exit_code, 0);
-      assert.equal(r.checks.length, 10);
+      assert.equal(r.checks.length, 11);
       assert.equal(r.date, "2026-11-05");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
-  test("held write is info (the defence working), missing hook is the one warn: grade B; markers and distrust are counted", async () => {
+  test("held write is info (the defence working), a missing optional hook is info only: grade A; markers and distrust are counted", async () => {
     const { dir, opts, store } = setup();
     try {
       const s = store();
@@ -58,12 +58,13 @@ describe("monomem health", () => {
       s.close();
       writeFileSync(opts.auditPath!, `{"op":"create","prev":"aaa"}\n`);
       const r = await runHealth({ ...opts, settingsPath: join(dir, "nope.json") });
-      assert.equal(find(r, "hooks").status, "warn");
+      assert.equal(find(r, "hooks").status, "info");
+      assert.match(find(r, "hooks").text, /optional/);
       assert.equal(find(r, "held").status, "info");
       assert.match(find(r, "held").text, /defence working/);
       assert.equal(find(r, "distrust").status, "info");
       assert.equal(find(r, "redacted").status, "info");
-      assert.equal(r.grade, "B", JSON.stringify(r.checks));
+      assert.equal(r.grade, "A", JSON.stringify(r.checks));
       assert.match(find(r, "distrust").text, /^1 distrust rule/);
       assert.match(find(r, "redacted").text, /: 1$/);
       assert.equal(find(r, "database").status, "ok");
@@ -103,7 +104,7 @@ describe("monomem health", () => {
     try {
       const r = await runHealth({ ...opts, bindHost: "0.0.0.0" });
       assert.equal(find(r, "security:bind").status, "warn");
-      assert.equal(r.grade, "B");
+      assert.equal(r.grade, "B", JSON.stringify(r.checks.filter((c) => c.status === "warn")));
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
@@ -162,7 +163,7 @@ describe("monomem health", () => {
       assert.equal(find(on, "hooks").status, "ok");
       assert.match(find(on, "hooks").text, /plugin/);
       writeFileSync(noHook, JSON.stringify({ enabledPlugins: { "monomem@monomem": false } }));
-      assert.equal(find(await runHealth({ ...opts, settingsPath: noHook, pluginsPath: plugins }), "hooks").status, "warn");
+      assert.equal(find(await runHealth({ ...opts, settingsPath: noHook, pluginsPath: plugins }), "hooks").status, "info");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
@@ -219,5 +220,30 @@ describe("monomem health", () => {
       assert.match(out[0], /wrote .*monomem-health\.svg/);
       assert.ok(!readdirSync(process.cwd()).includes("monomem-health.svg"), "nothing written into the current folder");
     } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe("exposure check", () => {
+  test("personal data not labelled private, plus an unlimited app key, cost one grade step in total", async () => {
+    const { dir, opts, store } = setup();
+    const saved = process.env.MONOMEM_TOKENS;
+    try {
+      const s = store();
+      s.create({ title: "contact", body: "reach me at jo@example.com or 4111 1111 1111 1111" });
+      s.create({ title: "secret plan", body: "x", sensitivity: "private" });
+      s.close();
+      writeFileSync(opts.auditPath!, `{"op":"create","prev":"aaa"}\n`);
+      process.env.MONOMEM_TOKENS = JSON.stringify([{ token: "k".repeat(40), scope: "write", label: "helper" }]);
+      const r = await runHealth(opts);
+      const e = find(r, "exposure");
+      assert.equal(e.status, "warn", JSON.stringify(e));
+      assert.match(e.text, /may hold personal data/);
+      assert.match(e.text, /no limit/);
+      assert.match(e.text, /counts as one warning/);
+      assert.equal(r.grade, "B", JSON.stringify(r.checks.filter((c) => c.status === "warn")));
+    } finally {
+      if (saved === undefined) delete process.env.MONOMEM_TOKENS; else process.env.MONOMEM_TOKENS = saved;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

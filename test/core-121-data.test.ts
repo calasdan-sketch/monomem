@@ -212,7 +212,7 @@ describe("schema migration to v11 from 1.1.0 and 1.2.0 databases", () => {
       ALTER TABLE quarantine DROP COLUMN sealed;
     `);
     if (to === 9) {
-      d.exec("DROP INDEX idx_notes_archived; ALTER TABLE notes DROP COLUMN body_enc; ALTER TABLE notes DROP COLUMN expires_at; ALTER TABLE notes DROP COLUMN archived_at;");
+      d.exec("DROP INDEX idx_notes_archived; DROP INDEX IF EXISTS idx_notes_live_updated; DROP INDEX IF EXISTS idx_notes_ns_updated; ALTER TABLE notes DROP COLUMN body_enc; ALTER TABLE notes DROP COLUMN expires_at; ALTER TABLE notes DROP COLUMN archived_at;");
     }
     d.exec(`PRAGMA user_version = ${to}`);
     d.close();

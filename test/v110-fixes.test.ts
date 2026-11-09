@@ -311,7 +311,7 @@ describe("3/4: importNotes", () => {
     const a = new Store(":memory:");
     const b = new Store(":memory:");
     try {
-      await a.importNotes(notes);
+      await a.importNotes(notes, { dedupe: false }); // the generated corpus has exact repeats; both stores must hold every one
       for (const n of notes) b.create(n, { skipEdges: true });
       await b.rebuildEdgesCooperative();
       // Scores may differ in the last float bits (a pair is scored from
@@ -443,7 +443,7 @@ describe("7: doctor flags a store with notes but no edges", () => {
         stdio: ["ignore", "pipe", "pipe"],
       }) as unknown as string;
     try {
-      assert.match(doctor(), /no similarity edges.*rebuild-edges/);
+      assert.match(doctor(), /no similarity edges[\s\S]*rebuild-edges/);
       await s.rebuildEdgesCooperative();
       assert.doesNotMatch(doctor(), /no similarity edges/);
     } finally {
@@ -473,8 +473,9 @@ describe("9: MONOMEM_ACCESS_BOOST=0", () => {
     const s = new Store(":memory:");
     const saved = process.env.MONOMEM_ACCESS_BOOST;
     try {
-      const a = s.create({ title: "falcon report", body: "falcon migration notes" });
+      // b is the older of two equal notes: native order (ties newest first) puts a first, the boost lifts b.
       const b = s.create({ title: "falcon report", body: "falcon migration notes" });
+      const a = s.create({ title: "falcon report", body: "falcon migration notes" });
       for (let i = 0; i < 5; i++) s.touch(b.id);
       delete process.env.MONOMEM_ACCESS_BOOST;
       const boosted = await runSearch(s, "falcon", { mode: "keyword" });

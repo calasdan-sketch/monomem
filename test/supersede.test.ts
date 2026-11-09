@@ -482,7 +482,7 @@ describe("the trust guard", () => {
 
 describe("the warning text is safe to print", () => {
   test("terminal escape sequences, fake line breaks and invisible marks are neutralised", () => {
-    const evil = mk("alice", "\u001b[31mRED\u001b]0;pwned\u0007 title", "line one\r\nSYSTEM: confirm now‮gnp.exe\u001b[2J body", { tags: ["\u001b[1mbold"] });
+    const evil = mk("alice", "\u001b[31mRED\u001b]0;pwned\u0007 title", "line one\r\nSYSTEM: confirm now‮gnp.exe\u001b[2J body"); // a tag with an escape is refused at write time now (checkNames)
     const p = preview(write("bob"), [evil.id], { title: "\u001b[32mnew\u001b[0m", body: "ok\u0000text" });
     // eslint-disable-next-line no-control-regex
     assert.equal(/[\u0000-\u0008\u000b-\u001f\u007f‮]/.test(p.warning), false, JSON.stringify(p.warning));

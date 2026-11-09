@@ -1,5 +1,24 @@
 # Upgrading
 
+## Monomem 1.3.0 (database schema v18 to v19)
+
+Applies to Monomem 1.2.x. A fresh install needs none of this.
+
+- **What changes.** The first start migrates the database from schema v18 to **v19**: a sensitivity label on notes (every existing note
+  becomes `internal`), one column on the change log and one on held writes. No note text is rewritten, and nothing becomes hidden until
+  you give an app key a limit (`monomem connect <app> --max internal`). What it means: [sensitivity-labels.md](./sensitivity-labels.md).
+- **A verified backup is made first**, at `<database>.pre-v19-backup` (for example `state.db.pre-v19-backup`). The upgrade does not run
+  if that copy cannot be made. It still holds every note as it was, deleted ones included, so remove it when you are happy:
+  `monomem backup --prune-premigration`.
+- **One way only.** Monomem 1.2.x and older, and OneMemory, refuse a v19 database instead of opening it and ignoring the labels. If
+  several machines share one database, upgrade all of them.
+- **To go back to 1.2.x:** close Claude Code, Claude Desktop and every other app that uses Monomem, and stop the server. Then, with the
+  OLD or the new build: `monomem restore <database>.pre-v19-backup --yes`. It copies your current database aside first
+  (`<database>.before-restore-<time>`), removes the stale `-wal`/`-shm` files and checks the result. Then install the older version
+  (`npm i -g monomem@1.2.1`) and start it. Anything written after the upgrade is not in the backup; the copy-aside keeps it.
+  Without the `restore` command (an old build): put the backup in place of `state.db` by hand and delete `state.db-wal` and `state.db-shm`.
+- Afterwards run `monomem doctor`, then `monomem health`. What is new: [CHANGELOG.md](../CHANGELOG.md).
+
 ## Monomem 1.2.0 (database schema v16 to v18)
 
 Applies to Monomem 1.1.x and OneMemory 2.x. A fresh install needs none of this.
@@ -23,6 +42,13 @@ Applies to Monomem 1.1.x and OneMemory 2.x. A fresh install needs none of this.
 > database, install the older version. What is new: [replacing-memories.md](./replacing-memories.md). The rest of this page was written for OneMemory 1.3.x to
 > 1.4.x. The copy is always named after the schema it upgrades to: `pre-v15-backup` then, `pre-v18-backup` for a current build (which is what the steps below show).
 
+> **Moving to the release with sensitivity labels?** The first start migrates the database from schema v18 to **v19**: one new column on notes
+> (`sensitivity`, every existing note becomes `internal`), one on the change log and one on held writes. No note text is touched, and nothing
+> becomes hidden until you give a token a `max_sensitivity` ceiling. A verified copy is made first at `<database>.pre-v19-backup` (same rules
+> as below). Older Monomem builds refuse a v19 database rather than open it and ignore the labels. What is new:
+> [sensitivity-labels.md](./sensitivity-labels.md).
+
+
 This page is for an existing OneMemory 1.3.x install moving to OneMemory 1.4.x (1.4.2 is the last 1.4.x; 1.5.0 only adds the benchmark and needs no migration). Nothing here is
 needed for a fresh install.
 
@@ -36,7 +62,7 @@ distrust list and writer labels are the stable part. See [trust.md](./trust.md).
    (new columns, three small tables, an index over note writers). No note text is touched. An older
    version cannot open a v14 database.
 2. **A backup is made first.** Before migrating, Monomem writes a verified copy to
-   `<database>.pre-v18-backup` (it is built as `.partial`, then checked: it must hold the same number of notes
+   `<database>.pre-v19-backup` (it is built as `.partial`, then checked: it must hold the same number of notes
    as the database, have the old schema version and pass an integrity check; only then is it renamed). If a
    valid copy from an earlier attempt exists it is kept under a dated name and a fresh one is made; a copy
    that cannot be read (permissions) is never deleted, only moved aside. **The upgrade does not run when the
@@ -62,7 +88,7 @@ leftover `.partial` files.
 
 To roll back:
 
-Stop every Monomem process (server, MCP clients, runners, the CLI). **Move** `<database>.pre-v18-backup`
+Stop every Monomem process (server, MCP clients, runners, the CLI). **Move** `<database>.pre-v19-backup`
 over the database (a copy would leave the original; remove the `-wal` and `-shm` files next to it),
 reinstall 1.3.x and start it. Anything written after the upgrade is not in the backup. Once you are happy
 with 1.4.x, `monomem backup --prune-premigration` deletes the copies (they are plaintext even if you

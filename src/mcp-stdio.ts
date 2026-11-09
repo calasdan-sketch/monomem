@@ -6,11 +6,12 @@ import "./quiet-sqlite.js"; // first: hide the node:sqlite ExperimentalWarning
 import "./legacy-env.js"; // second: read the old CLAUDE_BRIDGE_* variables as MONOMEM_*
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { Store } from "./store.js";
-import { createMcpServer } from "./mcp-server-core.js";
+import { createMcpServer, stdioSweep } from "./mcp-server-core.js";
 import { DB_PATH, prepareDataDir } from "./config.js";
 import { resolveStartupNamespace } from "./namespace.js";
 import { setProcessWriter, stdioWriter } from "./actor.js";
 import { audit, printable } from "./security.js";
+import { parseSensitivity, SENSITIVITY_HELP } from "./sensitivity.js";
 
 prepareDataDir();
 // No token on stdio: writes are stamped with the marker "stdio", or "stdio:<app>" when the launch config sets
@@ -18,23 +19,33 @@ prepareDataDir();
 const stdio = stdioWriter();
 if (stdio.warning) process.stderr.write(`[monomem] ${stdio.warning}\n`);
 setProcessWriter(stdio.writer);
-const store = new Store(DB_PATH);
+let store: Store;
+try {
+  store = new Store(DB_PATH);
+} catch (e) {
+  // A person reads this in an app's log: one plain line, not a stack trace.
+  process.stderr.write(`[monomem] cannot open the database: ${((e as Error).message ?? String(e)).replace(/\s+/g, " ")}\n`);
+  process.exit(1);
+}
 // Most people never run the HTTP server (which sweeps hourly), so expired notes are archived here too:
-// at startup and then hourly, idempotent, and a failure never stops the MCP server.
-const sweepExpired = (): void => {
-  try {
-    store.sweepExpired();
-  } catch (e) {
-    process.stderr.write(`[monomem] expiry sweep failed: ${(e as Error).message}\n`);
-  }
-};
-sweepExpired();
-setInterval(sweepExpired, 3_600_000).unref();
+// at startup and then hourly, idempotent, and a failure never stops the MCP server. The change log is pruned here too.
+const sweep = (): void => stdioSweep(store);
+sweep();
+setInterval(sweep, 3_600_000).unref();
 // Server-side namespace resolution: resolved ONCE at startup from the
 // process working directory. Null when unconfigured (legacy behavior).
 const nsOpts = resolveStartupNamespace(process.cwd());
 // local: admin with no token was never a deliberate grant, so operator-only tools stay off for the agent.
-const server = createMcpServer(store, "admin", nsOpts ?? undefined, { local: true });
+// Stdio has no token, so it has no token ceiling: whoever starts this process reads everything. MONOMEM_STDIO_MAX_SENSITIVITY
+// (public / internal / private) caps it anyway for setups that must use stdio. An app that must be kept away from private
+// notes should use the HTTP server with its own token instead (docs/give-an-app-limited-access.md).
+const stdioCeiling = (process.env.MONOMEM_STDIO_MAX_SENSITIVITY ?? "").trim();
+const stdioMax = stdioCeiling ? parseSensitivity(stdioCeiling) : undefined;
+if (stdioCeiling && !stdioMax) {
+  console.error(`[monomem] MONOMEM_STDIO_MAX_SENSITIVITY must be ${SENSITIVITY_HELP} (got ${JSON.stringify(stdioCeiling)}); not starting.`);
+  process.exit(1);
+}
+const server = createMcpServer(store, "admin", nsOpts ?? undefined, stdioMax ? { maxSensitivity: stdioMax, local: true } : { local: true });
 const transport = new StdioServerTransport();
 // The client's own name from the initialize handshake goes to the audit log, labelled as a claim: any program can
 // send any clientInfo. It is never used for written_by or for any access decision.
@@ -93,9 +104,17 @@ if (nsOpts) {
   console.error(`[monomem] namespace resolution ACTIVE: namespace="${nsOpts.namespace}"`);
 }
 
+// The app closing its end of the pipe is the normal way a stdio server ends: close the store then too (buffered read
+// counts are written), not only on a signal. Runs once.
+let closed = false;
 function shutdown(): void {
+  if (closed) return;
+  closed = true;
   store.close();
   process.exit(0);
 }
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
+process.on("SIGHUP", shutdown);
+process.stdin.on("end", shutdown);
+process.stdin.on("close", shutdown);

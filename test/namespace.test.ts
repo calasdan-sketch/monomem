@@ -268,7 +268,7 @@ describe("MCP namespace resolution (active)", () => {
     });
     const { note } = parseToolText(okRes);
     assert.equal(note.namespace, "agent-a");
-    assert.equal(note.body, "zebra alpha edited");
+    assert.equal(store.read(ownId)?.body, "zebra alpha edited"); // state_write no longer echoes the body
 
     // Cross-namespace update by id: denied.
     const denied: any = await client.callTool({

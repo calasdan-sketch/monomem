@@ -8,7 +8,8 @@
 
 import { cpSync, existsSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { join, relative, resolve } from "node:path";
+import { homedir } from "node:os";
+import { dirname, join, relative, resolve } from "node:path";
 import { dataHome, detectClients, hookHosts, readHistory, saveHistory, stamp, undoSession, type HistorySession, type SetupEnv, type SetupIO } from "./setup.js";
 
 export interface UninstallOptions {
@@ -65,6 +66,32 @@ export function dirBytes(dir: string, deadline: number = Date.now() + DIR_BYTES_
   return { bytes: n, truncated: false };
 }
 
+/**
+ * Top-level names Monomem itself writes in its data folder (the database and its side files, keys, tokens, the audit
+ * log, the capture spool, setup's history, sync and runner state, backups). --purge deletes only these when the folder
+ * also holds anything else, so a MONOMEM_HOME pointed at a busy folder never loses files that are not Monomem's.
+ */
+const OWN_ENTRY =
+  /^(?:state\.db.*|demo\.db.*|\.token.*|\.key.*|\.attest-key.*|\.sync-key.*|\.last-backup|tokens\.json.*|spaces\.json.*|setup-history\.json.*|setup-hooks-declined|capture\.json.*|capture-spool\.jsonl.*|claude-import-held\.json.*|runner-allow\.json.*|runner-seen\.json.*|runner\.lock|login-code.*|audit\.log.*|spool|backups|sync-conflicts|\.sync-work-.*|README\.txt)$/;
+
+/** Entries of `dir` that are not Monomem's (empty when it cannot be read). */
+export function foreignEntries(dir: string): string[] {
+  try {
+    return readdirSync(dir).filter((f) => !OWN_ENTRY.test(f));
+  } catch {
+    return [];
+  }
+}
+
+/** Why a folder must never be purged (the home folder or a filesystem root), or "" when it may be. */
+export function purgeRefusal(dir: string, home: string): string {
+  const d = resolve(dir);
+  const same = (a: string, b: string): boolean => (process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b);
+  if (same(d, resolve(home)) || same(d, resolve(homedir()))) return `${d} is your home folder`;
+  if (dirname(d) === d) return `${d} is the root of a drive`;
+  return "";
+}
+
 /** What undo will do to one recorded change, in words (nothing is written). */
 function describe(c: Change): string {
   if (!existsSync(c.real)) return "already gone, nothing to do";
@@ -115,13 +142,22 @@ export async function runUninstall(e: SetupEnv, io: SetupIO, opts: UninstallOpti
   let n = 1;
   for (const s of sessions) for (const c of [...s.changes].reverse()) io.out(`  ${n++}. ${c.label}: ${c.file}: ${describe(c)}`);
   if (!sessions.length) io.out("  (setup has not changed any app's configuration on this computer, or it was already undone)");
+  const refusal = opts.purge ? purgeRefusal(dir, e.home) : "";
+  if (refusal) {
+    io.err(`Refusing --purge: the data folder ${refusal}. Deleting it would delete files that are not Monomem's. Set MONOMEM_HOME to Monomem's own folder, or remove its files by hand.`);
+    return 1;
+  }
+  const others = opts.purge && existsSync(dir) ? foreignEntries(dir) : [];
   if (opts.purge) {
     if (existsSync(dir)) {
       if (!opts.noBackup) io.out(`  ${n++}. Make a final backup of ${dir} at ${backupDir}`);
       {
         const size = dirBytes(dir);
         const mb = `${(size.bytes / 1e6).toFixed(1)} MB${size.truncated ? "+, scan stopped early — folder is very large" : ""}`;
-        io.out(`  ${n++}. DELETE the data folder ${dir} (${mb}): every note, key and token in it${opts.noBackup ? ", with NO backup (--no-backup)" : ""}`);
+        if (others.length) {
+          io.out(`  ${n++}. DELETE Monomem's files in ${dir}: every note, key and token${opts.noBackup ? ", with NO backup (--no-backup)" : ""}`);
+          io.out(`     and leave the folder and the ${others.length} other file(s) in it: ${others.slice(0, 10).join(", ")}${others.length > 10 ? ", ..." : ""}`);
+        } else io.out(`  ${n++}. DELETE the data folder ${dir} (${mb}): every note, key and token in it${opts.noBackup ? ", with NO backup (--no-backup)" : ""}`);
       }
     } else io.out(`  (no data folder at ${dir}; nothing to delete)`);
     for (const b of configBackups) io.out(`  ${n++}. Delete setup's copy ${b}`);
@@ -176,13 +212,16 @@ export async function runUninstall(e: SetupEnv, io: SetupIO, opts: UninstallOpti
         }
         io.out(`  final backup made: ${backupDir}`);
       }
+      // Re-read now: only Monomem's own entries go when anything else is in the folder.
+      const foreign = foreignEntries(dir);
       try {
-        rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+        if (!foreign.length) rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+        else for (const f of readdirSync(dir)) if (OWN_ENTRY.test(f)) rmSync(join(dir, f), { recursive: true, force: true, maxRetries: 5 });
       } catch (err) {
         io.err(`  Could not delete ${dir} (${(err as Error).message}). Close every app using Monomem and run uninstall --purge again.`);
         return 1;
       }
-      io.out(`  deleted the data folder ${dir}`);
+      io.out(foreign.length ? `  deleted Monomem's files; left ${foreign.length} other file(s) in ${dir}` : `  deleted the data folder ${dir}`);
     }
     for (const b of configBackups) {
       try {

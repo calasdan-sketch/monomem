@@ -1,7 +1,7 @@
 // What Monomem costs you: aggregate numbers only, never prompt or note text.
 //
-// One row per agent session: tokens the SessionStart hook injected, the tokens of captured work those stood in for
-// ("saved", the same estimate as the savings footer), and tokens the optional local model used (llm.ts; 0 when it is
+// One row per agent session: tokens the SessionStart hook injected, the full text of the notes those stood in for
+// ("saved"; each injection counts only its own notes, never the whole capture log), and tokens the optional local model used (llm.ts; 0 when it is
 // off). Plus, read live: capture events recorded and the database size on disk. Tokens are estimates at ~4 characters
 // a token. Writes are best-effort: a meter that cannot write never costs a session its context.
 import type { Store } from "./store.js";
@@ -34,7 +34,7 @@ export interface MeterStats {
 }
 
 /** Add to one session's counters (fail-silent). */
-export function meterAdd(store: Store, sessionId: string, namespace: string, add: { injected?: number; saved?: number; llm?: number }): void {
+export function meterAdd(store: Store, sessionId: string, namespace: string, add: { injected?: number; saved?: number; llm?: number; savedOnce?: boolean }): void {
   if (!sessionId) return;
   const db = store.captureDb();
   // Session start must never wait behind another process's write lock for a meter row: fail fast, say so, keep going.
@@ -46,7 +46,7 @@ export function meterAdd(store: Store, sessionId: string, namespace: string, add
     db.prepare(
       `INSERT INTO meter_sessions (session_id, namespace, injections, injected_tokens, saved_tokens, llm_tokens, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(session_id) DO UPDATE SET injections = injections + excluded.injections, injected_tokens = injected_tokens + excluded.injected_tokens,
-         saved_tokens = saved_tokens + excluded.saved_tokens, llm_tokens = llm_tokens + excluded.llm_tokens, updated_at = excluded.updated_at`
+         saved_tokens = ${add.savedOnce ? "saved_tokens" : "saved_tokens + excluded.saved_tokens"}, llm_tokens = llm_tokens + excluded.llm_tokens, updated_at = excluded.updated_at`
     ).run(sessionId, namespace, inj, Math.max(0, Math.round(add.injected ?? 0)), Math.max(0, Math.round(add.saved ?? 0)), Math.max(0, Math.round(add.llm ?? 0)), new Date().toISOString());
   } catch (e) {
     process.stderr.write(`monomem: meter not updated (${(e as Error).message})\n`);
@@ -97,7 +97,7 @@ const plural = (n: number, one: string, many = one + "s"): string => `${n} ${n =
 /** One line for `monomem doctor`. "Injected" counts everything the hook added: note text plus index lines, legend and footer. */
 export function meterLine(m: MeterStats): string {
   const t = m.totals;
-  const standIn = t.saved_tokens > 0 ? `, standing in for ~${t.saved_tokens} tokens of captured work` : "";
+  const standIn = t.saved_tokens > 0 ? `, standing in for ~${t.saved_tokens} tokens of full note text` : "";
   return (
     `footprint: ${plural(t.sessions, "session")}, ${plural(t.injections, "injection")} of ~${t.injected_tokens} tokens in total (notes plus headers and footer)${standIn}, ` +
     `${t.llm_tokens} local-model tokens, ${plural(m.capture_events, "capture event")}, database ${(m.db_bytes / 1048576).toFixed(1)} MB`

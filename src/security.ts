@@ -6,9 +6,9 @@
 
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync } from "node:fs";
 import { createHash, timingSafeEqual } from "node:crypto";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { IncomingMessage } from "node:http";
-import { DATA_DIR, isLoopback, type Scope, type TokenEntry } from "./config.js";
+import { DATA_DIR, envNum, isLoopback, type Scope, type TokenEntry } from "./config.js";
 import { isWriterMarker, MARKER_DESCRIPTIONS } from "./actor.js";
 
 // ---- Untrusted-data banner --------------------------------------------------
@@ -186,7 +186,22 @@ export const SECRET_PATTERNS: ReadonlyArray<[string, RegExp]> = [
   ["Google API key", /\bAIza[0-9A-Za-z_-]{35}\b/],
   ["Slack token", /\bxox[abeoprs]-[0-9A-Za-z-]{10,}\b/],
   ["Stripe key", /\b(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{16,}\b/],
+  // A literal value only: "Bearer $TOKEN" and "Bearer <token>" are references and do not match.
+  ["Authorization header", /\bAuthorization["']?:[ \t]*["']?Bearer[ \t]+[A-Za-z0-9._~+/=-]{20,}/i],
+  ["Slack webhook", /hooks\.slack\.com\/services\/T[A-Z0-9]{6,}\/B[A-Z0-9]{6,}\/[A-Za-z0-9]{20,}/],
+  ["Discord webhook", /discord(?:app)?\.com\/api\/webhooks\/\d{15,22}\/[A-Za-z0-9_-]{50,}/],
+  ["Hugging Face token", /\bhf_[A-Za-z0-9]{30,}\b/],
+  ["Azure storage key", /\bAccountKey=[A-Za-z0-9+/]{40,}={0,2}/],
 ];
+
+// scheme://user:PASSWORD@host (postgres://, mongodb+srv://, redis://:pw@...). Placeholder passwords do not count.
+// Not in SECRET_PATTERNS: capture's redactor already blanks only the password part (redact.ts "URL password").
+const URL_PASSWORD = /\b[a-z][a-z0-9+.-]{0,20}:\/\/[^\s/:@]{0,64}:([^\s/@]{1,128})@[^\s/@]{1,253}/gi;
+const URL_PASSWORD_PLACEHOLDER = /^(?:pass(?:word)?|pwd|secret|x{3,}|\*+|<[^>]*>|\$\{?\w+\}?|\.\.\.|\[REDACTED[^\]]*\])$/i;
+export function hasUrlPassword(text: string): boolean {
+  for (const m of text.matchAll(URL_PASSWORD)) if (!URL_PASSWORD_PLACEHOLDER.test(m[1])) return true;
+  return false;
+}
 
 // Real key shapes only: Anthropic sk-ant-<kind><nn>-..., OpenAI sk-proj- /
 // sk-svcacct- / sk-admin- / legacy sk-<40+ base62>. Shape (mixed case +
@@ -248,7 +263,7 @@ export function shannonEntropy(s: string): number {
 }
 
 /** Adjacent letter pairs that switch case ("aB", "Xy"). */
-function caseFlips(s: string): number {
+export function caseFlips(s: string): number {
   let n = 0;
   for (let i = 1; i < s.length; i++) {
     const a = s[i - 1];
@@ -278,11 +293,31 @@ export function hasHighEntropyToken(text: string): boolean {
 
 export const HIGH_ENTROPY_LABEL = "high-entropy token";
 
+// A password or key written as plain words ("password: hunter2xyz", "api key = abc123def"). Every repetition is bounded.
+// Placeholders ("<your password>", "xxxx", "$PASSWORD", "example") do not count; "changeme" does (it is a real, weak password).
+export const SECRET_ASSIGN_LABEL = "password or key written as plain text";
+export function secretAssignments(text: string, max = 20): Array<{ label: string; index: number; length: number }> {
+  const re =
+    /(?<![A-Za-z0-9])(password|passwd|pwd|passcode|secret|api[ _-]?key|apikey|pin|access[_-]?token|auth[_-]?token|token|bearer)\b["'`]?[ \t]{0,4}[:=][ \t]{0,4}["'`]?(?![^\s"'`<>]{0,120}?(?:xxx|\*\*\*|example|placeholder|your[_-]?|redacted|\$\{?[A-Za-z_]|\.\.\.))([^\s"'`<>$]{6,120})([^\n]{0,200})/gi;
+  const out: Array<{ label: string; index: number; length: number }> = [];
+  let m: RegExpExecArray | null;
+  while (out.length < max && (m = re.exec(text)) !== null) {
+    // A value of plain letters is probably a sentence ("password: required for login"); keep it only when it ends the line.
+    if (/^[A-Za-z]+$/.test(m[2]) && m[3].trim() !== "") continue;
+    // "token" and "bearer" also name counts and settings ("token: required", "token = 4096"): a token value is long and has a digit.
+    if (/token|bearer/i.test(m[1]) && (m[2].length < 16 || !/\d/.test(m[2]))) continue;
+    out.push({ label: m[1].toLowerCase(), index: m.index, length: m[0].length - m[3].length });
+  }
+  return out;
+}
+
 /** Label of a known-prefix secret in normalized text, or null. */
 function knownSecret(t: string): string | null {
+  if (secretAssignments(t, 1).length) return SECRET_ASSIGN_LABEL;
   for (const [label, re] of SECRET_PATTERNS) if (re.test(t)) return label;
   if (hasOpenAiAnthropicKey(t)) return "OpenAI/Anthropic key";
   if (hasJwt(t)) return "JWT";
+  if (hasUrlPassword(t)) return "password in a URL";
   return null;
 }
 
@@ -327,12 +362,49 @@ export function originAllowed(req: IncomingMessage): boolean {
   return allowed.includes(origin);
 }
 
+// ---- Host check (DNS-rebinding defense, second layer) ------------------------
+// A rebinding attack makes the victim's browser reach this server under the ATTACKER's hostname, so the Host header names
+// a host that is not ours. Allowed without any setting: localhost, an IP address (a rebinding attack needs a name), and a
+// request that came through a proxy or tunnel (it carries forwarding headers; Docker and tunnels keep working).
+// Everything else is refused unless listed in MONOMEM_ALLOWED_HOSTS (comma-separated host names, ports ignored). When that
+// variable is set the check is strict: only loopback names and the listed hosts pass, forwarding headers or not.
+const FORWARD_HEADERS = ["x-forwarded-for", "x-forwarded-host", "forwarded", "cf-connecting-ip", "x-real-ip", "cf-ray"];
+
+export function allowedHostList(): string[] {
+  return (process.env.MONOMEM_ALLOWED_HOSTS || "")
+    .split(",")
+    .map((h) => h.trim().toLowerCase().replace(/:\d+$/, ""))
+    .filter(Boolean);
+}
+
+/** The 403 body for a refused Host: says exactly what to set. */
+export function hostRefusal(req: IncomingMessage): { error: string; hint: string } {
+  const name = String(req.headers["host"] ?? "").replace(/:\d+$/, "");
+  return {
+    error: "host not allowed",
+    hint: `This server was reached as "${name}", a name it does not expect. If that name is yours (a tunnel or a domain), restart the server with MONOMEM_ALLOWED_HOSTS=${name} (comma-separate several). Only if a proxy you control is the sole way in, MONOMEM_TRUST_PROXY=1 also works.`,
+  };
+}
+
+export function hostAllowed(req: IncomingMessage): boolean {
+  const raw = req.headers["host"];
+  if (!raw || Array.isArray(raw)) return true; // HTTP/1.0 client with no Host
+  const h = raw.toLowerCase();
+  const name = (h.startsWith("[") ? h.slice(1, h.indexOf("]")) : h.replace(/:\d+$/, "")).trim();
+  if (name === "localhost" || name.endsWith(".localhost") || isLoopback(name)) return true;
+  const listed = allowedHostList();
+  if (listed.includes(name) || listed.includes("*")) return true;
+  if (listed.length > 0) return false; // strict once the operator has listed hosts
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(name) || name.includes(":")) return true; // an IP address
+  return process.env.MONOMEM_TRUST_PROXY === "1" && FORWARD_HEADERS.some((k) => req.headers[k] !== undefined);
+}
+
 // ---- Rate limiter: fixed window per client key ------------------------------
 export class RateLimiter {
   private hits = new Map<string, { count: number; resetAt: number }>();
   constructor(
-    private max = Number(process.env.MONOMEM_RATE_MAX || 120),
-    private windowMs = Number(process.env.MONOMEM_RATE_WINDOW_MS || 10_000)
+    private max = envNum("MONOMEM_RATE_MAX", 120),
+    private windowMs = envNum("MONOMEM_RATE_WINDOW_MS", 10_000)
   ) {}
   /** true = allowed, false = over limit. */
   check(key: string): boolean {
@@ -372,8 +444,8 @@ export class AuthTarpit {
   private fails = new Map<string, { n: number; resetAt: number; pending: number }>();
   constructor(
     private freeFailures = 5,
-    private stepMs = Number(process.env.MONOMEM_TARPIT_STEP_MS || 250),
-    private capMs = Number(process.env.MONOMEM_TARPIT_CAP_MS || 2000),
+    private stepMs = envNum("MONOMEM_TARPIT_STEP_MS", 250),
+    private capMs = envNum("MONOMEM_TARPIT_CAP_MS", 2000),
     private windowMs = 60_000,
     private maxPending = 16
   ) {}
@@ -419,7 +491,7 @@ export function clientKey(req: IncomingMessage): string {
   // rate-limit bucket and defeat the limiter. So trust a forwarded client IP
   // ONLY when the operator has declared they run behind that proxy:
   //   - MONOMEM_TRUST_CLOUDFLARE=1 -> trust cf-connecting-ip
-  //   - MONOMEM_TRUST_PROXY=1      -> trust x-forwarded-for
+  //   - MONOMEM_TRUST_PROXY=1      -> trust x-forwarded-for (rightmost entry, or MONOMEM_TRUST_PROXY_HOPS from the right)
   // Otherwise key on the real socket address, which cannot be spoofed.
   if (process.env.MONOMEM_TRUST_CLOUDFLARE === "1") {
     const cf = req.headers["cf-connecting-ip"];
@@ -427,7 +499,15 @@ export function clientKey(req: IncomingMessage): string {
   }
   if (process.env.MONOMEM_TRUST_PROXY === "1") {
     const xff = req.headers["x-forwarded-for"];
-    if (typeof xff === "string" && xff) return xff.split(",")[0].trim();
+    // The trusted proxy APPENDS the address it saw, so the rightmost entry is the only one a client cannot forge;
+    // leftmost entries are whatever the client sent. MONOMEM_TRUST_PROXY_HOPS=N (default 1) counts N trusted proxies
+    // from the right; with fewer entries than that, the leftmost one is used.
+    if (typeof xff === "string" && xff) {
+      const parts = xff.split(",").map((p) => p.trim()).filter(Boolean);
+      const hops = Number(process.env.MONOMEM_TRUST_PROXY_HOPS);
+      const n = Number.isInteger(hops) && hops >= 1 ? hops : 1;
+      if (parts.length) return parts[Math.max(0, parts.length - n)];
+    }
   }
   return req.socket.remoteAddress || "unknown";
 }
@@ -494,7 +574,11 @@ export function authenticate(req: IncomingMessage, tokens: TokenEntry[]): Scope 
 // only the operation and metadata (op/id/namespace/byte count) -- never the
 // note title or body, so the audit trail can't itself become a leak.
 export function auditPath(): string {
-  return process.env.MONOMEM_AUDIT_LOG || join(DATA_DIR, "audit.log");
+  if (process.env.MONOMEM_AUDIT_LOG) return process.env.MONOMEM_AUDIT_LOG;
+  // The log lives beside the database in use: a pinned MONOMEM_DB_PATH (a temp or second store) must never append
+  // to the default store's audit.log.
+  const db = process.env.MONOMEM_DB_PATH?.trim();
+  return db && db !== ":memory:" ? join(dirname(resolve(db)), "audit.log") : join(DATA_DIR, "audit.log");
 }
 
 let auditWrites = 0;
@@ -648,6 +732,10 @@ export function verifyAuditChain(path: string = auditPath(), expect?: string): {
   return { ok: breaks === 0, lines: n, ...(expect !== undefined ? { anchor: { found: anchorAt > 0, linesAfter: anchorAt > 0 ? n - anchorAt : 0 } } : {}), breaks, forks, unchained, ...(brokenLine !== undefined ? { brokenLine, file } : {}), ...(recent.length ? { head: recent[recent.length - 1] } : {}) };
 }
 
+/** The refusal for a call that needs the admin scope (state_delete, a forget date on someone else's note). */
+export const ADMIN_SCOPE_NEEDED =
+  "this token lacks the required 'admin' scope. Deleting and managing need an administrator key (the person can make one with: monomem token add <name> --admin).";
+
 export function audit(entry: {
   op: string;
   id?: number;
@@ -667,9 +755,20 @@ export function audit(entry: {
     // Hash chain: `prev` = sha256 of the previous line (carried across rotation from audit.log.1).
     const prev = lastAuditLineHash(path);
     appendFileSync(path, JSON.stringify({ ts: new Date().toISOString(), prev, ...entry }) + "\n", { mode: 0o600 });
-  } catch {
-    // Audit logging must never break a request.
+  } catch (e) {
+    // Audit logging must never break a request, but a failing log must not be silent either: count it (shown in
+    // GET /stats and `monomem health`) and say so on stderr on the first failure and every 1000th after.
+    auditFailures++;
+    if (auditFailures === 1 || auditFailures % 1000 === 0) {
+      console.error(`[monomem] could not write the audit log (${(e as Error)?.message ?? e}); ${auditFailures} entr${auditFailures === 1 ? "y" : "ies"} missing so far`);
+    }
   }
+}
+
+let auditFailures = 0;
+/** Audit entries this process could not write. */
+export function auditFailureCount(): number {
+  return auditFailures;
 }
 
 /**
@@ -677,9 +776,44 @@ export function audit(entry: {
  * a terminal or into a log: control characters (escape sequences, carriage returns, newlines) become "?",
  * bidi overrides (RLO etc.) too, and it is cut to `max` characters, so it cannot clear the line or fake a "run this command" line.
  */
+// eslint-disable-next-line no-control-regex
+const UNPRINTABLE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
+const UNPRINTABLE_G = new RegExp(UNPRINTABLE.source, "g");
+export const NAMESPACE_MAX = 100;
+
+/**
+ * A namespace or tag that printable() would have to mangle (control, bidi or line-separator characters), a namespace
+ * longer than NAMESPACE_MAX, or the reserved namespace "*": the reason, else null. Store.create and Store.update call
+ * it, so it covers every write path that goes through them: notes (MCP, REST, CLI), tasks, handoffs, and imports
+ * (CLI import --file, admin POST /import), where importNotes lists a refused row in report.rejected and imports the rest.
+ * It does not touch rows already in the database, and a database-file restore (monomem restore <backup>) copies the file as it is.
+ */
+export function checkNames(input: { namespace?: string; tags?: string[] }): string | null {
+  const ns = input.namespace?.trim();
+  if (ns) {
+    if (UNPRINTABLE.test(ns)) return "namespace contains a control or text-direction character; use plain text";
+    if (ns.length > NAMESPACE_MAX) return `namespace exceeds ${NAMESPACE_MAX} chars`;
+    if (ns === "*") return 'namespace "*" is reserved (it means every namespace)';
+    // A namespace is shown in listings, the audit log and the change feed: a key pasted as one would leak everywhere.
+    // Known-prefix patterns only (no entropy check: a namespace may well be a long random-looking id).
+    const secret = knownSecret(normalizeForScan(ns));
+    if (secret) return `namespace looks like a secret (${secret}); namespaces are shown everywhere, so use a plain name`;
+  }
+  for (const t of input.tags ?? []) if (UNPRINTABLE.test(t)) return "a tag contains a control or text-direction character; use plain text";
+  return null;
+}
+
+/** printable() for a multi-line text: keeps line breaks and tabs, replaces every other character printable() would. */
+export function printableBlock(s: unknown, max = 20000): string {
+  return String(s ?? "")
+    .split("\n")
+    .map((l) => printable(l.replace(/\t/g, "    "), Number.MAX_SAFE_INTEGER))
+    .join("\n")
+    .slice(0, max);
+}
+
 export function printable(s: unknown, max = 120): string {
-  // eslint-disable-next-line no-control-regex
-  const t = String(s ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "?");
+  const t = String(s ?? "").replace(UNPRINTABLE_G, "?");
   return t.length > max ? t.slice(0, max) + "..." : t;
 }
 

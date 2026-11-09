@@ -146,9 +146,9 @@ describe("pinned notes", () => {
       } finally {
         console.error = quiet;
       }
-      assert.equal(SCHEMA_VERSION, 18);
-      assert.equal(Store.peekSchemaVersion(path), 18);
-      assert.equal(Store.peekSchemaVersion(path + ".pre-v18-backup"), 17);
+      assert.equal(SCHEMA_VERSION, 19);
+      assert.equal(Store.peekSchemaVersion(path), 19);
+      assert.equal(Store.peekSchemaVersion(path + ".pre-v19-backup"), 17);
       const n = s.list({}).notes[0];
       assert.equal(n.title, "kept");
       assert.equal(n.pinned, undefined);

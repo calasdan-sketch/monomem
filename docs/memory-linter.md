@@ -197,7 +197,10 @@ included: REST cannot tell an operator from an agent holding an admin token,
 and such a token can approve held writes itself), the runner, the capture
 hooks (`monomem hook`) and any library caller. Approving a held write and
 consolidation are not held; `monomem import` and `monomem sync` run as the CLI,
-so they are not held either. Secrets are still blocked before anything is held.
+so they are not held either, with one exception: a file that `import --dir` or
+`sync` reads whose `origin` is another store (written on another machine) is held
+like an agent's create or update, and the summary says how many were held.
+Secrets are still blocked before anything is held.
 
 Forgetting (archiving), restoring and replacing (supersede) a note change what agents see but cannot
 wait in the queue, so in an approve-first namespace they are refused for everyone except the local

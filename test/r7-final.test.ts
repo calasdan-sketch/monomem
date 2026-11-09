@@ -15,7 +15,7 @@ test("a token labelled 'cli (x' is never shortened to look like the cli marker",
   const t2 = s.create({ title: "c", body: "z" }, { writtenBy: "cli (x" });
   setProcessWriter("");
   const out = buildSummary([s.read(a.id)!, s.read(t1.id)!, s.read(t2.id)!] as never);
-  assert.doesNotMatch(String(out), /\(written by cli\)/);
+  assert.doesNotMatch(String(out), /^- cli: /m);
   s.close();
 });
 

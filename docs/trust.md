@@ -315,6 +315,11 @@ Runners from an early release write a heartbeat with no writer marker, which Mon
   is stamped with whoever imports it, the claim is shown as `imported_written_by`, and it is added to
   the taint set. **A file that simply omits every writer field carries no taint**: an unsigned file
   cannot prove who wrote it; only a verified attestation can.
+- A file whose `origin` is another store (a note written on another machine) is also flagged
+  `imported_unverified` when it creates or updates a note, so `why` and the provenance banner say it came in
+  without a verified attestation. In an approve-first namespace such a create or update goes to quarantine, as
+  an agent's write would, and is not live until approved. Approving it applies it as the approver (`cli`); the
+  approved note does not carry the `imported_unverified` flag. Files this store wrote itself merge as before.
 - Taint stays with the note when an admin **moves it to another namespace**: a rule in the new namespace
   matches the same names, a rule only in the old one no longer applies.
 - The taint set is capped (200 names per note, on import and on edit; names that match a rule are kept first), and a rule list is bounded (50 per namespace).

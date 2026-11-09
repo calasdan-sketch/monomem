@@ -55,7 +55,6 @@
 // another machine's unimported file. Every write refuses symlinked path
 // segments under the sync dir and goes through temp file + rename.
 
-import { createHash } from "node:crypto";
 import {
   closeSync,
   constants as fsc,
@@ -81,6 +80,8 @@ import {
 } from "./store.js";
 import { parseWriterRef } from "./trust.js";
 import { maybeEmbed } from "./search-service.js";
+import { contentHash, lf, normTags, type NoteContent } from "./sync-hash.js";
+import { type Sensitivity, DEFAULT_SENSITIVITY, parseSensitivity, sensitivityVisible, SENSITIVITY_HELP } from "./sensitivity.js";
 
 
 /** The approval tag family is store-keyed: a file can neither carry nor mint one. */
@@ -110,29 +111,7 @@ const KEYS = [
   "hash",
 ] as const;
 
-export interface NoteContent {
-  namespace: string;
-  title: string;
-  body: string;
-  tags: string[];
-}
-
-/** Same normalization the store applies to tags (trim, dedupe, drop empty). */
-function normTags(tags: unknown): string[] {
-  if (!Array.isArray(tags)) return [];
-  return Array.from(new Set(tags.map((t) => String(t).trim()).filter(Boolean)));
-}
-
-/** Files are LF-only; a body's CR / CRLF is the same content. */
-const lf = (s: string): string => s.replace(/\r\n?/g, "\n");
-
-/** Content hash used as the three-way merge base (16 hex chars). */
-export function contentHash(c: NoteContent): string {
-  return createHash("sha256")
-    .update(JSON.stringify([c.namespace, c.title, lf(c.body), normTags(c.tags)]))
-    .digest("hex")
-    .slice(0, 16);
-}
+export { contentHash, type NoteContent };
 
 /** Readable slug: keeps Unicode letters/digits (Greek, CJK), drops accents. */
 function slugify(title: string, max = 60): string {
@@ -274,6 +253,8 @@ export function renderNoteFile(
   const lines = KEYS.map((k) => `${k}: ${JSON.stringify(fm[k])}`);
   // Written only for a note the trust policy hides from agents (export --include-distrusted).
   if (extra.distrusted) lines.push("distrusted: true");
+  // v17: only a labelled note (anything but the default "internal") carries a label, so other files are byte-identical to before.
+  if (note.sensitivity) lines.push(`sensitivity: ${JSON.stringify(note.sensitivity)}`);
   // v16: only a captured row carries these, so an ordinary note's file is byte-identical to before.
   if (note.kind && note.kind !== "note") {
     lines.push(`kind: ${JSON.stringify(note.kind)}`, `session_id: ${JSON.stringify(note.session_id ?? "")}`);
@@ -413,9 +394,17 @@ export interface ExportResult {
 export function exportMarkdown(
   store: Store,
   dir: string,
-  opts: { namespace?: string; prune?: boolean; force?: boolean; includeDistrusted?: boolean } = {}
+  opts: { namespace?: string; prune?: boolean; force?: boolean; includeDistrusted?: boolean; maxSensitivity?: Sensitivity } = {}
 ): ExportResult {
   const self = store.storeId();
+  // A vault is a plain folder (often a git repo or a synced drive) that nothing in Monomem guards. A ceiling here keeps the
+  // labelled notes out of it: the option, else MONOMEM_EXPORT_MAX_SENSITIVITY. A value that is not a label stops the export
+  // (fail closed) instead of exporting everything.
+  const envCeiling = (process.env.MONOMEM_EXPORT_MAX_SENSITIVITY ?? "").trim();
+  const ceiling: Sensitivity | undefined = opts.maxSensitivity ?? (envCeiling ? (parseSensitivity(envCeiling) ?? undefined) : undefined);
+  if (opts.maxSensitivity === undefined && envCeiling && !ceiling) {
+    throw new Error(`MONOMEM_EXPORT_MAX_SENSITIVITY must be ${SENSITIVITY_HELP} (got ${JSON.stringify(envCeiling)}); nothing was exported`);
+  }
   const origins = store.syncOrigins();
   mkdirSync(dir, { recursive: true });
   const everything = store.exportAll().filter((n) => !opts.namespace || n.namespace === opts.namespace); // gate-ok: the vault export skips hidden notes itself (hiddenIds) unless --include-distrusted
@@ -424,9 +413,11 @@ export function exportMarkdown(
   // and then each such file is marked `distrusted: true`.
   // An archived note was forgotten (often by an agent's state_delete): it is not written to the vault,
   // and its earlier unedited file is pruned like a hidden note's, so "forget" also leaves the folder.
-  const notes = (opts.includeDistrusted ? everything : store.filterVisible(everything)).filter((n) => !n.archived_at);
+  const trustVisible = opts.includeDistrusted ? everything : store.filterVisible(everything);
+  const notes = (ceiling ? trustVisible.filter((n) => sensitivityVisible(n.sensitivity ?? DEFAULT_SENSITIVITY, ceiling)) : trustVisible).filter((n) => !n.archived_at);
   // A Set of the visible ids: `notes.includes(n)` per note made this quadratic in the number of hidden notes.
   const visibleIds = new Set<number>(notes.map((n) => n.id));
+  // (A note above the export ceiling is hidden the same way: it is not written, and an earlier unedited file of it is pruned.)
   const hiddenIds = new Set<number>(everything.filter((n) => !visibleIds.has(n.id)).map((n) => n.id));
   const marked = new Set<number>(opts.includeDistrusted ? store.markDistrusted(everything).filter((n) => n.distrusted).map((n) => n.id) : []);
   const keep = new Set<string>();
@@ -549,6 +540,8 @@ export interface ImportResult {
   dir: string;
   entries: ImportEntry[];
   counts: Record<ImportAction, number>;
+  /** Files written by another store that went to quarantine (approve-first, or the linter) instead of going live. */
+  foreignHeld: number;
 }
 
 /**
@@ -567,6 +560,7 @@ export async function importMarkdown(
   const self = store.storeId();
   const dry = opts.dryRun === true;
   const entries: ImportEntry[] = [];
+  let foreignHeld = 0;
   const conflictsDir = join(dir, ".conflicts");
   const saveConflict = (name: string, text: string): string => {
     const p = join(conflictsDir, name);
@@ -600,6 +594,11 @@ export async function importMarkdown(
     const origin = typeof fm.origin === "string" ? fm.origin : null;
     const originId = typeof fm.id === "number" && Number.isInteger(fm.id) ? fm.id : null;
     const hasIdentity = origin !== null && originId !== null;
+    // Written by another store: its writer claims are unverified, and approve-first holds it like an agent's write.
+    const foreign = origin !== null && origin !== self;
+    const foreignOpts = foreign ? { holdForApproval: true, importedUnverified: true } : {};
+    // A held create remembers where it came from, so approving it links the note and the next sync does not add it twice.
+    const syncIdentity = foreign && hasIdentity ? { syncIdentity: { origin: origin!, id: originId! } } : {};
 
     let localId: number | null = null;
     if (hasIdentity) localId = origin === self ? originId : store.syncLookup(origin!, originId!);
@@ -639,21 +638,31 @@ export async function importMarkdown(
       // Re-importing content already held for review must not queue it again.
       const held = store.pendingQuarantineId(namespace, title, body, content.tags);
       if (held !== null) {
+        if (foreign) foreignHeld++;
         push("quarantined", { detail: `already held in quarantine #${held}` });
         return;
       }
+      // An older held create of this same origin note (the file was edited again before anyone approved it) is
+      // replaced by this write, so approving cannot make two copies.
+      const stale = !local && foreign && hasIdentity ? store.pendingSyncCreateIds(origin!, originId!) : [];
+      const dropStale = (): string => {
+        for (const q of stale) store.rejectQuarantine(q);
+        return stale.length ? `; replaces held #${stale.join(", #")}` : "";
+      };
       try {
         const n = fn();
         if (!n) {
           push("skipped", { detail: "note vanished during import" });
           return;
         }
+        const replaced = dropStale();
         await maybeEmbed(store, n);
         remember(n.id, contentHash(n));
-        push(ok, { id: n.id, ...(detail ? { detail } : {}) });
+        push(ok, { id: n.id, ...(detail || replaced ? { detail: (detail ?? ok) + replaced } : {}) });
       } catch (e) {
         if (e instanceof QuarantinedError) {
-          push("quarantined", { detail: `quarantine #${e.quarantineId}: ${e.message}` });
+          if (foreign) foreignHeld++;
+          push("quarantined", { detail: `quarantine #${e.quarantineId}: ${e.message}${dropStale()}` });
         } else if (e instanceof ValidationError) {
           push("rejected", { detail: e.message });
         } else {
@@ -673,6 +682,8 @@ export async function importMarkdown(
           tags: importTags(content.tags),
           source: typeof fm.source === "string" ? fm.source : undefined,
           created_at: typeof fm.created_at === "string" ? fm.created_at : undefined,
+          // A labelled note keeps its label when a file brings it back; no label in the file = the default.
+          ...(fm.sensitivity !== undefined ? { sensitivity: String(fm.sensitivity) } : {}),
         },
         {
           updatedAt: typeof fm.updated_at === "string" ? fm.updated_at : undefined,
@@ -684,6 +695,8 @@ export async function importMarkdown(
             : {}),
           // A captured row (observation / summary) comes back as one, with its files and session.
           ...captureFieldsOf(fm),
+          ...foreignOpts,
+          ...syncIdentity,
         }
       );
       store.restoreCaptureLinks(n, fm.files);
@@ -727,7 +740,7 @@ export async function importMarkdown(
       return store.update(
         local.id,
         { namespace, title, body, tags: importTags(content.tags, local.tags) },
-        { ifRev: local.rev, ...(typeof fm.origin_writer === "string" && fm.origin_writer.trim() ? { alsoTouchedBy: claimNames(fm.origin_writer) } : {}) }
+        { ifRev: local.rev, ...foreignOpts, ...syncIdentity, ...(typeof fm.origin_writer === "string" && fm.origin_writer.trim() ? { alsoTouchedBy: claimNames(fm.origin_writer) } : {}) }
       );
     };
 
@@ -775,5 +788,5 @@ export async function importMarkdown(
     rejected: 0,
   } as Record<ImportAction, number>;
   for (const e of entries) counts[e.action]++;
-  return { dir, entries, counts };
+  return { dir, entries, counts, foreignHeld };
 }

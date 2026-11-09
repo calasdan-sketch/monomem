@@ -491,8 +491,8 @@ describe("recall + banner text", () => {
       { ...base, id: 1, title: "A", written_by: "claude-desktop", source: "cursor" },
       { ...base, id: 2, title: "B", written_by: "" , source: "cursor" },
     ]);
-    assert.match(s, /- \[A\] \(written by claude-desktop \(token\), claims source="cursor"\): B/);
-    assert.match(s, /- \[B\]: B/);
+    assert.match(s, /#1 claude-desktop \(token\), claims source="cursor": \[A\]: B/);
+    assert.match(s, /#2 \[B\]$/m); // a body that only repeats the title is not printed twice
   });
   test("provenanceBanner is capped, one-line per entry and strips injected line breaks", () => {
     const many = Array.from({ length: 60 }, (_, i) => ({ id: i + 1, written_by: "w", source: "s" }));
@@ -693,7 +693,7 @@ describe("upgrade safety", () => {
     try {
       const path = makeV12(dir);
       new Store(path).close();
-      const bak = path + ".pre-v18-backup";
+      const bak = path + ".pre-v19-backup";
       assert.ok(existsSync(bak), "backup exists");
       assert.equal(Store.peekSchemaVersion(bak), 12);
       assert.equal(Store.peekSchemaVersion(path), SCHEMA_VERSION);
@@ -727,7 +727,7 @@ describe("upgrade safety", () => {
     try {
       const p = join(dir, "fresh.db");
       new Store(p).close();
-      assert.ok(!existsSync(p + ".pre-v18-backup"));
+      assert.ok(!existsSync(p + ".pre-v19-backup"));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

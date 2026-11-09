@@ -51,7 +51,7 @@ describe("monomem drill", () => {
       const before = { size: statSync(db).size, bytes: readFileSync(db) };
       const r = await runDrill({ dbPath: db });
       assert.equal(r.notes, 300);
-      assert.equal(r.attacks, 20);
+      assert.equal(r.attacks, 22);
       assert.deepEqual(r.reached.map((x) => x.id).sort(), ["E16", "SELF"]);
       assert.deepEqual(r.unexpected, []);
       assert.equal(r.ok, true);
@@ -59,7 +59,7 @@ describe("monomem drill", () => {
       const v = (id: string): string => r.rows.find((x) => x.id === id)?.verdict ?? "";
       assert.equal(v("E01"), "held", "quarantined = held");
       assert.equal(v("E07"), "blocked", "a blocked secret is not quarantine");
-      assert.match(renderDrill(r), /Poison reached the agent: 2 of 20 attacks \(known misses: E16 reworded override, self-poisoning\)/);
+      assert.match(renderDrill(r), /Poison reached the agent: 2 of 22 attacks \(known misses: E16 reworded override, self-poisoning\)/);
       assert.equal(statSync(db).size, before.size);
       assert.ok(readFileSync(db).equals(before.bytes), "the real database file is byte-for-byte unchanged");
       assert.deepEqual(leftovers(), []);
@@ -108,9 +108,9 @@ describe("monomem drill", () => {
       const code = await withEnv("MONOMEM_DB_PATH", db, () => drillMain(["--json"], (s) => lines.push(s)));
       assert.equal(code, 0);
       const j = JSON.parse(lines.join("\n")) as { attacks: number; ok: boolean; rows: unknown[] };
-      assert.equal(j.attacks, 20);
+      assert.equal(j.attacks, 22);
       assert.equal(j.ok, true);
-      assert.equal(j.rows.length, 20);
+      assert.equal(j.rows.length, 22);
 
       const gone = join(dir, "nope.db");
       const code2 = await withEnv("MONOMEM_DB_PATH", gone, () => drillMain([], () => undefined));

@@ -3,17 +3,19 @@
 // re-compute from the lines. The store is opened to count things (opening an older database file upgrades its schema once)
 // and drill works on a copy. The only thing health writes is one small row noting how long the audit log was.
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { accessSync, constants as fsc, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { BIND_HOST, DATA_DIR, DB_PATH } from "./config.js";
 import { runDrill, DRILL_SCOPE, type DrillReport } from "./drill.js";
 import { meterStats } from "./meter.js";
 import { cardBrand, cardFooter, esc, svgLines } from "./receipts.js";
-import { auditPath as defaultAuditPath, printable, verifyAuditChain } from "./security.js";
+import { auditFailureCount, auditPath as defaultAuditPath, printable, verifyAuditChain } from "./security.js";
 import { Store } from "./store.js";
+import { describeDbFailure } from "./db-problem.js";
 import { embeddingsConfig } from "./embeddings.js";
 import { acceptLegacyHeartbeats } from "./liveness.js";
+import { scanPii } from "./pii.js";
 
 /** info: a fact worth showing that never lowers the grade. */
 export type Status = "ok" | "warn" | "fail" | "info";
@@ -154,6 +156,16 @@ const SEEN_KEY = "health_audit_seen";
 type Db = ReturnType<Store["captureDb"]>;
 type Result = Pick<HealthCheck, "status" | "text">;
 
+/** The ts of the newest audit line, if it has one. */
+function lastTs(lines: string[]): string | undefined {
+  try {
+    const ts = (JSON.parse(lines[lines.length - 1]) as { ts?: unknown }).ts;
+    return typeof ts === "string" ? ts : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Every audit line, oldest file first (the order verifyAuditChain reads them). */
 function auditLines(path: string): string[] {
   const files: string[] = [];
@@ -163,13 +175,14 @@ function auditLines(path: string): string[] {
 }
 
 /**
- * Audit-log check. Remembers (in _meta) how many lines the log had and the hash of the last one, and warns when a later run
- * finds fewer lines or a different line in that place. It cannot see tampering that happened before its first run.
+ * Audit-log check. Remembers (in _meta) the hash of the log's last line, and warns when a later run cannot find that line
+ * anywhere in the log, unless the log has rotated past it. It cannot see tampering that happened before its first run, and
+ * once rotation has dropped the remembered line it cannot tell rotation from removal.
  */
 function auditCheck(path: string | undefined, db: Db | undefined, notes: number): Result {
   const a = verifyAuditChain(path);
   if (a.breaks > 0) return { status: "fail", text: `${plural(a.breaks, "break")} (first at line ${a.brokenLine}): a log line was edited or removed` };
-  let seen: { lines: number; hash: string } | undefined;
+  let seen: { lines: number; hash: string; ts?: string } | undefined;
   try {
     const row = db?.prepare("SELECT value FROM _meta WHERE key = ?").get(SEEN_KEY) as { value: string } | undefined;
     seen = row ? (JSON.parse(row.value) as { lines: number; hash: string }) : undefined;
@@ -181,14 +194,29 @@ function auditCheck(path: string | undefined, db: Db | undefined, notes: number)
     return { status: "ok", text: "no audit log yet" };
   }
   const lines = auditLines(path ?? defaultAuditPath());
-  if (seen && lines.length < seen.lines) return { status: "warn", text: `the log has ${plural(lines.length, "line")}, fewer than the ${seen.lines} it had at the last health check: lines were removed (rotation can also drop old lines)` };
-  if (seen && sha(lines[seen.lines - 1]) !== seen.hash) return { status: "warn", text: `line ${seen.lines} is not the line health saw there last time: the log was edited or replaced (health only notices changes since its last run)` };
+  let note = "";
+  if (seen && !lines.some((l) => sha(l) === seen.hash)) {
+    // The line health saw last time is gone. Rotation drops the OLDEST files (MONOMEM_AUDIT_KEEP): then every line left was
+    // written after the remembered one, and the oldest of them chains to a line that is no longer there (its prev is not
+    // the genesis hash). Lines cut from the END leave older lines behind instead: that is still a warning.
+    const first = ((): { prev?: unknown; ts?: unknown } => {
+      try {
+        return JSON.parse(lines[0]) as { prev?: unknown; ts?: unknown };
+      } catch {
+        return {}; // a torn first line: treat as not rotated
+      }
+    })();
+    const rotated = typeof first.prev === "string" && first.prev !== "0".repeat(64) && typeof first.ts === "string" && typeof seen.ts === "string" && first.ts >= seen.ts;
+    if (rotated) note = " (the line health last saw has rotated out of the kept files)";
+    else if (lines.length < seen.lines) return { status: "warn", text: `the log has ${plural(lines.length, "line")}, fewer than the ${seen.lines} it had at the last health check: lines were removed` };
+    else return { status: "warn", text: `line ${seen.lines} is not the line health saw there last time: the log was edited or replaced (health only notices changes since its last run)` };
+  }
   try {
-    db?.prepare("INSERT OR REPLACE INTO _meta (key, value) VALUES (?, ?)").run(SEEN_KEY, JSON.stringify({ lines: lines.length, hash: sha(lines[lines.length - 1]) }));
+    db?.prepare("INSERT OR REPLACE INTO _meta (key, value) VALUES (?, ?)").run(SEEN_KEY, JSON.stringify({ lines: lines.length, hash: sha(lines[lines.length - 1]), ts: lastTs(lines) }));
   } catch {
     /* read-only database: skip the note */
   }
-  return { status: "ok", text: `${plural(a.lines, "line")}, no breaks, ${plural(a.forks, "fork")} (forks are concurrent writers, not tampering)` };
+  return { status: "ok", text: `${plural(a.lines, "line")}, no breaks, ${plural(a.forks, "fork")} (forks are concurrent writers, not tampering)${note}` };
 }
 
 export interface HealthOpts {
@@ -201,6 +229,8 @@ export interface HealthOpts {
   auditPath?: string;
   now?: Date;
   drill?: typeof runDrill;
+  /** Where the app configs are looked for (tests); default the real home folder. */
+  setupEnv?: import("./setup.js").SetupEnv;
 }
 
 export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
@@ -214,39 +244,79 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
 
   let notes = 0, held = 0, distrust = 0, marked = 0, dbOk = false;
   let meterText = "meter unavailable";
+  let piiNotes = 0, privateNotes = 0, labelledNotes = 0;
   let audit: Result | undefined;
   if (existsSync(dbPath)) {
     try {
       const s = new Store(dbPath);
       try {
-        notes = s.countAll();
-        held = s.listQuarantine({ limit: 500 }).length;
-        distrust = s.distrustRules().length;
-        // ponytail: loads every live note to count markers; use SQL if a store gets big enough for this to show up in the runtime
-        marked = s.exportAll({ live: true }).filter((n) => /\[REDACTED:/.test(`${n.title}\n${n.body}`)).length; // gate-ok: operator CLI, counts redaction markers only; no note content is returned or printed
-        const m = meterStats(s);
-        meterText = `${plural(notes, "note")}, database ${(m.db_bytes / 1048576).toFixed(1)} MB; the meter counts ~${m.totals.saved_tokens} tokens saved over ${plural(m.totals.sessions, "session")} (estimate, ~4 characters a token)`;
-        try {
-          audit = auditCheck(o.auditPath, s.captureDb(), notes);
-        } catch (e) {
-          audit = { status: "warn", text: `could not read the audit log: ${(e as Error).message}` };
+        const damaged = s.integrityProblem();
+        if (damaged) {
+          const d = describeDbFailure(dbPath, new Error(damaged));
+          add("database", "Database", "fail", `${d.problem}. ${d.fix}`);
+        } else {
+          // Each count on its own: one that fails is a warning of its own and lowers the grade, the others still run.
+          const step = (id: string, label: string, f: () => void): void => {
+            try {
+              f();
+            } catch (e) {
+              add(id, label, "warn", `could not be checked: ${(e as Error).message}`);
+            }
+          };
+          notes = s.countAll();
+          step("held", "Held writes", () => void (held = s.listQuarantine({ limit: 500 }).length));
+          step("distrust", "Distrusted writers", () => void (distrust = s.distrustRules().length));
+          step("redacted", "Note scan", () => {
+            // ponytail: loads every live note to count markers; use SQL if a store gets big enough for this to show up in the runtime
+            const live = s.exportAll({ live: true }); // gate-ok: operator CLI, counts redaction markers only; no note content is returned or printed
+            marked = live.filter((n) => /\[REDACTED:/.test(`${n.title}\n${n.body}`)).length;
+            piiNotes = scanPii(live, 200).suggestions.length;
+            privateNotes = live.filter((n) => n.sensitivity === "private").length;
+            labelledNotes = live.filter((n) => n.sensitivity !== undefined).length;
+          });
+          step("memory", "Memory size", () => {
+            const m = meterStats(s);
+            meterText = `${plural(notes, "note")}, database ${(m.db_bytes / 1048576).toFixed(1)} MB; the meter counts ~${m.totals.saved_tokens} tokens saved over ${plural(m.totals.sessions, "session")} (estimate, ~4 characters a token)`;
+          });
+          try {
+            audit = auditCheck(o.auditPath, s.captureDb(), notes);
+          } catch (e) {
+            audit = { status: "warn", text: `could not read the audit log: ${(e as Error).message}` };
+          }
+          dbOk = true;
         }
-        dbOk = true;
       } finally {
         s.close();
       }
     } catch (e) {
-      add("database", "Database", "fail", `cannot open ${dbPath}: ${(e as Error).message}`);
+      const d = describeDbFailure(dbPath, e);
+      add("database", "Database", "fail", `${d.problem}. ${d.fix}`);
     }
   } else add("database", "Database", "info", `no database yet at ${dbPath}: nothing is stored, and it is created on first use (monomem setup)`);
   if (dbOk) add("database", "Database", "ok", `database opens (${plural(notes, "note")})`);
 
+  // A database file that exists but did not open cleanly is damaged, not missing: the later lines say which.
+  const dbDamaged = !dbOk && existsSync(dbPath);
   const settingsPath = o.settingsPath ?? join(homedir(), ".claude", "settings.json");
+  // Claude Code is here when either its config file (~/.claude.json) or its folder (~/.claude) exists, as setup decides.
+  const claudeJson = join(dirname(dirname(settingsPath)), ".claude.json");
   if (hookWired(settingsPath)) add("hooks", "Hooks", "ok", "SessionStart hook wired in ~/.claude/settings.json");
   else if (pluginInstalled(o.pluginsPath ?? join(homedir(), ".claude", "plugins", "installed_plugins.json"), settingsPath)) add("hooks", "Hooks", "ok", "the monomem Claude Code plugin is installed (its SessionStart hook comes with it)");
-  else if (!existsSync(dirname(settingsPath))) add("hooks", "Hooks", "info", "Claude Code does not seem to be installed here (no ~/.claude folder), so there is no Claude Code hook to check");
+  else if (!existsSync(dirname(settingsPath)) && existsSync(claudeJson)) add("hooks", "Hooks", "info", "Claude Code is connected but has no hooks folder yet; run monomem setup --hook");
+  else if (!existsSync(dirname(settingsPath))) add("hooks", "Hooks", "info", "Claude Code does not seem to be installed here (no ~/.claude folder or ~/.claude.json), so there is no Claude Code hook to check");
   else if (existsSync(join(o.dataDir ?? DATA_DIR, HOOKS_DECLINED_FILE))) add("hooks", "Hooks", "info", "you chose no Claude Code hook when you ran setup, so Claude Code gets no memory at session start (run monomem setup --hook to add it)");
-  else add("hooks", "Hooks", "warn", "no monomem SessionStart hook in ~/.claude/settings.json and no monomem plugin in Claude Code's plugin list, so Claude Code gets no memory at session start");
+  else add("hooks", "Hooks", "info", "optional: no monomem SessionStart hook in ~/.claude/settings.json and no monomem plugin in Claude Code's plugin list, so Claude Code does not get your notes at session start (add it with monomem setup --hook)");
+
+  // App entries / hooks that point at a removed install or launch another version: one warning however many there are.
+  try {
+    const { appEntryProblems, realEnv } = await import("./setup.js");
+    const { PACKAGE_VERSION } = await import("./config.js");
+    const { fileURLToPath } = await import("node:url");
+    const probs = appEntryProblems(o.setupEnv ?? realEnv(PACKAGE_VERSION, fileURLToPath(new URL("./cli.js", import.meta.url))));
+    if (probs.length) add("apps", "App connections", "warn", `${probs.join("; ")}: run monomem setup`);
+  } catch {
+    /* configs could not be inspected */
+  }
 
   const sec = await securityFindings(o.dataDir ?? DATA_DIR, o.bindHost ?? BIND_HOST);
   if (sec.length) for (const f of sec) add(`security:${f.id}`, f.label, f.status, `${f.short} (monomem doctor has the detail)`);
@@ -256,20 +326,65 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
     try {
       const d: DrillReport = await (o.drill ?? runDrill)({ dbPath });
       const known = d.reached.length - d.unexpected.length;
-      add("drill", "Drill", d.ok ? "ok" : "fail", d.ok ? (d.reached.length ? `${d.reached.length} of ${d.attacks} known attacks reached the agent, all known misses (${known})` : `none of ${d.attacks} known attacks reached the agent`) + (d.approve_first ? " (approve-first is on: held writes wait for your review; approving one unread lets it in)" : "") : `${d.unexpected.length} unexpected of ${d.attacks} attacks reached the agent: ${d.unexpected.map((x) => x.id).join(", ")} (monomem drill has the detail)`);
+      add("drill", "Drill", d.ok ? "ok" : "fail", d.ok ? (d.reached.length ? `${d.attacks - d.reached.length} of ${d.attacks} known attacks blocked; ${d.reached.length === 1 ? "the 1 that gets through is a known limit" : `the ${d.reached.length} that get through are known limits`}` : `none of ${d.attacks} known attacks reached the agent`) + (d.approve_first ? " (approve-first is on: held writes wait for your review; approving one unread lets it in)" : "") : `${d.unexpected.length} unexpected of ${d.attacks} attacks reached the agent: ${d.unexpected.map((x) => x.id).join(", ")} (monomem drill has the detail)`);
     } catch (e) {
       add("drill", "Drill", "warn", `could not run: ${(e as Error).message}`);
     }
-  } else add("drill", "Drill", "info", "not run: there is no database to replay the attacks against yet");
+  } else add("drill", "Drill", "info", dbDamaged ? "not run: the database is damaged (see the Database line)" : "not run: there is no database to replay the attacks against yet");
+
+  if (dbOk) {
+    // Exposure: reasons the notes are more reachable than the labels suggest. One check, so it costs at most one grade step however many reasons it lists.
+    const reasons: string[] = [];
+    try {
+      const { resolveTokens } = await import("./config.js");
+      const open = resolveTokens().filter((t) => t.label !== "primary" && t.max_sensitivity === undefined && t.scope !== "admin");
+      if (open.length && labelledNotes > 0) reasons.push(`${plural(open.length, "app key")} with no limit can read your private notes (${open.map((t) => `"${t.label || "unnamed"}"`).slice(0, 3).join(", ")}; monomem token add <name> --max internal)`);
+    } catch {
+      /* tokens unreadable: the other checks say so */
+    }
+    if (piiNotes > 0) reasons.push(`${plural(piiNotes, "note")} may hold personal data and ${piiNotes === 1 ? "is" : "are"} not labelled private (monomem pii scan)`);
+    if (privateNotes > 0) {
+      try {
+        const { detectClients, realEnv } = await import("./setup.js");
+        const { PACKAGE_VERSION } = await import("./config.js");
+        const { fileURLToPath } = await import("node:url");
+        const wired = detectClients(realEnv(PACKAGE_VERSION, fileURLToPath(import.meta.url))).filter((c) => {
+          try {
+            return c.exists && /"monomem"|\[mcp_servers\.monomem\]/.test(readFileSync(c.file, "utf8")) && !/Authorization/i.test(readFileSync(c.file, "utf8"));
+          } catch {
+            return false;
+          }
+        });
+        if (wired.length) reasons.push(`${wired.map((c) => c.label).join(", ")} connect${wired.length === 1 ? "s" : ""} without a key, so a limit does not apply to ${wired.length === 1 ? "it" : "them"} (monomem connect <app> --max internal)`);
+      } catch {
+        /* client config unreadable: skip */
+      }
+    }
+    add("exposure", "Exposure", reasons.length ? "warn" : "ok", reasons.length ? reasons.join("; ") + " (counts as one warning)" : "no unlimited app keys, unlabelled personal data or keyless apps found");
+  }
 
   if (audit) add("audit", "Audit chain", audit.status, audit.text);
   else {
     try {
       const a = verifyAuditChain(o.auditPath);
-      add("audit", "Audit chain", a.breaks > 0 ? "fail" : "info", a.breaks > 0 ? `${plural(a.breaks, "break")} (first at line ${a.brokenLine}): a log line was edited or removed` : a.lines === 0 ? "no audit log yet" : `${plural(a.lines, "line")}, no breaks (no database, so the log length was not recorded)`);
+      add("audit", "Audit chain", a.breaks > 0 ? "fail" : "info", a.breaks > 0 ? `${plural(a.breaks, "break")} (first at line ${a.brokenLine}): a log line was edited or removed` : a.lines === 0 ? "no audit log yet" : `${plural(a.lines, "line")}, no breaks (${dbDamaged ? "the database is damaged, so the log length was not checked" : "no database, so the log length was not recorded"})`);
     } catch (e) {
       add("audit", "Audit chain", "warn", `could not read the audit log: ${(e as Error).message}`);
     }
+  }
+
+  // Audit writes never fail a request, so a log that cannot be written is otherwise silent. This checks it can be written
+  // now, and counts this process's failed entries (a running server reports its own count in GET /stats audit_failures).
+  {
+    const p = o.auditPath ?? defaultAuditPath();
+    let writable = true;
+    try {
+      accessSync(existsSync(p) ? p : dirname(p), fsc.W_OK);
+    } catch {
+      writable = existsSync(p) || existsSync(dirname(p)) ? false : true; // a folder that does not exist yet is made on the first write
+    }
+    const failed = auditFailureCount();
+    if (!writable || failed > 0) add("audit-write", "Audit writes", "warn", `${!writable ? `the audit log ${p} cannot be written, so operations go unrecorded` : ""}${!writable && failed ? "; " : ""}${failed ? `${failed} audit entr${failed === 1 ? "y" : "ies"} could not be written by this process` : ""}`);
   }
 
   if (dbOk) {

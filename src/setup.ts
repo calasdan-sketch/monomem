@@ -20,6 +20,7 @@ import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { applyOps, getMember, getPath, JsonEditError, opsAreApplied, parseDoc, parseJsonc, type Op } from "./jsonc-edit.js";
 import { applyTomlOps, findTable, hasServer, tomlOpsApplied } from "./toml-table.js";
+import { applyLegacyEnv, homeDataDir } from "./legacy-env.js";
 
 // ---- environment (injectable, so tests never touch a real configuration) ---------------------------------------------
 
@@ -87,10 +88,16 @@ export interface SetupOptions {
   project: boolean;
   /** Use this database for the new entry (default: the standard one, or the old one when migrating). */
   db?: string;
+  /** A data folder other than ~/.monomem (from MONOMEM_HOME in this shell): written into each app entry's env too. */
+  home?: string;
   noTestNote: boolean;
   noDoctor: boolean;
   /** "auto" (default), "node" (absolute node + cli.js) or "npx". */
   command: "auto" | "node" | "npx";
+  /** Wire the app to the running HTTP server with its own key (so its sensitivity limit applies) instead of the stdio command. */
+  httpEntry?: { url: string; headers: Record<string, string> };
+  /** `connect` calls setup for one app: skip the version banner and the list of every app found. */
+  terse?: boolean;
   /** Replace a config file that exists but is completely empty (0 bytes), which may be a half-written one. */
   forceEmpty: boolean;
   /** Remove an old (`onememory` / `claude-bridge`) entry that sits beside a `monomem` one. Only ever set after a typed yes. */
@@ -135,6 +142,20 @@ export function detectClients(e: SetupEnv): ClientTarget[] {
   else if (e.platform === "darwin") desk = join(e.home, "Library", "Application Support", "Claude", "claude_desktop_config.json");
   else desk = join(xdgConfig(e), "Claude", "claude_desktop_config.json");
   out.push({ id: "claude-desktop", label: "Claude Desktop", file: desk, exists: existsSync(desk), present: existsSync(desk) || existsSync(dirname(desk)) });
+  // Claude Desktop from the Microsoft Store (MSIX) reads its config from its package's virtualised AppData instead.
+  if (e.platform === "win32") {
+    const pkgs = join(e.env.LOCALAPPDATA?.trim() || join(e.home, "AppData", "Local"), "Packages");
+    let names: string[] = [];
+    try {
+      names = readdirSync(pkgs).filter((n) => n.startsWith("Claude_"));
+    } catch {
+      /* no Packages folder */
+    }
+    for (const n of names) {
+      const f = join(pkgs, n, "LocalCache", "Roaming", "Claude", "claude_desktop_config.json");
+      if (existsSync(f) || existsSync(dirname(f))) out.push({ id: "claude-desktop", label: "Claude Desktop (Microsoft Store)", file: f, exists: existsSync(f), present: true });
+    }
+  }
   const cur = join(e.home, ".cursor", "mcp.json");
   out.push({ id: "cursor", label: "Cursor", file: cur, exists: existsSync(cur), present: existsSync(cur) || existsSync(dirname(cur)) });
   const add = (id: ClientId, label: string, file: string, dir = dirname(file)): void => void out.push({ id, label, file, exists: existsSync(file), present: existsSync(file) || existsSync(dir) });
@@ -164,9 +185,6 @@ export interface ServerEntry {
 export function runningFromNpxCache(cliPath: string): boolean {
   return /[\\/]_npx[\\/]/.test(cliPath);
 }
-
-/** Hooks that run on every prompt / every Read: the agent waits for them, so their start-up time is felt each time. */
-const SYNC_HOOK_EVENTS: ReadonlySet<string> = new Set(["user-prompt", "file-context"]);
 
 /** Marker file (in the data folder) that setup writes when the person said no to the Claude Code hook, so `monomem health` can say so. */
 export const HOOKS_DECLINED_FILE = "setup-hooks-declined";
@@ -229,9 +247,13 @@ export function buildServerEntry(e: SetupEnv, opts: Pick<SetupOptions, "command"
 export function buildHookCommand(e: SetupEnv, opts: Pick<SetupOptions, "command">, dbPath?: string): string {
   const useNpx = opts.command === "npx" || (opts.command === "auto" && runningFromNpxCache(e.cliPath));
   const db = dbPath ? ` --db "${dbPath.replace(/\\/g, "/")}"` : "";
-  if (useNpx) return `npx -y monomem@${e.version} recall --budget-ms 800${db}`;
-  return `node "${e.cliPath.replace(/\\/g, "/")}" recall --budget-ms 800${db}`;
+  const cli = useNpx && opts.command === "auto" && e.globalCliPath ? e.globalCliPath : null;
+  if (useNpx && !cli) return `npx -y monomem@${e.version} recall --budget-ms 800${db}`;
+  return `node "${(cli ?? e.cliPath).replace(/\\/g, "/")}" recall --budget-ms 800${db}`;
 }
+
+/** Apps whose config accepts a web (HTTP) MCP server with headers: Claude Code and VS Code (type "http"), Cursor (url + headers). */
+export const HTTP_CAPABLE: readonly string[] = ["claude-code", "vscode", "cursor", "project"];
 
 export type EntryKind = "monomem" | "legacy" | "other";
 
@@ -267,13 +289,18 @@ export function migrateEntry(e: SetupEnv, opts: Pick<SetupOptions, "command">, o
   const env: Record<string, string> = {};
   const oldEnv = old.env && typeof old.env === "object" ? (old.env as Record<string, unknown>) : {};
   // A name already in the new style wins over its old-style twin, exactly as at run time (legacy-env.ts).
-  for (const [k, v] of Object.entries(oldEnv)) if (typeof v === "string" && !k.startsWith("CLAUDE_BRIDGE_")) env[k] = v;
-  for (const [k, v] of Object.entries(oldEnv)) {
-    if (typeof v !== "string" || !k.startsWith("CLAUDE_BRIDGE_")) continue;
-    const nk = "MONOMEM_" + k.slice("CLAUDE_BRIDGE_".length);
-    if (!(nk in env)) env[nk] = v;
+  // Old names, newest first (ONEMEMORY_* wins over CLAUDE_BRIDGE_*), as legacy-env.ts reads them.
+  const oldPrefixes = ["ONEMEMORY_", "CLAUDE_BRIDGE_"];
+  for (const [k, v] of Object.entries(oldEnv)) if (typeof v === "string" && !oldPrefixes.some((p) => k.startsWith(p))) env[k] = v;
+  for (const p of oldPrefixes) {
+    for (const [k, v] of Object.entries(oldEnv)) {
+      if (typeof v !== "string" || !k.startsWith(p) || k.length === p.length) continue;
+      const nk = "MONOMEM_" + k.slice(p.length);
+      if (!(nk in env)) env[nk] = v;
+    }
   }
-  let db = env.MONOMEM_DB_PATH ?? null;
+  // An entry that names a data folder (MONOMEM_HOME, or ONEMEMORY_HOME mapped above) keeps its data there.
+  let db = env.MONOMEM_DB_PATH ?? (env.MONOMEM_HOME?.trim() ? join(dataHome({ ...e, env: { MONOMEM_HOME: env.MONOMEM_HOME } }), "state.db") : null);
   if (!db) {
     const guess = dbBesideInstall(old);
     if (guess && existsSync(guess)) {
@@ -281,7 +308,7 @@ export function migrateEntry(e: SetupEnv, opts: Pick<SetupOptions, "command">, o
       db = guess;
       notes.push(`the old entry named no database; found one at ${guess} and pointed the new entry at it`);
     } else {
-      notes.push("the old entry named no database and none was found next to it: the new entry will start with the standard location (~/.monomem)");
+      notes.push(`the old entry named no database and none was found next to it: the new entry will use ${runtimeHome(e)}${e.env.MONOMEM_HOME?.trim() ? " (MONOMEM_HOME)" : homeDataDir(e.home).why === "legacy-home" ? " (where your OneMemory notes are)" : " (the standard location)"}`);
     }
   }
   const entry = buildServerEntry(e, opts, env, withType);
@@ -289,6 +316,105 @@ export function migrateEntry(e: SetupEnv, opts: Pick<SetupOptions, "command">, o
   for (const [k, v] of Object.entries(old)) if (!["command", "args", "env", "type"].includes(k)) entry[k] = v;
   return { entry, db, notes };
 }
+
+/** What planning one app shares with the next: the databases in play, and how to count a database's notes (read-only). */
+export interface SharedPlan {
+  dbs: Set<string>;
+  dupOld?: number;
+  noteCount?: (db: string) => number;
+}
+
+type Found = ReturnType<typeof findServers>[number];
+/** The old claude-bridge entry (by name, command line or a CLAUDE_BRIDGE_* setting). */
+const isBridge = (name: string, entry: Record<string, unknown>): boolean =>
+  name === "claude-bridge" || /claude-bridge/i.test(JSON.stringify([entry.command, entry.args])) || Object.keys((entry.env as object) ?? {}).some((k) => k.startsWith("CLAUDE_BRIDGE_"));
+
+/**
+ * The old entries (claude-bridge, onememory) and any "monomem" in one place, sorted out before planning:
+ *  - a claude-bridge entry with its own database, when anything else is there too, is never made the main store and
+ *    never removed: it stays exactly as it is (`aside`, with how to import its notes);
+ *  - several other old entries with no "monomem": the one whose database has notes is migrated, the rest removed (`drop`);
+ *  - an old entry with notes beside an EMPTY "monomem" on another database: that "monomem" is replaced by the old one
+ *    (`replace`; only after a yes, see planFile), so the notes stay reachable;
+ *  - two DIFFERENT databases that both have notes: this app is not changed (`skip`, or `conflict` beside "monomem")
+ *    with the commands that merge them; other apps still go ahead.
+ */
+function pickLegacyKeepers(
+  e: SetupEnv,
+  opts: SetupOptions,
+  base: string,
+  servers: Found[],
+  withType: boolean,
+  target: ClientTarget,
+  noteCount: (db: string) => number
+): { drop: Map<Found, string>; aside: Map<Found, string>; replace: Map<Found, { old: Found; line: string; ask: string }>; skip?: string; conflict?: string } {
+  const drop = new Map<Found, string>();
+  const aside = new Map<Found, string>();
+  const replace = new Map<Found, { old: Found; line: string; ask: string }>();
+  const at = (s: { path: string[] }): string => s.path.join("\u0000");
+  const dbOf = (entry: Record<string, unknown>): string => resolve(opts.db ?? migrateEntry(e, opts, entry, withType).db ?? join(opts.home ?? runtimeHome(e), "state.db"));
+  // The larger store stays the main data; the smaller one is imported into it (fewer notes moved, less to go wrong).
+  type Side = { db: string; notes: number; name: string };
+  const merge = (a: Side, b: Side): string => {
+    const [big, small] = a.notes >= b.notes ? [a, b] : [b, a];
+    return `To keep both sets, keep the larger store as your main data: ${big.db} ("${big.name}", ${big.notes} notes), and import the smaller one into it: ${small.db} ("${small.name}", ${small.notes} notes). Copy ${small.db} first, then  monomem export --format json --out other.json  with MONOMEM_DB_PATH=<the copy>, then  monomem import --file other.json  with MONOMEM_DB_PATH=${big.db}; then delete the "${small.name}" entry from ${target.file} and run monomem setup again`;
+  };
+  const groups = new Map<string, Array<{ s: Found; db: string; notes: number; bridgeDb: boolean }>>();
+  for (const s of servers) {
+    const entry = safeParseEntry(base, s);
+    if (!entry || classifyEntry(s.name, entry) !== "legacy") continue;
+    // A claude-bridge entry with its own database is judged (and named in the hint) by THAT database, never by --db.
+    const own = isBridge(s.name, entry) ? migrateEntry(e, opts, entry, withType).db : null;
+    const db = own !== null ? resolve(own) : dbOf(entry);
+    const list = groups.get(at(s)) ?? [];
+    list.push({ s, db, notes: noteCount(db), bridgeDb: own !== null });
+    groups.set(at(s), list);
+  }
+  for (const all of groups.values()) {
+    const where = all[0].s.path.length === 1 ? "" : ` (project ${all[0].s.path[1]})`;
+    const mono = servers.find((x) => x.name === "monomem" && at(x) === at(all[0].s));
+    const others = all.filter((x) => !x.bridgeDb);
+    for (const x of all) {
+      if (!x.bridgeDb || (!mono && others.length === 0)) continue;
+      aside.set(
+        x.s,
+        `${target.label}: the old "${x.s.name}" entry${where} has its own database (${x.db}, ${x.notes} notes), so I left it exactly as it is (not made your main store, not removed). To bring its notes into Monomem: copy that file first (Monomem upgrades a database it opens, and claude-bridge cannot read it after), then run  monomem export --format json --out bridge.json  with MONOMEM_DB_PATH=<the copy>, then  monomem import --file bridge.json`
+      );
+    }
+    if (mono) {
+      const mEntry = safeParseEntry(base, mono);
+      if (!mEntry) continue;
+      const mDb = dbOf(mEntry);
+      const mNotes = noteCount(mDb);
+      const full = [...new Map(others.filter((x) => x.notes > 0 && x.db !== mDb).map((x) => [x.db, x] as const)).values()];
+      if (!full.length) continue; // same data, or the old one is empty: the usual "remove the old entry" (asked first)
+      const x = full[0];
+      if (mNotes > 0 || full.length > 1) {
+        return { drop, aside, replace, conflict: `${target.label}: "monomem" (${mDb}, ${mNotes} notes) and "${x.s.name}" (${x.db}, ${x.notes} notes)${where} both hold notes, so I did not change ${target.file}. ${merge({ db: x.db, notes: x.notes, name: x.s.name }, { db: mDb, notes: mNotes, name: mono.name })}` };
+      }
+      replace.set(x.s, {
+        old: mono,
+        line: `keep your notes: the "monomem" entry${where} uses ${mDb} (0 notes) and "${x.s.name}" uses ${x.db} (${x.notes} notes), so the empty "monomem" entry is removed and "${x.s.name}" becomes "monomem" with its data`,
+        ask: `${target.label}: "monomem"${where} uses ${mDb} (0 notes) but "${x.s.name}" uses ${x.db} (${x.notes} notes). Run setup at a terminal: it shows the change that keeps the notes (the empty "monomem" entry goes, "${x.s.name}" becomes "monomem") and asks first`,
+      });
+      continue;
+    }
+    const list = others;
+    if (list.length < 2) continue;
+    const withNotes = [...new Set(list.filter((x) => x.notes > 0).map((x) => x.db))];
+    if (withNotes.length > 1) {
+      const names = list.map((x) => `"${x.s.name}" (${x.db}, ${x.notes} notes)`).join(" and ");
+      return { drop, aside, replace, skip: `${target.label}: ${names} both hold notes, so I did not change ${target.file}. ${merge(...withNotes.slice(0, 2).map((db) => { const x = list.find((y) => y.db === db)!; return { db, notes: x.notes, name: x.s.name }; }) as [Side, Side])}` };
+    }
+    const keep = list.find((x) => x.notes > 0) ?? list.find((x) => x.s.name === "claude-bridge") ?? list[0];
+    for (const x of list) {
+      if (x === keep) continue;
+      drop.set(x.s, `"${keep.s.name}" becomes "monomem" and keeps its data (${keep.db}); this entry's database ${x.db === keep.db ? "is the same one" : `(${x.db}, ${x.notes} notes) is left on disk, unused`}`);
+    }
+  }
+  return { drop, aside, replace };
+}
+
 
 // ---- planning ----------------------------------------------------------------------------------------------------------
 
@@ -461,37 +587,225 @@ function serversKey(id: ClientId, text: string): string {
  */
 const appLabel = (id: ClientId): string => (id === "project" ? "claude-code" : id);
 
+/** The data location this setup run pins into each entry (MONOMEM_HOME / MONOMEM_DB_PATH), if any. */
+function pinFor(opts: SetupOptions): Record<string, string> {
+  return { ...(opts.home ? { MONOMEM_HOME: opts.home } : {}), ...(opts.db ? { MONOMEM_DB_PATH: opts.db } : {}) };
+}
+const pinText = (pin: Record<string, string>): string => Object.entries(pin).map(([k, v]) => `${k}=${v}`).join(", ");
+
+/** An existing entry against the pin: "none" (nothing to pin), "ok" (same place), "missing" (entry names no place), "differs". */
+export function pinMismatch(e: Pick<SetupEnv, "home" | "platform">, pin: Record<string, string>, read: (k: string) => string | undefined): "none" | "ok" | "missing" | "differs" {
+  if (!Object.keys(pin).length) return "none";
+  const has = ["MONOMEM_HOME", "MONOMEM_DB_PATH"].filter((k) => read(k) !== undefined);
+  if (!has.length) return "missing";
+  // "~/x" and "C:\Users\Me\x" vs "c:\users\me\x" are the same folder (Windows paths ignore case).
+  const norm = (p: string): string => {
+    const t = p.trim();
+    const r = resolve(t === "~" || t.startsWith("~/") || t.startsWith("~\\") ? join(e.home, t.slice(1)) : t);
+    return e.platform === "win32" ? r.toLowerCase() : r;
+  };
+  for (const k of has) if (pin[k] === undefined || norm(String(read(k))) !== norm(pin[k])) return "differs";
+  return "ok";
+}
+
+const PINNED_VERSION = /monomem@(\d+\.\d+\.\d+)/i;
+
+/**
+ * Why an app's Monomem entry would not start this version, else null: an absolute command or a .js argument (cli.js) that
+ * no longer exists (stale: the install moved or was removed), or an npx pin to another version (outdated).
+ */
+export function entryProblem(entry: Record<string, unknown>, version: string, exists: (p: string) => boolean = existsSync): string | null {
+  const cmd = typeof entry.command === "string" ? entry.command : "";
+  const args = Array.isArray(entry.args) ? entry.args.map(String) : [];
+  const absolute = (p: string): boolean => /^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(p);
+  for (const p of [cmd, ...args.filter((a) => /\.js$/i.test(a))]) {
+    if (p && absolute(p) && !exists(p)) return `points at ${p}, which no longer exists`;
+  }
+  return pinProblem([cmd, ...args].join(" "), version);
+}
+
+/** "launches monomem X, this is Y" when the text pins another version with npx (monomem@X.Y.Z), else null. */
+export function pinProblem(text: string, version: string): string | null {
+  const m = PINNED_VERSION.exec(text);
+  return m && m[1] !== version ? `launches monomem ${m[1]}, this is ${version}` : null;
+}
+
+/** entryProblem for Codex's [mcp_servers.monomem] TOML table text. */
+function tomlEntryProblem(ours: string, version: string): string | null {
+  const command = /\bcommand\s*=\s*["']([^"']*)["']/.exec(ours)?.[1] ?? "";
+  return entryProblem({ command, args: [...ours.matchAll(/["']([^"']+\.js)["']/gi)].map((m) => m[1]) }, version) ?? pinProblem(ours, version);
+}
+
+/**
+ * doctor / health: every detected app whose Monomem entry is stale or outdated (entryProblem), and every hook file whose
+ * Monomem hook command pins another version. One line each: "<app>: <reason>".
+ */
+export function appEntryProblems(e: SetupEnv): string[] {
+  const out: string[] = [];
+  for (const c of detectClients(e)) {
+    const text = c.exists ? readTextFile(c.file) : null;
+    if (!text) continue;
+    if (c.id === "codex") {
+      const table = findTable(text, ["mcp_servers", "monomem"]);
+      const ours = table ? text.slice(table.start, table.end) : "";
+      const r = ours ? tomlEntryProblem(ours, e.version) : null;
+      if (r) out.push(`${c.label}: "monomem" ${r}`);
+      continue;
+    }
+    let servers: FoundServer[] = [];
+    try {
+      servers = findServers(text, c.id === "claude-code", serversKey(c.id, text));
+    } catch {
+      continue;
+    }
+    for (const s of servers) {
+      const entry = safeParseEntry(text, s);
+      if (!entry || classifyEntry(s.name, entry) !== "monomem") continue;
+      const r = entryProblem(entry, e.version);
+      if (r) out.push(`${c.label}: "${s.name}"${s.path.length === 1 ? "" : ` (project ${s.path[1]})`} ${r}`);
+    }
+  }
+  for (const h of hookHosts(e)) {
+    const text = readTextFile(h.file);
+    if (!text) continue;
+    const r = pinProblem([...text.matchAll(/"command"\s*:\s*"([^"]*monomem@[^"]*)"/gi)].map((m) => m[1]).join(" "), e.version);
+    if (r) out.push(`${h.label}: a Monomem hook ${r}`);
+  }
+  return out;
+}
+
+/** `KEY = "..."` (basic string, JSON-style escapes) or `KEY = '...'` (literal) in TOML text: the value, else undefined. */
+function tomlString(text: string, k: string): string | undefined {
+  const m = new RegExp(`\\b${k}\\s*=\\s*(?:"((?:[^"\\\\]|\\\\.)*)"|'([^']*)')`).exec(text);
+  if (!m) return undefined;
+  if (m[2] !== undefined) return m[2];
+  try {
+    return JSON.parse(`"${m[1]}"`) as string;
+  } catch {
+    return m[1];
+  }
+}
+
+/**
+ * A Codex server table ([mcp_servers.x] plus its [mcp_servers.x.env], or an inline `env = { ... }`) as an entry: command,
+ * args, env and other plain `key = "string" | number | bool` settings. Enough to migrate it; undo restores the exact
+ * bytes from the backup.
+ */
+function readTomlEntry(block: string): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const env: Record<string, string> = {};
+  const strings = (s: string): string[] => [...s.matchAll(/"((?:[^"\\]|\\.)*)"|'([^']*)'/g)].map((m) => (m[2] !== undefined ? m[2] : (JSON.parse(`"${m[1]}"`) as string)));
+  let inEnv = false;
+  for (const raw of block.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    if (line.startsWith("[")) {
+      inEnv = /\.\s*"?env"?\s*\]$/.test(line);
+      continue;
+    }
+    const kv = /^"?([A-Za-z0-9_-]+)"?\s*=\s*(.*)$/.exec(line);
+    if (!kv) continue;
+    const [, k, v] = kv;
+    if (inEnv) {
+      const s = strings(v);
+      if (s.length) env[k] = s[0];
+    } else if (k === "args") out.args = strings(v.replace(/#.*$/, ""));
+    else if (k === "env") {
+      for (const m of v.matchAll(/"?([A-Za-z0-9_]+)"?\s*=\s*("(?:[^"\\]|\\.)*"|'[^']*')/g)) env[m[1]] = strings(m[2])[0];
+    } else if (/^["']/.test(v)) out[k] = strings(v)[0];
+    else if (/^(true|false)\b/.test(v)) out[k] = v.startsWith("true");
+    else if (/^-?\d+(\.\d+)?\b/.test(v)) out[k] = Number(/^-?\d+(\.\d+)?/.exec(v)![0]);
+  }
+  if (Object.keys(env).length) out.env = env;
+  return out;
+}
+
+/** The plan line for adding env keys to an existing entry. */
+function envLine(name: string, where: string, add: Record<string, string>, app: string): string {
+  const parts: string[] = [];
+  const { MONOMEM_CLIENT: client, ...rest } = add;
+  if (client) parts.push(`label "${name}"${where} as ${app} (MONOMEM_CLIENT), so its writes are stamped "stdio:${app}"`);
+  const pin = pinText(rest);
+  if (pin) parts.push(`point "${name}"${where} at the data folder set in this shell (${pin}), so the app uses the same notes`);
+  return parts.join("; ");
+}
+
 /** Codex CLI: one [mcp_servers.monomem] table in ~/.codex/config.toml (command/args/env), everything else untouched. */
-function planToml(e: SetupEnv, opts: SetupOptions, target: ClientTarget, text: string | null, shared: { dbs: Set<string>; dupOld?: number }): { change: FileChange | null; already: string[]; conflicts: string[]; warnings: string[] } {
+function planToml(e: SetupEnv, opts: SetupOptions, target: ClientTarget, text: string | null, shared: SharedPlan): { change: FileChange | null; already: string[]; conflicts: string[]; warnings: string[] } {
   if (text !== null && hasServer(text, "monomem")) {
     const already = { change: null, already: [`${target.label}: "monomem" is already set up`], conflicts: [], warnings: [] };
-    if (/MONOMEM_CLIENT/.test(text)) return already;
+    const table = findTable(text, ["mcp_servers", "monomem"]);
+    const envTable = findTable(text, ["mcp_servers", "monomem", "env"]);
+    const ours = (table ? text.slice(table.start, table.end) : "") + (envTable ? text.slice(envTable.start, envTable.end) : "");
+    const want: Record<string, string> = /MONOMEM_CLIENT/.test(ours || text) ? {} : { MONOMEM_CLIENT: "codex" };
+    const pin = pinFor(opts);
+    const pinned = pinMismatch(e, pin, (k) => tomlString(ours, k));
+    if (pinned === "differs") return { ...already, already: [], conflicts: [`${target.label}: "monomem" uses a different data folder than the one set in this shell (${pinText(pin)}). Make them the same in ${target.file}, or unset MONOMEM_HOME / MONOMEM_DB_PATH here, then run setup again`] };
+    if (pinned === "missing") Object.assign(want, pin);
+    const stale = tomlEntryProblem(ours, e.version);
+    if (stale) {
+      // TOML tables are not rewritten in place; say exactly what to do instead of calling a broken entry fine.
+      return { ...already, already: [], warnings: [`${target.label}: "monomem" ${stale}. Delete the [mcp_servers.monomem] table (and its env table) from ${target.file}, then run monomem setup again`] };
+    }
+    if (!Object.keys(want).length) return already;
     // An entry from before per-app labels gets an [mcp_servers.monomem.env] table, but only when that cannot clash with
     // what is there: the entry is a table of its own and has no env yet (an inline `env = {...}` or an inline entry is
     // closed in TOML, so a second env would make the file invalid). Otherwise it keeps working, stamped plain "stdio".
-    const table = findTable(text, ["mcp_servers", "monomem"]);
-    if (!table || /^\s*"?env"?\s*[.=]/m.test(text.slice(table.start, table.end)) || findTable(text, ["mcp_servers", "monomem", "env"])) {
-      return { ...already, warnings: [`${target.label}: to label its writes "stdio:codex", add MONOMEM_CLIENT = "codex" to the env of [mcp_servers.monomem] by hand`] };
+    if (!table || /^\s*"?env"?\s*[.=]/m.test(text.slice(table.start, table.end)) || envTable) {
+      return { ...already, warnings: [`${target.label}: add ${Object.entries(want).map(([k, v]) => `${k} = ${JSON.stringify(v)}`).join(" and ")} to the env of [mcp_servers.monomem] by hand`] };
     }
     const at = ["mcp_servers", "monomem"];
     return {
-      change: { client: target.id, label: target.label, file: target.file, before: text, ops: [{ op: "set", path: at, key: "env", value: { MONOMEM_CLIENT: "codex" } }], lines: [`label "monomem" as codex (MONOMEM_CLIENT), so its writes are stamped "stdio:codex"`], inverse: [{ op: "remove", path: at, key: "env" }], allowEmpty: opts.forceEmpty, format: "toml" },
+      change: { client: target.id, label: target.label, file: target.file, before: text, ops: [{ op: "set", path: at, key: "env", value: want }], lines: [envLine("monomem", "", want, "codex")], inverse: [{ op: "remove", path: at, key: "env" }], allowEmpty: opts.forceEmpty, format: "toml" },
       already: [],
       conflicts: [],
       warnings: [],
     };
   }
-  const entry = buildServerEntry(e, opts, { MONOMEM_CLIENT: target.id, ...(opts.db ? { MONOMEM_DB_PATH: opts.db } : {}) });
+  // The package's previous name: [mcp_servers.onememory] becomes [mcp_servers.monomem] with the same data, not a second server.
+  const oldTable = text !== null ? findTable(text, ["mcp_servers", "onememory"]) : null;
+  if (text !== null && hasServer(text, "onememory") && !oldTable) {
+    return { change: null, already: [], conflicts: [], warnings: [`${target.label}: the old "onememory" server is written inline, so I did not change ${target.file}. Rewrite it as an [mcp_servers.onememory] table (or delete it), then run monomem setup again`] };
+  }
+  if (text !== null && oldTable) {
+    const old = readTomlEntry(text.slice(oldTable.start, oldTable.end));
+    const m = migrateEntry(e, opts, old, false);
+    m.entry.env = { MONOMEM_CLIENT: target.id, ...(m.entry.env ?? {}), ...(opts.db ? { MONOMEM_DB_PATH: opts.db } : {}), ...(opts.home ? { MONOMEM_HOME: opts.home } : {}) };
+    const dbToCheck = opts.db ?? m.db;
+    if (dbToCheck) shared.dbs.add(dbToCheck);
+    const where = m.db ? `your data stays where it is (${m.db})` : m.entry.env.MONOMEM_HOME ? `data folder ${m.entry.env.MONOMEM_HOME}` : `standard data location (${runtimeHome(e)})`;
+    return {
+      change: {
+        client: target.id,
+        label: target.label,
+        file: target.file,
+        before: text,
+        ops: [{ op: "remove", path: ["mcp_servers"], key: "onememory" }, { op: "set", path: ["mcp_servers"], key: "monomem", value: m.entry }],
+        lines: [`replace the old "onememory" server with "monomem"; ${where}`, ...m.notes.map((n) => "note: " + n)],
+        inverse: [{ op: "remove", path: ["mcp_servers"], key: "monomem" }, { op: "set", path: ["mcp_servers"], key: "onememory", value: old }],
+        allowEmpty: opts.forceEmpty,
+        format: "toml",
+      },
+      already: [],
+      conflicts: [],
+      warnings: [],
+    };
+  }
+  const entry = buildServerEntry(e, opts, { MONOMEM_CLIENT: target.id, ...(opts.db ? { MONOMEM_DB_PATH: opts.db } : {}), ...(opts.home ? { MONOMEM_HOME: opts.home } : {}) });
   if (opts.db) shared.dbs.add(opts.db);
   const ops: Op[] = [{ op: "set", path: ["mcp_servers"], key: "monomem", value: entry }];
   const lines = [`add the "monomem" memory server${opts.db ? ` (database ${opts.db})` : ""}`];
   return { change: { client: target.id, label: target.label, file: target.file, before: text, ops, lines, inverse: [{ op: "remove", path: ["mcp_servers"], key: "monomem" }], allowEmpty: opts.forceEmpty, format: "toml" }, already: [], conflicts: [], warnings: [] };
 }
 
-export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, shared: { dbs: Set<string>; dupOld?: number }): { change: FileChange | null; already: string[]; conflicts: string[]; warnings: string[] } {
+export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, shared: SharedPlan): { change: FileChange | null; already: string[]; conflicts: string[]; warnings: string[] } {
   const text = readTextFile(target.file);
   if (text === "" && !opts.forceEmpty) return { change: null, already: [], conflicts: [EMPTY_FILE_MSG(target.file)], warnings: [] };
-  if (target.id === "codex") return planToml(e, opts, target, text, shared);
+  if (target.id === "codex") {
+    const r = planToml(e, opts, target, text, shared);
+    if (text && hasServer(text, "monomem") && hasServer(text, "onememory")) r.warnings.push(`${target.label}: the old "onememory" server is still there beside "monomem". If both use the same notes, delete the [mcp_servers.onememory] table (and its env table) from ${target.file}`);
+    return r;
+  }
   const base = text ?? "";
   const key = serversKey(target.id, base);
   const already: string[] = [];
@@ -506,6 +820,12 @@ export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, 
   const hasOneTop = top.some((s) => classifyEntry(s.name, safeParseEntry(base, s) ?? {}) === "monomem");
   let migrated = 0;
   let labelled = 0;
+  let replaced = 0;
+  // Several old entries (claude-bridge, onememory) in one place would each become "monomem": keep one, drop the others.
+  const multi = pickLegacyKeepers(e, opts, base, servers, withType, target, shared.noteCount ?? (() => 0));
+  if (multi.skip) return { change: null, already, conflicts, warnings: [multi.skip] };
+  if (multi.conflict) return { change: null, already, conflicts: [multi.conflict], warnings };
+  const replacedMono = new Set([...multi.replace.values()].map((r) => r.old));
   for (const s of servers) {
     const entry = safeParseEntry(base, s);
     if (!entry) {
@@ -518,26 +838,93 @@ export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, 
     }
     const kind = classifyEntry(s.name, entry);
     const where = s.path.length === 1 ? "" : ` (project ${s.path[1]})`;
+    if (replacedMono.has(s)) continue; // an empty "monomem" that an old entry with notes replaces (below)
+    if (kind === "monomem" && opts.httpEntry) {
+      // Monomem's OWN entry (the one setup wrote, with no key) is replaced by the limited one. The change is shown, the file
+      // is backed up like every other setup change, and `monomem setup --undo` puts the old entry back exactly.
+      if (!HTTP_CAPABLE.includes(target.id)) {
+        conflicts.push(`${target.label}: I cannot safely write a key-based connection into this app's config (its format is not verified). Use the paste-in block that  monomem connect ${target.id} --restricted --print  shows`);
+        continue;
+      }
+      if ((entry as { url?: unknown }).url !== undefined || (entry as { headers?: unknown }).headers !== undefined) {
+        conflicts.push(`${target.label}: "${s.name}"${where} already connects this app with its own key. To change its limit, take that connection out first: monomem token list  (then monomem token remove <name> and monomem setup --undo), and run connect again`);
+        continue;
+      }
+      const limited = { ...(withType ? { type: "http" } : {}), url: opts.httpEntry.url, headers: opts.httpEntry.headers } as unknown as ServerEntry;
+      ops.push({ op: "set", path: s.path, key: s.name, value: limited });
+      inverse.unshift({ op: "set", path: s.path, key: s.name, value: entry });
+      lines.push(`replace Monomem's own "${s.name}" entry${where}: it connected this app to ALL your notes with no key and no limit; the new entry uses its own key and limit`);
+      replaced++;
+      continue;
+    }
     if (kind === "monomem") {
       const env = entry.env && typeof entry.env === "object" && !Array.isArray(entry.env) ? (entry.env as Record<string, unknown>) : null;
       // A folder's .mcp.json is only edited when asked (--project), the same as adding one.
       // Only a stdio entry (a command) is labelled: MONOMEM_CLIENT means nothing to an HTTP entry (url).
-    if ((env && "MONOMEM_CLIENT" in env) || typeof entry.command !== "string" || (target.id === "project" && !opts.project)) {
+      if (typeof entry.command !== "string" || (target.id === "project" && !opts.project)) {
         already.push(`${target.label}: "${s.name}"${where} is already set up`);
         continue;
       }
       // An entry from before per-app labels: name the app, so its writes are stamped stdio:<app> instead of plain stdio.
-      const at = env ? [...s.path, s.name, "env"] : [...s.path, s.name];
-      const op: Op = env ? { op: "set", path: at, key: "MONOMEM_CLIENT", value: appLabel(target.id) } : { op: "set", path: at, key: "env", value: { MONOMEM_CLIENT: appLabel(target.id) } };
-      ops.push(op);
-      inverse.unshift({ op: "remove", path: at, key: op.key });
-      lines.push(`label "${s.name}"${where} as ${appLabel(target.id)} (MONOMEM_CLIENT), so its writes are stamped "stdio:${appLabel(target.id)}"`);
+      const add: Record<string, string> = env && "MONOMEM_CLIENT" in env ? {} : { MONOMEM_CLIENT: appLabel(target.id) };
+      // MONOMEM_HOME / MONOMEM_DB_PATH set in this shell: an entry that names no data folder would use ~/.monomem instead.
+      const pin = pinFor(opts);
+      const pinned = pinMismatch(e, pin, (k) => (env && typeof env[k] === "string" ? (env[k] as string) : undefined));
+      if (pinned === "differs") {
+        conflicts.push(`${target.label}: "${s.name}"${where} uses a different data folder than the one set in this shell (${pinText(pin)}). Make them the same in ${target.file}, or unset MONOMEM_HOME / MONOMEM_DB_PATH here, then run setup again`);
+        continue;
+      }
+      if (pinned === "missing") Object.assign(add, pin);
+      // An entry that would not start this version (its cli.js is gone, or npx pins another version) is rewritten: same
+      // name, same env and extra settings, this version's launch command.
+      const problem = entryProblem(entry, e.version);
+      const fresh: ServerEntry = { ...entry, ...buildServerEntry(e, opts, { ...((env as Record<string, string> | null) ?? {}), ...add }, withType && "type" in entry) };
+      // Only when rewriting changes something: an entry that already is what setup writes now stays (no rewrite loop).
+      if (problem && JSON.stringify(fresh) !== JSON.stringify(entry)) {
+        ops.push({ op: "set", path: s.path, key: s.name, value: fresh });
+        inverse.unshift({ op: "set", path: s.path, key: s.name, value: entry });
+        lines.push(`rewrite "${s.name}"${where}: it ${problem}`);
+        labelled++;
+        continue;
+      }
+      if (!Object.keys(add).length) {
+        already.push(`${target.label}: "${s.name}"${where} is already set up`);
+        continue;
+      }
+      if (env) {
+        for (const [k, v] of Object.entries(add)) {
+          ops.push({ op: "set", path: [...s.path, s.name, "env"], key: k, value: v });
+          inverse.unshift({ op: "remove", path: [...s.path, s.name, "env"], key: k });
+        }
+      } else {
+        ops.push({ op: "set", path: [...s.path, s.name], key: "env", value: add });
+        inverse.unshift({ op: "remove", path: [...s.path, s.name], key: "env" });
+      }
+      lines.push(envLine(s.name, where, add, appLabel(target.id)));
       labelled++;
       continue;
     }
     if (kind !== "legacy") continue;
+    const asideHint = multi.aside.get(s);
+    if (asideHint) {
+      warnings.push(asideHint);
+      continue;
+    }
+    const swap = multi.replace.get(s);
+    if (swap && !opts.removeOld) {
+      shared.dupOld = (shared.dupOld ?? 0) + 1;
+      conflicts.push(swap.ask);
+      continue;
+    }
+    const dropped = multi.drop.get(s);
+    if (dropped) {
+      ops.push({ op: "remove", path: s.path, key: s.name });
+      inverse.unshift({ op: "set", path: s.path, key: s.name, value: entry });
+      lines.push(`remove the old "${s.name}" entry${where}: ${dropped}`);
+      continue;
+    }
     // An existing "monomem" next to the old one: do not merge two things by guesswork.
-    const sibling = servers.some((x) => x.name === "monomem" && x.path.join("\u0000") === s.path.join("\u0000"));
+    const sibling = !swap && servers.some((x) => x.name === "monomem" && x.path.join("\u0000") === s.path.join("\u0000"));
     if (sibling && opts.removeOld) {
       ops.push({ op: "remove", path: s.path, key: s.name });
       inverse.unshift({ op: "set", path: s.path, key: s.name, value: entry });
@@ -550,20 +937,39 @@ export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, 
       continue;
     }
     const m = migrateEntry(e, opts, entry, withType);
-    m.entry.env = { MONOMEM_CLIENT: appLabel(target.id), ...(m.entry.env ?? {}), ...(opts.db ? { MONOMEM_DB_PATH: opts.db } : {}) };
-    ops.push({ op: "rename", path: s.path, key: s.name, newKey: "monomem", value: m.entry });
-    inverse.unshift({ op: "rename", path: s.path, key: "monomem", newKey: s.name, value: entry });
-    lines.push(`replace the old "${s.name}" entry${where} with "monomem"; ${m.db ? `your data stays where it is (${m.db})` : "standard data location"}. The old install folder is not touched`);
+    m.entry.env = { MONOMEM_CLIENT: appLabel(target.id), ...(m.entry.env ?? {}), ...(opts.db ? { MONOMEM_DB_PATH: opts.db } : {}), ...(opts.home ? { MONOMEM_HOME: opts.home } : {}) };
+    if (swap) {
+      // The empty "monomem" entry takes the old one's settings in place (set, not remove + rename, so a re-check of the
+      // written file can tell the edit is there); the old entry goes.
+      ops.push({ op: "set", path: s.path, key: "monomem", value: m.entry }, { op: "remove", path: s.path, key: s.name });
+      inverse.unshift({ op: "set", path: s.path, key: "monomem", value: safeParseEntry(base, swap.old) }, { op: "set", path: s.path, key: s.name, value: entry });
+      lines.push(swap.line);
+    } else {
+      ops.push({ op: "rename", path: s.path, key: s.name, newKey: "monomem", value: m.entry });
+      inverse.unshift({ op: "rename", path: s.path, key: "monomem", newKey: s.name, value: entry });
+    }
+    lines.push(`replace the old "${s.name}" entry${where} with "monomem"; ${m.db ? `your data stays where it is (${m.db})` : opts.home ? `data folder ${opts.home}` : e.env.MONOMEM_HOME?.trim() ? `data folder ${dataHome(e)} (MONOMEM_HOME)` : `standard data location (${runtimeHome(e)})`}. The old install folder is not touched`);
     lines.push(...m.notes.map((n) => "note: " + n));
     const dbToCheck = opts.db ?? m.db;
     if (dbToCheck) shared.dbs.add(dbToCheck);
     migrated++;
   }
-  if (migrated === 0 && labelled === 0 && !hasOneTop && (target.id !== "project" || opts.project) && !already.length) {
+  if (migrated === 0 && labelled === 0 && replaced === 0 && !hasOneTop && (target.id !== "project" || opts.project) && !already.length) {
     // MONOMEM_CLIENT names the app for written_by ("stdio:<app>"): a label the config declares, not a verified identity.
     const env: Record<string, string> = { MONOMEM_CLIENT: appLabel(target.id) };
     if (opts.db) env.MONOMEM_DB_PATH = opts.db;
-    let entry = buildServerEntry(e, opts, env, withType);
+    if (opts.home) env.MONOMEM_HOME = opts.home;
+    let entry: ServerEntry;
+    if (opts.httpEntry) {
+      // Only apps whose web-connection format is documented are written here; the others get a paste-in snippet from `connect`.
+      if (!HTTP_CAPABLE.includes(target.id)) {
+        conflicts.push(`${target.label}: I cannot safely write a key-based connection into this app's config (its format is not verified). Use the paste-in block that  monomem connect ${target.id} --restricted --print  shows`);
+        return { change: null, already, conflicts, warnings };
+      }
+      entry = { ...(withType ? { type: "http" } : {}), url: opts.httpEntry.url, headers: opts.httpEntry.headers } as unknown as ServerEntry;
+    } else {
+      entry = buildServerEntry(e, opts, env, withType);
+    }
     // Muse: "optional" so a server that fails to start is skipped with a warning instead of aborting the whole run.
     if (target.id === "muse") entry = { transport: "stdio", ...entry, mode: "optional" };
     // Muse refuses to start without "schema_version": 1, so a file we create (or one missing it) gets it.
@@ -597,7 +1003,14 @@ const TOOL_NAMES = "(?:monomem|onememory|claude-bridge)";
 // or ~/Projects/OneMemory is the same tool. Matching case-sensitively made
 // setup miss its own hook and plan a duplicate -- found by CI, whose checkout
 // directory is capitalised, on a machine where the local one is not.
-const OLD_NPX_HOOK = /npx -y onememory-mcp@[^\s"]+ (?:recall|hook session-start)/;
+/**
+ * A hook command of the old package (`npx -y onememory-mcp[@x] ...`) or an npx Monomem of another version
+ * (`monomem@1.2.0`, `monomem@latest`) running `what` (a regex source): rewritten to the current command, never left
+ * beside a new one.
+ */
+const oldNpxHook = (version: string, what: string): RegExp =>
+  new RegExp(`npx -y (?:onememory-mcp(?:@[^\\s"]+)?|monomem@(?!${version.replace(/\./g, "\\.")}[\\s"])[^\\s"]+) (?:${what})(?![\\w-])`);
+const oldStartHook = (version: string): RegExp => oldNpxHook(version, "recall|hook session-start");
 const startRange = (doc: ReturnType<typeof parseDoc>, on: string): [number, number] => {
   const n = getPath(doc, ["hooks", on]);
   return n ? [n.start, n.end] : [0, 0];
@@ -624,11 +1037,13 @@ export const CAPTURE_HOOKS: ReadonlyArray<{ on: string; event: string; async: bo
 export function buildCaptureCommand(e: SetupEnv, opts: Pick<SetupOptions, "command">, event: string, dbPath?: string): string {
   const useNpx = opts.command === "npx" || (opts.command === "auto" && runningFromNpxCache(e.cliPath));
   const db = dbPath ? ` --db "${dbPath.replace(/\\/g, "/")}"` : "";
-  // A hook the agent waits for runs the global copy when there is one; the background ones stay on npx.
-  const cli = useNpx && SYNC_HOOK_EVENTS.has(event) && opts.command === "auto" && e.globalCliPath ? e.globalCliPath : e.cliPath;
+  // Every hook runs the installed (global) copy when there is one: pinned, no npx start-up, no download.
+  const cli = useNpx && opts.command === "auto" && e.globalCliPath ? e.globalCliPath : e.cliPath;
   if (useNpx && cli === e.cliPath) return `npx -y monomem@${e.version} hook ${event}${db}`;
   return `node "${cli.replace(/\\/g, "/")}" hook ${event}${db}`;
 }
+
+const CAPTURE_REWRITE = "replace the automatic memory hooks";
 
 export function planHook(e: SetupEnv, opts: SetupOptions, dbForHook?: string): { change: FileChange | null; already: boolean; conflict?: string } {
   return planHooks(e, opts, dbForHook, { recall: true, capture: false });
@@ -660,10 +1075,17 @@ export interface HookHost {
  *    stdin fields or the allowed group keys, and it skips a group with a key it does not know, so ours carry nothing but
  *    the command (no matcher, no async) and are recognised by their command line alone. UNVERIFIED: the stdin field names.
  */
+/**
+ * Claude Code's SessionStart sources: a new session, /clear, and after a /compact (the compacted context loses what the
+ * session-start hook printed, so it is printed again). The matcher setup wrote before is replaced on the next run (the new entry goes at the end of the list).
+ */
+export const CLAUDE_START_MATCHER = "startup|clear|compact";
+const OLD_CLAUDE_START_MATCHER = "startup|clear";
+
 export function hookHosts(e: SetupEnv): HookHost[] {
   const muse = detectClients(e).find((t) => t.id === "muse")!.file;
   return [
-    { client: "claude-code", label: "Claude Code hook", agent: "Claude", file: join(claudeDir(e), "settings.json"), start: { on: "SessionStart", matcher: "startup|clear" }, events: CAPTURE_HOOKS },
+    { client: "claude-code", label: "Claude Code hook", agent: "Claude", file: join(claudeDir(e), "settings.json"), start: { on: "SessionStart", matcher: CLAUDE_START_MATCHER }, events: CAPTURE_HOOKS },
     {
       client: "codex",
       label: "Codex CLI hook",
@@ -709,8 +1131,9 @@ export function hookHosts(e: SetupEnv): HookHost[] {
  * there) and, with `capture`, one entry per CAPTURE_HOOKS event (each only if that event has no monomem hook yet).
  * With capture the start-of-session entry is `hook session-start`, which prints the same context and also does the
  * capture housekeeping. Existing entries, ours or anyone's, are never touched; every addition has its own undo op.
+ * `upgradeOnly` (with capture): only rewrite capture hooks of the old package / another npx version, add none.
  */
-export function planHooks(e: SetupEnv, opts: SetupOptions, dbForHook: string | undefined, want: { recall: boolean; capture: boolean }, host: HookHost = hookHosts(e)[0]): { change: FileChange | null; already: boolean; conflict?: string } {
+export function planHooks(e: SetupEnv, opts: SetupOptions, dbForHook: string | undefined, want: { recall: boolean; capture: boolean; upgradeOnly?: boolean }, host: HookHost = hookHosts(e)[0]): { change: FileChange | null; already: boolean; conflict?: string } {
   const file = host.file;
   const text = readTextFile(file);
   if (text === "" && !opts.forceEmpty) return { change: null, already: false, conflict: EMPTY_FILE_MSG(file) };
@@ -723,7 +1146,7 @@ export function planHooks(e: SetupEnv, opts: SetupOptions, dbForHook: string | u
   const inverse: Op[] = [];
   const lines: string[] = [];
   // The old package's start-of-session hook (`npx -y onememory-mcp@<v> recall|hook session-start`) is rewritten to the current command.
-  const oldNpx = want.recall && doc ? OLD_NPX_HOOK.exec(text!.slice(...startRange(doc, host.start.on))) : null;
+  const oldNpx = want.recall && doc ? oldStartHook(e.version).exec(text!.slice(...startRange(doc, host.start.on))) : null;
   const oldEntry = oldNpx ? getPath(doc!, ["hooks", host.start.on])?.items?.find((i) => text!.slice(i.start, i.end).includes(oldNpx[0])) : undefined;
   if (oldNpx && oldEntry) {
     let old: { hooks?: Array<{ command?: unknown }> } | null = null;
@@ -733,12 +1156,37 @@ export function planHooks(e: SetupEnv, opts: SetupOptions, dbForHook: string | u
       /* comments inside the entry: leave the old hook alone */
     }
     const command = want.capture ? buildCaptureCommand(e, opts, "session-start", dbForHook) : buildHookCommand(e, opts, dbForHook);
-    const nu = old && Array.isArray(old.hooks) ? { ...old, hooks: old.hooks.map((x) => (typeof x?.command === "string" && x.command.includes(oldNpx[0]) ? { ...x, command } : x)) } : null;
+    const matcher = host.start.matcher && (old as { matcher?: unknown } | null)?.matcher === OLD_CLAUDE_START_MATCHER ? { matcher: host.start.matcher } : {};
+    const nu = old && Array.isArray(old.hooks) ? { ...old, ...matcher, hooks: old.hooks.map((x) => (typeof x?.command === "string" && x.command.includes(oldNpx[0]) ? { ...x, command } : x)) } : null;
     if (old && nu) {
       ops.push({ op: "unappend", path: ["hooks"], key: host.start.on, marker: oldNpx[0] }, { op: "append", path: ["hooks"], key: host.start.on, value: nu });
       inverse.unshift({ op: "append", path: ["hooks"], key: host.start.on, value: old });
       inverse.unshift({ op: "unappend", path: ["hooks"], key: host.start.on, marker: want.capture ? "hook session-start" : HOOK_MARKER });
-      lines.push(`replace the start-of-session hook from the old onememory-mcp package with the current Monomem one (same place, same settings)`);
+      lines.push(
+        /onememory-mcp/.test(oldNpx[0])
+          ? `replace the start-of-session hook from the old onememory-mcp package with the current Monomem one (same place, same settings)`
+          : `rewrite the start-of-session hook: it ${pinProblem(oldNpx[0], e.version)} (same place, same settings)`
+      );
+    }
+  } else if (doc && host.start.matcher === CLAUDE_START_MATCHER && has(host.start.on, HOOK_DETECT)) {
+    // Ours is already there: replace a "startup|clear" entry setup wrote earlier (it moves to the end of the list; no second entry).
+    const items = getPath(doc, ["hooks", host.start.on])?.items ?? [];
+    for (const marker of ["hook session-start", HOOK_MARKER]) {
+      const first = items.find((i) => text!.slice(i.start, i.end).includes(marker));
+      if (!first) continue;
+      let old: { matcher?: unknown } | null = null;
+      try {
+        old = JSON.parse(text!.slice(first.start, first.end));
+      } catch {
+        /* comments inside the entry: leave it alone */
+      }
+      if (old && old.matcher === OLD_CLAUDE_START_MATCHER) {
+        ops.push({ op: "unappend", path: ["hooks"], key: host.start.on, marker }, { op: "append", path: ["hooks"], key: host.start.on, value: { ...old, matcher: CLAUDE_START_MATCHER } });
+        inverse.unshift({ op: "append", path: ["hooks"], key: host.start.on, value: old });
+        inverse.unshift({ op: "unappend", path: ["hooks"], key: host.start.on, marker });
+        lines.push(`also show your notes again after Claude Code compacts a conversation (start-of-session hook matcher "${OLD_CLAUDE_START_MATCHER}" becomes "${CLAUDE_START_MATCHER}")`);
+      }
+      break;
     }
   } else if (want.recall && !has(host.start.on, HOOK_DETECT)) {
     const command = want.capture ? buildCaptureCommand(e, opts, "session-start", dbForHook) : buildHookCommand(e, opts, dbForHook);
@@ -749,7 +1197,29 @@ export function planHooks(e: SetupEnv, opts: SetupOptions, dbForHook: string | u
   }
   if (want.capture) {
     let added = 0;
+    let rewritten = 0;
     for (const h of host.events) {
+      const arr = doc ? getPath(doc, ["hooks", h.on]) : null;
+      const old = arr ? oldNpxHook(e.version, `hook ${h.event}`).exec(text!.slice(arr.start, arr.end)) : null;
+      const item = old ? arr!.items?.find((i) => text!.slice(i.start, i.end).includes(old[0])) : undefined;
+      if (old && item) {
+        let was: { hooks?: Array<{ command?: unknown }> } | null = null;
+        try {
+          was = JSON.parse(text!.slice(item.start, item.end));
+        } catch {
+          /* comments inside the entry: leave it alone */
+        }
+        if (was && Array.isArray(was.hooks)) {
+          const command = buildCaptureCommand(e, opts, h.event, dbForHook);
+          const nu = { ...was, hooks: was.hooks.map((x) => (typeof x?.command === "string" && x.command.includes(old[0]) ? { ...x, command } : x)) };
+          ops.push({ op: "unappend", path: ["hooks"], key: h.on, marker: old[0] }, { op: "append", path: ["hooks"], key: h.on, value: nu });
+          inverse.unshift({ op: "append", path: ["hooks"], key: h.on, value: was });
+          inverse.unshift({ op: "unappend", path: ["hooks"], key: h.on, marker: `hook ${h.event}` });
+          rewritten++;
+        }
+        continue;
+      }
+      if (want.upgradeOnly) continue;
       // Ours: a command line naming this tool (the package or its cli.js path) with `hook <event>`; another tool's
       // hook is not. The retired names count: the command line lives in the USER's settings file and still holds
       // whatever path was installed then, so matching only the current name would add a duplicate hook on upgrade.
@@ -760,6 +1230,7 @@ export function planHooks(e: SetupEnv, opts: SetupOptions, dbForHook: string | u
       added++;
     }
     if (added) lines.push(`record what ${host.agent} does in every project (files, commands, errors) into Monomem, stored only on this machine (MONOMEM_CAPTURE=off turns it off)`);
+    if (rewritten) lines.push(`${CAPTURE_REWRITE} (${rewritten}) from the old onememory-mcp package (or another npx version) with the installed Monomem, same place and settings`);
   }
   if (!ops.length) return { change: null, already: true };
   if (host.notes) lines.push(...host.notes);
@@ -1017,8 +1488,18 @@ export interface HistorySession {
 
 /** The data folder: MONOMEM_HOME, else ~/.monomem. */
 export function dataHome(e: SetupEnv): string {
-  const home = e.env.MONOMEM_HOME?.trim();
-  return home ? resolve(home) : join(e.home, ".monomem");
+  let home = e.env.MONOMEM_HOME?.trim();
+  // One pair of matching quotes is removed, as resolveDataDir (config.ts) does at run time; otherwise setup judges another folder.
+  if (home && home.length >= 2 && (home[0] === '"' || home[0] === "'") && home[home.length - 1] === home[0]) home = home.slice(1, -1).trim();
+  return home ?resolve(home.replace(/^~(?=$|[\\/])/, e.home)) : join(e.home, ".monomem");
+}
+
+/**
+ * The folder the server opens for an entry that names none: MONOMEM_HOME, else what config.ts picks under the home
+ * folder (~/.monomem, or ~/.onememory while only that one holds a store; homeDataDir is shared, so they agree).
+ */
+export function runtimeHome(e: SetupEnv): string {
+  return e.env.MONOMEM_HOME?.trim() ? dataHome(e) : homeDataDir(e.home).dir;
 }
 
 export function historyFile(e: SetupEnv): string {
@@ -1150,12 +1631,24 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   if (opts.undo) return undoLast(e, io);
   if (e.globalCliPath === undefined && opts.command === "auto" && runningFromNpxCache(e.cliPath)) e = { ...e, globalCliPath: detectGlobalCli(e) ?? null };
 
-  // A database pinned in the shell (MONOMEM_DB_PATH, or the old CLAUDE_BRIDGE_DB_PATH) must also reach the app's entry,
+  // Old-style names (ONEMEMORY_*, CLAUDE_BRIDGE_*) in the shell count as MONOMEM_*, exactly as at run time. A copy, so the
+  // caller's env is left as it was.
+  { const env = { ...e.env }; applyLegacyEnv(env); e = { ...e, env }; }
+  // A database pinned in the shell (MONOMEM_DB_PATH, or an old-style twin) must also reach the app's entry,
   // because the app will not run inside this shell.
-  const envDb = (e.env.MONOMEM_DB_PATH || e.env.CLAUDE_BRIDGE_DB_PATH || "").trim();
+  const envDb = (e.env.MONOMEM_DB_PATH || "").trim();
   if (!opts.db && envDb) opts = { ...opts, db: envDb };
-  io.out(`Monomem setup (version ${e.version})`);
-  io.out(`  Node ${e.nodeVersion}: OK\n`);
+  // The same for a data folder set with MONOMEM_HOME: without it in the entry, the app would use ~/.monomem instead.
+  // And for notes still in ~/.onememory (no ~/.monomem store yet): the server opens them by default today, but only
+  // until something creates ~/.monomem/state.db, so every entry and hook names that folder outright.
+  const legacyHome = !opts.home && !e.env.MONOMEM_HOME?.trim() && homeDataDir(e.home).why === "legacy-home";
+  if (!opts.home && runtimeHome(e) !== resolve(join(e.home, ".monomem"))) opts = { ...opts, home: runtimeHome(e) };
+  if (!opts.terse) {
+    io.out(`Monomem setup (version ${e.version})`);
+    io.out(`  Node ${e.nodeVersion}: OK\n`);
+  }
+  if (legacyHome) io.out(`Your notes are in ${opts.home} (the folder from when Monomem was called OneMemory; there is no ~/.monomem store), so each app entry and hook setup writes gets MONOMEM_HOME=${opts.home} and keeps using them.\n`);
+  else if (opts.home) io.out(`MONOMEM_HOME is set (${opts.home}), so each app entry setup writes gets MONOMEM_HOME too and uses that data folder.\n`);
   if (opts.only) {
     const bad = opts.only.filter((x) => !(CLIENT_IDS as readonly string[]).includes(x));
     if (bad.length) {
@@ -1164,18 +1657,22 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
     }
   }
   const found = detectClients(e);
-  io.out("What I found:");
-  for (const t of found) {
-    if (t.id === "project" && !t.exists) continue;
-    io.out(`  ${t.label.padEnd(26)} ${(t.exists ? "found" : t.present ? "installed, no config file yet" : "not found").padEnd(30)}${t.present ? t.file : ""}`.trimEnd());
+  if (!opts.terse) {
+    io.out("What I found:");
+    for (const t of found) {
+      if (t.id === "project" && !t.exists) continue;
+      io.out(`  ${t.label.padEnd(26)} ${(t.exists ? "found" : t.present ? "installed, no config file yet" : "not found").padEnd(30)}${t.present ? t.file : ""}`.trimEnd());
+    }
+    io.out("");
   }
-  io.out("");
 
   let plan: SetupPlan = { nodeOk: true, found, changes: [], dbs: [], warnings: [], already: [], conflicts: [], };
-  let shared: { dbs: Set<string>; dupOld?: number } = { dbs: new Set<string>() };
+  const { Store: StoreForCount } = await import("./store.js");
+  const noteCount = (db: string): number => StoreForCount.peekNoteCount(db);
+  let shared: SharedPlan = { dbs: new Set<string>(), noteCount };
   const planApps = (): void => {
     plan = { nodeOk: true, found, changes: [], dbs: [], warnings: [], already: [], conflicts: [] };
-    shared = { dbs: new Set<string>() };
+    shared = { dbs: new Set<string>(), noteCount };
     for (const t of found) {
       if (opts.only && !opts.only.includes(t.id)) continue;
       const asked = !!opts.only?.includes(t.id) || (t.id === "project" && opts.project);
@@ -1202,7 +1699,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   }
   const { Store, SCHEMA_VERSION } = await import("./store.js");
   const { DB_PATH } = await import("./config.js");
-  const primaryDb = opts.db ?? [...shared.dbs][0] ?? DB_PATH;
+  const primaryDb = opts.db ?? [...shared.dbs][0] ?? (opts.home ? join(opts.home, "state.db") : DB_PATH);
   const dbs = shared.dbs.size ? [...shared.dbs] : [primaryDb];
   plan.dbs = dbs;
   for (const d of dbs) {
@@ -1211,7 +1708,12 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   }
 
   if (plan.changes.length === 0 && plan.conflicts.length === 0) {
-    if (plan.already.length === 0) io.out("I found no app to connect. Pass --only claude-code (or claude-desktop, cursor, codex, gemini, muse, vscode, zed) to create its config, or --project for this folder.");
+    if (plan.already.length === 0) {
+        io.out("I found no app to connect on this computer (none of the supported apps is installed), so nothing was changed. That is fine. What to do next:");
+        io.out("  1. If you use one of these, name it and I will create its settings file:  monomem connect claude-code   (also: claude-desktop, cursor, codex, gemini, muse, vscode, zed)");
+        io.out("  2. Or connect an app by hand: it needs the command  monomem mcp  (see INSTALL.md), or for a web connection run  monomem token add <app-name>  and paste what it prints.");
+        io.out("  3. Not sure? Run  monomem doctor  to see what Monomem can find.");
+      }
   }
   if (plan.conflicts.length) {
     io.err("Stopped, because:");
@@ -1222,7 +1724,8 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   // Hook decision: every installed agent with command hooks (Claude Code, Codex, Gemini CLI, Muse). One answer covers all.
   let wantHook = false;
   let wantCapture = false;
-  const hookDb = primaryDbIfCustom(primaryDb, DB_PATH, opts);
+  // The hooks run inside the app, which does not see this shell's MONOMEM_HOME: name the database outright.
+  const hookDb = primaryDbIfCustom(primaryDb, DB_PATH, opts) ?? (opts.home ? join(opts.home, "state.db") : undefined);
   const hosts = hookHosts(e).filter((h) => !!found.find((t) => t.id === h.client)?.present && (!opts.only || opts.only.includes(h.client)));
   /** Per host: the start-of-session hook alone, and the automatic memory plan (which includes it). */
   const hookPlans = new Map<HookHost, FileChange>();
@@ -1244,12 +1747,17 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
       const pc = planHooks(e, opts, hookDb, { recall: opts.hook !== "no", capture: true }, h);
       if (pc.conflict) plan.conflicts.push(pc.conflict);
       else if (pc.already) plan.already.push(`${who}: the automatic memory hooks are already installed`);
-      else if (pc.change && pc.change.lines.some((l) => l.startsWith("record what "))) {
+      else if (pc.change && pc.change.lines.some((l) => l.startsWith("record what ") || l.startsWith(CAPTURE_REWRITE))) {
         if (capture === "yes") wantCapture = true;
         capturePlans.set(h, pc.change);
       }
     }
   }
+  // Capture hooks of the old onememory-mcp package (or another npx version) are already installed: rewriting them is an
+  // upgrade, not a new opt-in, so it happens without --capture (only --no-capture leaves them). Left alone they fail on
+  // a newer database and capture silently stops.
+  const upgradeHosts = new Set(hosts.filter((h) => planHooks(e, opts, hookDb, { recall: false, capture: true, upgradeOnly: true }, h).change));
+  if (capture === "no") for (const h of upgradeHosts) plan.warnings.push(`${h.label.replace(/ hook$/, "")}: your automatic memory hooks still run the old onememory-mcp package (or another npx version), which may not open this database, so they may record nothing. Run  monomem setup --capture  to upgrade them`);
   const anyHook = hookPlans.size > 0;
   const hookReplacesOld = [...hookPlans.values()].some((c) => c.lines.some((l) => l.startsWith("replace the start-of-session hook")));
   const anyCapture = capturePlans.size > 0;
@@ -1264,8 +1772,9 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   io.out("What I will do:");
   let n = 1;
   for (const c of plan.changes) for (const l of c.lines) io.out(`  ${l.startsWith("note:") ? "   " : `${n++}. ${c.label}: `}${l}`);
+  if (capture === "ask") for (const h of upgradeHosts) io.out(`  ${n++}. ${h.label.replace(/ hook$/, "")}: upgrade your existing automatic memory hooks from the old onememory-mcp package (or another npx version) to this Monomem, same place and settings. They are already installed; this is not a new hook`);
   for (const d of dbs) io.out(`  ${n++}. Database ${d}: ${describeSchema(Store.peekSchemaVersion(d), SCHEMA_VERSION)}`);
-  if (!opts.noTestNote) io.out(`  ${n++}. Write a test note, read it back and delete it, so you know writing, reading and deleting all work (your store is left empty)`);
+  if (!opts.noTestNote) io.out(`  ${n++}. Write a test note, read it back and delete it, so you know writing, reading and deleting all work (only that one note is deleted; no other note is touched)`);
   io.out(`  ${n++}. Run \`monomem doctor\` and tell you how to check the connection in your assistant`);
   for (const a of plan.already) io.out(`  (already fine) ${a}`);
   for (const w of plan.warnings) io.out(`  (careful) ${w}`);
@@ -1343,14 +1852,10 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
         const s = new Store(d);
         try {
           if (!opts.noTestNote) {
-            // An install from before 2.1.0 still holds the note setup used to
-            // leave behind. Clear it, or every existing user keeps the
-            // installer's note about the installer for good and never gets the
-            // cleaned-up behaviour -- the earlier fix only helped new stores.
-            const old = s.list({ limit: 50, withTags: ["setup-check"] });
-            let removed = 0;
-            for (const n of old.notes) if (s.delete(n.id)) removed++;
-            if (removed) io.out(`Database ${d}: removed ${removed} leftover test note${removed === 1 ? "" : "s"} from an earlier install — your store is yours now.`);
+            // A note an earlier installer left behind is the person's now (they may have pinned it): setup only ever
+            // deletes the one note it writes below, by its id. The old ones are named, never touched.
+            const old = s.list({ limit: 50, withTags: ["setup-check"] }).notes;
+            if (old.length) io.out(`Database ${d}: an earlier installer left ${old.map((n) => `#${n.id} "${n.title}"`).join(", ")}; I left ${old.length === 1 ? "it" : "them"} as ${old.length === 1 ? "it is" : "they are"} (archive with  monomem forget <id>  if you do not want ${old.length === 1 ? "it" : "them"}).`);
             {
               const note = s.create({
                 title: "Monomem is connected",
@@ -1387,7 +1892,11 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   const written: WrittenChange[] = [];
   // Each hook file: automatic memory (with the start-of-session hook when that was wanted too), else the hook alone.
   const hookChanges = hosts.flatMap((h) => {
-    const c = wantCapture ? planHooks(e, opts, hookDb, { recall: wantHook || (opts.hook !== "no" && !hookPlans.has(h)), capture: true }, h).change : wantHook ? hookPlans.get(h) : null;
+    const c = wantCapture
+      ? planHooks(e, opts, hookDb, { recall: wantHook || (opts.hook !== "no" && !hookPlans.has(h)), capture: true }, h).change
+      : capture !== "no" && upgradeHosts.has(h)
+        ? planHooks(e, opts, hookDb, { recall: wantHook, capture: true, upgradeOnly: true }, h).change
+        : wantHook ? hookPlans.get(h) : null;
     return c ? [c] : [];
   });
   const toWrite = [...plan.changes, ...hookChanges];
@@ -1420,7 +1929,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   if (claudeHost) {
     const marker = join(dirname(DB_PATH), HOOKS_DECLINED_FILE); // the standard data folder, never an old install's
     try {
-      if (wantHook || wantCapture) rmSync(marker, { force: true });
+      if (wantHook || wantCapture || (capture !== "no" && upgradeHosts.has(claudeHost))) rmSync(marker, { force: true });
       else if (hookPlans.has(claudeHost) || capturePlans.has(claudeHost)) {
         mkdirSync(dirname(marker), { recursive: true });
         writeFileSync(marker, "The Claude Code hook was declined when setup ran. Run monomem setup --hook to add it.\n");
@@ -1459,6 +1968,11 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   // assistant is known by another. It used to end by asking the user to search
   // for the note the installer had just written about the installer -- proof
   // that Monomem could talk to itself, in the slot where attention peaks.
+  if (opts.terse) {
+    // `monomem connect` prints its own closing lines.
+    io.out(`\nWritten. Restart ${written.length === 1 ? "that app" : "those apps"} so ${written.length === 1 ? "it picks" : "they pick"} up the change. To go back: monomem setup --undo`);
+    return 0;
+  }
   const proof = proofPair(written);
   io.out("\nDone. Restart any assistant that was open, so it picks up the new entry.");
   io.out("  Check it loaded: type  /mcp  (or your tool's equivalent) and look for  monomem  connected.");

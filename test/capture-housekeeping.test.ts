@@ -17,7 +17,7 @@ describe("captured rows and note housekeeping", () => {
     const st = s.accessStats();
     assert.equal(st.totalNotes, 1);
     assert.equal(st.neverAccessed, 1);
-    assert.deepEqual(st.mostAccessed.map((n) => n.title), ["Old plain note"]);
+    assert.deepEqual(st.mostAccessed.map((n) => n.title), [], "never read, so not listed as most accessed");
     assert.equal(st.staleCount, 1);
     assert.equal(s.staleCount(["default"]), 1);
     s.close();

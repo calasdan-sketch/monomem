@@ -346,6 +346,11 @@ export async function runGitSync(io: GitSyncIO, o: GitSyncOptions): Promise<numb
         try {
           const imp = await importMarkdown(store, work, {});
           const c = imp.counts;
+          // exportMarkdown applies MONOMEM_EXPORT_MAX_SENSITIVITY itself. With no ceiling set, labelled notes (private ones above
+          // all) go into the repository: say so once per run.
+          if (!(process.env.MONOMEM_EXPORT_MAX_SENSITIVITY ?? "").trim() && store.hasPrivateNotes()) {
+            io.err("  warning: some notes are labelled private and MONOMEM_EXPORT_MAX_SENSITIVITY is not set, so they will be pushed. Set it to internal (or public) to keep them out.");
+          }
           const exp = exportMarkdown(store, work, {});
           io.out(`  merged: ${c.created} new, ${c.updated} updated, ${c.unchanged} unchanged, ${c.conflict} conflict(s), ${c.rejected} rejected; wrote ${exp.written} file(s), removed ${exp.removed}.`);
           if (c.conflict > 0) {
@@ -356,6 +361,7 @@ export async function runGitSync(io: GitSyncIO, o: GitSyncOptions): Promise<numb
               io.out(`  ${c.conflict} note(s) were edited on two computers; the losing text is saved in ${keep}`);
             }
           }
+          if (imp.foreignHeld > 0) io.out(`  ${imp.foreignHeld} note(s) from other machines held for review (monomem quarantine list).`);
           if (c.rejected > 0) io.err(`  ${c.rejected} file(s) were rejected (see \`monomem import --dir\` for details).`);
         } finally {
           store.close();

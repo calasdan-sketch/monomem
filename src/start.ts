@@ -19,21 +19,26 @@ import {
   API_PORT,
   MCP_HTTP_PORT,
   BIND_HOST,
-  resolveTokens,
+  resolveTokens, startTokenReload,
   assertSafeExposure,
   AUTO_CONSOLIDATE_INTERVAL_MS,
   prepareDataDir,
   TOKEN_FILE,
+  isLoopback,
 } from "./config.js";
 import { autoConsolidateCooperative, AUTO_MERGE_SCORE } from "./consolidate.js";
 import { resolveStartupNamespace } from "./namespace.js";
+import { warnUnlabelledExposure } from "./sensitivity.js";
+import { openStoreOrExit } from "./db-problem.js";
 import { abortAllWaiters } from "./change-wait.js";
 import { pruneStaleHeartbeats } from "./liveness.js";
 
 prepareDataDir();
 assertSafeExposure();
 const tokens = resolveTokens();
-const store = new Store(DB_PATH);
+const store = openStoreOrExit(DB_PATH);
+warnUnlabelledExposure(store, tokens);
+startTokenReload(tokens);
 
 // Namespace resolution happens ONCE here, at startup, from the process cwd --
 // both transports share it, so MCP and REST enforce the same boundaries.
@@ -115,9 +120,13 @@ function scheduleJanitor(): void {
 
 exitOnListenError(apiServer, API_PORT, "MONOMEM_PORT", "API").listen(API_PORT, BIND_HOST, () => {
   console.error(`[monomem] API + dashboard on http://${BIND_HOST}:${API_PORT}`);
+  if (!isLoopback(BIND_HOST)) {
+    console.error(`[monomem] warning: listening on ${BIND_HOST}, not loopback, over plain HTTP (tokens and notes cross the network unencrypted). Put it behind your own TLS / authenticated tunnel: see INFRA.md.`);
+  }
   console.error(`[monomem] DB: ${DB_PATH}`);
   const tokenFromEnv = Boolean(process.env.MONOMEM_TOKEN && process.env.MONOMEM_TOKEN.trim());
   console.error(`[monomem] token: ${tokenFromEnv ? "from MONOMEM_TOKEN" : TOKEN_FILE}`);
+  console.error(`[monomem] Open the dashboard: http://127.0.0.1:${API_PORT}/  (key in ${tokenFromEnv ? "MONOMEM_TOKEN" : TOKEN_FILE}; or run: monomem open)`);
   const tokenExpr = tokenFromEnv ? "$MONOMEM_TOKEN" : `$(cat "${TOKEN_FILE}")`;
   console.error(
     `[monomem] try: curl -H "Authorization: Bearer ${tokenExpr}" "http://127.0.0.1:${API_PORT}/notes?limit=5"`
@@ -127,7 +136,7 @@ exitOnListenError(apiServer, API_PORT, "MONOMEM_PORT", "API").listen(API_PORT, B
 
 exitOnListenError(mcpServer, MCP_HTTP_PORT, "MONOMEM_MCP_PORT", "MCP").listen(MCP_HTTP_PORT, BIND_HOST, () => {
   console.error(
-    `[monomem] MCP over HTTP on http://${BIND_HOST}:${MCP_HTTP_PORT}/mcp (tunnel this)`
+    `[monomem] MCP over HTTP on http://${BIND_HOST}:${MCP_HTTP_PORT}/mcp (for apps that connect over HTTP with a key; see docs/give-an-app-limited-access.md)`
   );
   scheduleJanitor();
 });
@@ -197,3 +206,4 @@ function shutdown(): void {
 
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
+process.on("SIGHUP", shutdown); // the terminal it ran in was closed

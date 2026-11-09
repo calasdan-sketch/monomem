@@ -28,7 +28,7 @@ export interface Conflict {
   /** fact: both notes carry the same fact key with different values. possible: the key:value / title rule. */
   tier: "fact" | "possible";
   /** exact (fact tier). high: both titles state the key and value. medium: identical titles, the values are in the bodies. */
-  confidence: "exact" | "high" | "medium";
+  confidence: "exact" | "high" | "medium" | "low";
 }
 
 // "use X" tool families: two different members of one family under the same context conflict.
@@ -159,7 +159,7 @@ export function findConflicts(store: Store, opts: { namespaces?: string[]; notes
       }
     }
   }
-  const rank = { exact: 0, high: 1, medium: 2 };
+  const rank = { exact: 0, high: 1, medium: 2, low: 3 };
   return out.sort((x, y) => rank[x.confidence] - rank[y.confidence] || x.a.id - y.a.id);
 }
 
@@ -171,12 +171,12 @@ export interface ConflictGroup {
   key: string;
   tier: "fact" | "possible";
   /** The strongest confidence of the pairs in the group. */
-  confidence: "exact" | "high" | "medium";
+  confidence: "exact" | "high" | "medium" | "low";
   /** Most notes first. `value` is as written (original case). */
   values: Array<{ value: string; notes: ConflictNote[] }>;
 }
 
-const RANK = { exact: 0, high: 1, medium: 2 };
+const RANK = { exact: 0, high: 1, medium: 2, low: 3 };
 
 /** Pairs -> one block per (namespace, key, tier), N values instead of N^2 pairs. Order follows the pairs. */
 export function groupConflicts(conflicts: Conflict[]): ConflictGroup[] {
@@ -192,6 +192,8 @@ export function groupConflicts(conflicts: Conflict[]): ConflictGroup[] {
   }
   return [...groups.values()].map(({ g, byValue }) => ({
     ...g,
+    // A text-rule block that drags in more than two notes is a broad overlap, not a clear either/or: never "high" or "medium".
+    ...(g.tier === "possible" && [...byValue.values()].reduce((n, v) => n + v.notes.size, 0) > 2 ? { confidence: "low" as const } : {}),
     values: [...byValue.values()].map((v) => ({ value: v.value, notes: [...v.notes.values()].sort((x, y) => x.id - y.id) })).sort((x, y) => y.notes.length - x.notes.length || x.notes[0].id - y.notes[0].id),
   }));
 }
@@ -224,8 +226,11 @@ export function conflictLines(groups: ConflictGroup[]): string[] {
       out.push(`  ${printable(v.value)}`);
       for (const n of v.notes) out.push(`    #${n.id} "${printable(n.title)}" by ${printable(n.writer)} [${printable(n.kind)}] (${printable(n.at.slice(0, 10))})${n.pinned ? " [pinned]" : ""}`);
     }
-    for (const v of g.values) {
+    const noteCount = g.values.reduce((n, v) => n + v.notes.length, 0);
+    if (noteCount > 3) out.push(`    ${noteCount} notes are involved: replacing them all at once is not suggested. Pin the one you trust (below), or replace two at a time.`);
+    else for (const v of g.values) {
       const others = g.values.filter((o) => o !== v).flatMap((o) => o.notes.map((n) => n.id));
+      if (others.length > 2) continue;
       out.push(`    keep ${printable(v.value)}: monomem supersede --old ${others.join(",")} --new-id ${v.notes[0].id}   (replaces ${others.length === 1 ? "note" : "notes"} ${others.join(", ")} whole)`);
     }
     if (g.tier === "fact") for (const v of g.values) out.push(`    or drop just the fact ${printable(v.value)}: ${v.notes.map((n) => `monomem fact remove ${n.id} ${printable(n.factKey ?? g.key)}`).join(" | ")}`);

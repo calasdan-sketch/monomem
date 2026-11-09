@@ -8,7 +8,7 @@ import { runSearch, capPerSession, describeWhen } from "../src/search-service.js
 test("an aggregating question returns twice the results; everyday 'every'/'each' does not", async () => {
   const s = new Store(":memory:");
   for (let i = 0; i < 6; i++) s.create({ title: `Gym visit ${i}`, body: `gym workout log entry ${i} gym gym gym`, source: "A" }, {});
-  for (let i = 0; i < 3; i++) s.create({ title: `Gym note ${i}`, body: `gym ${i}`, source: `B${i}` }, {});
+  for (let i = 0; i < 3; i++) s.create({ title: `Short note ${i}`, body: `gym ${i}`, source: `B${i}` }, {});
   const hits = await runSearch(s, "how many times did I go to the gym", { mode: "keyword", limit: 3 });
   assert.equal(hits.length, 6, "limit 3 widened to 6");
   // `source` names a writer or origin, not a session: notes sharing it are not pushed back.

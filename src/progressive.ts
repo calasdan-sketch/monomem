@@ -12,6 +12,7 @@ import { NOTE_KINDS, ValidationError } from "./store.js";
 import { isModelWritten } from "./reserved-tags.js";
 import { eventInput } from "./capture.js";
 import { boostSessionNeighbours, keywordWithFallback } from "./search-service.js";
+import { currentCeiling } from "./actor.js";
 
 export interface ReadScope {
   /** Readable namespaces; undefined = every namespace (no namespace resolution). */
@@ -146,9 +147,23 @@ interface SessionRow {
   summary_note_id: number | null;
 }
 
+/**
+ * A session row is raw capture data (its folder, counts and the prompts typed in it), and none of that carries a label of its
+ * own. A caller with a ceiling below "private" sees no sessions; one at "private" sees them, except a session whose summary
+ * note is hidden (an unknown label), which is hidden whole.
+ */
+function sessionVisible(store: Store, r: SessionRow): boolean {
+  const max = currentCeiling();
+  if (max === undefined) return true;
+  // Raw capture (folders, prompts, observations) has no label and may hold anything typed in the session: only the top
+  // ceiling sees it, never "internal" or below.
+  if (max !== "private") return false;
+  return r.summary_note_id === null || !store.hiddenFromCaller(r.summary_note_id);
+}
+
 function sessionRow(store: Store, scope: ReadScope, id: string): SessionRow | null {
   const r = store.captureDb().prepare("SELECT id, namespace, cwd, agent, started_at, ended_at, prompt_count, event_count, summary_note_id FROM sessions WHERE id = ?").get(id) as SessionRow | undefined;
-  if (!r || (scope.namespaces && !scope.namespaces.includes(r.namespace))) return null;
+  if (!r || (scope.namespaces && !scope.namespaces.includes(r.namespace)) || !sessionVisible(store, r)) return null;
   return { ...r };
 }
 
@@ -172,19 +187,28 @@ export function memoryGet(store: Store, scope: ReadScope, ids: unknown): { notes
 export function sessionList(store: Store, scope: ReadScope, limit?: number): { sessions: Array<SessionRow & { summary: string | null }> } {
   if (scope.namespaces && scope.namespaces.length === 0) return { sessions: [] };
   const ns = scope.namespaces;
-  const rows = store
+  const want = clamp(limit, 20, 200);
+  // Filter BEFORE the limit: page through the newest sessions until `want` visible ones are found, so hidden ones never
+  // shorten the page (which would also show how many were hidden).
+  const stmt = store
     .captureDb()
     .prepare(
       `SELECT id, namespace, cwd, agent, started_at, ended_at, prompt_count, event_count, summary_note_id FROM sessions
-       ${ns ? `WHERE namespace IN (${ns.map(() => "?").join(",")})` : ""} ORDER BY started_at DESC LIMIT ?`
-    )
-    .all(...(ns ?? []), clamp(limit, 20, 200)) as unknown as SessionRow[];
-  return {
-    sessions: rows.map((r) => {
+       ${ns ? `WHERE namespace IN (${ns.map(() => "?").join(",")})` : ""} ORDER BY started_at DESC LIMIT ? OFFSET ?`
+    );
+  const out: Array<SessionRow & { summary: string | null }> = [];
+  const PAGE = 200;
+  for (let offset = 0; out.length < want; offset += PAGE) {
+    const rows = stmt.all(...(ns ?? []), PAGE, offset) as unknown as SessionRow[];
+    for (const r of rows) {
+      if (out.length >= want) break;
+      if (!sessionVisible(store, r)) continue;
       const sum = r.summary_note_id !== null ? readable(store, scope, r.summary_note_id) : null;
-      return { ...r, summary: sum ? sum.title : null };
-    }),
-  };
+      out.push({ ...r, summary: sum ? sum.title : null });
+    }
+    if (rows.length < PAGE) break;
+  }
+  return { sessions: out };
 }
 
 /** At most this many prompts (each cut to PROMPT_MAX characters) come with one session. */

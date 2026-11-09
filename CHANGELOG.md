@@ -4,7 +4,393 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.3.0] - 2026-11-09
+
+Upgrade notes: the first start migrates the database from schema v18 to v19 (one way: older builds refuse it) after
+making `<database>.pre-v19-backup`. To go back, close every app that uses Monomem and run `monomem restore <database>.pre-v19-backup --yes`
+(it keeps your current database aside first), then install 1.2.1. Details: `docs/upgrading.md`.
+
+### Fixed
+
+- **The audit log followed the default folder, not the database in use.** With `MONOMEM_DB_PATH` pinned (a second or temporary
+  store), every write was logged in the default store's `audit.log`. The log now sits beside the pinned database (`MONOMEM_AUDIT_LOG`
+  still wins; `:memory:` keeps the old rule).
+- **`setup --yes` left old capture hooks that could no longer run.** Without `--capture`, it replaced only the start-of-session hook;
+  the other `npx -y onememory-mcp@x hook <event>` hooks stayed, could not open a v19 database, and capture silently stopped. Rewriting
+  hooks that are already installed is an upgrade, not a new opt-in, so setup now does it (listed in the plan); `--no-capture` leaves
+  them and warns.
+- **`setup` ignored `ONEMEMORY_DB_PATH` / `ONEMEMORY_HOME` set in the shell** in some paths. Old-style names now count as `MONOMEM_*`
+  everywhere in setup, as at run time.
+- **`setup` deleted notes it had not written.** Its test-note step also deleted every note tagged `setup-check` that an earlier
+  installer had left (for example a pinned "OneMemory is connected" note #1). On a store where that note was pinned, the delete was
+  refused and setup stopped with "the database could not be opened". Setup now deletes only the one test note it wrote in the same
+  run, by its id; older installer notes are left as they are (not deleted, archived or unpinned) and named in one line with how to
+  archive them yourself (`monomem forget <id>`). The plan line no longer claims "your store is left empty".
+- **Claude Desktop from the Microsoft Store (MSIX) was not found.** Its config lives at
+  `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\claude_desktop_config.json`. Setup now looks there too (beside the
+  usual `%APPDATA%\Claude` file), shows it as "Claude Desktop (Microsoft Store)", and treats a `monomem` entry in it like any other
+  app's (labelled, pinned to the data folder, backup and undo as usual). Only checked against a simulated folder layout, not a
+  real Store install.
+- **Codex: an old `[mcp_servers.onememory]` table got a second server beside it.** It is now replaced by `[mcp_servers.monomem]`
+  with the same data settings (`ONEMEMORY_*` env renamed to `MONOMEM_*`), with a backup and `setup --undo` restoring the exact bytes.
+  An inline `onememory = { ... }`, or an `onememory` table beside an existing `monomem` one, is not edited: setup says what to remove.
+- **The merge hint for two stores that both hold notes pointed the wrong way.** It said to import the old entry's store into the
+  `monomem` one whatever their sizes, so a 3-note store could be told to absorb an 800-note one. It now names both stores with their
+  note counts, keeps the larger one as the main data and imports the smaller one into it, and says to delete the smaller one's entry.
+- **The `claude-bridge` import hint named the wrong database** when a database was pinned in the shell (`MONOMEM_DB_PATH` or `--db`):
+  it showed the pinned store and its count instead of claude-bridge's own. It now names claude-bridge's own database.
+
+- **`setup` on an upgrade from OneMemory kept pointing apps at an empty store.** When the notes are in `~/.onememory/state.db`
+  and there is no `~/.monomem/state.db` (the folder the server already falls back to), setup planned the migrated entry on the empty
+  `~/.monomem` and judged the old entry by that empty folder. It now uses the same rule as the server (one shared function), says so
+  in the plan, and writes `MONOMEM_HOME=<home>/.onememory` into each app entry and `--db` into each hook, so the notes stay reachable
+  even after something creates `~/.monomem/state.db`.
+- **An old `claude-bridge` entry with its own database is no longer made the main store** when an `onememory` or `monomem` entry is
+  beside it (before, the one with notes won, and the `onememory` entry was removed). It is left exactly as it is, and setup prints one
+  line on how to bring its notes over (`monomem export --format json` from a copy, then `monomem import --file`). A `claude-bridge`
+  entry on its own is still migrated as before.
+- **`monomem` beside `onememory` on different databases:** when the old entry has notes and the `monomem` one has none, the plan
+  shows the empty `monomem` entry being replaced by the old one with its data, and it is applied only after a typed yes (not with
+  `--yes` alone). When both have notes, setup stops, changes nothing and prints the commands that merge them. Same data, or an empty
+  old entry: unchanged (remove the old entry, asked first).
+- **Old hooks are replaced, not left or duplicated:** `npx -y onememory-mcp[@x] hook <event>` (and an npx `monomem@<other version>`
+  or `monomem@latest`) is rewritten in place for every automatic-memory event, not only the start-of-session one, and a rewritten
+  start-of-session entry moves from `startup|clear` to `startup|clear|compact`.
+- **Hooks run the installed copy:** when setup runs from npx and the same version is installed globally, every hook (not only the
+  prompt and Read ones) runs `node <global cli.js>`; without a global copy they stay on `npx -y monomem@<this version>`.
+
+### Security
+
+- **Capture redacts bare random tokens.** The capture hooks stored a bare 32-character hex key (e.g. the output of `cat .token`)
+  as it was, because it has no prefix, no `name=` before it and, being hex, no mixed case. Now redacted as `[REDACTED:random token]`:
+  any standalone run of 32+ hex digits (one case, with a digit and a letter) except exactly 40, and any base62/base64url token of 32+
+  characters with upper, lower and digits that flips case at least every 4 characters and has >= 4.3 bits/char of entropy. Kept:
+  git object ids (exactly 40 hex), short SHAs and anything under 32 hex, digests written `sha1:`/`sha256:`/`sha384:`/`sha512:` (or
+  with `=`/`-`), UUIDs, plain numbers, identifiers and joined words, paths. Known cost: other unprefixed 32+ hex ids (an MD5 checksum,
+  a 64-hex docker container id) are redacted too. This is capture only; the note linter's rules are unchanged.
+
+- **Rate-limit key behind a proxy:** with `MONOMEM_TRUST_PROXY=1` the bucket is the rightmost `X-Forwarded-For` entry (the one your
+  proxy appended), not the leftmost one, which the client controls: a client could get a fresh bucket for every forged value.
+  `MONOMEM_TRUST_PROXY_HOPS=N` (default 1) picks the Nth entry from the right (the leftmost one if there are fewer). No change when
+  `MONOMEM_TRUST_PROXY` is unset.
+- **Secret guard:** refuses a note that contains one of this server's own access tokens verbatim (the main token and every
+  `tokens.json` / `MONOMEM_TOKENS` entry; the message never shows the value), so the snippet `POST /tokens` prints cannot be saved as a
+  note. Also refused now: `token` / `access_token` / `auth_token` / `bearer` written with a value of 16+ characters that has a digit
+  (`MONOMEM_TOKEN=<64 hex>`, `{"token":"..."}`), a literal `Authorization: Bearer <20+ chars>`, a password in a URL
+  (`postgres://user:pw@host`; placeholders such as `<password>` or `$PW` pass), Slack and Discord webhook URLs, Hugging Face `hf_`
+  tokens and Azure `AccountKey=` values. `token: <your token here>`, `Bearer $TOKEN`, `max_tokens: 4096` and `postgres://localhost/app`
+  still pass.
+- **Markdown exfiltration rule** also covers `<img src="https://host/p?x=...">` and reference-style images (`![x][ref]` with a
+  `[ref]: https://host/p?x=...` line). Badge hosts stay exempt; a reference used only by plain links still passes.
+- **Audit log:** making and removing an app token (`monomem token add|remove`, the dashboard, `POST /tokens`, `DELETE /tokens/<name>`)
+  writes `token.add` / `token.remove` with the caller's label and the new token's name, scope, namespace and limit (never the token).
+  `GET /export` and `monomem export` write `export` with the note count and flags.
+- **`POST /tokens`** with `admin: true` or `no_limit: true` now needs the main (`primary`) token; any other admin gets 403. The CLI is
+  unchanged.
+- A failed audit write still never fails a request, but it is no longer silent: it is counted (`audit_failures` in `GET /stats`), printed
+  to stderr on the first failure and every 1000th, and `monomem health` warns when the audit log cannot be written or this process
+  failed to write an entry.
+- **Session-start context:** each line starts with the server-stamped writer (`- webagent (token): [title] ...`, index lines
+  `#12 by webagent: [note] title (...)`), so a title can no longer print a fake "(written by cli)" ahead of the real writer; `[` and `]`
+  in a title print as `(` and `)`, and a title is one line. The opening notice and the closing "END OF STORED NOTES" line carry the same
+  random block id, new for each output, so a note that copies the old closing line does not match the real one. `monomem drill` checks
+  both (FORGE, TERM), so it now reports 22 attacks instead of 20.
+- **Names a terminal could misprint are refused:** a namespace or tag with a control, line-separator or text-direction character
+  (anything `printable()` would replace) is refused on every write path (notes, tasks, handoffs: `Store.create` / `update`), as is
+  a namespace over 100 characters and the namespace `*`. Imports (`import --file` and admin `POST /import`) apply the same rule:
+  each such row is listed in the report's `rejected` with the reason and the rest of the file is imported. A database-file restore
+  (`monomem restore <backup>`) copies the file as it is. For rows already stored, `monomem audit`, `ls`, `show`, `search` and the other note listings print namespace, label and tags through
+  `printable()`. JSON responses (and the `/export` stream) carry `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`.
+- **Two app tokens with the same name are refused.** Tokens whose labels match after cleaning (letter case and spacing aside; two
+  unnamed tokens count too) would stamp the same `written_by`, so both stop working and the server says so on stderr (doctor and
+  health show that line too) until one is renamed. **Check `MONOMEM_TOKENS` / `tokens.json` for unnamed tokens before upgrading.**
+- **Stdio with `MONOMEM_STDIO_MAX_SENSITIVITY`:** writes are stamped `stdio:<app>` again; with the ceiling set they were stamped
+  plain `stdio`.
+- **`POST /capture`:** a session remembers the writer that opened it (new nullable `sessions.writer` column, filled for new sessions
+  only); another writer posting to it gets 409, so it cannot add events or end the session with its own summary.
+- **Session-start notes:** the opening notice now says that the closing line carries the same block id. The drill's TERM check now
+  uses a note that knows this output's block id and checks that no printed line equals the real closing line.
+- **Backdating needs admin:** `POST /notes` with `created_at` from a non-admin key gets 400 (nothing is stored). Admin keys, imports
+  and consolidation may still set it, but a `created_at` more than 5 minutes in the future is refused (an import lists that row in
+  `rejected`).
+- **A forget date on someone else's note needs admin:** a non-admin key may set a non-zero `forget_after` only on a note whose
+  `created_by` is its own (editing a note does not make it yours); otherwise the update is refused with the same "lacks the required 'admin' scope" message `state_delete`
+  gives. This applies in every namespace. The CLI, stdio and admin keys are not limited. `forget_after: 0` stays allowed.
+- **Expiry sweep audit:** `sweep-expire` is written once per archived note (its id, namespace and the note's last writer as
+  `last written by <name>`; who set the deadline is not stored), instead of one line with a count.
+- **Strict ids in MCP tools:** an id is accepted as a number or a digit-only string (`"5"`). `true`, `null`, `""` and `[5]` are
+  validation errors; before, they became 1, 0, 0 and 5, so `state_delete {"id": true}` archived note 1.
+- **Sync: notes written on another machine are claims, not trusted writes.** A file `import --dir` or `sync` reads whose `origin`
+  is another store now creates or updates its note with `imported_unverified` set (so `why` and the provenance banner say it came
+  in without a verified attestation), and in an approve-first namespace that create or update goes to quarantine like an agent's
+  write instead of going live. The summary adds "N note(s) from other machines held for review". Approving one applies it as the
+  approver (`cli`) and keeps the `imported_unverified` flag; an approved create is linked to the file's origin, so the next sync
+  updates that note instead of adding a second copy. Approving a held create or update also records it as what this store last
+  synced, so an edit the other machine makes before the next sync here arrives as an update (it was skipped as "store has a newer
+  version", or an approved update turned the next edit into a false conflict). If the file is edited again before anyone approves
+  the held create, the next sync replaces the held copy instead of holding a second one (approving both made two notes). Files
+  this store wrote merge as before.
+- **A forget date on someone else's note** now checks `created_by` (the note's first writer), not `written_by`: editing another
+  writer's note no longer makes it yours.
+- **A namespace that looks like a known secret** (an AWS key, a GitHub token and the other known-prefix patterns; no entropy
+  check) is refused on every write path, the import paths included, before anything is written or audited. The message names the
+  kind of secret, never the value.
+- **Runner child environment:** also drops variables whose names match `_AUTH`, `PWD` at the end, `DSN`, `CONNECTION_STRING`,
+  `SSH_AUTH_SOCK`, `GPG_AGENT`, and `MONOMEM_HOME` / `ONEMEMORY_HOME`, and any variable whose value is a URL with a password
+  (`scheme://user:pass@...`). docs/RUNNER.md now says plainly that a command runs as the same user and can read the data folder,
+  `.token` included.
+- **`MONOMEM_RATE_MAX`, `MONOMEM_RATE_WINDOW_MS`, `MONOMEM_TARPIT_STEP_MS`, `MONOMEM_TARPIT_CAP_MS`** that are not a whole number
+  >= 0 fall back to the default with one stderr line (before, `abc` became NaN and switched the limit off). Same check as the
+  server-limit variables, now shared (`envNum` in config.ts).
+- **`monomem start` on a non-loopback bind** prints one stderr warning that the API is plain HTTP and points to INFRA.md (doctor
+  already showed a `[warn]` line for it; a test now checks that line).
+- **Session-start git signals** run git with `-c core.fsmonitor=false -c core.hooksPath=`, and the diff with `--no-ext-diff`, so a
+  repository's own config cannot make that read run a program.
+- **`uninstall --purge` never deletes files that are not Monomem's.** It compares the data folder's top-level entries with the names
+  Monomem writes (the database and its side files, keys, tokens, audit log, capture spool, setup history, runner and sync state,
+  backups); if anything else is there it deletes only Monomem's entries, keeps the folder, and says how many other files it left.
+  The plan says the same before you confirm. It refuses outright when the data folder is your home folder or a drive root.
+
+### Fixed
+
+- **`monomem changes --since last`** prints every page again and moves its marker. With more changes than `--limit` it printed
+  one page and left the marker where it was, so the same changes came back every run. Other `--since` values still print one page
+  and the "more" line.
+- **Setup with several old entries:** an `onememory` entry's `ONEMEMORY_DB_PATH` / `ONEMEMORY_HOME` now count when choosing which
+  entry keeps its data (they were ignored, so an empty `claude-bridge` entry could win and the onememory notes were left unused),
+  and the new entry carries them as `MONOMEM_DB_PATH` / `MONOMEM_HOME`. An entry with `MONOMEM_HOME` is judged by that folder's
+  database, with one pair of quotes removed as at run time (a quoted value counted 0 notes, so the empty `claude-bridge` entry
+  could still win). A relative `MONOMEM_HOME` is still judged against setup's own folder.
+- **`monomem restore`** works on a damaged database (it is moved aside as-is, with its `-wal` / `-shm`, instead of failing on the
+  checkpoint) and refuses while another program has the database open even when idle (it tests the database lock; it no longer refuses
+  just because something answers on the API port). A file another program holds gives the "close the apps" message, never a stack
+  trace, and no `.restore-*.tmp` is left behind. The "To go back" line quotes the path. The damaged-database message points to
+  `monomem restore <backup folder>`.
+- **Help:** `monomem --help` and `-h` print the same as `monomem help`; `monomem help <command>` is the same as `monomem <command> --help`;
+  `ls`, `edit`, `forget` and `unpin --help` show their own line; `monomem hook --help` prints help instead of running a hook; the unknown
+  hook event message lists `file-context`. `doctor`'s verdict points at the `[warn]` lines. INSTALL.md said ten default tools; there are
+  nine.
+- **Setup:** a `MONOMEM_HOME` that is not `~/.monomem` is written into every app entry setup or connect writes (as `MONOMEM_DB_PATH`
+  already was), and setup says so; before, the app used `~/.monomem`. Claude Code's start-of-session hook also runs after `/compact`
+  (matcher `startup|clear|compact`, in setup and the plugin's `hooks/hooks.json`); running setup again replaces a `startup|clear` entry
+  it wrote earlier (the new one goes at the end of the SessionStart list; no second entry). Re-printing costs one more recall block per compaction. `init` says `monomem uninstall` reverses every app
+  and `setup --undo` only the last run.
+- **`monomem edit`:** a missing note is reported before anything else; with no `VISUAL` / `EDITOR` it opens `notepad` on Windows and
+  `vi` elsewhere; the file path is quoted, so a temp folder with a space works and Node prints no DEP0190 warning.
+- **Agent-facing text names only tools a default install has:** the file-context hook says `state_read id=N` unless `memory_get` is
+  enabled; the snippet and the habits skill say `state_search` (add mode: "relevant") instead of `state_relevant`; `catch_up`'s
+  description mentions `task_get`, `memory_since` and `memory_ack` only when they are enabled.
+
+- **Setup and `MONOMEM_HOME`:** with `MONOMEM_HOME` set and no `--db`, the session-start and capture hooks get
+  `--db "<home>/state.db"`, so they use the same notes as the app entry (before, they used `~/.monomem`). An existing `monomem`
+  entry that names no data folder gets `MONOMEM_HOME` (and `MONOMEM_DB_PATH` with `--db`) added, and `--undo` takes it out again;
+  one that names a different folder stops setup with a conflict instead of "already set up". Codex's TOML entry gets the same, or a
+  by-hand hint when its env is written inline. `MONOMEM_HOME=~/x` (or `~\x`) means the home folder; a relative path still works but
+  prints a warning, and doctor warns too.
+- **`monomem connect windsurf`** prints the real launch command (the same one setup writes) with `MONOMEM_CLIENT=windsurf` and, when
+  set, `MONOMEM_HOME`, instead of `{"command":"monomem"}`. `connect --dry-run` no longer says "Connected"; it says to run the same
+  command without `--dry-run`. `connect --name <label>` sets the restricted key's label (it was in the help but refused); the help
+  lists `--max`, `--print`, `--dry-run` and `--yes`.
+- **`monomem backup`** with `MONOMEM_HOME` set and no `--out` writes `monomem-backup-<time>` next to that data folder instead of
+  into the real home folder.
+- **`monomem edit`** always deletes its temporary copy of the note, also when the editor fails, the title is empty, or the change is
+  refused or held (same exit codes as before).
+- **A damaged database is reported, not shown as "no notes".** A search error that is not a query-syntax problem (a damaged file,
+  for example) is raised instead of returning no results, and any command that hits one prints what happened and how to restore
+  (`monomem restore`). `monomem doctor` and `monomem health` run `PRAGMA quick_check(1)` and the FTS5 index's integrity-check
+  (structure only), and report a fail line with the same advice. Health runs each count on its own, so one that fails is a warning
+  of its own instead of stopping the rest; with a damaged file it no longer runs the drill.
+- **`monomem health`'s audit check** looks for the line it saw last time anywhere in the log, so new lines and a rotation
+  (`MONOMEM_AUDIT_MAX_BYTES` / `MONOMEM_AUDIT_KEEP`) are not reported as tampering: when that line has rotated out it says so (it
+  then cannot tell rotation from removal). `monomem backup` leaves health's remembered line out of the copy and `monomem restore`
+  clears it. The audit-write check counts only this process's failed audit entries (a running server reports its own in
+  `GET /stats` `audit_failures`); it now has a test.
+- **Session-start notes:** the closing hint says `Open any with state_read id=N` (as the file-context hook does) unless
+  `memory_get` is enabled (`Open any with memory_get ids=[N]`); it used to name `state_read ids=[...]`, a parameter `state_read` did not take. A second recall for the same
+  session (after `/compact` or `/clear`) no longer adds to the meter's "saved" estimate again; the injection itself is still counted.
+- **Audit lines only for committed writes:** a write inside a transaction that is rolled back (a failing batch, for example) leaves no
+  audit line; lines from a transaction are written when it commits.
+- **CLI:** `search` / `relevant --json` print JSON (`{keywords, results: [{id, namespace, title, updated_at, written_by}]}`);
+  `search --limit` takes a whole number of 1 or more, like `ls`; `--ns` works as `--namespace` in `relevant`, `search`, `export`,
+  `quality`, `conflicts`, `facts`, `digest`, `pii` and `decay`; a value flag with no value says `--<flag> needs a value`. `show`
+  prints a multi-line body line by line (control characters still replaced). `ls --ns x` with no notes there names the namespaces in
+  use; the dashboard says the namespace box is the reason. The secret refusal says "an AWS access key", not "a AWS access key".
+- **Wording:** the start banner says the MCP-over-HTTP address is for apps that connect over HTTP with a key (it said "tunnel this");
+  health's drill line reads "20 of 22 known attacks blocked; the 2 that get through are known limits"; doctor's no-edges warning names
+  imports and restores, which skip linking. README: a line about `npx monomem demo`, and the benchmark is "above" the honest numbers;
+  `demo` is in the short help.
+- **`MONOMEM_HOME` / `ONEMEMORY_HOME`:** set but blank is an error (`MONOMEM_HOME is set but empty; set it to a folder or unset it`,
+  naming the variable that is blank) instead of silently falling back; one pair of surrounding quotes is removed; a value that still
+  holds `%NAME%`, `$NAME` or `${NAME}` is an error that says to write the full path (an app's config file does not expand variables).
+- **First-run token:** the `.token` file is created with `wx`, so several processes starting at once all use the one value written
+  first (before, two could each write their own value, and the one whose write landed first then held a key the file no longer had).
+- **Hard delete and the WAL:** after `Store.delete` (and `purgeHistory`) Monomem runs a non-waiting `PRAGMA wal_checkpoint(TRUNCATE)`,
+  so the deleted text does not stay in `state.db-wal`; `PRAGMA journal_size_limit = 4194304` caps the WAL left after a checkpoint.
+  If another app's open read keeps part of the log, `monomem delete` says the text can stay in `state.db-wal` until every app
+  disconnects.
+- **The stdio server closes the store when the app closes the pipe** (stdin end/close) and on SIGHUP, not only on SIGINT/SIGTERM, so
+  buffered read counts are written. Its hourly sweep now also prunes the change log, so the 90-day limit in the README holds for
+  stdio-only installs. `monomem start` also stops cleanly on SIGHUP.
+- **Stale or outdated app entries:** setup rewrites a Monomem entry whose absolute command or `cli.js` no longer exists, or whose npx
+  pin (`monomem@X.Y.Z`) is another version, and says why ("points at C:\nope\cli.js, which no longer exists", "launches monomem 1.2.0,
+  this is 1.3.0") instead of "already fine"; an old npx-pinned start-of-session hook is rewritten too. Codex's TOML entry gets a
+  by-hand instruction instead (not rewritten). `monomem doctor` prints a `[warn]` per stale entry and per hook file with an
+  npx-pinned hook of another version (setup rewrites only the start-of-session one; the capture hooks are reported, not rewritten),
+  and `monomem health` counts them as one warning. The data-folder comparison expands `~` and ignores
+  letter case on Windows. Health finds Claude Code by `~/.claude.json` or `~/.claude` (as setup does); with only the config file it
+  says to run `monomem setup --hook`. With a database that exists but is damaged, the drill and audit lines say so instead of "no
+  database".
+- **Archived notes explain themselves to agents:** `state_read`, `state_write` and `state_delete` on an archived (not replaced) note
+  in a namespace the caller can read say `note N is archived (hidden, not erased); a person can restore it with monomem restore N; ...`;
+  other namespaces still get `no note with id N`. `monomem ls --archived` lists archived notes with the `restore <id>` command for each.
+- **Search results with no notes carry no SECURITY NOTICE banner** (there is no stored text in them); any result with a note keeps it.
+- **`MONOMEM_HOME='""'`** (quotes around nothing) now fails with "is set but empty" instead of resolving to the current folder.
+- **Variable check in `MONOMEM_HOME`:** `$NAME` / `${NAME}` is refused only at the start of the path or of a path segment, so a real
+  folder such as `C:/data$foo` is accepted; `$HOME/x` and `C:/x/$FOO/y` are still refused (so is a segment like `$Recycle`, by
+  design). `%NAME%` is refused anywhere, as before.
+- **The hint after `monomem delete`** names `monomem scrub --yes`.
+- **Multi-id `state_read`** reads each id once (`ids: [1,1,1]` returns one note and counts one access). Once `max_chars` is used up
+  the remaining notes are not read or counted; their ids come back in `not_read_budget_spent`.
+- **`monomem backup`** builds its copy under a name of its own (process id plus random, like the pre-upgrade copy) and removes only
+  that file, so two backups into one folder cannot delete each other's copy in progress.
+- **Import dedupe works without `created_at`:** a note in an import file with no `created_at` is skipped when a note with the same
+  namespace, title and body exists, so importing such a file twice no longer doubles it. With `created_at` the old rule applies.
+- **`monomem setup` with several old entries in one file** (`claude-bridge` and `onememory`, which would each become `monomem`):
+  it migrates one and removes the others in the same edit, preferring the entry whose database has notes, otherwise
+  `claude-bridge`, and the plan says which data is kept and which entry is dropped. When two different databases both have notes
+  that app is skipped with the export / import commands that merge them, and the other apps still go ahead. With `MONOMEM_HOME`
+  set, the plan and the migration note name that folder instead of `~/.monomem` / "standard data location".
+
+### Changed
+
+- **`state_read` with several `ids`** reads up to 10 through the same checks as one id and returns `{notes, missing}` (and `archived`
+  for archived ones); `max_chars` is shared by all bodies; ids past 10 come back in `ignored_ids` with a hint.
+- **MCP tools report arguments they do not have** as `ignored_arguments` with a hint (and a did-you-mean for `text`, `content`, `note`
+  (body), `ns`, `namespaces` (namespace), `q`, `search` (query), `tag` (tags)); these names are not accepted. `state_write` with no
+  title or body but such an argument holding text is refused (`a new note needs a title or a body (you sent \`text\`; use \`body\`)`);
+  `state_search` with an ignored `namespaces` says the search was not limited to a namespace.
+- **Session-start lines start with `#<id>`**, a body that begins with its own title does not print the title again, and the footer no
+  longer lists the ids.
+- **`monomem edit <id> -`** reads the new text from a pipe (first line the title, the rest the body), with the same "changed meanwhile"
+  check. Without a terminal and without `-`, `edit` exits at once with that hint instead of starting an editor; `--editor` starts
+  `$VISUAL` / `$EDITOR` anyway.
+- **Import yield:** a longer pause between import batches (110 ms) was tried in round 2 and rejected: a write from another process
+  during a 10,000-note import already finished in about 0.5 s with the `setImmediate` gap, and the pause added about 2.5 s per 10,000
+  notes. `setImmediate` is kept.
+- **MCP results are smaller.** `state_search` and `state_list` cut each note body to 600 characters (`body_truncated: true`,
+  `body_chars: N`); `state_read` is unchanged. MCP JSON is no longer indented (REST is unchanged). `state_write` returns the note without
+  its body. `memory_supersede_preview` returns one block (the JSON with `warning`, `token`, `expires_at`) instead of the warning twice.
+  Measured on 5 notes of 54,000 characters each (characters of tool output): `state_search` 273,089 to 5,548, `state_list` 272,805 to
+  5,384, `state_write` 54,979 to 852, `memory_supersede_preview` 5,685 to 3,595, `state_read` 54,893 to 54,783 (no indent only).
+- **The default MCP tools accept common argument drift:** ids, limits and offsets given as strings (`"5"`), tags as one
+  comma-separated string, fact values as numbers or true/false, and `facts` as a JSON string; every limit (10 facts, 80-character
+  values, tag counts) still applies after. `state_write` creating a note with no title takes the body's first line (about 60
+  characters, cut at a word) and says so in `title_generated`; no title and no body is still an error. `state_read` also takes `ids`
+  (one id reads like `id`; several: see below) and returns at most `max_chars` (default 40,000) of the body, from `offset`, with `body_truncated`,
+  `body_chars` and `next_offset` when there is more (round 1 said `state_read` is never cut; that is no longer true above 40,000).
+- **`catch_up`, `memory_since` and `memory_ack` with no `consumer`** use this connection's own writer name (the token label, or
+  `stdio:<app>` written as `stdio_<app>`), so two apps on one store each keep their own "last" marker; before, they shared
+  `"default"` and one app's catch-up hid the changes from the other. `consumer: "default"` still gives the shared marker.
+- **Claude Code's session-start notes leave out notes `import --claude` brought in** (tagged `claude-md` or `claude-auto-memory`):
+  Claude Code already reads those files. Recall treats the hook as Claude Code's when `CLAUDE_PROJECT_DIR` or `CLAUDECODE=1` is set.
+  Search and other apps still show them; `import --claude` and docs/switching.md say so.
+- **Keyword ranking weighs the title most, then tags, then the body** (`bm25(notes_fts, 5, 1, 2)` in both keyword queries), and
+  equal scores go to the newest note (`updated_at`, then id, in SQL and in the ranking step). Session-start context keeps id
+  order for equal keyword scores, because recency is already its own signal there. Measured with `monomem bench` on
+  2026-11-09 against the same code with equal weights: LongMemEval-S and LoCoMo-10 by session unchanged (96.6 / 98.3 and
+  90.3 / 95.5 recall@5 / @10), LoCoMo-10 by turn 58.1 / 65.6 to 57.8 / 65.0 (57.7 / 65.2 on another run: ties between notes written in the same
+  millisecond can fall either way).
+- **`state_search`** states its limit bounds in the schema (default 20, min 1, max 200); a larger `limit` is lowered to 200 and
+  the response says `limit_capped: 200`; when the results fill the limit it says `more: true` (there may be more matches).
+- **CLI `search` / `relevant`** print "Showing N; more notes match. More: --limit X" when the list was cut (one extra hit is
+  fetched to tell), and **`ls`** prints "Showing 20 of 25 (newest first). More: monomem ls --limit 50".
+- **Keyword extraction keeps two-letter words that matter:** written in capitals (`CI`, `QA`, `UI`, `PR`), or when dropping them
+  would leave no keyword at all (`go`, `db.ts` gives `db` and `ts`). In the searches that run on extracted keywords (relevant
+  mode, CLI `search` / `relevant`, session-start context and the any-keyword fallback of keyword search) a keyword of one or two
+  letters is matched exactly, not as a prefix, so `go` does not match `golang`; a typed keyword search still prefix-matches every
+  word. "remind, recall, remember, tell, know, please, want, wanted, need, let, show,
+  find" are now stop words, so "can you remind me what we decided about the database migration?" searches for the decision.
+- **`monomem changes`** (human output) prints at most `--limit` entries (default 100) and then "... N more (use --json or a
+  narrower --since)" instead of printing every page; `--json` still pages through and prints them all. The window's totals are
+  counted on the first page only and carried in the signed cursor, so later pages skip the two counting queries.
+- **`monomem init --print`** shows Claude Desktop / Cursor in the `mcpServers` block and VS Code / Copilot in a separate
+  `.vscode/mcp.json` block (`{"servers": {"monomem": {"type": "stdio", ...}}}`); the README says the same.
+- **`monomem import --file`** says "N note(s) were pinned in the file; pins are not imported" when the file has pinned notes
+  (`pinned_not_imported` with `--json`).
+- **README numbers re-measured** on 2026-11-09 with this code: the session-start block for 60 short notes (new script
+  `bench/recall-size.mjs`) and the keyword and hybrid retrieval figures. Keyword: LongMemEval-S 96.6 / 98.3, LoCoMo-10 by session 90.3 / 95.5, by turn
+  57.8 / 65.0 (recall@5 / @10; it was 97.0 / 98.3, 90.2 / 95.6, 58.2 / 65.8 on 2026-11-04; docs/BENCHMARK.md has the
+  breakdown). Hybrid (`nomic-embed-text` via local Ollama), replacing the figures measured before the date-hint change:
+  LoCoMo-10 by session 91.8 / 96.7, by turn 66.3 / 74.9, LongMemEval-S 98.5 / 99.4. The session-start block for 60 short
+  notes is about 5,900 characters (~1,500 tokens) and lists all 60 (it said 7,100 characters, 57 of 60).
+
+### Added
+
+- **Everyday commands:** `monomem add "text" [--title T] [--ns work] [--tag a,b] [--private | --sens public|internal|private]` (`-` reads a
+  pipe; same linter, secret refusal and held-write review as any other writer; written as `cli`), `monomem show <id>`,
+  `monomem ls [--ns x] [--limit 20]`, `monomem edit <id>` (in `$EDITOR`; refused if the note changed meanwhile) and `monomem forget <id>`
+  (an archive you can undo with `restore`). `monomem search` with no words lists your notes, as its help says. The CLI is you, the
+  owner: sensitivity limits apply to apps, not to it.
+- **`monomem restore <backup folder | state.db>`**: puts a backup (or a `.pre-vNN-backup`) back as your database. Refuses while Monomem or
+  an app is using it, copies the current database aside, removes stale `-wal`/`-shm`, checks the result.
+- `search --mode semantic|hybrid` (and REST/MCP `mode`) now says "semantic search is not set up; showing keyword results" when no
+  embedding service is on (a `notice` field on REST and MCP). Ordering is unchanged. `relevant` shows a short snippet per note.
+- `POST /tokens` accepts `max_sensitivity` (and still `max`) and answers 400 naming the valid fields for an unknown one.
+- `health` gains one capped **Exposure** check (app keys with no limit, notes that may hold personal data and are not marked private, apps
+  connected without a key): all reasons together cost at most one grade step.
+- Write responses (REST `similar_note`, MCP `similar_note`, and the `add` command) hint "looks similar to #N - consider updating it".
+  Nothing is blocked.
+
+### Fixed
+
+- Conflict reports: a broad overlap (more than two notes on one key) is "low", never "high", and no longer suggests replacing more than two
+  notes with one command.
+- `health` and `doctor` agree: the optional start-of-session hook and `.pre-vNN-backup` copies are info, not warnings.
+- Session-start recall shows as many notes as 1.2.1 (short `by <name>` label on index lines, one legend line).
+- A search over 4096 characters or 64 words is refused with a clear message on every route (a 1 MB query once held the database for
+  about 99 seconds). The index builder also cuts it as a second layer.
+- `monomem <search|relevant> --help` lists the real options. `recall` run by hand at a keyboard prints text (`--json` for the hook
+  payload; the hook itself is unchanged). `stats.mostAccessed` no longer lists notes nobody has read.
+- Undoing a replacement says the replacement note is still live and how to archive it. The "read access log: a row was skipped" message
+  is now a calm one-time info line. A database from a newer build prints one plain line from the stdio server, naming the
+  `.pre-vNN-backup` copy, instead of a stack trace.
+- `private` is described plainly everywhere: limited apps cannot see it; apps with no limit (including your main Claude connection)
+  still can, with the next step.
+
+### Added (sensitivity labels, schema v19)
+
+- **Per-memory sensitivity labels and per-token ceilings.** Each note is `public`, `internal` (the default) or `private`. A token
+  in `tokens.json` / `MONOMEM_TOKENS` can set `max_sensitivity`; above that ceiling a note is not found, searched, listed, counted,
+  exported, injected, shown in the change feed, named by `why`, `receipts`, `pinned`, `rollback` or the fact-conflict check, on every
+  route, and the token cannot write or relabel above it (lowering a label needs an administrator key). A hidden note looks exactly like
+  a missing one. Tokens without a ceiling behave as before. Set labels with `sensitivity` on `state_write` / `POST /notes`, or
+  `monomem label <id> <level>`. `MONOMEM_RECALL_MAX_SENSITIVITY` caps the session-start and file-context hooks,
+  `MONOMEM_STDIO_MAX_SENSITIVITY` caps a stdio app, and `MONOMEM_EXPORT_MAX_SENSITIVITY` / `monomem export --max-sensitivity` cap the
+  Markdown vault. The access log (`/access`) and the meter totals are not available to a key with a ceiling. See
+  `docs/sensitivity-labels.md`.
+- **Schema v19** (adds the label columns; every existing note becomes `internal`). A backup is written to `<db>.pre-v19-backup`, and
+  older builds refuse the file.
+- **`monomem token add <name> --max public|internal|private | --no-limit`** (the existing `token add --label ... --scope ...` form still
+  works), a running server picks up `tokens.json` changes within a couple of seconds, and the dashboard has an Apps panel to add and
+  remove keys. `monomem connect <app> [--restricted]` gives one app its own key and limit; `monomem open` opens the dashboard signed in
+  with a one-time code; `GET /whoami` tells an app what it can see.
+- Checkups that only suggest, never change: `monomem scrub` (backup first, then compacts the file and rebuilds search so deleted text
+  is gone; also `purge-deleted`), `monomem pii scan` (suggests `monomem label <id> private`), `monomem digest`,
+  `monomem safety-report --out report.html`, `monomem audit` (who changed what; `audit verify` is unchanged), `monomem demo`,
+  `monomem snippet`, `monomem import --rules`. Two new `monomem quality` checks: personal data in notes not marked private, and notes
+  that may contradict each other. The dashboard has a tidiness card, an Audit tab and a Changes window picker.
+- Per-command help: `monomem <command> --help`.
+
+### Changed
+
+- A big namespace is no longer indexed inside the write that needs it: above 5,000 live notes the similarity index is built in the
+  background in short slices. New indexes make the default note list about ten times faster at 50,000 notes.
+- Both servers set explicit connection limits and refuse a request that reaches them under an unexpected host name
+  (`MONOMEM_ALLOWED_HOSTS`; localhost, IP addresses and proxied or tunnelled requests are unaffected).
+- `monomem backup` no longer copies the encryption key into the backup folder unless you pass `--include-key`; it says where the key is.
+- Session-start recall labels each index line with who wrote it (short `by <name>`, explained once) and ends with a reminder that the notes are data.
+- `monomem setup` and `connect` replace Monomem's own keyless entry with a limited one when you ask for a limit (shown, backed up, undoable).
+- `monomem demo` runs one benchmark suite (permission isolation) so the tour takes seconds.
 
 ## [1.2.1] - 2026-11-06
 
@@ -116,7 +502,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   local `monomem` CLI can edit, forget, restore, hard-delete, replace (as the replaced note, and by supersede undo), restore an
   older version of, purge the history of, or merge it. Every other caller gets an error naming the note: MCP, every REST call
   (an admin token included, as for approve-first; an admin token can unpin and then change it), the server's own jobs. The
-  expiry sweep and decay never archive a pinned note. Not carried by export, import or sync. Details:
+  expiry sweep and decay never archive a pinned note. A JSON export includes `pinned: true` for reference; it is not restored
+  by import or sync. Details:
   [docs/replacing-memories.md](./docs/replacing-memories.md#pinned-notes-cli-only).
 - **Roll back one writer.** `monomem rollback --writer <name> --since <ISO|30m|2h|7d> [--include-conflicts] [--yes]`, admin
   `POST /rollback/preview` + `POST /rollback/confirm`, and the operator-only MCP tool `memory_rollback` (off over stdio unless

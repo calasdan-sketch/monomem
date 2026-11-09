@@ -47,7 +47,7 @@ Monomem part. An entry setup did not add (one you wrote by hand) is listed, not 
 |---|---|
 | `setup --project` | `./.mcp.json` |
 | `export --format md --dir <d>` / `export --format json --out <f>` | that folder / file |
-| `backup [--out <d>]` | `<d>`, default `~/monomem-backup-<time>` (never the current folder: a backup and its key must not land in a repo) |
+| `backup [--out <d>]` | `<d>`, default `~/monomem-backup-<time>`, or next to the data folder when `MONOMEM_HOME` is set (never the current folder: a backup and its key must not land in a repo) |
 | `uninstall --purge` | the final backup, `~/monomem-final-backup-<time>` (unless `--no-backup`) |
 | `sync --git <repo>` | `<repo>/monomem/` or `<repo>/monomem-enc/`, and git commits in that repo |
 | `npm run runner` (a Monomem checkout only, not in the npm package) | `<checkout>/data/runner.lock`, `runner-seen.json` |
@@ -64,7 +64,9 @@ Monomem part. An entry setup did not add (one you wrote by hand) is listed, not 
 | Session summary by a local model (`src/llm.ts`) | `MONOMEM_LLM_URL` and `MONOMEM_LLM_MODEL` | a loopback address only, unless `MONOMEM_LLM_ALLOW_REMOTE=1`; redirects refused |
 | Capture hook posting to a server (`src/hook.ts`) | `MONOMEM_HOOK_URL` and `MONOMEM_HOOK_TOKEN` | your own Monomem server |
 | Runner `--post` (`src/runner-sign.ts`) | `MONOMEM_URL` and `MONOMEM_TOKEN` | your own Monomem server |
-| Dashboard page (`src/dashboard.ts`) | opening the dashboard | the Monomem server that served the page |
+| Dashboard page (`src/dashboard.ts`) | opening the dashboard | the Monomem server that served the page (API calls, and the one-time sign-in code that `monomem open` hands over) |
+| `monomem open` (`src/cli.ts`) | running the command | `http://127.0.0.1:<api port>/health`, to see whether your own server is up |
+| `monomem restore` (`src/cli.ts`) | running the command | `http://127.0.0.1:<api port>/health`, only to print a hint when something answers there (whether the database is in use is judged by its lock) |
 
 Not Monomem's own calls: `npx monomem` downloads the package from npm, and `sync --git` runs `git`, which pushes where your
 repository's remote points.

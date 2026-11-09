@@ -36,6 +36,31 @@ describe("in-memory store and the audit log", () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  test("a pinned MONOMEM_DB_PATH puts the audit log beside that database, never in the default data folder", () => {
+    const dir = mkdtempSync(join(tmpdir(), "monomem-audit-pin-"));
+    const saveDb = process.env.MONOMEM_DB_PATH;
+    const saveLog = process.env.MONOMEM_AUDIT_LOG;
+    delete process.env.MONOMEM_AUDIT_LOG;
+    const def = auditPath();
+    const before = existsSync(def) ? readFileSync(def, "utf8") : null;
+    try {
+      const db = join(dir, "state.db");
+      process.env.MONOMEM_DB_PATH = db;
+      assert.equal(auditPath(), join(dir, "audit.log"));
+      const s = new Store(db);
+      s.create({ title: "c", body: "gamma" });
+      s.close();
+      assert.equal(existsSync(join(dir, "audit.log")), true);
+      process.env.MONOMEM_DB_PATH = ":memory:";
+      assert.equal(auditPath(), def, ":memory: keeps the default rule");
+      assert.equal(existsSync(def) ? readFileSync(def, "utf8") : null, before, "the default audit.log is untouched");
+    } finally {
+      if (saveDb === undefined) delete process.env.MONOMEM_DB_PATH; else process.env.MONOMEM_DB_PATH = saveDb;
+      if (saveLog === undefined) delete process.env.MONOMEM_AUDIT_LOG; else process.env.MONOMEM_AUDIT_LOG = saveLog;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("audit completeness and chain", () => {

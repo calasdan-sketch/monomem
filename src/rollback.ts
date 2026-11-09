@@ -119,7 +119,7 @@ type Step = { action: "archive" | "restore"; version?: number; conflict?: string
 
 /** One note's verdict. `isW` matches the writer (with the stdio family). */
 function decide(store: Store, n: NoteRecord, isW: (v: unknown) => boolean, since: string): Step {
-  if (n.superseded_by !== undefined) return { skip: "replaced", detail: `replaced by note ${n.superseded_by}; undo that replacement first` };
+  if (n.status === "superseded") return { skip: "replaced", detail: `replaced by ${n.superseded_by !== undefined ? `note ${n.superseded_by}` : "another note"}; undo that replacement first` };
   const hist = store.historyOf(n.id).reverse(); // oldest first
   const dropped = store.historyDropped(n.id);
   const others = (names: unknown[]): string[] => [...new Set(names.filter((x): x is string => typeof x === "string" && x !== "" && !isW(x)))];

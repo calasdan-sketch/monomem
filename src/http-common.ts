@@ -4,7 +4,7 @@
 
 import type { IncomingMessage, Server } from "node:http";
 import { StringDecoder } from "node:string_decoder";
-import { type TokenEntry } from "./config.js";
+import { envNum as num, type TokenEntry } from "./config.js";
 
 // 1MB cap so a bad client can't OOM the process. Shared by both servers.
 export const MAX_BODY_BYTES = 1_000_000;
@@ -28,8 +28,8 @@ export class PayloadTooLargeError extends Error {}
 export const IMPORT_BODY_BYTES = (() => {
   const raw = process.env.MONOMEM_IMPORT_MAX_BYTES;
   const n = raw ? Number(raw) : NaN;
-  // Default 256MB; clamp to [1MB, 2GB] so a typo can't disable it entirely.
-  if (!Number.isFinite(n)) return 256 * 1024 * 1024;
+  // Default 64MB (an admin-only restore; raise it for a bigger backup); clamp to [1MB, 2GB] so a typo can't disable it entirely.
+  if (!Number.isFinite(n)) return 64 * 1024 * 1024;
   return Math.min(Math.max(Math.floor(n), 1_000_000), 2_000_000_000);
 })();
 
@@ -87,4 +87,18 @@ export function exitOnListenError(server: Server, port: number, envVar: string, 
     }
     process.exit(1);
   });
+}
+
+/**
+ * Explicit connection limits instead of Node's defaults, so a slow or greedy client cannot hold the server open.
+ * All can be changed: MONOMEM_MAX_CONNECTIONS (default 512), MONOMEM_HEADERS_TIMEOUT_MS (default 20000: time to send the
+ * request line and headers), MONOMEM_REQUEST_TIMEOUT_MS (default 300000: time to send the whole request, which has to
+ * allow a large /import over a slow link), MONOMEM_KEEPALIVE_TIMEOUT_MS (default 5000).
+ */
+export function applyServerLimits<T extends Server>(server: T): T {
+  server.maxConnections = num("MONOMEM_MAX_CONNECTIONS", 512) || 512;
+  server.headersTimeout = num("MONOMEM_HEADERS_TIMEOUT_MS", 20_000);
+  server.requestTimeout = num("MONOMEM_REQUEST_TIMEOUT_MS", 300_000);
+  server.keepAliveTimeout = num("MONOMEM_KEEPALIVE_TIMEOUT_MS", 5_000);
+  return server;
 }

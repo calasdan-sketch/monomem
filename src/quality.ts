@@ -7,6 +7,8 @@
 //   quarantined  write the linter held                                  fix: quarantine approve | reject
 //   lint         live note the linter would flag today                  fix: archive (undo: restore)
 //   decay        captured row the next decay sweep archives             fix: decay (undo: restore), or tag it "pinned"
+//   pii          note that looks like it holds personal data (pattern)   fix: monomem label <id> private (a suggestion; nothing changes by itself)
+//   contradiction two notes that may disagree (heuristic, English)       fix: supersede preview (undo available)
 //
 // Read-only: building the report changes nothing. Admin surfaces only (CLI, GET /quality); it lists titles of every
 // writer's notes, distrusted ones included.
@@ -15,8 +17,10 @@ import { findCandidatesCooperative } from "./consolidate.js";
 import { lintContent, describeFindings } from "./lint.js";
 import { isStale, stalenessConfig } from "./staleness.js";
 import { findConflicts, conflictReport, type Conflict, type ConflictGroup } from "./conflicts.js";
+import { scanPii, describePii } from "./pii.js";
+import { findContradictions } from "./contradiction.js";
 
-export const QUALITY_TYPES = ["duplicate", "stale_twin", "quarantined", "lint", "decay"] as const;
+export const QUALITY_TYPES = ["duplicate", "stale_twin", "quarantined", "lint", "decay", "pii", "contradiction"] as const;
 export type QualityType = (typeof QUALITY_TYPES)[number];
 
 export interface QualityIssue {
@@ -129,6 +133,29 @@ export async function qualityReport(store: Store, namespaces?: string[]): Promis
       detail: `${d.obs_type || d.kind} #${d.id} ${quote(d.title)} not updated or read for ${d.idleDays} days`,
       fix: `monomem decay${namespaces?.length === 1 ? ` --namespace ${namespaces[0]}` : ""}`,
       alt: `add the tag "pinned" to keep it`,
+    });
+  }
+
+  for (const p of scanPii(notes, PER_TYPE).suggestions) {
+    issues.push({
+      type: "pii",
+      namespace: p.namespace,
+      ids: [p.id],
+      detail: describePii(p),
+      fix: `monomem label ${p.id} private`,
+      alt: "if it is not personal data, ignore this (the scan is pattern-based and can be wrong)",
+    });
+  }
+
+  const byIdAll = new Map(notes.map((n) => [n.id, n]));
+  for (const c of findContradictions(notes, { max: PER_TYPE }).found) {
+    issues.push({
+      type: "contradiction",
+      namespace: c.namespace,
+      ids: c.ids,
+      detail: `#${c.ids[0]} and #${c.ids[1]} may contradict each other: ${c.why}`,
+      fix: `monomem supersede --old ${c.ids[0]} --new-id ${c.ids[1]}`,
+      alt: byIdAll.has(c.ids[0]) ? "this only previews and asks first; if both are right, ignore it" : undefined,
     });
   }
 

@@ -2,7 +2,7 @@
 // MCP server, and the HTTP/SSE MCP server so all three point at the same
 // state file and accept the same token.
 
-import "./legacy-env.js"; // first: CLAUDE_BRIDGE_* (the old name) are read as MONOMEM_*
+import { homeDataDir } from "./legacy-env.js"; // first: CLAUDE_BRIDGE_* (the old name) are read as MONOMEM_*
 import { randomBytes } from "node:crypto";
 import {
   chmodSync,
@@ -20,10 +20,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { resolveTimeZone } from "./time-parse.js";
+import { cleanWriter } from "./actor.js";
+import { didYouMean } from "./suggest.js";
+import { type Sensitivity, parseSensitivity, sensitivityRank, defaultCeilingFromEnv, SENSITIVITY_HELP } from "./sensitivity.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const PROJECT_ROOT = join(__dirname, "..", "..");
@@ -50,6 +53,25 @@ export const LEGACY_HOME_DIR_NAME = ".onememory";
 export const HOME_DIR_NAME = ".monomem";
 
 /**
+ * A whole number >= 0 from the environment variable `name`, or `def` when it is unset or blank. A value that is not such
+ * a number (MONOMEM_RATE_MAX=abc) also gives `def`, with one line on stderr naming the variable, instead of a NaN that
+ * silently turns a limit off.
+ */
+export function envNum(name: string, def: number, env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env[name];
+  if (raw === undefined || raw.trim() === "") return def;
+  const v = Number(raw);
+  if (Number.isFinite(v) && v >= 0) return Math.floor(v);
+  process.stderr.write(`[monomem] ${name}=${JSON.stringify(raw)} is not a whole number >= 0; using the default ${def}\n`);
+  return def;
+}
+
+/** A leading ~, ~/ or ~\ means the home folder (a shell expands it, but an app's config file does not). */
+export function expandHome(p: string): string {
+  return /^~(?=$|[\\/])/.test(p) ? join(homedir(), p.slice(1)) : p;
+}
+
+/**
  * The data directory (database, token, tokens.json, spaces.json):
  *   1. MONOMEM_HOME, when set (ONEMEMORY_HOME still works -- see legacy-env.ts);
  *   2. the package's own ./data, when running from a git checkout that
@@ -70,19 +92,33 @@ export function resolveDataDir(
   env: NodeJS.ProcessEnv = process.env,
   root: string = PROJECT_ROOT
 ): { dir: string; why: "env" | "checkout" | "home" | "legacy-home" } {
+  // A variable that is set but blank is a mistake (often a config file with "MONOMEM_HOME": ""), not "use the default":
+  // falling through would put the data somewhere the person did not choose, or silently use the other variable.
+  for (const name of ["MONOMEM_HOME", "ONEMEMORY_HOME"] as const) {
+    if (env[name] !== undefined && !env[name]!.trim()) throw new Error(`${name} is set but empty; set it to a folder or unset it`);
+  }
+  const name = env.MONOMEM_HOME !== undefined ? "MONOMEM_HOME" : "ONEMEMORY_HOME";
   const home = env.MONOMEM_HOME ?? env.ONEMEMORY_HOME;
-  if (home && home.trim()) {
-    return { dir: resolve(home.trim()), why: "env" };
+  if (home) {
+    let raw = home.trim();
+    // One pair of matching quotes, as a config file or a shell line copied with its quotes leaves them.
+    if (raw.length >= 2 && (raw[0] === '"' || raw[0] === "'") && raw[raw.length - 1] === raw[0]) raw = raw.slice(1, -1).trim();
+    if (!raw) throw new Error(`${name} is set but empty; set it to a folder or unset it`);
+    // An app's JSON config does not expand variables: %USERPROFILE% or $HOME arrive as literal text. $NAME counts only at the
+    // start of the path or of a segment (C:/data$foo is a real folder name); a segment such as $Recycle is refused too.
+    if (/%[A-Za-z_][A-Za-z0-9_]*%|(^|[\\/])\$\{?[A-Za-z_]\w*\}?/.test(raw)) {
+      throw new Error(
+        `${name}=${raw} is not a full path (an app's config file does not expand variables); write the full path, e.g. C:\\Users\\you\\.monomem`
+      );
+    }
+    const dir = expandHome(raw);
+    if (!isAbsolute(dir)) process.stderr.write(`[monomem] warning: MONOMEM_HOME is a relative path (${dir}); it depends on the folder you start from. Use a full path.\n`);
+    return { dir: resolve(dir), why: "env" };
   }
   if (existsSync(join(root, ".git")) && existsSync(join(root, "data", "state.db"))) {
     return { dir: join(root, "data"), why: "checkout" };
   }
-  const newHome = join(homedir(), HOME_DIR_NAME);
-  const oldHome = join(homedir(), LEGACY_HOME_DIR_NAME);
-  if (!existsSync(join(newHome, "state.db")) && existsSync(join(oldHome, "state.db"))) {
-    return { dir: oldHome, why: "legacy-home" };
-  }
-  return { dir: newHome, why: "home" };
+  return homeDataDir(homedir());
 }
 
 const DATA = resolveDataDir();
@@ -283,7 +319,7 @@ export function resolveToken(): string {
     if (t.length < MIN_TOKEN_LENGTH) {
       throw new Error(
         `monomem: MONOMEM_TOKEN is too short (${t.length} chars); use at least ${MIN_TOKEN_LENGTH}. ` +
-          `Generate one with: openssl rand -hex 32`
+          `Make one with: monomem token new (it only prints a fresh value; nothing is saved)`
       );
     }
     return t;
@@ -294,7 +330,19 @@ export function resolveToken(): string {
   }
   const token = randomBytes(32).toString("hex");
   privateDir(dirname(TOKEN_FILE));
-  writeFileSync(TOKEN_FILE, token, { mode: 0o600 });
+  try {
+    // "wx": only the first of several processes starting at once creates the file; the others use its value.
+    writeFileSync(TOKEN_FILE, token, { mode: 0o600, flag: "wx" });
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+    // The winner may not have written its bytes yet: re-read briefly while the file is empty.
+    for (let i = 0; i < 50; i++) {
+      const won = readFileSync(TOKEN_FILE, "utf8").trim();
+      if (won) return won;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+    writeFileSync(TOKEN_FILE, token, { mode: 0o600 }); // left empty by an earlier crash: replace it, as before
+  }
   // Never print the token value itself -- this line may be captured by a
   // Windows Scheduled Task's redirected output, a service manager's logs, or
   // future log-shipping, and the token is a full-access credential valid
@@ -330,6 +378,60 @@ export interface TokenEntry {
    * carries one -- it stays the operator's unrestricted escape hatch.
    */
   namespace?: string;
+  /**
+   * Optional per-token sensitivity CEILING (`public` < `internal` < `private`).
+   *
+   * When set, this token can never read a note labelled above it, on any note path
+   * (search, recall, list, get, change feed, injection, export), can
+   * not write a note above it, and can not touch a note above it. A hidden note
+   * answers exactly like a note that does not exist. A non-admin token may raise
+   * a note's label (up to its ceiling) but not lower it.
+   *
+   * When unset the token is not restricted by label (legacy behaviour, so existing
+   * token files keep working); the docs recommend setting one on every secondary
+   * token. The primary token never carries one.
+   */
+  max_sensitivity?: Sensitivity;
+}
+
+/**
+ * Every access-token value configured right now (primary MONOMEM_TOKEN or .token, MONOMEM_TOKENS, tokens.json), read
+ * without side effects (unlike resolveToken, it never creates a token). The linter refuses a note that contains one.
+ * Cached on the env values and the two files' size and mtime, so a write pays two stat calls.
+ */
+let tokenValueCache: { key: string; values: string[] } | null = null;
+export function configuredTokenValues(): string[] {
+  const tokensFile = join(DATA_DIR, "tokens.json");
+  const sig = (f: string): string => {
+    try {
+      const st = statSync(f);
+      return `${st.mtimeMs}:${st.size}`;
+    } catch {
+      return "-";
+    }
+  };
+  const key = [process.env.MONOMEM_TOKEN ?? "", process.env.MONOMEM_TOKENS ?? "", TOKEN_FILE, sig(TOKEN_FILE), sig(tokensFile)].join("\0");
+  if (tokenValueCache?.key === key) return tokenValueCache.values;
+  const out = new Set<string>();
+  const add = (t: unknown): void => {
+    if (typeof t === "string" && t.trim().length >= 16) out.add(t.trim());
+  };
+  add(process.env.MONOMEM_TOKEN);
+  try {
+    add(readFileSync(TOKEN_FILE, "utf8"));
+  } catch {
+    /* no primary token file yet */
+  }
+  for (const read of [() => process.env.MONOMEM_TOKENS ?? "", () => readFileSync(tokensFile, "utf8")]) {
+    try {
+      const arr: unknown = JSON.parse(read());
+      if (Array.isArray(arr)) for (const e of arr) add((e as { token?: unknown } | null)?.token);
+    } catch {
+      /* absent or broken: resolveTokens reports that */
+    }
+  }
+  tokenValueCache = { key, values: [...out] };
+  return tokenValueCache.values;
 }
 
 function isScope(s: unknown): s is Scope {
@@ -350,6 +452,9 @@ function isScope(s: unknown): s is Scope {
 const SCOPE_RANK: Record<Scope, number> = { read: 1, write: 2, admin: 3 };
 
 export function resolveTokens(): TokenEntry[] {
+  // Tokens with at least one invalid entry. A token listed twice where ANY entry is invalid is refused entirely: the invalid
+  // entry may be the stricter one, and the valid one must not quietly stand in for it.
+  const refused = new Set<string>();
   const byToken = new Map<string, TokenEntry>();
   const locked = new Set<string>(); // the primary admin token's scope is fixed
   const add = (
@@ -357,16 +462,27 @@ export function resolveTokens(): TokenEntry[] {
     scope: unknown,
     label: unknown,
     lock = false,
-    namespace?: unknown
+    namespace?: unknown,
+    maxSensitivity?: unknown
   ): void => {
     if (typeof token !== "string" || !token.trim()) return;
-    if (!isScope(scope)) return;
     const t = token.trim();
+    if (!isScope(scope)) {
+      // A misspelt scope used to drop the token without a word; say so, and suggest the likely word.
+      const guess = typeof scope === "string" ? didYouMean(scope, ["read", "write", "admin"]) : null;
+      console.error(
+        `[monomem] ignoring token ${typeof label === "string" && label ? `"${label}"` : "(unnamed)"}: ` +
+          `its "scope" must be read, write or admin (got ${JSON.stringify(scope)}).${guess ? ` Did you mean "${guess}"?` : ""} ` +
+          `Fix the entry in MONOMEM_TOKENS / tokens.json; the token will not work until then.`
+      );
+      refused.add(t);
+      return;
+    }
     if (!lock && t.length < MIN_TOKEN_LENGTH) {
       console.error(
         `[monomem] ignoring token ${typeof label === "string" && label ? `"${label}"` : "(unnamed)"}: ` +
           `it is ${t.length} characters; user-supplied tokens must be at least ${MIN_TOKEN_LENGTH}. ` +
-          `Generate one with: openssl rand -hex 32`
+          `To add an app, let Monomem make the token for you: monomem token add <name>`
       );
       return;
     }
@@ -382,10 +498,33 @@ export function resolveTokens(): TokenEntry[] {
           `its "namespace" must be a non-empty string (got ${JSON.stringify(namespace)}). ` +
           `Fix the entry in MONOMEM_TOKENS / tokens.json; the token will not work until then.`
       );
+      refused.add(t);
       return;
     }
     const ns = typeof namespace === "string" ? namespace.trim() : undefined;
+    // A sensitivity ceiling is a restriction, so a value that is present but not a label (a typo such as "privte", 5, "")
+    // must NOT quietly become "no ceiling": the whole token is refused, loudly, like a bad namespace pin.
+    let ceiling: Sensitivity | undefined;
+    // (`null` is also refused: it reads like "no limit", which is the opposite of what a ceiling is for.)
+    if (maxSensitivity !== undefined) {
+      const parsed = parseSensitivity(maxSensitivity);
+      if (!parsed || lock) {
+        refused.add(t);
+        console.error(
+          `[monomem] ignoring token ${typeof label === "string" && label ? `"${label}"` : "(unnamed)"}: ` +
+            (lock
+              ? `the primary token cannot carry a "max_sensitivity".`
+              : `its "max_sensitivity" must be ${SENSITIVITY_HELP} (got ${JSON.stringify(maxSensitivity)}). `) +
+            `Fix the entry in MONOMEM_TOKENS / tokens.json; the token will not work until then.`
+        );
+        return;
+      }
+      ceiling = parsed;
+    }
     const existing = byToken.get(t);
+    if (existing && locked.has(t) && ceiling !== undefined) {
+      console.error(`[monomem] the primary token is also listed${typeof label === "string" && label ? ` as "${label}"` : ""} with a "max_sensitivity"; the primary token cannot carry one, so it is ignored and the primary token stays unrestricted.`);
+    }
     if (existing) {
       // Never downgrade/change the primary token. For any other token listed
       // more than once, keep the MOST restrictive scope (lowest rank) AND the
@@ -395,8 +534,13 @@ export function resolveTokens(): TokenEntry[] {
       if (!locked.has(t)) {
         const scopeDown = SCOPE_RANK[scope] < SCOPE_RANK[existing.scope];
         const pinTighter = ns !== undefined && existing.namespace === undefined;
-        if (scopeDown || pinTighter) {
+        // Same rule for the ceiling: the lower one wins, and any ceiling beats none.
+        const ceilTighter =
+          ceiling !== undefined &&
+          (existing.max_sensitivity === undefined || sensitivityRank(ceiling) < sensitivityRank(existing.max_sensitivity));
+        if (scopeDown || pinTighter || ceilTighter) {
           const nextNs = pinTighter ? ns : existing.namespace;
+          const nextCeil = ceilTighter ? ceiling : existing.max_sensitivity;
           if (ns !== undefined && existing.namespace !== undefined && ns !== existing.namespace) {
             console.error(
               `[monomem] token ${existing.label || "(unnamed)"} is listed with two different ` +
@@ -408,6 +552,7 @@ export function resolveTokens(): TokenEntry[] {
             scope: scopeDown ? scope : existing.scope,
             label: scopeDown && typeof label === "string" ? label : existing.label,
             ...(nextNs !== undefined ? { namespace: nextNs } : {}),
+            ...(nextCeil !== undefined ? { max_sensitivity: nextCeil } : {}),
           });
         } else if (ns !== undefined && existing.namespace !== undefined && ns !== existing.namespace) {
           console.error(
@@ -423,6 +568,7 @@ export function resolveTokens(): TokenEntry[] {
       scope,
       label: typeof label === "string" ? label : "",
       ...(ns !== undefined ? { namespace: ns } : {}),
+      ...(ceiling !== undefined ? { max_sensitivity: ceiling } : {}),
     });
     if (lock) locked.add(t);
   };
@@ -450,8 +596,24 @@ export function resolveTokens(): TokenEntry[] {
       return;
     }
     for (const e of arr) {
-      const o = e as { token?: unknown; scope?: unknown; label?: unknown; namespace?: unknown };
-      add(o?.token, o?.scope, o?.label, false, o?.namespace);
+      const o = e as { token?: unknown; scope?: unknown; label?: unknown; namespace?: unknown; max_sensitivity?: unknown };
+      // A misspelt ceiling key ("maxSensitivity", "max_sensitivty") would otherwise be ignored and leave the token unrestricted.
+      const lookalikes = o && typeof o === "object" ? Object.keys(o).filter((k) => k !== "max_sensitivity" && /sens|ceil/i.test(k)) : [];
+      if (lookalikes.length) {
+        console.error(
+          `[monomem] ignoring token ${typeof o.label === "string" && o.label ? `"${o.label}"` : "(unnamed)"}: unknown key ${lookalikes.map((k) => JSON.stringify(k)).join(", ")} looks like "max_sensitivity". ` +
+            `Fix the spelling in ${where}; the token will not work until then.`
+        );
+        if (typeof o.token === "string") refused.add(o.token.trim());
+        continue;
+      }
+      // "primary" is the main key's name: another key carrying it would be treated as the unrestricted main key.
+      if (typeof o?.label === "string" && o.label.trim().toLowerCase() === "primary" && typeof o.token === "string" && !locked.has(o.token.trim())) {
+        console.error(`[monomem] ignoring a token in ${where}: the name "primary" is reserved for the main key. Rename it (monomem token add <name> makes a new one).`);
+        refused.add(o.token.trim());
+        continue;
+      }
+      add(o?.token, o?.scope, o?.label, false, o?.namespace, o?.max_sensitivity);
     }
   };
 
@@ -463,7 +625,72 @@ export function resolveTokens(): TokenEntry[] {
     parseList(readFileSync(tokensFile, "utf8"), tokensFile);
   }
 
+  // Two different tokens with one label (letter case and spacing aside, an empty label included) would stamp the same
+  // written_by: their writes could not be told apart. Both are refused, loudly, until one is renamed.
+  const byLabel = new Map<string, string[]>();
+  for (const [t, e] of byToken) {
+    if (refused.has(t)) continue;
+    const k = cleanWriter(e.label).toLowerCase();
+    byLabel.set(k, [...(byLabel.get(k) ?? []), t]);
+  }
+  for (const [k, ts] of byLabel) {
+    if (ts.length < 2) continue;
+    console.error(`[monomem] ignoring ${ts.length} tokens that share the name ${k ? `"${k}"` : "(unnamed)"}: their writes would carry the same writer. Give each its own name in MONOMEM_TOKENS / tokens.json (or remove one: monomem token list); they will not work until then.`);
+    for (const t of ts) if (!locked.has(t)) refused.add(t);
+  }
+  for (const t of refused) if (!locked.has(t)) byToken.delete(t);
+  // Opt-in default ceiling for secondary tokens that set none. A value that is not a label stops the server (fail closed).
+  const dflt = defaultCeilingFromEnv();
+  if (dflt === null) {
+    throw new Error(`MONOMEM_DEFAULT_MAX_SENSITIVITY must be ${SENSITIVITY_HELP} (got ${JSON.stringify(process.env.MONOMEM_DEFAULT_MAX_SENSITIVITY)})`);
+  }
+  if (dflt !== undefined) {
+    for (const [t, e] of byToken) if (!locked.has(t) && e.max_sensitivity === undefined) byToken.set(t, { ...e, max_sensitivity: dflt });
+  }
   return [...byToken.values()];
+}
+
+/**
+ * Hot reload of <data dir>/tokens.json. `tokens` is the live array the servers authenticate against (both HTTP front doors
+ * build a fresh server per request, so a change applies to the very next request): when the file changes, the list is
+ * re-read and replaced IN PLACE. A removed token stops working at once; a changed ceiling applies to the next request.
+ * A file that cannot be parsed keeps the old list (and says so), so a half-saved edit cannot lock everyone out or open it up.
+ * Returns the function that checks now (used by tests) and a stop function.
+ */
+export function startTokenReload(tokens: TokenEntry[], opts: { intervalMs?: number; file?: string; log?: (m: string) => void } = {}): { check: () => boolean; stop: () => void } {
+  const file = opts.file ?? join(DATA_DIR, "tokens.json");
+  const log = opts.log ?? ((m: string) => console.error(m));
+  const sig = (): string => {
+    try {
+      const st = statSync(file);
+      return `${st.mtimeMs}:${st.size}`;
+    } catch {
+      return "none";
+    }
+  };
+  let last = sig();
+  const check = (): boolean => {
+    const now = sig();
+    if (now === last) return false;
+    last = now;
+    try {
+      // resolveTokens() skips a broken file with a log line; for a reload that would silently revoke everyone, so check first.
+      if (now !== "none") {
+        const parsed = JSON.parse(readFileSync(file, "utf8"));
+        if (!Array.isArray(parsed)) throw new Error("expected a JSON list");
+      }
+      const fresh = resolveTokens();
+      tokens.splice(0, tokens.length, ...fresh);
+      log(`[monomem] tokens reloaded: ${fresh.length} token(s) now accepted`);
+      return true;
+    } catch (e) {
+      log(`[monomem] tokens.json changed but could not be read (${(e as Error).message}); keeping the previous list`);
+      return false;
+    }
+  };
+  const timer = setInterval(check, opts.intervalMs ?? 2000);
+  timer.unref();
+  return { check, stop: () => clearInterval(timer) };
 }
 
 // Parse a port from the environment, falling back (loudly) on anything that

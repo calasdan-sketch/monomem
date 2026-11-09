@@ -20,10 +20,10 @@ import { resolve } from "node:path";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { Store } from "./store.js";
 import { createMcpServer } from "./mcp-server-core.js";
-import { originAllowed, RateLimiter, AuthTarpit, clientKey, tokenKey, authenticateEntry } from "./security.js";
+import { originAllowed, hostAllowed, hostRefusal, RateLimiter, AuthTarpit, clientKey, tokenKey, authenticateEntry } from "./security.js";
 import { type TokenEntry } from "./config.js";
 import { type ServerNamespaceOpts, resolveRequestNamespace } from "./namespace.js";
-import { PayloadTooLargeError, readBody, normalizeTokens, exitOnListenError } from "./http-common.js";
+import { PayloadTooLargeError, readBody, normalizeTokens, exitOnListenError, applyServerLimits } from "./http-common.js";
 
 // Small JSON writer that never writes to an already-finished response.
 function sendJson(res: ServerResponse, status: number, payload: unknown): void {
@@ -63,7 +63,7 @@ export function createMcpHttpServer(
       : {};
   };
 
-  return createServer(async (req: IncomingMessage, res: ServerResponse) => {
+  return applyServerLimits(createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? "/", "http://localhost");
 
     if (req.method === "GET" && url.pathname === "/health") {
@@ -71,6 +71,10 @@ export function createMcpHttpServer(
       return;
     }
 
+    if (!hostAllowed(req)) {
+      sendJson(res, 403, hostRefusal(req));
+      return;
+    }
     if (!originAllowed(req)) {
       sendJson(res, 403, { error: "origin not allowed" });
       return;
@@ -85,7 +89,7 @@ export function createMcpHttpServer(
       const ckey = clientKey(req);
       const proceed = await tarpit.failed(ckey);
       if (!proceed || !authFailures.check(ckey)) sendJson(res, 429, { error: "rate limit exceeded" });
-      else sendJson(res, 401, { error: "unauthorized" });
+      else sendJson(res, 401, { error: "unauthorized", hint: "Send your key as the header  Authorization: Bearer <key>.  Your keys: monomem token list." });
       return;
     }
     if (!perToken.check(tokenKey(principal.token))) {
@@ -123,6 +127,7 @@ export function createMcpHttpServer(
         waitKey: tokenKey(principal.token),
         label: principal.label,
         authed: true,
+        ...(principal.max_sensitivity !== undefined ? { maxSensitivity: principal.max_sensitivity } : {}),
         signal: gone.signal,
       });
       const transport = new StreamableHTTPServerTransport({
@@ -150,18 +155,22 @@ export function createMcpHttpServer(
       console.error("[monomem] mcp error:", (e as Error).message);
       sendJson(res, 500, { error: "internal error" });
     }
-  });
+  }));
 }
 
 // --- standalone entry (node dist/src/mcp-http.js) ---------------------------
 async function runStandalone(): Promise<void> {
-  const { DB_PATH, MCP_HTTP_PORT, BIND_HOST, resolveTokens, assertSafeExposure, prepareDataDir } =
+  const { warnUnlabelledExposure } = await import("./sensitivity.js");
+  const { DB_PATH, MCP_HTTP_PORT, BIND_HOST, resolveTokens, startTokenReload, assertSafeExposure, prepareDataDir } =
     await import("./config.js");
   const { resolveStartupNamespace } = await import("./namespace.js");
   prepareDataDir();
   assertSafeExposure();
   const tokens = resolveTokens();
-  const store = new Store(DB_PATH);
+  const { openStoreOrExit } = await import("./db-problem.js");
+  const store = openStoreOrExit(DB_PATH);
+  warnUnlabelledExposure(store, tokens);
+  startTokenReload(tokens);
   // Namespace resolution happens ONCE here, at startup, from the process cwd.
   const nsOpts = resolveStartupNamespace(process.cwd());
   if (nsOpts) {

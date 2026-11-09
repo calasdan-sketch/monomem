@@ -69,7 +69,8 @@ describe("1.7.1 an old entry with comments inside it", () => {
     assert.equal(await runSetup(s.e, io, opts({ yes: true, noTestNote: true })), 0, io.all());
     const out = readFileSync(s.cc, "utf8");
     assert.match(out, /"monomem"/);
-    assert.doesNotMatch(out, /claude-bridge/);
+    // The new entry points at THIS checkout, whose folder name may itself contain "claude-bridge": leave that path out of the check.
+    assert.doesNotMatch(out.split(JSON.stringify(s.e.cliPath).slice(1, -1)).join("").split(s.e.cliPath).join(""), /claude-bridge/);
     assert.ok(out.includes('"keep": { "command": "k" }'));
     assert.ok(out.includes(JSON.stringify(db).slice(1, -1)) || out.includes(JSON.stringify(db)));
   });

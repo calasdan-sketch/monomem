@@ -5,6 +5,7 @@
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { audit } from "./security.js";
 
 export type TokenScope = "read" | "write" | "admin";
 export interface TokenRow {
@@ -64,6 +65,7 @@ export function addToken(dataDir: string, label: string, scope: string, namespac
   if (rows.some((r) => isRow(r) && r.label === name)) throw new TokenFileError(`A token labelled "${name}" already exists; pick another label or remove it first.`);
   const row: TokenRow = { token: randomBytes(32).toString("hex"), scope: scope as TokenScope, label: name, ...(ns ? { namespace: ns } : {}) };
   save(file, [...rows, row]);
+  audit({ op: "token.add", label: "cli", kind: "token", detail: `${name} scope=${scope} ns=${ns ?? "-"} max=none` });
   return row;
 }
 
@@ -95,5 +97,6 @@ export function removeToken(dataDir: string, label: string): boolean {
   const kept = rows.filter((r) => !(isRow(r) && r.label === label));
   if (kept.length === rows.length) return false;
   save(file, kept);
+  audit({ op: "token.remove", label: "cli", kind: "token", detail: label });
   return true;
 }

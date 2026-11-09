@@ -88,8 +88,12 @@ can know.
   block, "WHO WROTE THIS", lists one line per note, e.g.
   `- #12: written by claude-desktop (token) - claims source="cursor" (unverified)`. Capped
   at 25 lines; claims are flattened to one line so one cannot forge another line.
-- **Session-start recall**: `- [Title] (written by claude-desktop (token), claims source="cursor"): ...`
-  for stamped notes.
+- **Session-start recall**: `- claude-desktop (token), claims source="cursor": [Title]: ...`
+  for stamped notes, and index lines read `#12 by claude-desktop: [note] Title (...)`. The
+  writer comes first, before any text the note controls; `[` and `]` in a title print as `(`
+  and `)`, and a title is one line. The opening notice and the closing "END OF STORED NOTES"
+  line carry the same random block id (`SECURITY NOTICE (block 3f9a1c):`), new for each
+  output, so a note that copies the closing line cannot match the real one.
 - **Change feed**: every entry has `written_by` (the writer as of *that event*) and `note_written_by`
   (who holds the note now). The dashboard shows `written_by`.
 - The "WHO WROTE THIS" block JSON-quotes every writer-controlled string in it (`source`, a token

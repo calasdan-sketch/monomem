@@ -158,7 +158,7 @@ const pct = (m: unknown): string => {
   return r.of === 0 ? "n/a" : `${r.count}/${r.of} (${Math.round((r.rate ?? 0) * 100)}%)`;
 };
 
-function headline(suite: Suite, m: Record<string, unknown>): string[] {
+export function headline(suite: Suite, m: Record<string, unknown>): string[] {
   if (suite === "stale")
     return [
       `stale-hit-rate@1 ${pct(m["stale-hit-rate@1"])}   @5 ${pct(m["stale-hit-rate@5"])}   unflagged@5 ${pct(m["unflagged-stale-hit-rate@5"])}`,

@@ -1,5 +1,5 @@
 <!-- Image URLs are absolute on purpose: GitHub resolves relative paths, npm does not. -->
-![Monomem: Shared memory for AI agents that holds poisoned writes.](https://raw.githubusercontent.com/calasdan-sketch/monomem/main/docs/brand/monomem-banner.png)
+![Monomem: Shared memory for AI agents that holds writes that match known attack patterns.](https://raw.githubusercontent.com/calasdan-sketch/monomem/main/docs/brand/monomem-banner.png)
 
 **Shared memory for your AI coding agents that records who wrote each note and holds suspicious writes for your review.**
 
@@ -7,9 +7,19 @@
 npx monomem setup
 ```
 
-Needs Node 22.16 or newer (check with `node -v`). On an older Node, use [Docker](#docker).
+Want to see it first? `npx monomem demo` runs a short tour on a throwaway store (deleted at the end); it never touches your notes.
 
-![A poisoned write is held, a second agent's search never sees it, and the dashboard rejects it](https://raw.githubusercontent.com/calasdan-sketch/monomem/main/docs/monomem-demo.gif)
+Needs Node 22.16 or newer (check with `node -v`). No new enough Node? One command instead (needs Docker; put a long random `MONOMEM_TOKEN` in `.env` first):
+
+```bash
+git clone https://github.com/calasdan-sketch/monomem && cd monomem && cp .env.example .env && docker compose up -d
+```
+
+(More: [Docker](#docker).)
+
+**What it does not do:** it holds writes that match known attack patterns and records who wrote each note. It only covers what goes through Monomem: anything that can run shell commands or open `~/.monomem/state.db` itself can read or change your notes directly, and a reworded attack the pattern check does not know can still get through. Sensitivity limits apply to apps that connect with their own key. See [Known limits](#known-limits).
+
+![A write that matches a known attack pattern is held, a second agent's search never sees it, and the dashboard rejects it](https://raw.githubusercontent.com/calasdan-sketch/monomem/main/docs/monomem-demo.gif)
 
 *Recorded from a real run against a throwaway store ([transcript](https://github.com/calasdan-sketch/monomem/blob/main/docs/brand/demo-transcript.txt)): a write containing an injected instruction is held and never reaches the other agent's search, then rejected from the real dashboard. The two terminal panes are drawn from the real REST responses; the dashboard is a screen recording. Nothing sped up.*
 
@@ -33,7 +43,7 @@ Needs Node 22.16 or newer (check with `node -v`). On an older Node, use [Docker]
 
 ```bash
 npx monomem setup
-npx monomem drill   # replays 20 known poisoning attacks on a copy of your store
+npx monomem drill   # replays 22 known poisoning attacks on a copy of your store
 ```
 
 `setup` finds Claude Code, Claude Desktop, Cursor, Codex, Gemini CLI, Muse, VS Code and Zed on this computer, shows you in plain words what it will do and the exact
@@ -70,7 +80,8 @@ if you want the dashboard, REST API and MCP-over-HTTP (the `curl` examples
 below need it): `monomem start`.
 
 No global install: `claude mcp add monomem -- npx -y monomem mcp`.
-`monomem init` prints the config for Claude Desktop / Cursor / Copilot;
+`monomem init --print` prints the config for Claude Desktop / Cursor, and a separate
+`.vscode/mcp.json` block (`"servers"`) for VS Code / Copilot;
 [INSTALL.md](./INSTALL.md) has every client.
 
 `monomem start` serves the dashboard and REST API on `:8790` and
@@ -240,7 +251,7 @@ Monomem makes **no hidden model calls**. The only models it ever talks to are th
 receives note and search text, defaults to a local Ollama, and is a remote host if you set `MONOMEM_EMBED_URL` to one). The meter shows the rest, as aggregate numbers only (no
 prompt or note text is recorded):
 
-- tokens injected at session start, per session and in total, and the tokens of captured work they stood in for;
+- tokens injected at session start, per session and in total, and the tokens of full note text they stood in for;
 - tokens the local summarizer used (0 while it is off);
 - capture events recorded and the database size on disk.
 
@@ -286,6 +297,10 @@ dashboard's **Meter** view. Tokens are estimates at about 4 characters a token.
 - **Scoped tokens.** `read` / `write` / `admin` bearer tokens, enforced
   identically on REST and MCP — give your phone a read token and a leaked
   token can't wipe the store.
+- **Sensitivity labels.** Mark a note `public`, `internal` (the default) or `private`, and give each app a ceiling
+  (`monomem token add --label cursor --scope write --max internal`, or `monomem connect cursor --restricted`). Above its
+  ceiling a note is not found, searched, listed, counted, exported or injected, and looks the same as a note that does
+  not exist. → [docs/sensitivity-labels.md](./docs/sensitivity-labels.md), [docs/give-an-app-limited-access.md](./docs/give-an-app-limited-access.md)
 - **MCP *and* a plain REST API** on the same store, plus a small dashboard.
 
 Also included: optional semantic / hybrid search with your own embeddings
@@ -413,6 +428,9 @@ monomem rollback --writer stdio:cursor --since 2h [--include-conflicts]   # undo
 monomem access [--since 24h] [--writer label]   # who read memory, with which tool (never note text)
 monomem flood     monomem resume <label>         # writers paused for too many writes in an hour
 monomem quality [--json]     monomem decay [--dry-run]     monomem archive <id> | restore <id>
+monomem label <id> [public|internal|private]    # show or set a note's sensitivity label
+monomem connect <app> [--restricted]     monomem open     # one app with its own key and limit; open the dashboard signed in
+monomem pii scan     monomem digest [--since 24h]     monomem scrub     monomem safety-report --out report.html     # checkups (docs/checkups.md)
 monomem consolidate | rebuild-edges | reindex | relevant "…" | recall
 monomem bench [--json] [--suite stale|contradiction|isolation|provenance] [--strict-gaps]   # provenance benchmark (docs/BENCHMARK.md)
 ```
@@ -476,17 +494,18 @@ It has five suites, as plain JSON scenario files you can extend in [`bench/scena
 | E  Memory poisoning | 19 | injected or malicious memories never reach an agent as trusted content: prompt-injection (plain, forged tags, zero-width-obfuscated, hidden in invisible Unicode tag characters, a booking-policy override) is quarantined; a sleeper trigger or curl-pipe-to-shell note is stored with a warning; a reworded override that passes the gate leaves all four booking answers once its writer is distrusted; a distrusted/low-trust writer cannot outrank or silently overwrite a trusted fact; secrets are redacted (capture) or blocked (write); a forged writer/namespace is stamped with the real one; an unsigned import cannot pose as verified; a captured web fetch is not trusted memory; SessionStart injection carries the untrusted-data banner and leaves distrusted notes out; mass near-duplicate flooding cannot bury the answer | `poison-reach-count` (must be 0) |
 
 **Retrieval quality.** `monomem bench --longmemeval` and `--locomo` score retrieval on the public datasets, with no model
-and no judge (does the right conversation come back?). On one Windows PC, 2026-11-04, keyword search (the default, no model):
+and no judge (does the right conversation come back?). On one Windows PC, 2026-11-09, keyword search (the default, no model):
 
 | Dataset | Recall@5 | Recall@10 | Search time (p50) |
 |---|---|---|---|
-| LongMemEval-S, 470 of 500 questions (the 30 abstention questions have no right answer to find) | 97.0 % | 98.3 % | 2.9 ms |
-| LoCoMo-10, 1,982 questions, by session | 90.2 % | 95.6 % | 1.1 ms |
-| LoCoMo-10, 1,982 questions, by turn (the hard one: our weakest number) | 58.2 % | 65.8 % | 1.5 ms |
+| LongMemEval-S, 470 of 500 questions (the 30 abstention questions have no right answer to find) | 96.6 % | 98.3 % | 2.8 ms |
+| LoCoMo-10, 1,982 questions, by session | 90.3 % | 95.5 % | 1.0 ms |
+| LoCoMo-10, 1,982 questions, by turn (the hard one: our weakest number) | 57.8 % | 65.0 % | 1.1 ms |
 
 Optional hybrid search (keywords plus a local embedding model, `nomic-embed-text` via Ollama) does better still: LoCoMo-10
-by session 91.3 % / 96.2 %, by turn 65.7 % / 74.8 %, LongMemEval-S 98.1 % / 99.1 % (recall@5 / @10, full runs,
-18 to 39 ms per search, measured just before the date-hint change).
+by session 91.8 % / 96.7 %, by turn 66.3 % / 74.9 %, LongMemEval-S 98.5 % / 99.4 % (recall@5 / @10, full runs,
+13 to 22 ms per search (p50), measured 2026-11-09 with this code). Ties between equal scores go to the newest note, so a re-run
+can move a by-turn figure by about 0.1 to 0.2 points.
 
 These are retrieval numbers, not the end-to-end QA accuracy memory vendors usually publish, so they are not comparable with
 those. Every number, the per-type breakdown, where hybrid is worse, and the caveats: [docs/BENCHMARK.md](./docs/BENCHMARK.md#retrieval-longmemeval-s-and-locomo).
@@ -500,8 +519,32 @@ writing a small adapter (write, update, delete, search, plus the actor: writer a
 stop appearing in search, then a confirm with the preview's one-time code. Nothing is deleted, undo is one command, and every
 edit keeps the text it replaces. See [docs/replacing-memories.md](./docs/replacing-memories.md).
 
-**Known gaps:** none open. Scenarios for behaviour Monomem lacks are kept and marked rather than deleted; the history of
-each one and how it was fixed is in [docs/BENCHMARK.md](./docs/BENCHMARK.md#known-gaps-history), with the provenance-field breakdown.
+**Known gaps in the benchmark:** none open. Scenarios for behaviour Monomem lacks are kept and marked rather than deleted, and the history
+of each one and how it was fixed is in [docs/BENCHMARK.md](./docs/BENCHMARK.md#known-gaps-history), with the provenance-field breakdown.
+
+Limits no scenario can show (what the benchmark cannot see) are listed next, under Known limits.
+
+## Known limits
+
+- The write check is pattern matching. A reworded attack it does not know passes; `monomem drill` replays the attacks it does know.
+- Monomem guards what goes through it. A program that can run shell commands, or open the database file itself, is not stopped.
+- Local apps connected over stdio have no key, so a limit on other apps does not apply to them. A note marked `private` is hidden from
+  apps given a limit; apps with no limit (including your main Claude connection) still see it.
+- The writer name of a local app comes from its config file: it tells your apps apart, but it is not proof.
+- Keyword search finds words, not meaning. Semantic search needs a local embedding service (Ollama); without one you get keyword results.
+- Upgrading the database is one way (older versions refuse a newer file). A backup copy is made first and `monomem restore` goes back.
+- Needs Node 22.16 or newer, because it uses Node's built-in SQLite (Node 20 does not have it; checked). Docker is the way around that.
+- Lowering a note's label does not rewrite its older saved versions.
+
+## Honest numbers
+
+- **Finding a note again (keyword search only, top 5 results, from a QA pass).** Questions that use the note's own words: the right note was
+  in the top 5 about **95%** of the time. Reworded questions that share few words with the note: about **50%**. Semantic search
+  (`MONOMEM_EMBEDDINGS=on`, needs a local Ollama) helps with the reworded ones; without it Monomem does not understand meaning. These come
+  from a QA pass, not from the benchmark above: treat them as a rough guide and test on your own notes.
+- **What it adds at the start of a session.** A store of 60 short notes at the default setting (`MONOMEM_RECALL_TOKENS` = 1,500) produced
+  about 5,900 characters, roughly **1,500 tokens** (estimated at 4 characters a token), listing all 60 notes (measured 2026-11-09 with
+  `node bench/recall-size.mjs`, which you can run yourself). The block is capped at 8,000 characters. `monomem meter` shows what yours actually costs and saves, as estimates.
 
 ## Security in one paragraph
 
@@ -555,6 +598,10 @@ remove it: [docs/footprint.md](./docs/footprint.md).
 | [docs/provenance.md](./docs/provenance.md) | who wrote a note: server-stamped `written_by`, filters, what is and is not trusted |
 | [docs/trust.md](./docs/trust.md) | distrust list, writer ids, signed attestations: what each does and does not prove, upgrade and rollback |
 | [docs/team.md](./docs/team.md) | shared memory for a team: one server, one token per person, namespaces, approve-first, sync, backups |
+| [docs/sensitivity-labels.md](./docs/sensitivity-labels.md) | public / internal / private labels and per-token ceilings; what a hidden note looks like |
+| [docs/give-an-app-limited-access.md](./docs/give-an-app-limited-access.md) | give one app its own key and a limit, step by step |
+| [docs/two-developers-one-server.md](./docs/two-developers-one-server.md) | two people, one Docker server, a key each, private notes kept apart |
+| [docs/checkups.md](./docs/checkups.md) | `pii scan`, `digest`, `scrub`, `safety-report`, `audit` |
 | [docs/token-namespaces.md](./docs/token-namespaces.md) | per-token namespace permissions — one shared bridge, isolated agents |
 | [docs/replacing-memories.md](./docs/replacing-memories.md) | replacing a note in two steps, undo, version history and restore, confidence, the trust guard |
 | [docs/BENCHMARK.md](./docs/BENCHMARK.md) | `monomem bench`: stale memory, contradiction recovery, permission isolation, provenance retention; scenario format; adapting it to another memory system |

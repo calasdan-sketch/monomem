@@ -41,13 +41,13 @@ function io(answers: string[] = [], interactive = false): SetupIO & { all: () =>
 const opts = (o: Partial<SetupOptions> = {}): SetupOptions => ({ ...DEFAULT_OPTIONS, noDoctor: true, noTestNote: true, ...o });
 
 describe("sync hooks and npx", () => {
-  test("from npx with a global copy, the prompt and Read hooks run node on the global cli.js; background hooks stay on npx", () => {
+  test("from npx with a global copy, every hook runs node on the global cli.js (pinned to the installed copy, background ones too)", () => {
     const { e } = sandbox({ cliPath: NPX_CLI, globalCliPath: GLOBAL_CLI });
     const o = { command: "auto" as const };
     assert.equal(buildCaptureCommand(e, o, "user-prompt"), `node "${GLOBAL_CLI}" hook user-prompt`);
     assert.equal(buildCaptureCommand(e, o, "file-context"), `node "${GLOBAL_CLI}" hook file-context`);
-    assert.equal(buildCaptureCommand(e, o, "post-tool"), "npx -y monomem@1.2.0 hook post-tool");
-    assert.equal(buildCaptureCommand(e, o, "session-end"), "npx -y monomem@1.2.0 hook session-end");
+    assert.equal(buildCaptureCommand(e, o, "post-tool"), `node "${GLOBAL_CLI}" hook post-tool`);
+    assert.equal(buildCaptureCommand(e, o, "session-end"), `node "${GLOBAL_CLI}" hook session-end`);
   });
   test("from npx with no global copy all stay on npx; --command npx is respected even with a global copy", () => {
     assert.equal(buildCaptureCommand(sandbox({ cliPath: NPX_CLI, globalCliPath: null }).e, { command: "auto" }, "user-prompt"), "npx -y monomem@1.2.0 hook user-prompt");
@@ -112,7 +112,7 @@ describe("health hook wording", () => {
     return { dir, opts: { dbPath, dataDir: dir, bindHost: "127.0.0.1", settingsPath, pluginsPath: join(dir, "p.json"), auditPath: join(dir, "audit.log"), now: new Date("2026-11-05T12:00:00Z"), drill: async () => ({ notes: 0, attacks: 1, rows: [], reached: [], unexpected: [], ok: true, elapsed_ms: 1, approve_first: false }) } };
   }
   const hooks = (r: Awaited<ReturnType<typeof runHealth>>) => r.checks.find((c) => c.id === "hooks")!;
-  test("Claude Code installed, hook missing, never declined: warn", async () => assert.equal(hooks(await runHealth(hsetup(true).opts)).status, "warn"));
+  test("Claude Code installed, hook missing, never declined: info (optional, same as doctor)", async () => assert.equal(hooks(await runHealth(hsetup(true).opts)).status, "info"));
   test("no Claude Code folder: info", async () => assert.equal(hooks(await runHealth(hsetup(false).opts)).status, "info"));
   test("setup recorded a declined hook: info", async () => {
     const h = hsetup(true);

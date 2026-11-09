@@ -86,7 +86,10 @@ export function noteWhy(store: Store, note: NoteRecord, opts: { namespaces?: str
   const sup = db.prepare("SELECT at, actor, action, old_id, new_id FROM supersede_log WHERE old_id = ? OR new_id = ? ORDER BY seq").all(id, id) as Array<{ at: string; actor: string; action: string; old_id: number; new_id: number | null }>;
   for (const s of sup) {
     const verb = s.action === "undo" ? "replacement undone" : "replaced";
-    const rel = s.old_id === id ? `${verb}: this note was retired in favour of #${s.new_id}` : `${verb}: this note replaced #${s.old_id}`;
+    // The other note may be above the caller's sensitivity ceiling: then it is "another note", not an id.
+    const other = s.old_id === id ? s.new_id : s.old_id;
+    const otherName = other !== null && store.readVisible(other) ? `#${other}` : "another note";
+    const rel = s.old_id === id ? `${verb}: this note was retired in favour of ${otherName}` : `${verb}: this note replaced ${otherName}`;
     tl.push({ at: s.at, what: `${rel}, by ${p(s.actor || "unknown")}` });
   }
 
@@ -112,7 +115,7 @@ export function noteWhy(store: Store, note: NoteRecord, opts: { namespaces?: str
   for (const r of shown.slice(0, SHOWN_LIMIT)) tl.push({ at: r.at, what: `shown at session start ${p(r.session_id)} (${p(r.client || "-")}), rank ${r.rank}, why: ${whyText(r.why)}` });
 
   tl.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0)); // stable: ties keep the order built above
-  const status = note.superseded_by != null ? "superseded" : note.archived_at ? "archived" : "live";
+  const status = note.status === "superseded" || note.superseded_by != null ? "superseded" : note.archived_at ? "archived" : "live";
   return {
     id,
     namespace: note.namespace,

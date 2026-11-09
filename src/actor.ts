@@ -8,6 +8,7 @@
 // context before it has authenticated and fill the label in afterwards.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
+import type { Sensitivity } from "./sensitivity.js";
 
 export interface ActorRef {
   label: string;
@@ -17,9 +18,22 @@ export interface ActorRef {
    * bare label (tests, scripts) never becomes `written_by` on its own.
    */
   authed?: boolean;
+  /**
+   * The token's sensitivity ceiling (config `max_sensitivity`). Undefined = no ceiling (the primary/operator token, stdio,
+   * the CLI, a token with none set). Set, the store hides every note labelled above it, on every read path, and refuses
+   * writes above it. See src/sensitivity.ts.
+   */
+  maxSensitivity?: Sensitivity;
+  /** False for a non-admin token: it may raise a note's label but not lower it. Undefined = may (operator, CLI, stdio). */
+  canDeclassify?: boolean;
 }
 
 export const actorStore = new AsyncLocalStorage<ActorRef>();
+
+/** The sensitivity ceiling of the current call, or undefined when it has none. */
+export function currentCeiling(): Sensitivity | undefined {
+  return actorStore.getStore()?.maxSensitivity;
+}
 
 /** The writer's label for the current call, or "" (CLI, scripts, unknown). */
 export function currentActor(): string {

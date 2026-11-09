@@ -17,12 +17,12 @@ export const DASHBOARD_HTML = `<!doctype html>
   :root{color-scheme:dark;--gold:#F0C171;
     --bg:#061a28;--panel:#0B2E45;--panel2:#143c58;--line:#2a5878;--field-line:#6b93ae;
     --ink:#eef3f7;--dim:#a9bfcf;--body:#d3e0ea;--accent:#F0C171;--focus:#F0C171;
-    --btn-bg:#F0C171;--btn-fg:#0B2E45;--danger:#ffa3a3;--danger-bg:#b3261e;--danger-fg:#fff;
+    --btn-bg:#F0C171;--btn-fg:#0B2E45;--danger:#ffa3a3;--danger-bg:#b3261e;--danger-fg:#fff;--ok:#7fd6a8;--warn:#F0C171;
     --chip-s:45%;--chip-bg-l:24%;--chip-fg-l:86%;--chip-fg-s:80%}
   @media (prefers-color-scheme:light){:root{color-scheme:light;
     --bg:#f3f6f9;--panel:#ffffff;--panel2:#e6edf3;--line:#c3d1dc;--field-line:#6b879b;
     --ink:#0B2E45;--dim:#46607a;--body:#1d3b50;--accent:#7a4f00;--focus:#0B2E45;
-    --btn-bg:#0B2E45;--btn-fg:#ffffff;--danger:#b3261e;--danger-bg:#b3261e;--danger-fg:#fff;
+    --btn-bg:#0B2E45;--btn-fg:#ffffff;--danger:#b3261e;--danger-bg:#b3261e;--danger-fg:#fff;--ok:#14683f;--warn:#7a4f00;
     --chip-s:60%;--chip-bg-l:90%;--chip-fg-l:20%;--chip-fg-s:70%}}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);
@@ -114,6 +114,24 @@ export const DASHBOARD_HTML = `<!doctype html>
   #viewd{margin:0 0 12px;font-size:13px}
   .tag.fact{color:var(--ink);border-color:var(--accent)}
   code{background:var(--panel2);border-radius:4px;padding:0 4px}
+  .lvl{display:inline-block;border-radius:6px;padding:0 8px;font-size:11px;font-weight:700;margin-left:6px;vertical-align:middle;border:1px solid var(--line)}
+  .lvl-public{color:var(--ok);border-color:var(--ok)}
+  .lvl-internal{color:var(--dim)}
+  .lvl-private{color:var(--warn);border-color:var(--warn)}
+  .nolimit{color:var(--warn);font-weight:700}
+  #who{color:var(--dim);font-size:13px;margin:0 0 12px}
+  pre.snip{white-space:pre-wrap;word-break:break-all;background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:10px;font-size:12px}
+  table.apps{width:100%;font-size:13px;border-collapse:collapse}
+  table.apps td,table.apps th{text-align:left;padding:5px 6px;border-bottom:1px solid var(--line)}
+  /* Phones: tables become one small card per row, nothing scrolls sideways. */
+  @media (max-width:600px){
+    table.apps,table.apps tbody{display:block;width:100%}
+    table.apps tr.hd{display:none}
+    table.apps tr{display:block;padding:8px 0;border-bottom:1px solid var(--line)}
+    table.apps td{display:flex;justify-content:space-between;gap:12px;border:0;padding:2px 0;text-align:right;overflow-wrap:anywhere}
+    table.apps td::before{content:attr(data-l);color:var(--dim);text-align:left;flex:0 0 38%}
+    table.apps td:empty{display:none}
+  }
 </style>
 </head>
 <body>
@@ -122,6 +140,7 @@ export const DASHBOARD_HTML = `<!doctype html>
   <h1>mono<span>mem</span></h1>
   <input id="q" class="grow" aria-label="Search notes" placeholder="Search notes...">
   <input id="ns" class="ns" aria-label="Namespace filter" placeholder="namespace">
+  <select id="lvlf" aria-label="Show only notes with this label" onchange="applyFilter()"><option value="">all labels</option><option value="public">public</option><option value="internal">internal</option><option value="private">private</option></select>
   <button class="ghost" id="btn_new" aria-expanded="false" aria-controls="new" onclick="toggleNew()">+ New</button>
   <button class="ghost" onclick="load()">Refresh</button>
   <label class="chk" title="Also show notes written by writers an admin distrusts (marked DISTRUSTED)"><input type="checkbox" id="inc" aria-describedby="inc_help" onchange="load()"> distrusted<span id="inc_help" class="sr">Also show notes written by writers an admin distrusts. They are marked DISTRUSTED.</span></label>
@@ -134,6 +153,8 @@ export const DASHBOARD_HTML = `<!doctype html>
   <button id="tab_sessions" onclick="loadSessions()" title="Agent sessions Monomem recorded, each with its timeline">Sessions</button>
   <button id="tab_quality" onclick="loadQuality()" title="Duplicates, stale twins, held writes, linter findings, rows about to decay and writers who disagree (admin token)">Quality<span id="quality_n"></span></button>
   <button id="tab_meter" onclick="loadMeter()" title="What Monomem costs you: tokens injected and saved, local-model tokens, database size">Meter</button>
+  <button id="tab_apps" hidden onclick="loadApps()" title="The apps that are allowed to connect, and what each may see (administrators only)">Apps</button>
+  <button id="tab_audit" hidden onclick="loadAudit()" title="Who changed what, and when (administrators only)">Audit</button>
 </nav>
 <main>
   <div id="new" class="card">
@@ -141,6 +162,7 @@ export const DASHBOARD_HTML = `<!doctype html>
       <input id="n_title" class="grow" aria-label="Title" placeholder="Title">
       <input id="n_ns" class="grow" aria-label="Namespace (optional)" placeholder="namespace (optional)">
       <input id="n_tags" class="grow" aria-label="Tags, comma separated" placeholder="tags, comma, separated">
+      <select id="n_lvl" aria-label="Who can see this note"><option value="internal">internal (normal)</option><option value="public">public (anyone)</option><option value="private">private (limited apps cannot see it; unlimited apps still can)</option></select>
     </div>
     <textarea id="n_body" aria-label="Body" placeholder="Body..."></textarea>
     <div class="row" style="margin-top:10px">
@@ -150,6 +172,9 @@ export const DASHBOARD_HTML = `<!doctype html>
   </div>
   <h2 id="viewh" class="viewh">Notes</h2>
   <p id="viewd" class="muted"></p>
+  <select id="chwin" hidden aria-label="How far back to look for changes" onchange="loadChanges()"><option value="24h">24 hours</option><option value="7d">7 days</option><option value="30d">30 days</option></select>
+  <p id="who" role="status"></p>
+  <div id="insights" class="card" style="display:none" aria-live="polite"></div>
   <div id="msg" class="msg" role="status" aria-live="polite"></div>
   <div id="runner" class="card err" style="display:none"></div>
   <button id="heldstrip" class="strip" onclick="loadHeld()" hidden></button>
@@ -166,7 +191,7 @@ export const DASHBOARD_HTML = `<!doctype html>
 
 <div id="gate" class="gate">
   <h1 style="font-size:28px">mono<span style="color:var(--accent)">mem</span></h1>
-  <p class="muted"><label for="tok">Paste your Monomem token to view the store.</label> It is in the <code>.token</code> file in your Monomem data folder; <code>monomem doctor</code> shows where that is.</p>
+  <p class="muted"><label for="tok">Paste your Monomem token to view the store.</label> Easiest: run <code>monomem open</code> in a terminal and this page signs in for you. The token is in the <code>.token</code> file in your Monomem data folder; <code>monomem doctor</code> shows where that is.</p>
   <input id="tok" type="password" placeholder="MONOMEM_TOKEN" onkeydown="if(event.key==='Enter')saveTok()">
   <button onclick="saveTok()">Open</button>
   <p id="gate_err" class="err" role="alert"></p>
@@ -241,20 +266,53 @@ var VIEWS = {
   sessions:["Sessions","Agent sessions Monomem recorded, each with its timeline."],
   session:["Session timeline",""],
   quality:["Quality","Duplicates, stale twins, held writes, linter findings, rows about to decay, and writers who disagree about a fact. Needs an admin token."],
-  meter:["Meter","What Monomem costs you: tokens injected and saved, local-model tokens, database size."]
+  meter:["Meter","What Monomem costs you: tokens injected and saved, local-model tokens, database size."],
+  apps:["Apps","The apps that are allowed to connect, and the highest label each may see. Keys are never shown again after they are made. Needs an admin token."],
+  audit:["Audit","Who changed what, and when. Only who, what kind, where and how many; never the text of a note. Needs an admin token."]
 };
 // The view buttons are a tab bar: the active one carries aria-current.
-var TABS = { list:"list", held:"held", review:"review", changes:"changes", sessions:"sessions", session:"sessions", quality:"quality", meter:"meter" };
+var TABS = { list:"list", held:"held", review:"review", changes:"changes", sessions:"sessions", session:"sessions", quality:"quality", meter:"meter", apps:"apps", audit:"audit" };
 function setView(v){
   VIEW = v;
   say("");
   $("viewh").textContent = VIEWS[v][0];
   $("viewd").textContent = VIEWS[v][1];
-  ["list","held","review","changes","sessions","quality","meter"].forEach(function(t){
+  $("chwin").hidden = v !== "changes";
+  ["list","held","review","changes","sessions","quality","meter","apps","audit"].forEach(function(t){
     $("tab_" + t).ariaCurrent = TABS[v] === t ? "page" : null;
   });
   showStrip();
 }
+
+// monomem open passes a one-time code (60 seconds) after the # of the address, so it never reaches the server or its logs.
+// Take it, remove it from the address bar, and swap it for the key at the end of this file.
+var LOGIN_CODE = null;
+try { window.addEventListener("hashchange", function(){ if(/(?:^#|&)(?:code|token)=/.test(location.hash)){ location.reload(); } }); } catch(e){}
+(function(){
+  try {
+    var h = location.hash || "";
+    var m = /(?:^#|&)token=([^&]+)/.exec(h);
+    if(m){ sessionStorage.setItem(TOKKEY, decodeURIComponent(m[1])); history.replaceState(null, "", location.pathname + location.search); }
+    var c = /(?:^#|&)code=([0-9a-f]{32})/.exec(h);
+    if(c){ LOGIN_CODE = c[1]; history.replaceState(null, "", location.pathname + location.search); }
+  } catch(e){}
+})();
+// Give every table cell its column name, so on a phone each row can show as a small card.
+function stackTables(){
+  var tabs = document.querySelectorAll("#list table");
+  for(var i = 0; i < tabs.length; i++){
+    var rows = tabs[i].querySelectorAll("tr");
+    if(!rows.length || tabs[i].getAttribute("data-stacked")){ continue; }
+    tabs[i].setAttribute("data-stacked", "1");
+    tabs[i].classList.add("apps");
+    var heads = [].map.call(rows[0].children, function(c){ return c.textContent; });
+    rows[0].classList.add("hd");
+    for(var r = 1; r < rows.length; r++){
+      for(var c = 0; c < rows[r].children.length; c++){ rows[r].children[c].setAttribute("data-l", heads[c] || ""); }
+    }
+  }
+}
+try { new MutationObserver(stackTables).observe(document.getElementById("list"), { childList:true, subtree:true }); } catch(e){}
 
 function show(app){
   $("app").style.display = app ? "block" : "none";
@@ -264,9 +322,26 @@ function saveTok(){
   var v = $("tok").value.trim();
   if(!v){ return; }
   try { sessionStorage.setItem(TOKKEY, v); } catch(e){}
-  show(true); load();
+  start();
 }
-function logout(){ try { sessionStorage.removeItem(TOKKEY); } catch(e){} show(false); }
+// Show the notes, and (separately) who you are signed in as.
+function start(){
+  show(true);
+  load();
+  api("/whoami").then(function(w){
+    $("who").textContent = "Signed in as " + (w.label || "unnamed") + ": " + String(w.can_see || "").replace(/[.\\s]+$/, "") + ".";
+    var isAdmin = w.scope === "admin" && !w.namespace && !w.max_sensitivity;
+    $("tab_apps").hidden = !isAdmin;
+    $("tab_audit").hidden = !isAdmin;
+    if(isAdmin){ loadInsights(); }
+  }).catch(function(){ /* the notes call reports any problem */ });
+}
+function logout(why){
+  try { sessionStorage.removeItem(TOKKEY); } catch(e){}
+  show(false);
+  var g = $("gate_err");
+  if(g){ g.textContent = (typeof why === "string") ? why : ""; }
+}
 function toggleNew(){
   var n = $("new");
   var open = n.style.display !== "block";
@@ -280,7 +355,7 @@ function api(path, opts){
   opts.headers["Authorization"] = "Bearer " + tok();
   if(opts.body){ opts.headers["Content-Type"] = "application/json"; }
   return fetch(path, opts).then(function(r){
-    if(r.status === 401){ logout(); throw new Error("unauthorized - check your token"); }
+    if(r.status === 401){ logout("That key was not accepted. Check you copied all of it, or run  monomem open  in a terminal."); throw new Error("not signed in"); }
     return r.json().then(function(j){ if(!r.ok){ throw new Error(j.error || r.status); } return j; });
   });
 }
@@ -290,18 +365,21 @@ function render(notes){
   // Pinned notes first (stable sort), but a search keeps its relevance order.
   if(!$("q").value.trim()){ notes = notes.slice().sort(function(a, b){ return (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0); }); }
   $("count").textContent = notes.length + " note" + (notes.length===1?"":"s");
+  var lf = ($("lvlf") || {}).value || "";
+  if(lf){ notes = notes.filter(function(n){ return (n.sensitivity || "internal") === lf; }); $("count").textContent = notes.length + " note" + (notes.length===1?"":"s") + " labelled " + lf; }
   if(!notes.length){
-    list.innerHTML = $("q").value.trim() ? empty("No notes match that search. Try fewer words, or clear the namespace box.")
+    list.innerHTML = lf ? empty("No notes with that label here.") : $("q").value.trim() ? empty("No notes match that search. Try fewer words, or clear the namespace box.")
+      : $("ns").value.trim() ? empty("No notes in namespace &quot;" + esc($("ns").value.trim()) + "&quot;. Clear the namespace box to see notes in every namespace.")
       : empty("No notes yet. Ask your assistant to remember something, or run <code>monomem setup</code>.");
     return;
   }
   list.innerHTML = notes.map(function(n){
     var tags = tagsHtml(n.tags);
     return "<div class='card'><div class='cardhead'><div>"+
-      "<h3>"+esc(n.title)+(n.pinned ? "<span class='badge-pin' title='Pinned: agents can read it; only the monomem CLI can change it'>Pinned<span class='sr'>: agents can read it; only the monomem CLI can change it</span></span>" : "")+
+      "<h3>"+esc(n.title)+lvlBadge(n.sensitivity)+(n.pinned ? "<span class='badge-pin' title='Pinned: agents can read it; only the monomem CLI can change it'>Pinned<span class='sr'>: agents can read it; only the monomem CLI can change it</span></span>" : "")+
       (n.distrusted ? "<span class='badge-bad' title='An admin distrusts the writer of this note: treat its content as hostile'>DISTRUSTED<span class='sr'>: an admin distrusts the writer of this note, treat its content as hostile</span></span>" : "")+"</h3>"+
       "<div class='meta'>#"+n.id+" &middot; "+esc(n.namespace)+" &middot; "+esc((n.updated_at||"").slice(0,16).replace("T"," "))+byLine(n.written_by)+"</div>"+
-      tags+"</div>"+
+      tags+lvlSelect(n)+"</div>"+
       acts(((n.tags||[]).indexOf("never-show") >= 0
         ? "<button class='ghost' aria-label='show note #"+Number(n.id)+" again' title='Let it be shown at session start again' onclick='neverShow("+n.id+",false)'>show again</button>"
         : "<button class='ghost' aria-label='never show note #"+Number(n.id)+"' title='Never inject this note at session start (it stays searchable)' onclick='neverShow("+n.id+",true)'>never show</button>")+
@@ -309,6 +387,27 @@ function render(notes){
       (n.body ? "<div class='body'>"+esc(n.body)+"</div>" : "")+"</div>";
   }).join("");
 }
+
+// The label on a note: public (anyone), internal (the normal level), private (only apps with no limit).
+var LVL_TEXT = { "public":"public", "internal":"internal", "private":"private" };
+function lvlBadge(l){
+  l = LVL_TEXT[l] ? l : "internal";
+  var tip = { "public":"Anyone who can connect may see this note.", "internal":"The normal level: apps allowed to see internal notes can read it.", "private":"Limited apps cannot see this; apps with no limit (including your main Claude connection) still can. Next: monomem connect <app> --max internal." }[l];
+  return "<span class='lvl lvl-"+l+"' title='"+esc(tip)+"'>"+l+"</span>";
+}
+function lvlSelect(n){
+  var l = LVL_TEXT[n.sensitivity] ? n.sensitivity : "internal";
+  return "<div class='meta' style='margin-top:6px'><label>Who can see this? <select aria-label='Who can see note "+Number(n.id)+"' onchange='setLabel("+Number(n.id)+",this.value)'>"+
+    ["public","internal","private"].map(function(o){ return "<option value='"+o+"'"+(o===l?" selected":"")+">"+o+"</option>"; }).join("")+"</select></label></div>";
+}
+function setLabel(id, level){
+  api("/notes/" + id).then(function(j){
+    var n = j.note || j;
+    return api("/notes/" + id, { method:"PUT", body: JSON.stringify({ sensitivity: level, if_rev: n.rev }) });
+  }).then(function(){ load(); say("Note #" + id + " is now " + level + "."); })
+    .catch(function(e){ load(); say("Could not change the label: " + e.message, true); });
+}
+function applyFilter(){ if(VIEW === "list"){ load(); } }
 
 function inc(){ var c = $("inc"); return !!(c && c.checked); }
 
@@ -350,10 +449,12 @@ function load(){
 function loadChanges(){
   setView("changes");
   var ns = $("ns").value.trim();
-  var path = "/changes?since=24h&limit=200" + (ns ? ("&namespace=" + encodeURIComponent(ns)) : "") + (inc() ? "&include_distrusted=1" : "");
+  var win = ($("chwin") || {}).value || "24h";
+  var winText = { "24h":"24 hours", "7d":"7 days", "30d":"30 days" }[win] || win;
+  var path = "/changes?since=" + encodeURIComponent(win) + "&limit=200" + (ns ? ("&namespace=" + encodeURIComponent(ns)) : "") + (inc() ? "&include_distrusted=1" : "");
   api(path).then(function(j){
     var c = j.counts || {};
-    $("count").textContent = "last 24h: " + (c.created||0) + " created, " +
+    $("count").textContent = "last " + winText + ": " + (c.created||0) + " created, " +
       (c.updated||0) + " updated, " + (c.deleted||0) + " deleted" + (j.quarantined ? (", " + j.quarantined + " held") : "");
     var srcs = Object.keys(j.bySource || {}).map(function(k){
       var v = j.bySource[k];
@@ -367,7 +468,7 @@ function loadChanges(){
         (e.source ? " &middot; claims "+esc(e.source) : "")+"</div></div>";
     }).join("");
     $("list").innerHTML = "<div class='row'>"+srcs+"</div>" +
-      (rows || empty("Nothing changed in the last 24 hours. New and edited notes will show up here."));
+      (rows || empty("Nothing changed in the last " + winText + ". New and edited notes will show up here."));
   }).catch(function(e){ incRefused(e); failList(e); });
 }
 
@@ -523,6 +624,10 @@ function loadSession(id){
 // ---- Quality: what is worth a look (GET /quality, admin). Every button goes through a path that asks first and can be
 // undone: replace = supersede preview, then confirm (undo: supersede undo), archive (undo: restore), quarantine approve/reject.
 // The server calls a held write "quarantined"; the page says "held" everywhere.
+function qPrivate(id){
+  api("/notes/" + id).then(function(j){ var n = j.note || j; return api("/notes/" + id, { method:"PUT", body: JSON.stringify({ sensitivity: "private", if_rev: n.rev }) }); })
+    .then(function(){ loadQuality(); say("Note #" + id + " is now private."); }).catch(fail);
+}
 function typeLabel(t){ return t === "quarantined" ? "held" : String(t); }
 function loadQuality(){
   setView("quality");
@@ -532,6 +637,8 @@ function loadQuality(){
     var rows = (j.issues || []).map(function(i){
       var a = Number(i.ids[0]), b = Number(i.ids[1]), q = Number(i.quarantine_id), btn = "";
       if(i.type === "duplicate" || i.type === "stale_twin"){ btn = "<button onclick='qReplace("+a+","+b+")'>Replace #"+a+" with #"+b+"</button>"; }
+      else if(i.type === "contradiction"){ btn = "<button onclick='qReplace("+a+","+b+")'>Replace #"+a+" with #"+b+"</button>"; }
+      else if(i.type === "pii"){ btn = "<button onclick='qPrivate("+a+")'>Make #"+a+" private</button>"; }
       else if(i.type === "quarantined"){ btn = "<button aria-label='reject held write #"+q+"' onclick='arm(this,function(){qQuarantine("+q+",&quot;reject&quot;)})'>Reject</button> <button class='ghost' aria-label='approve held write #"+q+"' onclick='arm(this,function(){qQuarantine("+q+",&quot;approve&quot;)})'>Approve</button>"; }
       else { btn = "<button class='ghost' onclick='arm(this,function(){qArchive("+a+")})'>Archive</button>"; }
       return "<div class='card'><div class='cardhead'><div><h3><span class='tag'>"+esc(typeLabel(i.type))+"</span>"+esc(i.detail)+"</h3>"+
@@ -684,7 +791,7 @@ function loadMeter(){
     }).join("");
     $("list").innerHTML = "<div class='card'><h3>Totals</h3><div>"+
       "~"+num(t.injected_tokens)+" tokens injected at session start ("+num(t.injections)+(Number(t.injections) === 1 ? " time" : " times")+")<br>"+
-      "~"+num(t.saved_tokens)+" tokens saved (estimate): the captured work the injected notes stood in for, minus the tokens injected<br>"+
+      "~"+num(t.saved_tokens)+" tokens saved (estimate): the full text of the notes shown, minus the tokens injected<br>"+
       num(t.llm_tokens)+" local-model tokens (0 = the optional summarizer is off)<br>"+
       num(m.capture_events)+" capture events recorded<br>"+
       "database "+(Number(m.db_bytes||0)/1048576).toFixed(1)+" MB on disk</div>"+
@@ -694,13 +801,101 @@ function loadMeter(){
   }).catch(failList);
 }
 
+
+// ---- Apps: which apps may connect and what each can see (admin only; GET/POST/DELETE /tokens). Keys are never listed;
+// a new one is shown once, here, right after it is made.
+function loadApps(){
+  setView("apps");
+  api("/tokens").then(function(j){
+    var apps = j.apps || [];
+    $("count").textContent = apps.length + " app" + (apps.length===1?"":"s") + " can connect";
+    var rows = apps.map(function(a){
+      var lim = a.max_sensitivity ? ("up to " + esc(a.max_sensitivity)) : "<span class='nolimit'>NO LIMIT" + (a.scope === "admin" ? " (sees everything)" : "") + "</span>";
+      var rm = (a.source === "file") ? "<button class='danger' data-label='"+esc(a.label)+"' aria-label='Remove app "+esc(a.label)+"' onclick='arm(this,function(){removeApp(this.getAttribute(&quot;data-label&quot;))}.bind(this))'>remove</button>" : "<span class='muted'>set outside the dashboard</span>";
+      return "<tr><td>"+esc(a.label)+"</td><td>"+esc(a.scope)+"</td><td>"+esc(a.namespace || "all")+"</td><td>"+lim+"</td><td>"+(a.last_used ? when(a.last_used) : "not since the server started")+"</td><td>"+rm+"</td></tr>";
+    }).join("");
+    $("list").innerHTML =
+      "<div class='card'><h3>Apps that can connect</h3><table class='apps'><tr><th>name</th><th>may</th><th>namespace</th><th>sees notes labelled</th><th>last used</th><th></th></tr>"+rows+"</table>"+
+      "<p class='meta'>Keys are not shown here. Removing an app cuts it off straight away.</p></div>"+
+      "<div class='card'><h3>Add an app</h3><div class='row'>"+
+      "<input id='ap_label' placeholder='name, e.g. cursor' aria-label='Name for the new app'>"+
+      "<select id='ap_scope' aria-label='What the app may do'><option value='write'>read and write</option><option value='read'>read only</option></select>"+
+      "<select id='ap_max' aria-label='Highest label the app may see'><option value='internal'>sees public + internal</option><option value='public'>sees public only</option><option value='private'>sees private notes too (still limited)</option><option value='none'>NO LIMIT (sees everything)</option></select>"+
+      "<button onclick='addApp()'>Add app</button></div><div id='ap_out'></div></div>";
+  }).catch(failList);
+}
+function addApp(){
+  var label = $("ap_label").value.trim();
+  var max = $("ap_max").value;
+  if(!label){ say("Give the app a name first.", true); return; }
+  var body = { label: label, scope: $("ap_scope").value };
+  var go = function(){
+    api("/tokens", { method:"POST", body: JSON.stringify(body) }).then(function(j){
+      var out = $("ap_out");
+      out.innerHTML = "<p><b>Copy this key now.</b> It is shown once and cannot be looked up later.</p>"+
+        "<pre class='snip' id='ap_tok'></pre><button onclick='copyText(&quot;ap_tok&quot;)'>Copy key</button>"+
+        "<p class='meta'>"+esc(j.access || "")+"</p>"+
+        "<p>Paste this into the app's settings:</p><pre class='snip' id='ap_snip'></pre><button class='ghost' onclick='copyText(&quot;ap_snip&quot;)'>Copy settings</button>";
+      $("ap_tok").textContent = j.token;
+      $("ap_snip").textContent = j.snippet || "";
+      $("ap_label").value = "";
+      say("Added " + label + ".");
+    }).catch(fail);
+  };
+  if(max === "none"){
+    body.no_limit = true;
+    ask("NO LIMIT means this app can read every private note and change any label. Only do this for an app you trust completely.", "Add it anyway", go);
+  } else { body.max = max; go(); }
+}
+function copyText(id){
+  var t = $(id).textContent;
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(t).then(function(){ say("Copied."); }, function(){ say("Could not copy; select the text and copy it by hand.", true); });
+  } else { say("Select the text and copy it by hand.", true); }
+}
+function removeApp(label){
+  api("/tokens/" + encodeURIComponent(label), { method:"DELETE" }).then(function(){ loadApps(); say("Removed " + label + "."); }).catch(fail);
+}
+
+// ---- Top card: how tidy memory is and what changed lately (admin only). Counts and plain words; never note text. ----
+function loadInsights(){
+  var box = $("insights");
+  api("/insights").then(function(j){
+    var h = j.health || {};
+    var ded = (h.deductions || []).map(function(d){ return "<li>-" + Number(d.points) + " " + esc(d.category) + ": " + esc(d.detail) + "</li>"; }).join("");
+    box.innerHTML = "<div class='cardhead'><div><h3>Memory tidiness: " + Number(h.score) + " / 100</h3>" +
+      "<div class='meta'>" + esc(String(j.text || "").split(String.fromCharCode(10))[0]) + "</div></div>" +
+      acts("<button class='ghost' onclick='loadQuality()'>See what to fix</button>") + "</div>" +
+      (ded ? "<ul class='meta'>" + ded + "</ul>" : "<div class='meta'>Nothing to deduct.</div>");
+    box.style.display = "block";
+  }).catch(function(){ box.style.display = "none"; });
+}
+
+// ---- Audit: who changed what (GET /audit, admin). Metadata only. ----
+function loadAudit(){
+  setView("audit");
+  var op = ($("au_op") || {}).value || "";
+  var since = ($("au_since") || {}).value || "24h";
+  api("/audit?since=" + encodeURIComponent(since) + (op ? "&op=" + encodeURIComponent(op) : "") + "&limit=200").then(function(j){
+    var es = j.entries || [];
+    $("count").textContent = es.length + " entr" + (es.length===1?"y":"ies");
+    var rows = es.map(function(e){
+      return "<tr><td>" + when(e.ts) + "</td><td>" + esc(e.op) + "</td><td>" + esc(e.label || "command line / server") + "</td><td>" + esc(e.namespace || "") + "</td><td>" + (e.id != null ? "#" + Number(e.id) : "") + "</td></tr>";
+    }).join("");
+    var ops = ["", "create", "update", "delete"].map(function(o){ return "<option value='" + o + "'" + (o===op?" selected":"") + ">" + (o || "all actions") + "</option>"; }).join("");
+    var wins = ["24h", "7d", "30d"].map(function(w){ return "<option value='" + w + "'" + (w===since?" selected":"") + ">last " + w + "</option>"; }).join("");
+    $("list").innerHTML = "<div class='row'><select id='au_since' aria-label='How far back' onchange='loadAudit()'>" + wins + "</select><select id='au_op' aria-label='Kind of action' onchange='loadAudit()'>" + ops + "</select></div>" +
+      (rows ? "<div class='card'><table class='apps'><tr><th>when</th><th>action</th><th>app</th><th>namespace</th><th>note</th></tr>" + rows + "</table></div>" : empty("Nothing logged in that time."));
+  }).catch(failList);
+}
+
 function addNote(){
   var title = $("n_title").value.trim();
   var err = $("n_err"); err.textContent = "";
   if(!title){ err.textContent = "title is required"; return; }
   var tags = $("n_tags").value.split(",").map(function(t){return t.trim();}).filter(Boolean);
   var payload = { title: title, body: $("n_body").value,
-    tags: tags, namespace: $("n_ns").value.trim() || undefined };
+    tags: tags, namespace: $("n_ns").value.trim() || undefined, sensitivity: $("n_lvl").value };
   api("/notes", { method:"POST", body: JSON.stringify(payload) })
     .then(function(j){
       $("n_title").value=""; $("n_body").value="";
@@ -745,7 +940,15 @@ var t;
 $("q").addEventListener("input", function(){ clearTimeout(t); t = setTimeout(load, 250); });
 $("ns").addEventListener("input", function(){ clearTimeout(t); t = setTimeout(load, 250); });
 
-if(tok()){ show(true); load(); } else { show(false); $("tok").focus(); }
+if(LOGIN_CODE){
+  fetch("/login", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ code: LOGIN_CODE }) })
+    .then(function(r){ return r.json().then(function(j){ return { ok: r.ok, j: j }; }); })
+    .then(function(x){
+      if(x.ok && x.j.token){ try { sessionStorage.setItem(TOKKEY, x.j.token); } catch(e){} start(); }
+      else { show(false); $("gate_err").textContent = (x.j && x.j.error) || "That sign-in link did not work. Run monomem open again."; }
+    })
+    .catch(function(){ show(false); });
+} else if(tok()){ start(); } else { show(false); $("tok").focus(); }
 `;
 
 // The brand mark (docs/brand/mark-gold-48.png), served at GET /favicon.ico without a token.

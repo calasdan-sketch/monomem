@@ -44,7 +44,7 @@ describe("file-context hook", () => {
       assert.ok(ctx.startsWith(UNTRUSTED_BANNER));
       assert.match(ctx, new RegExp(`#${fix.id} \\[bugfix\\] Fixed rounding in tax\\.ts`));
       assert.doesNotMatch(ctx, /Unrelated/);
-      assert.match(ctx, new RegExp(`memory_get ids=\\[${fix.id}\\]`));
+      assert.match(ctx, /memory_get ids=\[N\]/);
       assert.equal(await runHook("file-context", read("src/tax.ts"), opts), "", "announced once per session (relative path is the same file)");
       assert.notEqual(await runHook("file-context", read("src/tax.ts", "s2"), opts), "", "a new session hears it again");
     } finally {

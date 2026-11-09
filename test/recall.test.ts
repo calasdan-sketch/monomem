@@ -40,7 +40,7 @@ describe("recall: buildSummary (pure)", () => {
 
   test("one note -> header + title + body snippet", () => {
     const out = buildSummary([fakeNote({ title: "Ship date", body: "We ship on Thursdays." })]);
-    assert.equal(out, "Recent memory (1 note):\n- [Ship date]: We ship on Thursdays.");
+    assert.equal(out, "Recent memory (1 note):\n#1 [Ship date]: We ship on Thursdays.");
   });
 
   test("multiple notes -> plural header, one line each", () => {
@@ -48,13 +48,13 @@ describe("recall: buildSummary (pure)", () => {
       fakeNote({ title: "A", body: "alpha" }),
       fakeNote({ title: "B", body: "beta" }),
     ]);
-    assert.equal(out, "Recent memory (2 notes):\n- [A]: alpha\n- [B]: beta");
+    assert.equal(out, "Recent memory (2 notes):\n#1 [A]: alpha\n#1 [B]: beta");
   });
 
   test("body is truncated to ~200 chars", () => {
     const out = buildSummary([fakeNote({ title: "Long", body: "x".repeat(500) })]);
     const line = out.split("\n")[1];
-    assert.ok(line.length <= "- [Long]: ".length + 200);
+    assert.ok(line.length <= "#1 [Long]: ".length + 200);
     assert.ok(line.includes("x".repeat(200)));
   });
 
@@ -63,8 +63,8 @@ describe("recall: buildSummary (pure)", () => {
       fakeNote({ title: "  Spaced\nTitle ", body: "  line1\n\nline2  " }),
       fakeNote({ title: "Bare", body: "" }),
     ]);
-    assert.ok(out.includes("- [Spaced Title]: line1 line2"));
-    assert.ok(out.includes("- [Bare]") && !out.includes("[Bare]:"));
+    assert.ok(out.includes("#1 [Spaced Title]: line1 line2"));
+    assert.ok(out.includes("#1 [Bare]") && !out.includes("[Bare]:"));
   });
 
   test("output is capped well under 8000 chars", () => {
@@ -278,7 +278,7 @@ describe("recall: namespace isolation (regression)", () => {
       try {
         const ctx = contextOf(await runRecall({ dbPath: dbFile }));
         assert.ok(
-          ctx.startsWith(UNTRUSTED_BANNER),
+          ctx.startsWith(UNTRUSTED_BANNER.replace("SECURITY NOTICE:", `SECURITY NOTICE (block ${/block ([0-9a-f]{6})/.exec(ctx)?.[1]}):`)),
           `banner missing from hook output: ${ctx.slice(0, 120)}`
         );
         assert.ok(ctx.includes("Inject"));

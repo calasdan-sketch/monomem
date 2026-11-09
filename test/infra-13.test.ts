@@ -40,14 +40,14 @@ describe("monomem backup", () => {
       s.create({ title: "second", body: "more" });
       // a second connection mid-transaction does not break the copy
       const out = join(dir, "bk");
-      const r = backupStore(s, db, out);
+      const r = backupStore(s, db, out, { includeKey: true });
       assert.equal(r.notes, 2);
       assert.ok(r.key && existsSync(r.key));
       if (process.platform !== "win32") {
         assert.equal(statSync(r.key!).mode & 0o777, 0o600);
         assert.equal(statSync(r.db).mode & 0o777, 0o600);
       }
-      assert.match(readFileSync(join(out, "README.txt"), "utf8"), /SEPARATELY|Move it somewhere else/);
+      assert.match(readFileSync(join(out, "README.txt"), "utf8"), /SEPARATELY|somewhere else/);
       // the copy is a working store (with the key beside it)
       const restored = new Store(r.db);
       assert.equal(restored.list({}).notes.find((n) => n.title === "secret thing")!.body, "the body is sealed at rest");
@@ -58,7 +58,7 @@ describe("monomem backup", () => {
       raw.close();
       assert.ok(!rows.some((x) => x.body.includes("sealed at rest")));
       // never overwrites
-      assert.throws(() => backupStore(s, db, out), /already exists/);
+      assert.throws(() => backupStore(s, db, out, { includeKey: true }), /already exists/);
       s.close();
     } finally {
       if (prevHome === undefined) delete process.env.MONOMEM_ENCRYPT;
@@ -80,12 +80,12 @@ describe("monomem backup", () => {
       assert.ok(!r.stdout.includes("WARNING"));
       assert.ok(!existsSync(join(dir, "b1", ".key")));
       ensureKey(dir);
-      const r2 = spawnSync(process.execPath, [join(process.cwd(), "dist/src/cli.js"), "backup", "--out", join(dir, "b2")], { env, encoding: "utf8" });
+      const r2 = spawnSync(process.execPath, [join(process.cwd(), "dist/src/cli.js"), "backup", "--include-key", "--out", join(dir, "b2")], { env, encoding: "utf8" });
       // the db was written before the key existed; opening it with a key present is still fine
       assert.equal(r2.status, 0, r2.stderr);
       assert.match(r2.stdout, /WARNING/);
       assert.ok(existsSync(join(dir, "b2", ".key")));
-      const again = spawnSync(process.execPath, [join(process.cwd(), "dist/src/cli.js"), "backup", "--out", join(dir, "b2")], { env, encoding: "utf8" });
+      const again = spawnSync(process.execPath, [join(process.cwd(), "dist/src/cli.js"), "backup", "--include-key", "--out", join(dir, "b2")], { env, encoding: "utf8" });
       assert.equal(again.status, 1);
       assert.match(again.stderr, /already exists/);
     } finally {

@@ -266,6 +266,24 @@ describe("export / import", () => {
     b.close();
   });
 
+  test("an approved foreign create is linked: the next sync neither re-holds nor duplicates it", async () => {
+    const a = new Store(":memory:");
+    const b = new Store(":memory:");
+    b.create({ title: "B's own note" }); // so ids differ between stores
+    b.setApproveFirst("shared", true);
+    a.create({ title: "From A", body: "hello", namespace: "shared" });
+    exportMarkdown(a, dir);
+    assert.equal((await importMarkdown(b, dir)).counts.quarantined, 1);
+    b.approveQuarantine(b.listQuarantine()[0].id);
+    const again = await importMarkdown(b, dir);
+    assert.equal(again.counts.created, 0);
+    assert.equal(again.counts.quarantined, 0);
+    assert.equal(b.listQuarantine().length, 0);
+    assert.equal(b.list({ namespace: "shared" }).total, 1, "one copy, not two");
+    a.close();
+    b.close();
+  });
+
   test("sync-tool conflict copies are skipped, not merged", async () => {
     const s = new Store(":memory:");
     writeFileSync(join(dir, "plan.sync-conflict-20261016-120000-ABCDEFG.md"), "# Plan\nother\n");

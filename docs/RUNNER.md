@@ -355,6 +355,11 @@ do not grow forever. Unclaimed commands are never pruned, however old.
   [Is the PC asleep? Commands waiting](#is-the-pc-asleep-commands-waiting).
 - It runs commands as whatever user starts it. Do not start it as an
   administrator unless an allowlisted action genuinely needs that.
+- The child's environment is trimmed (variables whose names look like secrets, tokens, passwords,
+  `_AUTH`, DSNs, connection strings, `SSH_AUTH_SOCK`, `GPG_AGENT*`, `MONOMEM_HOME` / `ONEMEMORY_HOME`, and
+  any value of the form `scheme://user:pass@...` are removed), but that is not a sandbox: a command runs
+  as the same user as the runner and can read every file that user can, including the Monomem data folder
+  and its `.token` file. Allowlist only commands you trust with that.
 
 ## Command tasks: the task board in front of the runner
 
