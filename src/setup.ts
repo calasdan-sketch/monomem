@@ -1309,8 +1309,10 @@ export interface HistorySession {
 
 /** The data folder: MONOMEM_HOME, else ~/.monomem. */
 export function dataHome(e: SetupEnv): string {
-  const home = e.env.MONOMEM_HOME?.trim();
-  return home ? resolve(home.replace(/^~(?=$|[\\/])/, e.home)) : join(e.home, ".monomem");
+  let home = e.env.MONOMEM_HOME?.trim();
+  // One pair of matching quotes is removed, as resolveDataDir (config.ts) does at run time; otherwise setup judges another folder.
+  if (home && home.length >= 2 && (home[0] === '"' || home[0] === "'") && home[home.length - 1] === home[0]) home = home.slice(1, -1).trim();
+  return home ?resolve(home.replace(/^~(?=$|[\\/])/, e.home)) : join(e.home, ".monomem");
 }
 
 export function historyFile(e: SetupEnv): string {

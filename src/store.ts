@@ -42,6 +42,7 @@ import { isStale, stalenessConfig, annotateStaleness } from "./staleness.js";
 import { encrypt, decryptIfEncrypted, isEncrypted, loadKey, keyPath, noteAad, captureAad } from "./crypto.js";
 import { currentActor, currentWriter, cleanWriter, currentCeiling, actorStore } from "./actor.js";
 import { redact } from "./redact.js";
+import { contentHash as syncContentHash } from "./sync-hash.js";
 import {
   type Sensitivity,
   DEFAULT_SENSITIVITY,
@@ -3503,6 +3504,8 @@ export class Store {
       holdForApproval?: boolean;
       /** ... and flagged `imported_unverified` when applied. */
       importedUnverified?: boolean;
+      /** Sync of another machine's file: its (origin, id), so approving the held update records the sync merge base. */
+      syncIdentity?: { origin: string; id: number };
     } & LintOpts = {}
   ): NoteRecord | null {
     this.floodGate(opts.lint ?? "full", opts.noFloodCount !== true);
@@ -3576,6 +3579,7 @@ export class Store {
         findings,
         writtenBy: opts.writtenBy,
         importedUnverified: opts.importedUnverified,
+        syncIdentity: opts.syncIdentity,
       });
       throw new QuarantinedError(qid, findings);
     }
@@ -7964,14 +7968,18 @@ export class Store {
           },
           { lint: "none", writtenBy: row.written_by ?? "", importedUnverified: Number(row.imported_unverified) === 1 }
         );
-        if (row.sync_origin !== null && row.sync_origin_id !== null) this.syncLink(row.sync_origin, Number(row.sync_origin_id), n.id);
+        if (row.sync_origin !== null && row.sync_origin_id !== null) {
+          this.syncLink(row.sync_origin, Number(row.sync_origin_id), n.id);
+          // What this store has now synced for the note, so an origin edit before the next sync merges as an update.
+          this.setSyncBase(n.id, syncContentHash(n));
+        }
         drop.run(id);
         return n;
       });
     } else {
       const held = this.db
-        .prepare("SELECT if_rev, set_namespace, written_by, sensitivity, imported_unverified FROM quarantine WHERE id = ?")
-        .get(id) as { if_rev: number | null; set_namespace: number; written_by: string | null; sensitivity: string; imported_unverified: number };
+        .prepare("SELECT if_rev, set_namespace, written_by, sensitivity, imported_unverified, sync_origin FROM quarantine WHERE id = ?")
+        .get(id) as { if_rev: number | null; set_namespace: number; written_by: string | null; sensitivity: string; imported_unverified: number; sync_origin: string | null };
       const ifRev = held.if_rev;
       // Rows from before 1.1.0 may lack the rev the update was based on;
       // applying them unguarded could overwrite later edits.
@@ -8001,6 +8009,8 @@ export class Store {
           `quarantined update #${id} targets note ${q.target_id}, which no longer exists; reject it instead`
         );
       }
+      // A held sync update: record the synced content as the merge base (else the next origin edit looks like a conflict).
+      if (held.sync_origin !== null) this.setSyncBase(updated.id, syncContentHash(updated));
       drop.run(id);
       note = updated;
     }
@@ -8072,6 +8082,15 @@ export class Store {
         "INSERT INTO sync_base (local_id, hash) VALUES (?, ?) ON CONFLICT(local_id) DO UPDATE SET hash = excluded.hash"
       )
       .run(localId, hash);
+  }
+
+  /** Ids of pending held creates of another machine's note (origin, originId), oldest first. */
+  pendingSyncCreateIds(origin: string, originId: number): number[] {
+    return (
+      this.db
+        .prepare("SELECT id FROM quarantine WHERE op = 'create' AND sync_origin = ? AND sync_origin_id = ? ORDER BY id")
+        .all(origin, originId) as Array<{ id: number }>
+    ).map((r) => Number(r.id));
   }
 
   /**

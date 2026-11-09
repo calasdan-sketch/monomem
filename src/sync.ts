@@ -55,7 +55,6 @@
 // another machine's unimported file. Every write refuses symlinked path
 // segments under the sync dir and goes through temp file + rename.
 
-import { createHash } from "node:crypto";
 import {
   closeSync,
   constants as fsc,
@@ -81,6 +80,7 @@ import {
 } from "./store.js";
 import { parseWriterRef } from "./trust.js";
 import { maybeEmbed } from "./search-service.js";
+import { contentHash, lf, normTags, type NoteContent } from "./sync-hash.js";
 import { type Sensitivity, DEFAULT_SENSITIVITY, parseSensitivity, sensitivityVisible, SENSITIVITY_HELP } from "./sensitivity.js";
 
 
@@ -111,29 +111,7 @@ const KEYS = [
   "hash",
 ] as const;
 
-export interface NoteContent {
-  namespace: string;
-  title: string;
-  body: string;
-  tags: string[];
-}
-
-/** Same normalization the store applies to tags (trim, dedupe, drop empty). */
-function normTags(tags: unknown): string[] {
-  if (!Array.isArray(tags)) return [];
-  return Array.from(new Set(tags.map((t) => String(t).trim()).filter(Boolean)));
-}
-
-/** Files are LF-only; a body's CR / CRLF is the same content. */
-const lf = (s: string): string => s.replace(/\r\n?/g, "\n");
-
-/** Content hash used as the three-way merge base (16 hex chars). */
-export function contentHash(c: NoteContent): string {
-  return createHash("sha256")
-    .update(JSON.stringify([c.namespace, c.title, lf(c.body), normTags(c.tags)]))
-    .digest("hex")
-    .slice(0, 16);
-}
+export { contentHash, type NoteContent };
 
 /** Readable slug: keeps Unicode letters/digits (Greek, CJK), drops accents. */
 function slugify(title: string, max = 60): string {
@@ -664,19 +642,27 @@ export async function importMarkdown(
         push("quarantined", { detail: `already held in quarantine #${held}` });
         return;
       }
+      // An older held create of this same origin note (the file was edited again before anyone approved it) is
+      // replaced by this write, so approving cannot make two copies.
+      const stale = !local && foreign && hasIdentity ? store.pendingSyncCreateIds(origin!, originId!) : [];
+      const dropStale = (): string => {
+        for (const q of stale) store.rejectQuarantine(q);
+        return stale.length ? `; replaces held #${stale.join(", #")}` : "";
+      };
       try {
         const n = fn();
         if (!n) {
           push("skipped", { detail: "note vanished during import" });
           return;
         }
+        const replaced = dropStale();
         await maybeEmbed(store, n);
         remember(n.id, contentHash(n));
-        push(ok, { id: n.id, ...(detail ? { detail } : {}) });
+        push(ok, { id: n.id, ...(detail || replaced ? { detail: (detail ?? ok) + replaced } : {}) });
       } catch (e) {
         if (e instanceof QuarantinedError) {
           if (foreign) foreignHeld++;
-          push("quarantined", { detail: `quarantine #${e.quarantineId}: ${e.message}` });
+          push("quarantined", { detail: `quarantine #${e.quarantineId}: ${e.message}${dropStale()}` });
         } else if (e instanceof ValidationError) {
           push("rejected", { detail: e.message });
         } else {
@@ -754,7 +740,7 @@ export async function importMarkdown(
       return store.update(
         local.id,
         { namespace, title, body, tags: importTags(content.tags, local.tags) },
-        { ifRev: local.rev, ...foreignOpts, ...(typeof fm.origin_writer === "string" && fm.origin_writer.trim() ? { alsoTouchedBy: claimNames(fm.origin_writer) } : {}) }
+        { ifRev: local.rev, ...foreignOpts, ...syncIdentity, ...(typeof fm.origin_writer === "string" && fm.origin_writer.trim() ? { alsoTouchedBy: claimNames(fm.origin_writer) } : {}) }
       );
     };
 

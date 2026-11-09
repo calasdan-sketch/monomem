@@ -64,7 +64,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in without a verified attestation), and in an approve-first namespace that create or update goes to quarantine like an agent's
   write instead of going live. The summary adds "N note(s) from other machines held for review". Approving one applies it as the
   approver (`cli`) and keeps the `imported_unverified` flag; an approved create is linked to the file's origin, so the next sync
-  updates that note instead of adding a second copy. Files this store wrote merge as before.
+  updates that note instead of adding a second copy. Approving a held create or update also records it as what this store last
+  synced, so an edit the other machine makes before the next sync here arrives as an update (it was skipped as "store has a newer
+  version", or an approved update turned the next edit into a false conflict). If the file is edited again before anyone approves
+  the held create, the next sync replaces the held copy instead of holding a second one (approving both made two notes). Files
+  this store wrote merge as before.
 - **A forget date on someone else's note** now checks `created_by` (the note's first writer), not `written_by`: editing another
   writer's note no longer makes it yours.
 - **A namespace that looks like a known secret** (an AWS key, a GitHub token and the other known-prefix patterns; no entropy
@@ -94,7 +98,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Setup with several old entries:** an `onememory` entry's `ONEMEMORY_DB_PATH` / `ONEMEMORY_HOME` now count when choosing which
   entry keeps its data (they were ignored, so an empty `claude-bridge` entry could win and the onememory notes were left unused),
   and the new entry carries them as `MONOMEM_DB_PATH` / `MONOMEM_HOME`. An entry with `MONOMEM_HOME` is judged by that folder's
-  database.
+  database, with one pair of quotes removed as at run time (a quoted value counted 0 notes, so the empty `claude-bridge` entry
+  could still win). A relative `MONOMEM_HOME` is still judged against setup's own folder.
 - **`monomem restore`** works on a damaged database (it is moved aside as-is, with its `-wal` / `-shm`, instead of failing on the
   checkpoint) and refuses while another program has the database open even when idle (it tests the database lock; it no longer refuses
   just because something answers on the API port). A file another program holds gives the "close the apps" message, never a stack
