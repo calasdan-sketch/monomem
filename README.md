@@ -27,6 +27,12 @@ git clone https://github.com/calasdan-sketch/monomem && cd monomem && cp .env.ex
 - **Knows who wrote it.** Every note records its writer. For callers that use a token, the server stamps the name; for local apps it is a label from that app's config file, so it tells your apps apart but is not proof.
 - **Holds suspicious writes.** A write that looks like an instruction planted to steer your other assistants is held until you approve it, and `monomem approve-first --all on` makes every agent write wait for your OK. The check is pattern matching, so it doesn't catch everything. An agent that can run shell commands, like Claude Code, can run the `monomem` command itself and its writes are not held, so this protects you from tools that only have the memory connection (see [SECURITY.md](./SECURITY.md)).
 
+**How it works:**
+
+![How Monomem works: your agents save through MCP or REST; a write check refuses secrets and holds writes that match known attacks until you approve them; one SQLite file keeps each note's writer, history and privacy label; reads hide private notes from limited apps and leave out distrusted writers.](https://raw.githubusercontent.com/calasdan-sketch/monomem/main/docs/monomem-architecture.png)
+
+*Diagram source: [docs/monomem-architecture.mmd](https://github.com/calasdan-sketch/monomem/blob/main/docs/monomem-architecture.mmd) (Mermaid). More detail: [docs/architecture.md](./docs/architecture.md).*
+
 [![CI](https://github.com/calasdan-sketch/monomem/actions/workflows/ci.yml/badge.svg)](https://github.com/calasdan-sketch/monomem/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/monomem)](https://www.npmjs.com/package/monomem)
 ![License](https://img.shields.io/badge/license-MIT-blue)
