@@ -1719,6 +1719,8 @@ export function createMcpServer(
     "task_put",
     {
       title: "Create or update a task",
+      // Can queue a command for the runner (still needs admin approval + the runner's allowlist).
+      annotations: { destructiveHint: true },
       description:
         "Shared task board across devices and models. Create a task (no `id`: `title` required) or update one " +
         "(`id`: only the fields you pass change). status: idea | planned | running | blocked | done | queued | failed. " +
@@ -1746,7 +1748,11 @@ export function createMcpServer(
         parent_id: z.number().int().nullable().optional().describe("Id of the parent task (same namespace); null clears."),
         blocked_by: z.array(z.number().int()).optional().describe("Ids of tasks that must finish first; [] clears."),
         command: z
-          .object({ action: z.string(), params: z.record(z.string(), z.string()).optional() })
+          .object({
+            // Same rule validateCommand enforces: an allowlist action NAME, never a command line.
+            action: z.string().regex(/^[A-Za-z0-9_.:-]{1,64}$/).describe("Allowlist action name (letters, digits, . _ : -), not a shell command."),
+            params: z.record(z.string(), z.string()).optional(),
+          })
           .nullable()
           .optional()
           .describe("Command task: runner allowlist action + string params. null removes it. Needs `target`. Changing it voids any approval."),
