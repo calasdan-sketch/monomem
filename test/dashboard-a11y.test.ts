@@ -91,9 +91,63 @@ describe("dashboard polish", () => {
     assert.ok(!h.includes("stood in for<br>") && h.includes("minus the tokens injected"));
     assert.ok(h.includes("(none)"));
   });
-  test("phone: search is ordered before the distrusted checkbox; favicon is a square PNG", () => {
-    assert.match(DASHBOARD_HTML, /header #q\{order:-2/);
-    assert.match(DASHBOARD_HTML, /header label\.chk\{order:-1\}/);
+  test("phone: search gets its own row under the brand; the distrusted checkbox lives in the Filters row; favicon is a square PNG", () => {
+    assert.match(DASHBOARD_HTML, /header #q\{order:2;flex-basis:100%\}/);
+    const header = DASHBOARD_HTML.slice(DASHBOARD_HTML.indexOf("<header"), DASHBOARD_HTML.indexOf("</header>"));
+    assert.ok(!header.includes('id="inc"') && !header.includes('id="ns"'), "header holds only brand, search and + New");
+    assert.match(DASHBOARD_HTML, /role="group" aria-label="Filters">[\s\S]*id="ns"[\s\S]*id="lvlf"[\s\S]*id="inc"/);
+    assert.match(DASHBOARD_HTML, /<img src="\/favicon\.ico" alt=""/);
     assert.equal(FAVICON_PNG.readUInt32BE(16), FAVICON_PNG.readUInt32BE(20));
+  });
+  test("who-line: the owner sentence shows only for an unlimited admin key", async () => {
+    const who = (w: unknown) => page((path) => (path === "/whoami" ? w : { notes: [] }));
+    const admin = who({ label: "primary", scope: "admin" });
+    admin.ctx.start();
+    await settle();
+    assert.match(admin.el("who").innerHTML, /^You're the owner: you can see everything\. Pinned notes change only from the terminal\./);
+    assert.match(admin.el("who").innerHTML, /<small class='tech'>primary<\/small>/);
+    for (const w of [{ label: "phone", scope: "write", can_see: "public and internal notes." }, { label: "boss", scope: "admin", max_sensitivity: "internal", can_see: "x" }, { label: "ns", scope: "admin", namespace: "work", can_see: "x" }]) {
+      const p = who(w);
+      p.ctx.start();
+      await settle();
+      assert.ok(!/owner/.test(p.el("who").innerHTML + p.el("who").textContent), w.label);
+      assert.match(p.el("who").textContent, /^Signed in as /);
+    }
+    const xss = who({ label: "<b>", scope: "admin" });
+    xss.ctx.start();
+    await settle();
+    assert.ok(!xss.el("who").innerHTML.includes("<b>"));
+  });
+  test("the cli writer shows as terminal, with cli in small grey text", () => {
+    const p = page(() => ({}));
+    assert.match(p.ctx.chip("cli"), />terminal<small class='tech'>cli<\/small><\/span>$/);
+    assert.ok(!/you/i.test(p.ctx.chip("cli")));
+    assert.ok(!/tech/.test(p.ctx.chip("agent")));
+  });
+  test("delete asks for a permanent confirm; the per-note label picker uses the honest private wording", async () => {
+    const p = page(() => ({ notes: [note] }));
+    p.ctx.load();
+    await settle();
+    const h = p.el("list").innerHTML;
+    assert.match(h, /data-confirm='Confirm permanent delete\?'[^>]*aria-label|aria-label='delete note #4' data-confirm='Confirm permanent delete\?'/);
+    assert.match(h, />private \(limited apps cannot see it; unlimited apps still can\)</);
+    const attrs: any = { "data-confirm": "Confirm permanent delete?" };
+    const b: any = { textContent: "delete", _t: 0, getAttribute: (k: string) => attrs[k] ?? null, setAttribute: (k: string, v: string) => (attrs[k] = v), removeAttribute: (k: string) => delete attrs[k] };
+    p.ctx.arm(b, () => {});
+    assert.equal(b.textContent, "Confirm permanent delete?");
+  });
+  test("renamed labels: Usage, Activity log, backup, sign out, access key", () => {
+    assert.match(DASHBOARD_HTML, /id="tab_meter"[^>]*>Usage<small class="tech">meter<\/small>/);
+    assert.match(DASHBOARD_HTML, /id="tab_audit"[^>]*>Activity log<small class="tech">audit<\/small>/);
+    assert.match(DASHBOARD_HTML, />Download backup<small class="tech">\.json<\/small>/);
+    assert.match(DASHBOARD_HTML, /every note your key can see, unencrypted/);
+    assert.match(DASHBOARD_HTML, />Add notes from a backup<small class="tech">\.json<\/small>/);
+    assert.match(DASHBOARD_HTML, />Sign out</);
+    assert.match(DASHBOARD_HTML, /placeholder="Your access key"/);
+    assert.match(DASHBOARD_HTML, /MONOMEM_TOKEN/);
+    assert.match(DASHBOARD_HTML, /\.token/);
+    assert.equal((DASHBOARD_HTML.match(/by Calas Automations/g) || []).length, 2);
+    assert.match(DASHBOARD_HTML, /Show notes from distrusted writers/);
+    assert.ok(!/Export JSON|Import JSON|Change token/.test(DASHBOARD_HTML));
   });
 });

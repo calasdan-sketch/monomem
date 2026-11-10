@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **The dashboard has a new look and plainer words.** A navy header band with the gold rule and the crescent mark (both
+  themes), softer cards, a 15px base size, and Calas Automations branding on the sign-in screen and footer. The header
+  now holds only search and **+ New**; the project, label and distrusted-writer filters moved to a **Filters** row. Tabs
+  are grouped: Notes, Review, Held, Changes first, then Sessions, Quality, Usage, Apps, Activity log. Renamed labels,
+  with the technical term in small grey text where it helps: **Meter** is now **Usage** (meter), **Audit** is now
+  **Activity log** (audit), the namespace box is **Project** (namespace), the `cli` writer shows as **terminal** (cli),
+  **Export JSON** / **Import JSON** are **Download backup** / **Add notes from a backup** (.json), **Change token** is
+  **Sign out**, and the sign-in box asks for **Your access key**. An unlimited admin key now sees "You're the owner: you
+  can see everything. Pinned notes change only from the terminal." Delete now confirms with "Confirm permanent
+  delete?", and the per-note label picker uses the same honest private wording as the new-note one. No route, element
+  id or behaviour changed.
+
 ## [1.3.3] - 2026-11-10
 
 ### Added

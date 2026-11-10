@@ -101,7 +101,7 @@ describe("why was this shown? / never show again", () => {
   });
 
   test("dashboard: a never-show button on each note PUTs the tag", async () => {
-    assert.match(DASHBOARD_HTML, /onclick="loadMeter\(\)"[^>]*>Meter</);
+    assert.match(DASHBOARD_HTML, /onclick="loadMeter\(\)"[^>]*>Usage</);
     const puts: Array<{ path: string; body: string }> = [];
     const els = new Map<string, any>();
     const el = (id: string): any => {

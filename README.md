@@ -266,7 +266,7 @@ prompt or note text is recorded):
 - capture events recorded and the database size on disk.
 
 See it in `monomem doctor` (the `footprint:` line), `GET /stats` and `memory_stats` (the `meter` field), and the
-dashboard's **Meter** view. Tokens are estimates at about 4 characters a token.
+dashboard's **Usage** view. Tokens are estimates at about 4 characters a token.
 
 ---
 

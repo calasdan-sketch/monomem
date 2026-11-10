@@ -68,7 +68,7 @@ section carries a stable source id, so running it again adds nothing. Text the m
 in quarantine (`monomem quarantine list`), not stored. `--dry-run` writes nothing. Importing from other memory tools beyond those
 `import --from` already supports (claude-mem, mem0, basic-memory) is not available.
 
-## `monomem audit` and the dashboard Audit tab
+## `monomem audit` and the dashboard Activity log tab
 
 `monomem audit [--since 24h] [--op create|update|delete|...] [--label <key name>] [--limit n] [--json]` shows who changed what and when:
 the action, the key's name, the namespace and the note number. Never the text of a note. (Who *read* memory is a different log:
