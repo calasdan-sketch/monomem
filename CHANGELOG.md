@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-11-09
+
+### Added
+
+- **`monomem-mcp` command.** Starts only the stdio MCP server, with no arguments. `monomem` with no arguments starts the HTTP
+  server and dashboard, so a launcher that runs one bare command and cannot pass `mcp` (a catalog or security-tool entry) had no
+  way to start the MCP connection. `monomem mcp` keeps working exactly as before.
+
 ## [1.3.0] - 2026-11-09
 
 Upgrade notes: the first start migrates the database from schema v18 to v19 (one way: older builds refuse it) after

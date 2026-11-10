@@ -1,4 +1,7 @@
+#!/usr/bin/env node
 // MCP server over stdio, for local Claude Code / Claude Desktop config.
+// Also the `monomem-mcp` bin: a launcher that cannot pass arguments (e.g. a catalog entry that runs one bare command) gets
+// the stdio server directly, since `monomem` with no arguments starts the HTTP server and dashboard instead.
 // Points at the same SQLite file the HTTP API uses (MONOMEM_DB_PATH
 // or the default <data dir>/state.db, see config.ts) so state written here is immediately
 // visible to the API and vice versa.
