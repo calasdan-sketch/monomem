@@ -31,7 +31,7 @@ git clone https://github.com/calasdan-sketch/monomem && cd monomem && cp .env.ex
 
 ![How Monomem works: your agents save through MCP or REST; a write check refuses secrets and holds writes that match known attacks until you approve them; one SQLite file keeps each note's writer, history and privacy label; reads hide private notes from limited apps and leave out distrusted writers.](https://raw.githubusercontent.com/calasdan-sketch/monomem/main/docs/monomem-architecture.png)
 
-*Diagram source: [docs/monomem-architecture.mmd](./docs/monomem-architecture.mmd) (Mermaid). More detail: [docs/architecture.md](./docs/architecture.md).*
+*Diagram source: [docs/monomem-architecture.mmd](https://github.com/calasdan-sketch/monomem/blob/main/docs/monomem-architecture.mmd) (Mermaid). More detail: [docs/architecture.md](./docs/architecture.md).*
 
 [![CI](https://github.com/calasdan-sketch/monomem/actions/workflows/ci.yml/badge.svg)](https://github.com/calasdan-sketch/monomem/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/monomem)](https://www.npmjs.com/package/monomem)

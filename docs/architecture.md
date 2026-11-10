@@ -47,7 +47,7 @@ flowchart LR
   class YOU you;
 ```
 
-*The same diagram as an image (for npm and other viewers that do not draw Mermaid): [monomem-architecture.png](./monomem-architecture.png). Source: [monomem-architecture.mmd](./monomem-architecture.mmd).*
+*The same diagram as an image (for npm and other viewers that do not draw Mermaid): [monomem-architecture.png](https://github.com/calasdan-sketch/monomem/blob/main/docs/monomem-architecture.png). Source: [monomem-architecture.mmd](https://github.com/calasdan-sketch/monomem/blob/main/docs/monomem-architecture.mmd).*
 
 One store, reached three ways — all pointing at the same
 `MONOMEM_DB_PATH`, so a note written through any one of them is
