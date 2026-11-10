@@ -650,7 +650,7 @@ describe("adoption wording, key drift, session start", () => {
     assert.match(DASHBOARD_JS, /fact-removed:/);
     assert.match(DASHBOARD_JS, /<summary class='muted'>More<\/summary>/);
     assert.match(DASHBOARD_JS, /Replace whole note instead/);
-    assert.match(DASHBOARD_JS, /Namespace: <b>/);
+    assert.match(DASHBOARD_JS, /Project: <b>/); // the redesign calls a namespace a "project" on screen
   });
 
 });
