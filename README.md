@@ -17,6 +17,10 @@ git clone https://github.com/calasdan-sketch/monomem && cd monomem && cp .env.ex
 
 (More: [Docker](#docker).)
 
+[![Monomem MCP server](https://mcprush.com/badge/monomem-mcp/card.svg)](https://mcprush.com/to/monomem-mcp?ref=badge)
+
+*An independent scan's grade, updated by mcprush after each scan: it reads the published package, not our claims.*
+
 **What it does not do:** it holds writes that match known attack patterns and records who wrote each note. It only covers what goes through Monomem: anything that can run shell commands or open `~/.monomem/state.db` itself can read or change your notes directly, and a reworded attack the pattern check does not know can still get through. Sensitivity limits apply to apps that connect with their own key. See [Known limits](#known-limits).
 
 ![A write that matches a known attack pattern is held, a second agent's search never sees it, and the dashboard rejects it](https://raw.githubusercontent.com/calasdan-sketch/monomem/main/docs/monomem-demo.gif)

@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.2] - 2026-11-10
+
+### Changed
+
+- **`task_put` now says what it can do.** It carries `destructiveHint: true` (it can queue a command for the runner), so MCP
+  apps that ask before risky tools will ask before this one. Its `command.action` field now states the rule the server already
+  enforced: an allowlist action name (letters, digits, `. _ : -`, up to 64), never a command line. Nothing about what is accepted
+  changed; a security scanner reading the tool's description can now see the limit. `task_put` is still not in the default tool
+  set (`MONOMEM_TOOLS=all` or a list naming it turns it on), command tasks still need an admin's approval, and the runner still
+  runs only actions on its own allowlist.
+
 ## [1.3.1] - 2026-11-09
 
 ### Added
