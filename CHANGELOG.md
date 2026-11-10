@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Overdue tasks lead the session-start board.** A task's `due` date was stored but the board never showed it, and it
+  listed only the 10 newest open tasks, so a task due last week vanished behind newer ones. The board now looks at up to
+  200 open tasks, puts the ones whose due date or time has passed first (earliest first), and prints `due <date>` and
+  `OVERDUE` on each line. Every board line also names its server-stamped writer (`[by <writer>]`), so a task from an
+  access key never shows up unlabelled. This is not a notification: nothing fires between sessions.
+
 ## [1.3.2] - 2026-11-10
 
 ### Changed

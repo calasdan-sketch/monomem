@@ -291,7 +291,9 @@ dashboard's **Meter** view. Tokens are estimates at about 4 characters a token.
   `task_claim`, `session_handoff`, and one `catch_up` call (changes since you last looked +
   open tasks + latest handoff). Built on plain notes, so it is encrypted,
   namespaced and searchable like the rest; `monomem recall` includes open
-  tasks and the latest handoff at session start. → [docs/tasks.md](./docs/tasks.md)
+  tasks and the latest handoff at session start. A task whose `due` date has passed is listed
+  first there, marked `OVERDUE`, so "remind me next session" works. Nothing fires between
+  sessions: it shows when the next session starts. → [docs/tasks.md](./docs/tasks.md)
 - **Memory linter.** Every write is scanned for secrets (API keys, JWTs,
   private keys, high-entropy tokens) and prompt-injection instructions
   ("ignore previous instructions", chat-template markers, tool-call
