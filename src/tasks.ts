@@ -1272,8 +1272,25 @@ export function catchUp(store: Store, opts: CatchUpOpts = {}): CatchUp {
  * characters, so a title can't forge extra lines or terminal escapes. Each
  * section has its OWN budget, so a long task list can never cut the handoff.
  */
+/** True when a task's due date or time has passed (date-only: due before today, local time). */
+export function isOverdue(due: string | undefined, now = new Date()): boolean {
+  if (!due) return false;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(due)) {
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    return due < today;
+  }
+  const t = Date.parse(due);
+  return Number.isFinite(t) && t < now.getTime();
+}
+
+/** Overdue tasks first (earliest due first), then the rest in their original order. */
+export function overdueFirst<T extends { due?: string }>(tasks: T[], now = new Date()): T[] {
+  const late = tasks.filter((t) => isOverdue(t.due, now)).sort((a, b) => (a.due! < b.due! ? -1 : a.due! > b.due! ? 1 : 0));
+  return [...late, ...tasks.filter((t) => !isOverdue(t.due, now))];
+}
+
 export function buildBoardSummary(
-  tasks: Array<Pick<Task, "id" | "status" | "title" | "owner" | "next_step">>,
+  tasks: Array<Pick<Task, "id" | "status" | "title" | "owner" | "next_step"> & Partial<Pick<Task, "due" | "written_by">>>,
   handoff: Handoff | null,
   maxChars = 2500,
   totalTasks?: number
@@ -1295,7 +1312,10 @@ export function buildBoardSummary(
       const line =
         `- #${t.id} [${clip(t.status, 12)}] ${clip(t.title, 100)}` +
         (t.owner ? ` (${clip(t.owner, 40)})` : "") +
-        (t.next_step ? ` -> next: ${clip(t.next_step, 120)}` : "");
+        (t.due ? ` due ${clip(t.due, 25)}${isOverdue(t.due) ? " OVERDUE" : ""}` : "") +
+        (t.next_step ? ` -> next: ${clip(t.next_step, 120)}` : "") +
+        // Server-stamped writer, so an overdue task from an access key never surfaces unlabelled.
+        (t.written_by ? ` [by ${clip(t.written_by, 40)}]` : "");
       if (used + line.length + 1 > taskBudget - 60) break;
       lines.push(line);
       used += line.length + 1;
