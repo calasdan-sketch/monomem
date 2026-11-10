@@ -116,12 +116,12 @@ export function titleText(s: string): string {
 }
 
 /**
- * Exact output shape Claude Code requires for SessionStart hooks.
+ * Exact output shape Claude Code requires for SessionStart (and UserPromptSubmit) hooks.
  */
-export function buildHookOutput(additionalContext: string): string {
+export function buildHookOutput(additionalContext: string, hookEventName: "SessionStart" | "UserPromptSubmit" = "SessionStart"): string {
   return JSON.stringify({
     hookSpecificOutput: {
-      hookEventName: "SessionStart",
+      hookEventName,
       additionalContext,
     },
   });

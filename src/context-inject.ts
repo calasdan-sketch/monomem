@@ -14,6 +14,7 @@
 // store's own read filters; the caller (recall.ts) adds the UNTRUSTED banner and resolves the namespace fail-closed.
 // Every note / index line carries a short "why shown" tag ({files,kw,recent,decision Nd}, explained once in a legend);
 // a note tagged never-show (NEVER_SHOW_TAG) is never injected. With a session id, the sizes go to the meter (meter.ts).
+// Operator-pinned notes (notes.pinned, set by `monomem pin` or an admin key) come before all of it, within PINNED_CHARS.
 import { execFile } from "node:child_process";
 import type { Store, NoteRecord } from "./store.js";
 import { NOTE_KINDS } from "./store.js";
@@ -47,6 +48,9 @@ export const DEFAULT_PROFILE_TOKENS = 300;
 const CHARS_PER_TOKEN = 4;
 const POOL = 100;
 const GIT_TIMEOUT_MS = 400;
+/** Hard cap on the pinned block (characters), charged to the recall budget. */
+export const PINNED_CHARS = 1600;
+export const PINNED_HEAD = "Pinned (always shown):";
 
 export interface ContextSignals {
   branch?: string;
@@ -137,6 +141,34 @@ export function setNeverShow(store: Store, id: number, on: boolean): NoteRecord 
   return store.update(id, { tags }, { keepWriter: true });
 }
 
+/**
+ * The user-prompt hook's block: one index line (no body) per ordinary note saved or changed since this session's previous
+ * prompt (the first prompt: since the session started), newest first, at most NEW_LINES. Distrusted writers are left out by
+ * the store's list; so are captured rows (list's default kind is "note"), this session's own rows, never-show notes and
+ * `notWrittenBy` (the session's own writer, when known). "" when there is nothing new.
+ */
+export const NEW_LINES = 5;
+export function newNotesSince(store: Store, sessionId: string, opts: { namespace?: string; notWrittenBy?: string } = {}): string {
+  const db = store.captureDb();
+  // The prompt this hook fires for is already recorded, so the previous one is the second newest.
+  const prev = db.prepare("SELECT at FROM capture_events WHERE session_id = ? AND event = 'user-prompt' ORDER BY seq DESC LIMIT 1 OFFSET 1").get(sessionId) as { at: string } | undefined;
+  const since = prev?.at ?? (db.prepare("SELECT started_at FROM sessions WHERE id = ?").get(sessionId) as { started_at: string } | undefined)?.started_at;
+  if (!since) return "";
+  // ponytail: looks at the 200 most recently updated notes; "and N more" undercounts past that, memory_since has the rest.
+  const fresh = store
+    .list({ namespace: opts.namespace, limit: 200, withoutTags: [NEVER_SHOW_TAG], ...(opts.notWrittenBy ? { notWrittenBy: opts.notWrittenBy } : {}) })
+    .notes.filter((n) => n.updated_at > since && n.session_id !== sessionId && n.written_by !== "capture");
+  if (!fresh.length) return "";
+  const on = enabledToolNames();
+  const more = fresh.length - NEW_LINES;
+  store.logAccess({ tool: "hook:new-notes", namespaces: opts.namespace !== undefined ? [opts.namespace] : [], results: Math.min(fresh.length, NEW_LINES) });
+  return [
+    `New since your last message (open with ${openToolName()}):`,
+    ...fresh.slice(0, NEW_LINES).map((n) => indexLine(n)),
+    ...(more > 0 ? [`and ${more} more (${on === null || on.has("memory_since") ? "memory_since" : "catch_up"})`] : []),
+  ].join("\n");
+}
+
 /** `{files,kw 3d}`: why a row is in the pack (signals from rankContext) and its age. */
 export function whyTag(n: NoteRecord, signals: Set<string> | undefined, now = Date.now()): string {
   const s = [...(signals ?? [])];
@@ -188,7 +220,7 @@ export function projectProfile(store: Store, opts: InjectOptions, latestSummary:
 export async function rankContext(
   store: Store,
   opts: InjectOptions = {}
-): Promise<{ ranked: NoteRecord[]; total: number; latestSummary: NoteRecord | null; why: Map<number, Set<string>> }> {
+): Promise<{ ranked: NoteRecord[]; total: number; latestSummary: NoteRecord | null; why: Map<number, Set<string>>; pinned: NoteRecord[] }> {
   const ns = opts.namespace;
   const wf = {
     ...(opts.writtenBy ? { writtenBy: opts.writtenBy } : {}),
@@ -198,6 +230,12 @@ export async function rankContext(
   const hidden = [TASK_TAG, HANDOFF_TAG, NEVER_SHOW_TAG, ...(opts.skipTags ?? [])];
   const base = { namespace: ns, kinds: NOTE_KINDS, withoutTags: hidden, ...wf };
   const skip = (n: NoteRecord): boolean => n.tags.some((t) => hidden.includes(t));
+  // A row fetched by id (readVisible: distrusted writers out unless asked for) re-checked against this session's filters.
+  const fits = (n: NoteRecord | null): n is NoteRecord => {
+    if (!n || n.archived_at || (ns !== undefined && n.namespace !== ns) || skip(n)) return false;
+    if (opts.writtenBy && !nameIs(n.written_by, opts.writtenBy, stdioFamily(opts.writtenBy))) return false;
+    return !(opts.notWrittenBy && nameIs(n.written_by, opts.notWrittenBy, stdioFamily(opts.notWrittenBy)));
+  };
   const why = new Map<number, Set<string>>();
   const mark = (id: number, s: string): void => {
     if (!why.has(id)) why.set(id, new Set());
@@ -233,9 +271,7 @@ export async function rankContext(
     for (const r of rows) {
       if (!pool.has(r.note_id)) {
         const n = store.readVisible(r.note_id, { includeDistrusted: opts.includeDistrusted === true }); // gate-ok: namespace, archive and writer filters are re-applied just below
-        if (!n || n.archived_at || (ns !== undefined && n.namespace !== ns) || skip(n)) continue;
-        if (opts.writtenBy && !nameIs(n.written_by, opts.writtenBy, stdioFamily(opts.writtenBy))) continue;
-        if (opts.notWrittenBy && nameIs(n.written_by, opts.notWrittenBy, stdioFamily(opts.notWrittenBy))) continue;
+        if (!fits(n)) continue;
         pool.set(n.id, n);
       }
       overlap.push(r.note_id);
@@ -245,18 +281,44 @@ export async function rankContext(
   const byRecency = [...pool.values()].sort((a, b) => (a.updated_at < b.updated_at ? 1 : a.updated_at > b.updated_at ? -1 : b.id - a.id)).map((n) => n.id);
   for (const id of byRecency.slice(0, 10)) mark(id, "recent");
   const fused = rrfScores([bm25, overlap, byRecency]);
-  const ranked = rankHits(store, [...fused.entries()].map(([id, score]) => ({ note: pool.get(id)!, score })));
-  return { ranked, total: store.list({ ...base, limit: 1 }).total, latestSummary, why };
+  // Operator-pinned notes (the notes.pinned COLUMN, never the agent-settable "pinned" tag): shown first by injectContext, so
+  // they leave the ranked pass. pinnedNotes applies the sensitivity ceiling; readVisible + fits the distrust and session filters.
+  const pinned = store
+    .pinnedNotes(ns !== undefined ? [ns] : undefined)
+    .map((p) => store.readVisible(p.id, { includeDistrusted: opts.includeDistrusted === true })) // gate-ok: filters re-applied by fits
+    .filter(fits);
+  const pinnedIds = new Set(pinned.map((n) => n.id));
+  const ranked = rankHits(store, [...fused.entries()].filter(([id]) => !pinnedIds.has(id)).map(([id, score]) => ({ note: pool.get(id)!, score })));
+  const summary = latestSummary && pinnedIds.has(latestSummary.id) ? null : latestSummary;
+  return { ranked, total: store.list({ ...base, limit: 1 }).total, latestSummary: summary, why, pinned };
 }
 
 /** The packed context text ("" when there is nothing to say). */
 export async function injectContext(store: Store, opts: InjectOptions = {}): Promise<string> {
-  const { ranked, total, latestSummary, why } = await rankContext(store, opts);
-  if (!ranked.length && !latestSummary) return "";
+  const { ranked, total, latestSummary, why, pinned } = await rankContext(store, opts);
+  if (!ranked.length && !latestSummary && !pinned.length) return "";
   const budget = (opts.tokens ?? recallTokens()) * CHARS_PER_TOKEN;
   const parts: string[] = [];
   const shown: NoteRecord[] = [];
   let used = WHY_LEGEND.length;
+  // Pinned notes go first, inside a fixed cap charged to the same budget; what does not fit is counted, never dropped silently.
+  const pinLines: string[] = [];
+  const pinCap = Math.min(PINNED_CHARS, Math.floor(budget / 2));
+  let pinUsed = PINNED_HEAD.length;
+  for (const n of pinned) {
+    const snippet = one(n.body).slice(0, 200);
+    const line = `${indexLine(n)}${snippet ? ": " + snippet : ""}`;
+    if (pinUsed + line.length + 1 > pinCap - 90) break; // 90: room for the "N more" line, so the block stays inside the cap
+    pinLines.push(line);
+    pinUsed += line.length + 1;
+    shown.push(n);
+  }
+  if (pinned.length) {
+    const more = pinned.length - pinLines.length;
+    const text = [PINNED_HEAD, ...pinLines, ...(more ? [`${more} more pinned note${more === 1 ? "" : "s"} not shown (monomem pin lists them all, or the dashboard).`] : [])].join("\n");
+    parts.push(text);
+    used += text.length;
+  }
   const profile = projectProfile(store, opts, latestSummary, Math.min(profileTokens() * CHARS_PER_TOKEN, Math.floor(budget / 2)));
   if (profile) {
     parts.push(profile);
@@ -310,7 +372,7 @@ export async function injectContext(store: Store, opts: InjectOptions = {}): Pro
   if (lines.length) parts.push(`${header}\n${lines.join("\n")}`);
   if (!shown.length) return "";
   if (shown.some((n) => n !== latestSummary)) parts.push(WHY_LEGEND);
-  if (lines.some((l) => /^#\d+ by /.test(l))) parts.push(WRITER_LEGEND);
+  if ([...pinLines, ...lines].some((l) => /^#\d+ by /.test(l))) parts.push(WRITER_LEGEND);
   const ns = opts.namespace;
   const captured = Number(
     (

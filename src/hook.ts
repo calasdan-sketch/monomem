@@ -8,6 +8,7 @@
 // (or, when MONOMEM_HOOK_URL and MONOMEM_HOOK_TOKEN are set, to POST <url>/capture first) and a later hook drains it.
 //
 // session-start also prints the start-of-session context (recall.ts / context-inject.ts), exactly like `monomem recall`.
+// user-prompt prints one title line per note other writers saved since the previous prompt (nothing when there are none).
 // file-context (PreToolUse on Read) prints what memory knows about the file about to be read (file-context.ts); advisory only.
 import { existsSync } from "node:fs";
 import { spawn } from "node:child_process";
@@ -154,6 +155,44 @@ export async function captureHook(event: HookEvent, payload: Record<string, unkn
 }
 
 /**
+ * UserPromptSubmit: titles of notes other writers saved since this session's previous prompt (context-inject.ts
+ * newNotesSince), inside the same untrusted-data banner as session start. Same short lock wait as capture; a busy or
+ * missing database, an unresolvable namespace, a bad sensitivity cap or any error prints nothing.
+ */
+async function newNotesHook(payload: Record<string, unknown>, env: NodeJS.ProcessEnv, opts: HookOptions): Promise<string> {
+  try {
+    const sid = typeof payload.session_id === "string" ? payload.session_id.slice(0, 200) : "";
+    const { DB_PATH } = await import("./config.js");
+    const dbPath = opts.dbPath ?? DB_PATH;
+    if (!sid || !existsSync(dbPath)) return "";
+    const { resolveRecallNamespace, buildHookOutput, newBlockNonce, untrustedBanner, untrustedReminder } = await import("./recall.js");
+    const res = await resolveRecallNamespace(typeof payload.cwd === "string" ? payload.cwd : undefined);
+    if (res.kind === "unresolvable") return "";
+    const { recallCeilingFromEnv } = await import("./sensitivity.js");
+    const cap = recallCeilingFromEnv();
+    if (cap === null) return "";
+    const { Store } = await import("./store.js");
+    const { newNotesSince } = await import("./context-inject.js");
+    const { actorStore, stdioWriter } = await import("./actor.js");
+    // The session's own writer is only known when the hook's environment names the app (MONOMEM_CLIENT, as the MCP entry does).
+    const self = env.MONOMEM_CLIENT?.trim() ? stdioWriter(env).writer : undefined;
+    const store = new Store(dbPath, { noMigrate: true, busyTimeoutMs: HOOK_BUSY_MS });
+    try {
+      const run = (): string => newNotesSince(store, sid, { ...(res.kind === "resolved" ? { namespace: res.namespace } : {}), ...(self ? { notWrittenBy: self } : {}) });
+      const text = cap ? actorStore.run({ label: "", maxSensitivity: cap, canDeclassify: false }, run) : run();
+      if (!text) return "";
+      const nonce = newBlockNonce();
+      return buildHookOutput(untrustedBanner(nonce) + text + "\n\n" + untrustedReminder(nonce), "UserPromptSubmit");
+    } finally {
+      store.close();
+    }
+  } catch (e) {
+    process.stderr.write(`monomem hook user-prompt: ${(e as Error).message}\n`);
+    return "";
+  }
+}
+
+/**
  * The whole hook: returns the text to print on stdout ("" = print nothing). Never throws.
  */
 export async function runHook(eventArg: string, stdinText: string, opts: HookOptions = {}): Promise<string> {
@@ -202,6 +241,7 @@ export async function runHook(eventArg: string, stdinText: string, opts: HookOpt
   } catch (e) {
     process.stderr.write(`monomem hook ${event}: ${(e as Error).message}\n`);
   }
+  if (event === "user-prompt") return newNotesHook(payload, env, opts);
   if (event !== "session-start") return "";
   try {
     const { runRecall } = await import("./recall.js");

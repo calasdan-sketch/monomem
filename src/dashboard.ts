@@ -313,6 +313,7 @@ function ask(text, okLabel, fn){
 }
 
 var VIEW = "list";
+var IS_ADMIN = false;
 // One h2 and one visible line per view (this replaces the tooltips as the way to learn what a tab is for).
 var VIEWS = {
   list:["Notes","All notes, newest first."],
@@ -386,6 +387,8 @@ function start(){
   load();
   api("/whoami").then(function(w){
     var isAdmin = w.scope === "admin" && !w.namespace && !w.max_sensitivity;
+    // Pin / Unpin buttons (PUT /pinned is admin-only): redraw the list once we know.
+    if(isAdmin && !IS_ADMIN){ IS_ADMIN = true; if(VIEW === "list"){ load(); } }
     // An unlimited admin key sees everything; any other key keeps the server's own can_see wording.
     if(isAdmin){ $("who").innerHTML = "You're the owner: you can see everything. Pinned notes change only from the terminal.<small class='tech'>" + esc(w.label || "unnamed") + "</small>"; }
     else { $("who").textContent = "Signed in as " + (w.label || "unnamed") + ": " + String(w.can_see || "").replace(/[.\\s]+$/, "") + "."; }
@@ -441,6 +444,9 @@ function render(notes){
       acts(((n.tags||[]).indexOf("never-show") >= 0
         ? "<button class='ghost' aria-label='show note #"+Number(n.id)+" again' title='Let it be shown at session start again' onclick='neverShow("+n.id+",false)'>show again</button>"
         : "<button class='ghost' aria-label='never show note #"+Number(n.id)+"' title='Never inject this note at session start (it stays searchable)' onclick='neverShow("+n.id+",true)'>never show</button>")+
+      (!IS_ADMIN ? "" : n.pinned
+        ? " <button class='ghost' aria-label='unpin note #"+Number(n.id)+"' onclick='arm(this,function(){setPin("+Number(n.id)+",false)})'>Unpin</button>"
+        : " <button class='ghost' aria-label='pin note #"+Number(n.id)+"' title='Show it first at the start of every session; only the monomem CLI can then change it' onclick='setPin("+Number(n.id)+",true)'>Pin (always shown)</button>")+
       " <button class='danger' aria-label='delete note #"+Number(n.id)+"' data-confirm='Confirm permanent delete?' onclick='arm(this,function(){del("+n.id+")})'>delete</button>")+"</div>"+
       (n.body ? "<div class='body'>"+esc(n.body)+"</div>" : "")+"</div>";
   }).join("");
@@ -815,6 +821,11 @@ function qReplace(oldId, newId){
 }
 function qPin(id){
   api("/pinned", { method:"PUT", body: JSON.stringify({ id: id, pinned: true }) }).then(loadQuality).catch(fail);
+}
+function setPin(id, on){
+  api("/pinned", { method:"PUT", body: JSON.stringify({ id: id, pinned: on }) })
+    .then(function(){ load(); say(on ? "Note #" + id + " is pinned: it is shown first at the start of every session." : "Note #" + id + " is no longer pinned."); })
+    .catch(fail);
 }
 function qDistrust(btn){
   api("/trust/distrust", { method:"POST", body: JSON.stringify({ namespace: btn.getAttribute("data-ns"), writer: btn.getAttribute("data-w") }) }).then(loadQuality).catch(fail);
