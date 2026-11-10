@@ -213,6 +213,34 @@ CLI itself, so none of them stops an agent that can run commands.**
 - **Read access log** (`monomem access`): records which writer read what (query preview, counts, no note text), kept
   30 days by default.
 
+### Closing the shell gap, strongest first
+
+None of the controls above stops an agent that can run commands as you. These do, to different degrees:
+
+1. **A separate OS user owns the data (the real boundary).** Create a second account, give it the data folder
+   (`MONOMEM_HOME`) with permissions only it can read, run `monomem start` as that account, and connect your agents
+   over REST with their own tokens. An agent running as you can then neither open the database file nor run the CLI
+   against it. Limits: stdio MCP does not work this way (the app starts the server as you, so it needs the files);
+   an **admin** token can still unpin notes over REST, so give agents ordinary tokens; and anyone with administrator
+   rights on the machine can still read the folder. We have not yet written up a tested step-by-step for Windows, macOS
+   and Linux; until then, treat this as the approach, not a recipe.
+2. **A container or devcontainer** for the agent, with the data folder not mounted and the server reachable only over
+   REST. Same limits as 1, and only as strong as the container setup.
+3. **Permission rules in the agent (a speed bump, not a boundary).** For Claude Code, in `~/.claude/settings.json`:
+
+   ```json
+   { "permissions": { "deny": [
+     "Bash(monomem *)", "Bash(npx monomem *)", "Bash(npx -y monomem *)",
+     "Read(~/.monomem/**)", "Edit(~/.monomem/**)"
+   ] } }
+   ```
+
+   This stops the obvious commands. It does **not** stop a determined agent: `node <path>/cli.js`, `sqlite3`,
+   `python -c`, `sh -c "monomem ..."`, `cmd /c monomem` or `cat` through a shell all get past prefix rules, and the
+   rules only cover Claude Code. It also blocks you from asking Claude to run `monomem doctor` for you. It does not
+   affect Monomem's own hooks or MCP server, which Claude Code starts directly rather than through its shell tool.
+   Use your own data folder path if you set `MONOMEM_HOME`.
+
 ## Limitations (stated honestly)
 
 - Single-user, single-node SQLite. No clustering, no multi-tenant isolation
