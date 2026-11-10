@@ -1,6 +1,6 @@
 {
   "name": "monomem",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "Shared local memory for AI coding agents: an MCP server, a start-of-session recall hook and the Monomem skill.",
   "author": {
     "name": "Calas Automations Inc."
