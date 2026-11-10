@@ -299,8 +299,10 @@ dashboard's **Meter** view. Tokens are estimates at about 4 characters a token.
   ("ignore previous instructions", chat-template markers, tool-call
   coercion). Secrets are blocked; injection is quarantined for admin review
   and invisible to search and recall until approved. It is a pattern
-  linter, with unit tests but no published false-positive rate: expect misses
-  and the occasional false flag. → [docs/memory-linter.md](./docs/memory-linter.md)
+  linter, so expect misses. On 190,000 ordinary chat turns it held 21 (all
+  containing real override wording) and refused 27 (mostly code examples with a
+  sample password); method and caveats in [docs/BENCHMARK.md](./docs/BENCHMARK.md#write-check-false-positives-how-often-ordinary-text-is-refused-or-held).
+  → [docs/memory-linter.md](./docs/memory-linter.md)
 - **Plain-file sync.** `monomem export --format md --dir` writes one
   Markdown file per note with YAML front-matter, deterministic and
   git-friendly; `monomem import --dir` merges edits back three-way — newer

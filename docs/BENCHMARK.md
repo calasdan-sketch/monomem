@@ -506,6 +506,41 @@ here; they are covered by unit tests. The session-start change is not a benchmar
 to tune the 11-04 session-neighbour weight, so its numbers are not a held-out test. No end-to-end answer accuracy was
 re-measured in this round.
 
+## Write-check false positives: how often ordinary text is refused or held
+
+Measured 2026-11-10 on Monomem 1.3.2 with `node bench/lint-fp.mjs` (after `npm run build`, with no `MONOMEM_TOKEN*` set).
+It runs `lintContent`, the check every write goes through, over text that contains no attacks planted by us, one note per
+chat turn or paragraph. **None of these corpora is real agent notes**, which carry more commands, paths and code; read the
+numbers as a floor for chat and a rough guide for technical prose.
+
+| Corpus | Notes | Refused (secret) | Held (injection) | Warned only |
+|---|---:|---:|---:|---:|
+| LongMemEval-S cleaned, chat turns | 189,502 | 27 (0.014%) | 21 (0.011%) | 421 (0.22%) |
+| LoCoMo-10, chat turns | 1,033 | 0 | 0 | 0 |
+| Monomem CHANGELOG bullets + docs paragraphs | 1,128 | 4 (0.35%) | 5 (0.44%) | 8 (0.71%) |
+
+Every refused and held note was read by hand (`--show-held` prints them):
+
+- **Held, LongMemEval (21):** 17 are user messages that really say "ignore all previous instructions" (prompt templates
+  pasted into a chatbot), 2 contain leftover Llama chat-template tokens (`<|start_header_id|>assistant`) in the dataset,
+  1 is a broken flag emoji that left invisible Unicode tag characters behind, and 1 asks for a markdown image whose URL
+  carries data. All 21 contain exactly what the rule is for; none is an accidental match. In a memory store they would still
+  be held, and approving one is `monomem quarantine`.
+- **Held, docs (5):** all 5 quote attacks on purpose (changelog lines describing the check itself, and a migration guide
+  that names "Ignore previous instructions" as an example). No accidental match.
+- **Refused, LongMemEval (27):** the real noise. Almost all are code or config examples with a sample password in them
+  (`DB_PASSWORD=secret`, a `password:` line in a docker-compose file, a database URL with `user:pass@`), plus one private
+  key block and one long URL token. The secret guard refuses these on purpose, because a placeholder and a real password
+  look the same. If you save code examples as notes, expect about 1 in 7,000 to be refused; the error says what it looks
+  like (`"password: ..."`), and replacing the value with `<password>` saves it (checked). An administrator can make this a
+  warning instead with `MONOMEM_LINT=secrets=warn`.
+- **Refused, docs (4):** changelog lines that quote password shapes as examples.
+- **Warned only** never stops a write: emails, phone numbers, IP addresses and "package install" lines are noted and saved.
+
+Not measured: notes written by real agents over months, and non-English text. The patterns were written with the attacks in
+`bench/` in view, so a clean result on these corpora says the check is quiet on ordinary chat and docs, not that it is quiet
+on your notes. Run the script on an export of your own store to see your number.
+
 ## `monomem drill`: the poisoning attacks on your own setup
 
 `monomem drill` copies your store to a temporary folder (`VACUUM INTO`, your file is opened read-only), replays the
