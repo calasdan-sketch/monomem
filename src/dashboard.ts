@@ -13,17 +13,22 @@ export const DASHBOARD_HTML = `<!doctype html>
 <title>monomem</title>
 <link rel="icon" href="/favicon.ico" type="image/png" sizes="64x64">
 <style>
-  /* Brand (Calas Automations): navy #0B2E45 + gold #F0C171. Every colour is a token; the light theme only redefines tokens. */
+  /* Brand: the calasautomations.com palette (calas-theme.css): navy #0B2E45, ocean #155F87, gold #F0C171.
+     Every colour is a token; the light theme only redefines tokens. Fonts: the site's names first (used when installed;
+     the CSP blocks web-font downloads), then the closest system fonts (Georgia for Libre Baskerville). */
   :root{color-scheme:dark;--gold:#F0C171;--navy:#0B2E45;--fs:15px;--r:14px;--r-s:9px;
-    --bg:#061a28;--panel:#0B2E45;--panel2:#143c58;--seg:#082236;--line:#2a5878;--field-line:#6b93ae;
-    --ink:#eef3f7;--dim:#a9bfcf;--body:#d3e0ea;--accent:#F0C171;--focus:#F0C171;
-    --btn-bg:#F0C171;--btn-fg:#0B2E45;--danger:#ffa3a3;--danger-bg:#b3261e;--danger-fg:#fff;--ok:#7fd6a8;--warn:#F0C171;
+    --sans:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+    --serif:"Libre Baskerville",Georgia,"Times New Roman",serif;
+    --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;
+    --bg:#0B1A26;--panel:#102434;--panel2:#183041;--seg:#0D1F2C;--line:#1F3A4D;--field-line:#5a7b92;
+    --ink:#EEF4F8;--dim:#B4C4CF;--body:#D6E2EA;--accent:#4FA3D1;--focus:#7CC4EA;
+    --btn-bg:#4FA3D1;--btn-fg:#0B1A26;--danger:#ffa3a3;--danger-bg:#b3261e;--danger-fg:#fff;--ok:#6FD9A2;--warn:#F0C171;
     --shadow:inset 0 1px 0 rgba(255,255,255,.04);
     --chip-s:45%;--chip-bg-l:24%;--chip-fg-l:86%;--chip-fg-s:80%}
   @media (prefers-color-scheme:light){:root{color-scheme:light;
-    --bg:#f3f6f9;--panel:#ffffff;--panel2:#e8eef3;--seg:#e2e9ef;--line:#d3dee7;--field-line:#6b879b;
-    --ink:#0B2E45;--dim:#46607a;--body:#1d3b50;--accent:#7a4f00;--focus:#0B2E45;
-    --btn-bg:#0B2E45;--btn-fg:#ffffff;--danger:#b3261e;--danger-bg:#b3261e;--danger-fg:#fff;--ok:#14683f;--warn:#7a4f00;
+    --bg:#F1F6F9;--panel:#FFFFFF;--panel2:#EAF0F4;--seg:#EAF0F4;--line:#D9E3EA;--field-line:#66717B;
+    --ink:#12212C;--dim:#4E5B66;--body:#12212C;--accent:#155F87;--focus:#155F87;
+    --btn-bg:#155F87;--btn-fg:#ffffff;--danger:#b3261e;--danger-bg:#b3261e;--danger-fg:#fff;--ok:#17794A;--warn:#8A5A12;
     --shadow:0 1px 2px rgba(11,46,69,.05),0 8px 20px -12px rgba(11,46,69,.22);
     --chip-s:60%;--chip-bg-l:90%;--chip-fg-l:20%;--chip-fg-s:70%}}
   /* The navy band (header, sign-in card) looks the same in both themes, so it redefines the tokens inside it. */
@@ -32,7 +37,8 @@ export const DASHBOARD_HTML = `<!doctype html>
     --btn-bg:var(--gold);--btn-fg:var(--navy)}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased;
-    font:var(--fs)/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+    font:var(--fs)/1.5 var(--sans)}
+  h1,h2{font-family:var(--serif);font-weight:700;letter-spacing:-.01em}
   header{display:flex;gap:12px;align-items:center;padding:12px max(16px,calc((100% - 900px)/2 + 16px));flex-wrap:wrap}
   @media (min-width:700px){header{position:sticky;top:0;z-index:2}}
   .brand{display:flex;align-items:center;gap:9px;margin-right:auto}
@@ -71,7 +77,7 @@ export const DASHBOARD_HTML = `<!doctype html>
   .card.held{border-left:5px solid var(--danger-bg)}
   .stamp{display:inline-block;border:2px solid var(--danger);color:var(--danger);border-radius:4px;
     padding:0 7px;font-size:11px;font-weight:800;letter-spacing:.08em;margin-bottom:6px}
-  .heldbody{font:13px/1.45 ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;white-space:pre-wrap;
+  .heldbody{font:13px/1.45 var(--mono);white-space:pre-wrap;
     overflow-wrap:anywhere;color:var(--body);border:1px dashed var(--danger);border-radius:6px;padding:8px 10px;margin-top:8px}
   .grow{flex:1 1 140px;min-width:0}
   .ns{width:170px;max-width:100%}
@@ -420,8 +426,8 @@ function render(notes){
   var lf = ($("lvlf") || {}).value || "";
   if(lf){ notes = notes.filter(function(n){ return (n.sensitivity || "internal") === lf; }); $("count").textContent = notes.length + " note" + (notes.length===1?"":"s") + " labelled " + lf; }
   if(!notes.length){
-    list.innerHTML = lf ? empty("No notes with that label here.") : $("q").value.trim() ? empty("No notes match that search. Try fewer words, or clear the namespace box.")
-      : $("ns").value.trim() ? empty("No notes in namespace &quot;" + esc($("ns").value.trim()) + "&quot;. Clear the namespace box to see notes in every namespace.")
+    list.innerHTML = lf ? empty("No notes with that label here.") : $("q").value.trim() ? empty("No notes match that search. Try fewer words, or clear the Project box.")
+      : $("ns").value.trim() ? empty("No notes in project &quot;" + esc($("ns").value.trim()) + "&quot;. Clear the Project box to see notes in every project.")
       : empty("No notes yet. Ask your assistant to remember something, or run <code>monomem setup</code>.");
     return;
   }
@@ -731,7 +737,7 @@ function cfRow(g, gi){
   var pins = all.filter(function(n){ return n.pinned; }).map(function(n){ return "#"+Number(n.id); });
   return "<div class='cf'><h3><span class='tag'>"+esc(g.confidence)+"</span>"+esc(g.key)+"</h3>"+
     g.values.map(function(v){ return "<div class='cfval'><b>"+esc(v.value)+"</b>"+v.notes.map(cfNote).join("")+"</div>"; }).join("")+
-    "<div class='meta'>Namespace: <b>"+esc(g.namespace)+"</b>"+(pins.length ? " &middot; "+pins.join(", ")+" pinned: change it from the CLI" : "")+"</div>"+acts(btns.join(" "))+
+    "<div class='meta'>Project: <b>"+esc(g.namespace)+"</b>"+(pins.length ? " &middot; "+pins.join(", ")+" pinned: change it from the CLI" : "")+"</div>"+acts(btns.join(" "))+
     (more.length ? "<details class='cfmore'><summary class='muted'>More</summary>"+acts(more.join(" "))+"</details>" : "")+
     "<div class='cfdlg' id='cfdlg"+gi+"'></div></div>";
 }
@@ -851,7 +857,7 @@ function loadMeter(){
       stat(num(m.capture_events), "capture events recorded")+
       stat((Number(m.db_bytes||0)/1048576).toFixed(1)+" MB", "database on disk")+"</div>"+
       "<div class='meta' style='margin-top:8px'>"+esc(m.note)+"</div></div>"+
-      (rows ? "<div class='card'><h3>Recent sessions</h3><div class='scroll'><table class='apps'><tr><th scope='col'>updated</th><th scope='col'>namespace</th><th scope='col' class='n'>injected</th><th scope='col' class='n'>saved</th><th scope='col' class='n'>model</th></tr>"+rows+"</table></div></div>"
+      (rows ? "<div class='card'><h3>Recent sessions</h3><div class='scroll'><table class='apps'><tr><th scope='col'>updated</th><th scope='col'>project</th><th scope='col' class='n'>injected</th><th scope='col' class='n'>saved</th><th scope='col' class='n'>model</th></tr>"+rows+"</table></div></div>"
         : empty("No session metered yet: the numbers start with the next session the SessionStart hook runs for."));
   }).catch(failList);
 }
@@ -870,7 +876,7 @@ function loadApps(){
       return "<tr><td>"+esc(a.label)+"</td><td>"+esc(a.scope)+"</td><td>"+esc(a.namespace || "all")+"</td><td>"+lim+"</td><td>"+(a.last_used ? when(a.last_used) : "not since the server started")+"</td><td>"+rm+"</td></tr>";
     }).join("");
     $("list").innerHTML =
-      "<div class='card'><h3>Apps that can connect</h3><table class='apps'><tr><th>name</th><th>may</th><th>namespace</th><th>sees notes labelled</th><th>last used</th><th></th></tr>"+rows+"</table>"+
+      "<div class='card'><h3>Apps that can connect</h3><table class='apps'><tr><th>name</th><th>may</th><th>project</th><th>sees notes labelled</th><th>last used</th><th></th></tr>"+rows+"</table>"+
       "<p class='meta'>Keys are not shown here. Removing an app cuts it off straight away.</p></div>"+
       "<div class='card'><h3>Add an app</h3><div class='row'>"+
       "<input id='ap_label' placeholder='name, e.g. cursor' aria-label='Name for the new app'>"+
@@ -940,7 +946,7 @@ function loadAudit(){
     var ops = ["", "create", "update", "delete"].map(function(o){ return "<option value='" + o + "'" + (o===op?" selected":"") + ">" + (o || "all actions") + "</option>"; }).join("");
     var wins = ["24h", "7d", "30d"].map(function(w){ return "<option value='" + w + "'" + (w===since?" selected":"") + ">last " + w + "</option>"; }).join("");
     $("list").innerHTML = "<div class='row'><select id='au_since' aria-label='How far back' onchange='loadAudit()'>" + wins + "</select><select id='au_op' aria-label='Kind of action' onchange='loadAudit()'>" + ops + "</select></div>" +
-      (rows ? "<div class='card'><table class='apps'><tr><th>when</th><th>action</th><th>app</th><th>namespace</th><th>note</th></tr>" + rows + "</table></div>" : empty("Nothing logged in that time."));
+      (rows ? "<div class='card'><table class='apps'><tr><th>when</th><th>action</th><th>app</th><th>project</th><th>note</th></tr>" + rows + "</table></div>" : empty("Nothing logged in that time."));
   }).catch(failList);
 }
 
