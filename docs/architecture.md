@@ -1,57 +1,53 @@
 # Architecture
 
 ```mermaid
-%%{init: {"theme":"base","themeVariables":{
-  "fontFamily":"Trebuchet MS, Verdana, Arial, sans-serif",
-  "primaryColor":"#141a28","primaryTextColor":"#e8ecf5","primaryBorderColor":"#2b3550",
-  "lineColor":"#5b6b8c","clusterBkg":"#0f1420","clusterBorder":"#232c40",
-  "edgeLabelBackground":"#0b0e15"}}}%%
+%%{init: {"theme":"base","flowchart":{"useMaxWidth":false,"htmlLabels":false,"curve":"basis","nodeSpacing":40,"rankSpacing":55},
+  "themeVariables":{"fontFamily":"Arial, Helvetica, sans-serif","fontSize":"16px",
+  "primaryColor":"#12233f","primaryTextColor":"#eef2fa","primaryBorderColor":"#2b3a5c",
+  "lineColor":"#8a9bbd","clusterBkg":"#0d1626","clusterBorder":"#2b3a5c",
+  "edgeLabelBackground":"#0b1220","tertiaryColor":"#0d1626"}}}%%
 flowchart LR
-  subgraph you["Your machine"]
-    direction TB
-    CC["Claude Code"]
-    CD["Claude Desktop"]
-    IDE["Cursor · Copilot · Cline"]
+  AG["Your AI agents<br/>Claude Code · Codex · Cursor<br/>Copilot · Gemini CLI · Zed"]
+  AG2["Every agent, next session<br/>knows what the others saved"]
+
+  subgraph mm["Monomem: one small Node process on your machine"]
+    direction LR
+    IN(["MCP · REST"])
+    GATE{"Write check<br/>secrets refused<br/>known attacks held"}
+    HELD[["Held queue<br/>waits for your OK"]]
+    DB[("One SQLite file<br/>each note keeps<br/>who wrote it, its history<br/>and its privacy label")]
+    OUT(["Reads<br/>private notes hidden<br/>from limited apps<br/>distrusted writers left out"])
+    IN --> GATE
+    GATE -- "clean" --> DB
+    GATE -- "suspicious" --> HELD
+    HELD -- "you approve" --> DB
+    DB --> OUT
   end
 
-  subgraph bridge["Monomem — one small Node process"]
-    direction TB
-    STDIO(["MCP · stdio"])
-    HTTP(["MCP · HTTP  :8791"])
-    API(["REST API + dashboard  :8790"])
-    DB[("SQLite + FTS5<br/>one note store")]
-    STDIO --> DB
-    HTTP --> DB
-    API --> DB
-  end
+  YOU(["You: dashboard and CLI<br/>approve · distrust · roll back · drill"])
 
-  subgraph away["Away from your desk"]
-    direction TB
-    WEB["claude.ai web"]
-    PHONE["Claude mobile"]
-  end
+  AG -- "save" --> IN
+  OUT -- "recall" --> AG2
+  HELD -.- YOU
+  DB -.- YOU
 
-  CC --> STDIO
-  CD --> STDIO
-  IDE --> STDIO
-  WEB  -. "HTTPS tunnel · bearer token" .-> HTTP
-  PHONE -. "HTTPS tunnel · bearer token" .-> HTTP
-
-  classDef client fill:#07343b,stroke:#22d3ee,stroke-width:2px,color:#d7fbff;
-  classDef remote fill:#3a3108,stroke:#f5c518,stroke-width:2px,color:#fff4cf;
-  classDef stdio  fill:#0c3020,stroke:#35d0a5,stroke-width:2px,color:#d7fff0;
-  classDef http   fill:#12233f,stroke:#4f8cff,stroke-width:2px,color:#dfe9ff;
-  classDef api    fill:#3a1518,stroke:#ff5d6c,stroke-width:2px,color:#ffdfe2;
-  classDef store  fill:#0c3a26,stroke:#35d0a5,stroke-width:3px,color:#eafff6;
-  class CC,CD,IDE client;
-  class WEB,PHONE remote;
-  class STDIO stdio;
-  class HTTP http;
-  class API api;
+  classDef agent fill:#0b2e45,stroke:#3fb4ff,stroke-width:2px,color:#e3f3ff;
+  classDef entry fill:#12233f,stroke:#7f9cff,stroke-width:2px,color:#e6ecff;
+  classDef gate  fill:#3a2c08,stroke:#f0c171,stroke-width:3px,color:#fff3d6;
+  classDef held  fill:#3a1518,stroke:#ff7a85,stroke-width:2px,color:#ffe1e4;
+  classDef store fill:#0c3a26,stroke:#35d0a5,stroke-width:3px,color:#eafff6;
+  classDef read  fill:#12233f,stroke:#35d0a5,stroke-width:2px,color:#e6fff6;
+  classDef you   fill:#2b2410,stroke:#f0c171,stroke-width:2px,color:#fff3d6;
+  class AG,AG2 agent;
+  class IN entry;
+  class GATE gate;
+  class HELD held;
   class DB store;
-
-  linkStyle 6,7 stroke:#f5c518,stroke-width:2px;
+  class OUT read;
+  class YOU you;
 ```
+
+*The same diagram as an image (for npm and other viewers that do not draw Mermaid): [monomem-architecture.png](./monomem-architecture.png). Source: [monomem-architecture.mmd](./monomem-architecture.mmd).*
 
 One store, reached three ways — all pointing at the same
 `MONOMEM_DB_PATH`, so a note written through any one of them is
