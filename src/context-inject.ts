@@ -309,7 +309,8 @@ export async function injectContext(store: Store, opts: InjectOptions = {}): Pro
   let pinUsed = PINNED_HEAD.length;
   for (const n of pinned) {
     // Same treatment as titles: no invisible/bidi/control characters, and brackets cannot fake a "[type]" tag or writer.
-    const snippet = one(n.body).replace(INVISIBLE_RE, "").replace(/\[/g, "(").replace(/\]/g, ")").slice(0, 200);
+    // A stamped note's text is not pasted in, pinned or not: the flag on its line says why.
+    const snippet = originTools(n).length ? "" : one(n.body).replace(INVISIBLE_RE, "").replace(/\[/g, "(").replace(/\]/g, ")").slice(0, 200);
     const line = `${indexLine(n)}${snippet ? ": " + snippet : ""}`;
     if (pinUsed + line.length + 1 > pinCap - 90) break; // 90: room for the "N more" line, so the block stays inside the cap
     pinLines.push(line);
@@ -354,7 +355,7 @@ export async function injectContext(store: Store, opts: InjectOptions = {}): Pro
   const limit = Math.max(1, Math.min(100, Math.floor(opts.limit ?? 10)));
   const notes: NoteRecord[] = [];
   for (const n of ranked) {
-    if (n.kind || notes.length >= limit) continue;
+    if (n.kind || originTools(n).length || notes.length >= limit) continue; // stamped rows: index line only, never their text
     const next = buildSummary([...notes, n], tagOf);
     if (used + next.length > budget) break;
     notes.push(n);

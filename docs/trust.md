@@ -167,8 +167,13 @@ output. A stamp, once set on a summary, stays when the summary is rebuilt later 
 - The `WHO WROTE THIS` block on every MCP read says `Monomem saw this session read outside content through "WebFetch"
   (stamped, not claimed)`.
 
-**It cannot be forged or dropped.** `obs.` tags are reserved: no note write (REST, MCP, file sync) can add one or take one
-away, so a trusted writer cannot quietly promote a stamped summary into a clean note.
+**It cannot be dropped.** Once a note has the stamp, every update path keeps it (REST, MCP, file sync, JSON import, the
+CLI): the stamp only grows. `obs.` tags are reserved, so an agent's note write can neither add nor remove one, and a
+trusted writer cannot quietly promote a stamped summary into a clean note. Two admin-level routes can *create* a note that
+already carries a stamp: `monomem import` / `POST /import` and a synced vault file. That can only add caution, never remove
+it. A tool name that is not plain name characters (letters, digits, `_ . -`, up to 80) is stamped as `other`, and so is
+one the write-time linter refuses, so a hostile name can neither reach the agent's context nor cost the session its
+summary. A stamped note's text is never pasted into the session-start block, pinned or not.
 
 **What it is not.** A note **without** the stamp is not thereby safe. Every note is still untrusted data. Not covered:
 

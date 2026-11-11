@@ -24,7 +24,8 @@
 // the exact tags `observation` and `summary`, and every tag starting with
 // `obs.` (obs.type:, obs.concept:). Only extract.ts writes them, so a note
 // cannot pass itself off as captured work.
-import { ValidationError } from "./store.js";
+import { ValidationError, ORIGIN_TOOL_PREFIX } from "./store.js";
+export { ORIGIN_TOOL_PREFIX };
 import { flaggedFactValue } from "./facts.js";
 
 export const RESERVED_TAG_PREFIX = "task.";
@@ -42,7 +43,6 @@ export const isModelWritten = (n: { tags: readonly string[] }): boolean => n.tag
  * tool name comes from the hook payload, not from the model. It says "this session read outside content through X"; a
  * note WITHOUT it is not thereby safe.
  */
-export const ORIGIN_TOOL_PREFIX = "obs.origin:tool:";
 export const originTools = (n: { tags: readonly string[] }): string[] =>
   n.tags.filter((t) => t.startsWith(ORIGIN_TOOL_PREFIX)).map((t) => t.slice(ORIGIN_TOOL_PREFIX.length));
 /** The short flag printed after a stamped note's title in agent context ("" when not stamped). */

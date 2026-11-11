@@ -12,7 +12,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `WebFetch`, `WebSearch` or another MCP server's tool, the session summary gets the reserved tag
   `obs.origin:tool:<name>` (at most 3, from the hook payload's tool name, never from model text). A stamped summary is named
   but not pasted into the session-start block, index lines say `(session read outside content: WebFetch)`, and the WHO WROTE
-  THIS block states it as stamped, not claimed. No note write can add or drop the stamp. It is not a clean bill for
+  THIS block states it as stamped, not claimed. No update path can drop the stamp (it only grows), an agent's write cannot
+  add one, a pinned stamped note shows no text either, and an unsafe or linter-refused tool name is stamped `other`. It is not a clean bill for
   unstamped notes, does not cover an agent paraphrasing outside text into `state_write` (the drill's `SELF` miss) or
   clients without the capture hooks, and does not count `Read`/`Bash`. New `MONOMEM_LOCAL_MCP_SERVERS` names MCP servers
   that only return local content. See docs/trust.md, "The outside-content stamp". Suggested by readers of the drill

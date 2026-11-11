@@ -79,9 +79,14 @@ export const MAX_ORIGIN_TOOLS = 3;
 /** Pure: the outside-content tools that returned output in these events, as stamp tags (exported for the tests). */
 export function originTags(events: readonly { event: string; tool: string; output: string }[]): string[] {
   const seen = new Set<string>();
-  for (const e of events) if ((e.event === "post-tool" || e.event === "post-tool-failure") && e.output && isOutsideTool(e.tool)) seen.add(e.tool.slice(0, 80));
+  // A tool name lands in a tag and in agent context: anything but plain name characters is stamped as "other" (still stamped).
+  for (const e of events)
+    if ((e.event === "post-tool" || e.event === "post-tool-failure") && e.output && isOutsideTool(e.tool)) seen.add(SAFE_TOOL_NAME.test(e.tool) ? e.tool : OTHER_TOOL);
   return [...seen].sort().slice(0, MAX_ORIGIN_TOOLS).map((t) => ORIGIN_TOOL_PREFIX + t);
 }
+const SAFE_TOOL_NAME = /^[A-Za-z0-9_.-]{1,80}$/;
+/** The stamp used when a tool's name is unsafe to print, or when the linter refuses the named stamp. */
+export const OTHER_TOOL = "other";
 const TEST_CMD = /\b(?:node\s+--test|(?:npm|pnpm|yarn)\s+(?:run\s+)?test|npx\s+(?:jest|vitest)|jest|vitest|pytest|cargo\s+test|go\s+test)\b/;
 const BUILD_CMD = /\b(?:(?:npm|pnpm|yarn)\s+run\s+build|tsc\b|cargo\s+build|go\s+build|make\b)/;
 const TEST_FAILED =
@@ -310,15 +315,24 @@ function tagsFor(kind: "observation" | "summary", type: string, text: string): s
 
 /** Write one capture note; a write the linter holds or refuses is skipped (the linter doing its job), never thrown. */
 function write(store: Store, s: SessionRow, kind: "observation" | "summary", type: string, title: string, body: string, files: Observation["files"], extraTags: string[] = []): NoteRecord | null {
-  try {
+  const attempt = (extra: string[]): NoteRecord => {
     const note = store.create(
-      { namespace: s.namespace || DEFAULT_NAMESPACE, title, body, tags: [...tagsFor(kind, type, `${title} ${body}`), ...extraTags], source: CAPTURE_SOURCE },
+      { namespace: s.namespace || DEFAULT_NAMESPACE, title, body, tags: [...tagsFor(kind, type, `${title} ${body}`), ...extra], source: CAPTURE_SOURCE },
       { kind, sessionId: s.id, obsType: kind === "observation" ? type : "", skipEdges: true }
     );
     linkFiles(store, note.id, files);
     return note;
+  };
+  try {
+    return attempt(extraTags);
   } catch {
-    return null;
+    // A tool name the linter dislikes must not cost the session its summary: retry once with the plain "other" stamp.
+    if (!extraTags.length) return null;
+    try {
+      return attempt([ORIGIN_TOOL_PREFIX + OTHER_TOOL]);
+    } catch {
+      return null;
+    }
   }
 }
 
@@ -422,8 +436,16 @@ export function distillSession(store: Store, sessionId: string): { observations:
       const kept = existing.tags.filter((t) => t !== MODEL_WRITTEN_TAG);
       const room = MAX_ORIGIN_TOOLS - kept.filter((t) => t.startsWith(ORIGIN_TOOL_PREFIX)).length;
       const added = origin.filter((t) => !kept.includes(t)).slice(0, Math.max(0, room));
-      if (existing.body !== sum.body || existing.title !== sum.title || added.length)
-        store.update(existing.id, { title: sum.title, body: sum.body, tags: [...kept, ...added] });
+      if (existing.body !== sum.body || existing.title !== sum.title || added.length) {
+        try {
+          store.update(existing.id, { title: sum.title, body: sum.body, tags: [...kept, ...added] });
+        } catch (e) {
+          // Retry once with the plain stamp, so a refused tool name does not freeze the summary (the outer catch keeps it as it was).
+          if (!added.length) throw e;
+          const other = ORIGIN_TOOL_PREFIX + OTHER_TOOL;
+          store.update(existing.id, { title: sum.title, body: sum.body, tags: kept.includes(other) ? kept : [...kept, other] });
+        }
+      }
       linkFiles(store, existing.id, sum.files);
     } else {
       id = write(store, s, "summary", "session", sum.title, sum.body, sum.files, origin)?.id ?? null;
