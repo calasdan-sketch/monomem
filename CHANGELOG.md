@@ -6,6 +6,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed (docs)
+
+- **README and INFRA.md no longer say claude.ai or the Claude mobile app can connect.** Their custom connectors sign in
+  with OAuth; Monomem only accepts a bearer token, and a login page in front (Cloudflare Access) blocks the connector.
+  The docs now say so, link Anthropic's connector-auth page, and point phone users to Claude Code's remote control.
+
 ### Added
 
 - **Pinned notes are now also shown first at every session start.** Pin used to mean only "agents can read it, but only

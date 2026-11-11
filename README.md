@@ -95,10 +95,13 @@ No global install: `claude mcp add monomem -- npx -y monomem mcp`.
 [INSTALL.md](./INSTALL.md) has every client.
 
 `monomem start` serves the dashboard and REST API on `:8790` and
-MCP-over-HTTP on `:8791` (bound to `127.0.0.1`). To reach it from your phone
-or claude.ai, put an authenticated tunnel (Cloudflare Tunnel + Access,
-Tailscale, or your own TLS proxy) in front of `:8791` — see
-[INFRA.md](./INFRA.md).
+MCP-over-HTTP on `:8791` (bound to `127.0.0.1`). Clients that can send a
+bearer token (Claude Code, scripts, your own apps) can reach it remotely
+through a private network or tunnel you control — see [INFRA.md](./INFRA.md).
+**claude.ai and the Claude mobile app do not work with it yet:** their custom
+connectors sign in with OAuth, Monomem only accepts a bearer token, and a
+login page such as Cloudflare Access blocks the connector. On a phone, use
+Claude Code's remote control, which runs on your computer.
 
 Plain REST works too once `monomem start` is running (the token is in
 `~/.monomem/.token`):
