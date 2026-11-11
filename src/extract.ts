@@ -19,7 +19,7 @@ import { DEFAULT_NAMESPACE } from "./store.js";
 import { scanForInjection } from "./lint.js";
 import { extractKeywords } from "./keywords.js";
 import { captureAad, eventInput } from "./capture.js";
-import { MODEL_WRITTEN_TAG } from "./reserved-tags.js";
+import { MODEL_WRITTEN_TAG, ORIGIN_TOOL_PREFIX } from "./reserved-tags.js";
 
 export const OBS_TYPES = ["bugfix", "feature", "refactor", "change", "discovery", "decision", "security_alert", "security_note"] as const;
 export type ObsType = (typeof OBS_TYPES)[number];
@@ -58,6 +58,30 @@ export interface Observation {
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 const READ_TOOLS = new Set(["Read", "Grep", "Glob"]);
+
+/**
+ * Tools whose output is outside content: the web, and MCP servers other than Monomem itself. The name is the hook
+ * payload's tool_name, recorded by capture.ts, never text the model wrote.
+ * ponytail: local reads (Read/Grep/Glob) and Bash (curl, git pull) are not counted: they run in nearly every session, so
+ * the label would mean nothing. A downloaded README read with Read is therefore NOT stamped (said in docs/trust.md).
+ */
+export function isOutsideTool(tool: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (tool === "WebFetch" || tool === "WebSearch") return true;
+  if (!tool.startsWith("mcp__") || /^mcp__(plugin_monomem_)?monomem__/.test(tool)) return false;
+  // MONOMEM_LOCAL_MCP_SERVERS: MCP servers the owner says return only local content (a code index, say), by server name.
+  const server = tool.slice(5).split("__")[0].toLowerCase();
+  const local = (env.MONOMEM_LOCAL_MCP_SERVERS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  return !local.includes(server);
+}
+/** At most this many tool names are stamped on one summary (sorted); a session that used more still gets the first ones. */
+export const MAX_ORIGIN_TOOLS = 3;
+
+/** Pure: the outside-content tools that returned output in these events, as stamp tags (exported for the tests). */
+export function originTags(events: readonly { event: string; tool: string; output: string }[]): string[] {
+  const seen = new Set<string>();
+  for (const e of events) if ((e.event === "post-tool" || e.event === "post-tool-failure") && e.output && isOutsideTool(e.tool)) seen.add(e.tool.slice(0, 80));
+  return [...seen].sort().slice(0, MAX_ORIGIN_TOOLS).map((t) => ORIGIN_TOOL_PREFIX + t);
+}
 const TEST_CMD = /\b(?:node\s+--test|(?:npm|pnpm|yarn)\s+(?:run\s+)?test|npx\s+(?:jest|vitest)|jest|vitest|pytest|cargo\s+test|go\s+test)\b/;
 const BUILD_CMD = /\b(?:(?:npm|pnpm|yarn)\s+run\s+build|tsc\b|cargo\s+build|go\s+build|make\b)/;
 const TEST_FAILED =
@@ -285,10 +309,10 @@ function tagsFor(kind: "observation" | "summary", type: string, text: string): s
 }
 
 /** Write one capture note; a write the linter holds or refuses is skipped (the linter doing its job), never thrown. */
-function write(store: Store, s: SessionRow, kind: "observation" | "summary", type: string, title: string, body: string, files: Observation["files"]): NoteRecord | null {
+function write(store: Store, s: SessionRow, kind: "observation" | "summary", type: string, title: string, body: string, files: Observation["files"], extraTags: string[] = []): NoteRecord | null {
   try {
     const note = store.create(
-      { namespace: s.namespace || DEFAULT_NAMESPACE, title, body, tags: tagsFor(kind, type, `${title} ${body}`), source: CAPTURE_SOURCE },
+      { namespace: s.namespace || DEFAULT_NAMESPACE, title, body, tags: [...tagsFor(kind, type, `${title} ${body}`), ...extraTags], source: CAPTURE_SOURCE },
       { kind, sessionId: s.id, obsType: kind === "observation" ? type : "", skipEdges: true }
     );
     linkFiles(store, note.id, files);
@@ -386,15 +410,23 @@ export function distillSession(store: Store, sessionId: string): { observations:
   const titles = store.list({ kinds: ["observation"], sessionId, limit: 50, order: "created_asc" }).notes.map((n) => n.title);
   const sum = summarize(all, s.cwd, titles);
   if (!sum) return { observations: written, summaryId: s.summary_note_id };
+  // The summary quotes the session's errors and closing words, which can carry what an outside tool returned: stamp it.
+  // Observations are not stamped: their text comes from the user's prompts and local commands, never from tool output.
+  const origin = originTags(all);
   let id = s.summary_note_id;
   const existing = id !== null ? store.read(id) : null; // gate-ok: the capture writer re-reads its own summary note
   try {
     if (existing && existing.kind === "summary") {
-      // A rebuilt summary is the deterministic text again: it loses the model-written mark (llm.ts).
-      if (existing.body !== sum.body || existing.title !== sum.title) store.update(existing.id, { title: sum.title, body: sum.body, tags: existing.tags.filter((t) => t !== MODEL_WRITTEN_TAG) });
+      // A rebuilt summary is the deterministic text again: it loses the model-written mark (llm.ts). Stamps only grow:
+      // an origin seen earlier in the session stays even if a later rebuild's window no longer shows it.
+      const kept = existing.tags.filter((t) => t !== MODEL_WRITTEN_TAG);
+      const room = MAX_ORIGIN_TOOLS - kept.filter((t) => t.startsWith(ORIGIN_TOOL_PREFIX)).length;
+      const added = origin.filter((t) => !kept.includes(t)).slice(0, Math.max(0, room));
+      if (existing.body !== sum.body || existing.title !== sum.title || added.length)
+        store.update(existing.id, { title: sum.title, body: sum.body, tags: [...kept, ...added] });
       linkFiles(store, existing.id, sum.files);
     } else {
-      id = write(store, s, "summary", "session", sum.title, sum.body, sum.files)?.id ?? null;
+      id = write(store, s, "summary", "session", sum.title, sum.body, sum.files, origin)?.id ?? null;
       if (id !== null) store.captureDb().prepare("UPDATE sessions SET summary_note_id = ? WHERE id = ?").run(id, sessionId);
     }
   } catch {
