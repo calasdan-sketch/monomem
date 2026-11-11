@@ -145,6 +145,8 @@ interface SessionRow {
   prompt_count: number;
   event_count: number;
   summary_note_id: number | null;
+  /** Model the app reported at session start (unverified), or null. */
+  model: string | null;
 }
 
 /**
@@ -162,7 +164,7 @@ function sessionVisible(store: Store, r: SessionRow): boolean {
 }
 
 function sessionRow(store: Store, scope: ReadScope, id: string): SessionRow | null {
-  const r = store.captureDb().prepare("SELECT id, namespace, cwd, agent, started_at, ended_at, prompt_count, event_count, summary_note_id FROM sessions WHERE id = ?").get(id) as SessionRow | undefined;
+  const r = store.captureDb().prepare("SELECT id, namespace, cwd, agent, started_at, ended_at, prompt_count, event_count, summary_note_id, model FROM sessions WHERE id = ?").get(id) as SessionRow | undefined;
   if (!r || (scope.namespaces && !scope.namespaces.includes(r.namespace)) || !sessionVisible(store, r)) return null;
   return { ...r };
 }
@@ -193,7 +195,7 @@ export function sessionList(store: Store, scope: ReadScope, limit?: number): { s
   const stmt = store
     .captureDb()
     .prepare(
-      `SELECT id, namespace, cwd, agent, started_at, ended_at, prompt_count, event_count, summary_note_id FROM sessions
+      `SELECT id, namespace, cwd, agent, started_at, ended_at, prompt_count, event_count, summary_note_id, model FROM sessions
        ${ns ? `WHERE namespace IN (${ns.map(() => "?").join(",")})` : ""} ORDER BY started_at DESC LIMIT ? OFFSET ?`
     );
   const out: Array<SessionRow & { summary: string | null }> = [];

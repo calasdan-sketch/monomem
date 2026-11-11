@@ -95,10 +95,13 @@ No global install: `claude mcp add monomem -- npx -y monomem mcp`.
 [INSTALL.md](./INSTALL.md) has every client.
 
 `monomem start` serves the dashboard and REST API on `:8790` and
-MCP-over-HTTP on `:8791` (bound to `127.0.0.1`). To reach it from your phone
-or claude.ai, put an authenticated tunnel (Cloudflare Tunnel + Access,
-Tailscale, or your own TLS proxy) in front of `:8791` — see
-[INFRA.md](./INFRA.md).
+MCP-over-HTTP on `:8791` (bound to `127.0.0.1`). Clients that can send a
+bearer token (Claude Code, scripts, your own apps) can reach it remotely
+through a private network or tunnel you control — see [INFRA.md](./INFRA.md).
+**claude.ai and the Claude mobile app do not work with it yet:** their custom
+connectors sign in with OAuth, Monomem only accepts a bearer token, and a
+login page such as Cloudflare Access blocks the connector. On a phone, use
+Claude Code's remote control, which runs on your computer.
 
 Plain REST works too once `monomem start` is running (the token is in
 `~/.monomem/.token`):
@@ -215,6 +218,8 @@ monomem setup --capture        # or answer y to "Also record what <agent> does i
   version, the (already redacted) event waits in a spool file and is stored by a later hook.
 - **Back at the next session:** the start-of-session context is ranked by what you are working on (git branch, changed
   files, recent work), packed into `MONOMEM_RECALL_TOKENS` (1500), and ends with what it stands in for.
+- **During a session:** new notes from other agents show up as one-line titles on your next message (at most 5, then
+  "and N more"; distrusted writers and captured rows left out; nothing when there are none).
 - **Looking things up:** `memory_index` (compact rows) → `memory_timeline` (what happened around one) →
   `memory_get` (full text, cite as `om:#id`), plus `session_list`. REST: `GET /index`, `GET /timeline`, `POST /get`,
   `GET /sessions`, `GET /files/timeline?path=`. The [monomem-mem skill](./skills/monomem-mem/SKILL.md) teaches
@@ -247,7 +252,9 @@ and quietly stays on keyword search when it does not (it retries once a minute).
 `monomem doctor` shows whether the hooks are wired, the last captured event and the spool size;
 `monomem setup --undo` takes the hooks out again.
 
-**At session start** you get a short "What I know about this project" block first (decisions, conventions, key
+**At session start**, notes you pin are shown at the start of every session, first, within a fixed size limit
+(`monomem pin <id>`, or **Pin (always shown)** in the dashboard with an admin key; `monomem pin` lists them). Then
+you get a short "What I know about this project" block (decisions, conventions, key
 files, the last session, open-task count), built from your stored notes with no model, capped at
 `MONOMEM_PROFILE_TOKENS` (300) and switched off with `MONOMEM_PROFILE=off`. Every memory line then says why it is
 there, in a few characters (`{files,kw 3d}`: linked to files you changed, matches your branch, three days old). A
@@ -266,7 +273,7 @@ prompt or note text is recorded):
 - capture events recorded and the database size on disk.
 
 See it in `monomem doctor` (the `footprint:` line), `GET /stats` and `memory_stats` (the `meter` field), and the
-dashboard's **Meter** view. Tokens are estimates at about 4 characters a token.
+dashboard's **Usage** view. Tokens are estimates at about 4 characters a token.
 
 ---
 

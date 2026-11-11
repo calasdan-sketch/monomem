@@ -4,8 +4,9 @@ status: active
 ---
 # Monomem — Infra & Ops Guide
 
-Setup and operations guide for exposing Monomem to Claude's remote
-surfaces (web, mobile) over the public internet. This document covers the
+Setup and operations guide for exposing Monomem over the public internet to
+clients that can send its bearer token. **claude.ai and the Claude mobile app
+cannot connect yet** (see section 3): their connectors need OAuth. This document covers the
 infra side only — tunnel setup, auth verification, connector setup, and a
 smoke test. See the main [README](./README.md) for what the project is and
 how to build/run it locally.
@@ -311,30 +312,31 @@ moves between releases.
 
 ### Claude web (remote, HTTPS)
 
-Claude web only supports remote MCP servers added as a custom connector
-through the UI. As currently documented: **claude.ai → Settings →
-Connectors → Add custom connector**, then supply:
+**Not supported yet (checked 2026-11-10).** Claude web and mobile add remote
+MCP servers as custom connectors, and those connectors sign in with OAuth
+(dynamic client registration or CIMD). Sending a fixed `Authorization` header
+is a beta limited to some organisations
+([Anthropic: connector authentication](https://claude.com/docs/connectors/building/authentication.md)).
+Monomem only accepts a bearer token, so a personal plan has no way to send it,
+and a login page in front (Cloudflare Access) blocks the connector before it
+reaches Monomem. Never run the endpoint without auth to work around this.
 
-- Name: `monomem` (or whatever you like)
-- URL: `https://<TUNNEL_HOSTNAME>/mcp`
-- Auth: however the connector UI asks for the bearer token (a header field
-  or an OAuth-style flow, depending on the current UI)
-
-Verify the exact menu path and field names against the live product —
-connector UIs change between releases.
+Until Monomem can verify a signed-in identity itself, use Claude Code's remote
+control on the phone (it runs Claude Code on your computer, which already has
+Monomem), or a client that can send the bearer token.
 
 ### Claude mobile (remote, HTTPS)
 
-Same remote connector mechanism as web, reached through the mobile app's
-own settings: **Claude app → Settings → Connectors → Add custom
-connector**, same URL and token as the web setup above.
+Same as Claude web: not supported yet, for the same reason. A connector added
+on claude.ai is the one the mobile app uses.
 
 ---
 
 ## 4. Smoke test — Definition of Done
 
 The real acceptance test: *write a note from Claude Code on the desktop,
-then read that same note back from Claude mobile.* Run it exactly like
+then read that same note back from a second, remote client.* (Claude mobile
+cannot be that client yet; see section 3.) Run it exactly like
 this once both halves are live — don't accept a partial pass.
 
 ### Preconditions (all must be true first)

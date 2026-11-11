@@ -4,6 +4,51 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.4] - 2026-11-10
+
+### Added
+
+- **Sessions show the model the app reported.** When Claude Code's SessionStart hook includes `model` (it sometimes
+  leaves it out, for example after `/clear`), Monomem keeps it on that session and the dashboard's Sessions tab shows
+  "Model at session start: … (reported by the app, not verified; subagents and /model switches may differ)". It is not
+  stamped on individual notes, never used for access or trust, and no other app reports a model today.
+
+### Fixed (docs)
+
+- **README and INFRA.md no longer say claude.ai or the Claude mobile app can connect.** Their custom connectors sign in
+  with OAuth; Monomem only accepts a bearer token, and a login page in front (Cloudflare Access) blocks the connector.
+  The docs now say so, link Anthropic's connector-auth page, and point phone users to Claude Code's remote control.
+
+### Added
+
+- **Pinned notes are now also shown first at every session start.** Pin used to mean only "agents can read it, but only
+  the monomem CLI can change it". It now ALSO means "shown first at every session start": a `Pinned (always shown):`
+  block before everything else, capped at 1600 characters charged to the recall budget. Pinned notes that do not fit
+  are counted ("N more pinned notes not shown (monomem pin lists them all, or the dashboard).") and never dropped
+  silently. Only the operator pin counts (`monomem pin <id>`, or `PUT /pinned` with an admin key), never the `pinned`
+  tag, which still only keeps a captured row from decaying. Distrusted writers, never-show and the sensitivity cap
+  apply as before. The dashboard shows **Pin (always shown)** / **Unpin** on each note for an unlimited admin key.
+- **New notes from other agents show up on your next message.** The `user-prompt` hook (UserPromptSubmit) now prints
+  one title line (id, writer, title; no body) per note saved or changed since your previous message, at most 5 plus
+  "and N more", inside the same untrusted-data banner as session start. Captured observations and summaries,
+  distrusted writers, never-show notes and this session's own rows are left out (and your own app's notes when the
+  hook's environment sets `MONOMEM_CLIENT`). Nothing is printed when there is nothing new, and a busy or missing
+  database prints nothing rather than slowing the prompt.
+
+### Changed
+
+- **The dashboard has a new look and plainer words.** A navy header band with the gold rule and the crescent mark (both
+  themes), softer cards, a 15px base size, and Calas Automations branding on the sign-in screen and footer. The header
+  now holds only search and **+ New**; the project, label and distrusted-writer filters moved to a **Filters** row. Tabs
+  are grouped: Notes, Review, Held, Changes first, then Sessions, Quality, Usage, Apps, Activity log. Renamed labels,
+  with the technical term in small grey text where it helps: **Meter** is now **Usage** (meter), **Audit** is now
+  **Activity log** (audit), the namespace box is **Project** (namespace), the `cli` writer shows as **terminal** (cli),
+  **Export JSON** / **Import JSON** are **Download backup** / **Add notes from a backup** (.json), **Change token** is
+  **Sign out**, and the sign-in box asks for **Your access key**. An unlimited admin key now sees "You're the owner: you
+  can see everything. Agents cannot change pinned notes; only you (terminal or this owner key) can pin or unpin." Delete now confirms with "Confirm permanent
+  delete?", and the per-note label picker uses the same honest private wording as the new-note one. No route, element
+  id or behaviour changed.
+
 ## [1.3.3] - 2026-11-10
 
 ### Added

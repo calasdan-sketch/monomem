@@ -13,80 +13,119 @@ export const DASHBOARD_HTML = `<!doctype html>
 <title>monomem</title>
 <link rel="icon" href="/favicon.ico" type="image/png" sizes="64x64">
 <style>
-  /* Brand: navy #0B2E45 + gold #F0C171. Every colour is a token; the light theme only redefines tokens. */
-  :root{color-scheme:dark;--gold:#F0C171;
-    --bg:#061a28;--panel:#0B2E45;--panel2:#143c58;--line:#2a5878;--field-line:#6b93ae;
-    --ink:#eef3f7;--dim:#a9bfcf;--body:#d3e0ea;--accent:#F0C171;--focus:#F0C171;
-    --btn-bg:#F0C171;--btn-fg:#0B2E45;--danger:#ffa3a3;--danger-bg:#b3261e;--danger-fg:#fff;--ok:#7fd6a8;--warn:#F0C171;
+  /* Brand: the calasautomations.com palette (calas-theme.css): navy #0B2E45, ocean #155F87, gold #F0C171.
+     Every colour is a token; the light theme only redefines tokens. Fonts: the site's names first (used when installed;
+     the CSP blocks web-font downloads), then the closest system fonts (Georgia for Libre Baskerville). */
+  :root{color-scheme:dark;--gold:#F0C171;--navy:#0B2E45;--fs:15px;--r:14px;--r-s:9px;
+    --sans:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+    --serif:"Libre Baskerville",Georgia,"Times New Roman",serif;
+    --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;
+    --bg:#0B1A26;--panel:#102434;--panel2:#183041;--seg:#0D1F2C;--line:#1F3A4D;--field-line:#5a7b92;
+    --ink:#EEF4F8;--dim:#B4C4CF;--body:#D6E2EA;--accent:#4FA3D1;--focus:#7CC4EA;
+    --btn-bg:#4FA3D1;--btn-fg:#0B1A26;--danger:#ffa3a3;--danger-bg:#b3261e;--danger-fg:#fff;--ok:#6FD9A2;--warn:#F0C171;
+    --shadow:inset 0 1px 0 rgba(255,255,255,.04);
     --chip-s:45%;--chip-bg-l:24%;--chip-fg-l:86%;--chip-fg-s:80%}
   @media (prefers-color-scheme:light){:root{color-scheme:light;
-    --bg:#f3f6f9;--panel:#ffffff;--panel2:#e6edf3;--line:#c3d1dc;--field-line:#6b879b;
-    --ink:#0B2E45;--dim:#46607a;--body:#1d3b50;--accent:#7a4f00;--focus:#0B2E45;
-    --btn-bg:#0B2E45;--btn-fg:#ffffff;--danger:#b3261e;--danger-bg:#b3261e;--danger-fg:#fff;--ok:#14683f;--warn:#7a4f00;
+    --bg:#F1F6F9;--panel:#FFFFFF;--panel2:#EAF0F4;--seg:#EAF0F4;--line:#D9E3EA;--field-line:#66717B;
+    --ink:#12212C;--dim:#4E5B66;--body:#12212C;--accent:#155F87;--focus:#155F87;
+    --btn-bg:#155F87;--btn-fg:#ffffff;--danger:#b3261e;--danger-bg:#b3261e;--danger-fg:#fff;--ok:#17794A;--warn:#8A5A12;
+    --shadow:0 1px 2px rgba(11,46,69,.05),0 8px 20px -12px rgba(11,46,69,.22);
     --chip-s:60%;--chip-bg-l:90%;--chip-fg-l:20%;--chip-fg-s:70%}}
+  /* The navy band (header, sign-in card) looks the same in both themes, so it redefines the tokens inside it. */
+  .navy{color-scheme:dark;background:var(--navy);border-bottom:3px solid var(--gold);color:var(--ink);
+    --panel:#143c58;--panel2:#1d4a69;--ink:#ffffff;--dim:#a9bfcf;--field-line:#5d87a4;--accent:var(--gold);--focus:var(--gold);
+    --btn-bg:var(--gold);--btn-fg:var(--navy)}
   *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--ink);
-    font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-  header{display:flex;gap:10px;align-items:center;padding:12px max(16px,calc((100% - 900px)/2 + 16px));
-    border-bottom:3px solid var(--gold);background:var(--bg);flex-wrap:wrap}
+  body{margin:0;background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased;
+    font:var(--fs)/1.5 var(--sans)}
+  h1,h2{font-family:var(--serif);font-weight:700;letter-spacing:-.01em}
+  header{display:flex;gap:12px;align-items:center;padding:12px max(16px,calc((100% - 900px)/2 + 16px));flex-wrap:wrap}
   @media (min-width:700px){header{position:sticky;top:0;z-index:2}}
-  h1{font-size:16px;margin:0;font-weight:700;letter-spacing:.2px}
+  .brand{display:flex;align-items:center;gap:9px;margin-right:auto}
+  .brand img{width:28px;height:28px;display:block}
+  h1{font-size:17px;margin:0;font-weight:700;letter-spacing:-.01em}
   h1 span{color:var(--accent)}
+  header #q{border-radius:999px;padding-left:16px}
   input,textarea,button,select{font:inherit;color:var(--ink);background:var(--panel);
-    border:1px solid var(--field-line);border-radius:9px;padding:6px 11px;min-height:34px}
+    border:1px solid var(--field-line);border-radius:var(--r-s);padding:6px 12px;min-height:36px}
+  input[type=checkbox]{min-height:0;width:18px;height:18px;margin:0;accent-color:var(--accent)}
   :focus-visible{outline:3px solid var(--focus);outline-offset:2px}
-  button{cursor:pointer;background:var(--btn-bg);border-color:var(--btn-bg);color:var(--btn-fg);font-weight:600}
+  button{cursor:pointer;background:var(--btn-bg);border-color:var(--btn-bg);color:var(--btn-fg);font-weight:600;
+    transition:background-color .15s,box-shadow .15s,transform .1s}
+  @media (prefers-reduced-motion:no-preference){button:active{transform:scale(.98)}}
+  @media (prefers-reduced-motion:reduce){button{transition:none}}
   button.ghost{background:var(--panel);color:var(--ink);border-color:var(--field-line)}
   button.danger{background:transparent;border-color:transparent;color:var(--danger);padding:4px 8px}
-  button.linkbtn{background:none;border:0;color:var(--accent);text-decoration:underline;
-    padding:4px 2px;font-weight:400}
-  nav{display:flex;gap:6px;flex-wrap:wrap;padding:10px 16px 0;max-width:900px;margin:0 auto}
-  nav button{background:transparent;color:var(--ink);border-color:var(--line);font-weight:500}
+  button.linkbtn{background:none;border:0;color:var(--accent);text-decoration:underline;text-underline-offset:3px;
+    padding:4px 2px;font-weight:500;min-height:0}
+  small.tech{color:var(--dim);font-size:.78em;font-weight:500;margin-left:.4em}
+  /* Tabs: the four you use daily in one segmented group, the rest quieter beside it. */
+  nav{display:flex;gap:10px 16px;flex-wrap:wrap;justify-content:space-between;align-items:center;padding:16px 16px 0;max-width:900px;margin:0 auto}
+  .seg{display:flex;flex-wrap:wrap;gap:2px;padding:3px;background:var(--seg);border-radius:12px}
+  .seg2{background:transparent;padding:3px 0}
+  nav button{background:transparent;color:var(--ink);border-color:transparent;font-weight:500;padding:5px 13px;min-height:34px}
+  .seg2 button{color:var(--dim)}
+  nav button:hover{background:var(--panel2)}
   [hidden]{display:none!important}
   nav button.lit{border-color:var(--danger)}
+  nav button[aria-current=page]{background:var(--panel);color:var(--ink);font-weight:650;
+    box-shadow:var(--shadow),inset 0 -2px 0 var(--accent)}
   .pill{display:inline-block;background:var(--danger-bg);color:var(--danger-fg);border-radius:999px;
     padding:0 7px;font-size:11px;font-weight:700;margin-left:6px;line-height:17px}
   .strip{display:block;width:100%;text-align:left;margin-bottom:12px;background:transparent;color:var(--danger);
-    border:1px solid var(--danger);border-left:5px solid var(--danger-bg);border-radius:9px;font-weight:600}
+    border:1px solid var(--danger);border-left:5px solid var(--danger-bg);border-radius:var(--r-s);font-weight:600}
   .card.held{border-left:5px solid var(--danger-bg)}
   .stamp{display:inline-block;border:2px solid var(--danger);color:var(--danger);border-radius:4px;
     padding:0 7px;font-size:11px;font-weight:800;letter-spacing:.08em;margin-bottom:6px}
-  .heldbody{font:13px/1.45 ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;white-space:pre-wrap;
+  .heldbody{font:13px/1.45 var(--mono);white-space:pre-wrap;
     overflow-wrap:anywhere;color:var(--body);border:1px dashed var(--danger);border-radius:6px;padding:8px 10px;margin-top:8px}
-  nav button[aria-current=page]{background:var(--panel2);border-color:var(--accent);
-    box-shadow:inset 0 -3px 0 var(--accent);font-weight:700}
   .grow{flex:1 1 140px;min-width:0}
-  .ns{width:130px;max-width:100%}
+  .ns{width:170px;max-width:100%}
   main{max-width:900px;margin:0 auto;padding:14px 16px 18px}
+  .filters{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:flex-end;padding:0 0 14px;border-bottom:1px solid var(--line)}
+  .fld{display:flex;flex-direction:column;gap:4px;font-size:13px;font-weight:600;color:var(--dim)}
+  .filters .ghost{margin-left:auto}
   .row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;align-items:center}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
-    padding:14px 16px;margin-bottom:12px}
-  .card h3{margin:0 0 4px;font-size:15px;overflow-wrap:anywhere}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+    padding:16px 18px;margin-bottom:12px;box-shadow:var(--shadow)}
+  .card h3{margin:0 0 4px;font-size:16px;font-weight:650;overflow-wrap:anywhere}
   .meta{color:var(--dim);font-size:12px;margin-bottom:8px;overflow-wrap:anywhere}
   .tag{display:inline-block;background:var(--panel2);border:1px solid var(--line);
     border-radius:999px;padding:1px 9px;font-size:12px;margin:0 5px 3px 0;color:var(--dim)}
   .tag.why{color:var(--ink);border-color:var(--danger)}
   .chip{display:inline-block;border-radius:6px;padding:0 7px;font-size:12px;font-weight:600;
     background:hsl(var(--h) var(--chip-s) var(--chip-bg-l));color:hsl(var(--h) var(--chip-fg-s) var(--chip-fg-l))}
-  .badge-pin{display:inline-block;background:var(--gold);color:#0B2E45;border-radius:6px;
+  .chip .tech{color:inherit;opacity:.75}
+  .badge-pin{display:inline-block;background:var(--gold);color:var(--navy);border-radius:6px;
     padding:0 7px;font-size:11px;font-weight:700;margin-left:6px;vertical-align:middle}
-  .body{white-space:pre-wrap;overflow-wrap:anywhere;color:var(--body);font-size:14px}
+  .body{white-space:pre-wrap;overflow-wrap:anywhere;color:var(--body);font-size:14px;line-height:1.55}
   .cardhead{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap}
   .cardhead>div:first-child{flex:1 1 220px;min-width:0}
-  #new textarea{width:100%;min-height:70px;resize:vertical}
+  #new textarea{width:100%;min-height:90px;resize:vertical}
   #new{display:none}
   .muted{color:var(--dim)}
+  .empty{text-align:center;padding:32px 20px;border:1px dashed var(--line);border-radius:var(--r)}
   .err{color:var(--danger)}
   .msg{min-height:0;margin-bottom:10px}
   .msg:empty{display:none}
-  .gate{max-width:420px;margin:12vh auto;padding:0 16px;text-align:center}
-  .gate input{width:100%;margin:12px 0;text-align:center}
-  footer{max-width:900px;margin:0 auto;padding:10px 16px 40px;color:var(--dim);
-    font-size:12px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+  .gate{max-width:440px;margin:10vh auto;padding:0 16px}
+  .gcard{background:var(--panel);border:1px solid var(--line);border-radius:20px;overflow:hidden;box-shadow:var(--shadow);text-align:center}
+  .gcard .navy{padding:30px 20px 22px}
+  .gcard .navy img{width:56px;height:56px}
+  .gword{font-size:30px;margin:8px 0 2px}
+  .gbody{padding:20px 24px 24px}
+  .gate input{width:100%;margin:14px 0 12px;text-align:center}
+  .gate button{width:100%}
+  .by{font-size:12px;color:var(--dim);margin:0}
+  footer{max-width:900px;margin:8px auto 0;padding:14px 16px 40px;color:var(--dim);border-top:1px solid var(--line);
+    font-size:13px;display:flex;gap:6px 16px;align-items:center;flex-wrap:wrap}
+  footer #count{margin-right:auto}
+  footer .by{flex-basis:100%;margin-top:8px}
+  .hint{font-size:12px;margin-left:-10px}
   .badge-bad{display:inline-block;background:var(--danger-bg);color:var(--danger-fg);border-radius:6px;
     padding:0 7px;font-size:11px;font-weight:700;margin-left:6px;vertical-align:middle}
   #runner div+div{margin-top:4px}
-  label.chk{display:flex;gap:6px;align-items:center;color:var(--dim);font-size:13px;white-space:nowrap}
+  label.chk{display:flex;gap:8px;align-items:center;color:var(--dim);font-size:13px;min-height:36px}
   .scroll{overflow-x:auto}
   .msg{overflow-wrap:anywhere}
   .cf{border-top:1px solid var(--line);padding:10px 0 2px}
@@ -98,11 +137,9 @@ export const DASHBOARD_HTML = `<!doctype html>
   .cfdlg ul{margin:0 0 6px;padding-left:18px}
   .cf .acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
   .cf .acts button{max-width:100%;overflow-wrap:anywhere}
-  /* Phones: the note text comes before its action buttons. */
+  /* Phones: the search gets its own row under the brand; the note text comes before its action buttons. */
   @media (max-width:600px){
-    header h1{order:-3}
-    header #q{order:-2;flex-basis:100%} /* search comes straight after the title, before the checkbox */
-    header label.chk{order:-1}
+    header #q{order:2;flex-basis:100%}
     .card{display:flex;flex-direction:column}
     .cardhead{display:contents}
     .cardhead>div:first-child{order:1;flex:none}
@@ -110,8 +147,8 @@ export const DASHBOARD_HTML = `<!doctype html>
     .card .acts{order:3;margin-top:10px}
   }
   .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
-  .viewh{font-size:18px;margin:0 0 2px}
-  #viewd{margin:0 0 12px;font-size:13px}
+  .viewh{font-size:22px;font-weight:700;letter-spacing:-.015em;margin:18px 0 2px}
+  #viewd{margin:0 0 14px;font-size:14px;max-width:68ch}
   .tag.fact{color:var(--ink);border-color:var(--accent)}
   code{background:var(--panel2);border-radius:4px;padding:0 4px}
   .lvl{display:inline-block;border-radius:6px;padding:0 8px;font-size:11px;font-weight:700;margin-left:6px;vertical-align:middle;border:1px solid var(--line)}
@@ -119,10 +156,17 @@ export const DASHBOARD_HTML = `<!doctype html>
   .lvl-internal{color:var(--dim)}
   .lvl-private{color:var(--warn);border-color:var(--warn)}
   .nolimit{color:var(--warn);font-weight:700}
-  #who{color:var(--dim);font-size:13px;margin:0 0 12px}
-  pre.snip{white-space:pre-wrap;word-break:break-all;background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:10px;font-size:12px}
+  #who{color:var(--dim);font-size:13px;margin:0 0 14px}
+  #who:empty{display:none}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:18px 28px;margin:10px 0 6px}
+  .stat b{display:block;font-size:26px;font-weight:700;letter-spacing:-.02em;line-height:1.15}
+  .stat span{color:var(--dim);font-size:13px}
+  .stats,table{font-variant-numeric:tabular-nums}
+  pre.snip{white-space:pre-wrap;word-break:break-all;background:var(--panel2);border:1px solid var(--line);border-radius:var(--r-s);padding:10px;font-size:12px}
   table.apps{width:100%;font-size:13px;border-collapse:collapse}
-  table.apps td,table.apps th{text-align:left;padding:5px 6px;border-bottom:1px solid var(--line)}
+  table.apps td,table.apps th{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line)}
+  table.apps th{color:var(--dim);font-weight:600}
+  table.apps .n{text-align:right}
   /* Phones: tables become one small card per row, nothing scrolls sideways. */
   @media (max-width:600px){
     table.apps,table.apps tbody{display:block;width:100%}
@@ -136,35 +180,41 @@ export const DASHBOARD_HTML = `<!doctype html>
 </head>
 <body>
 <div id="app" style="display:none">
-<header>
-  <h1>mono<span>mem</span></h1>
-  <input id="q" class="grow" aria-label="Search notes" placeholder="Search notes...">
-  <input id="ns" class="ns" aria-label="Namespace filter" placeholder="namespace">
-  <select id="lvlf" aria-label="Show only notes with this label" onchange="applyFilter()"><option value="">all labels</option><option value="public">public</option><option value="internal">internal</option><option value="private">private</option></select>
-  <button class="ghost" id="btn_new" aria-expanded="false" aria-controls="new" onclick="toggleNew()">+ New</button>
-  <button class="ghost" onclick="load()">Refresh</button>
-  <label class="chk" title="Also show notes written by writers an admin distrusts (marked DISTRUSTED)"><input type="checkbox" id="inc" aria-describedby="inc_help" onchange="load()"> distrusted<span id="inc_help" class="sr">Also show notes written by writers an admin distrusts. They are marked DISTRUSTED.</span></label>
+<header class="navy">
+  <div class="brand"><img src="/favicon.ico" alt="" width="28" height="28"><h1>mono<span>mem</span></h1></div>
+  <input id="q" class="grow" aria-label="Search notes" placeholder="Search notes">
+  <button id="btn_new" aria-expanded="false" aria-controls="new" onclick="toggleNew()">+ New</button>
 </header>
 <nav aria-label="Views">
+  <div class="seg">
   <button id="tab_list" onclick="load()" title="All notes, newest first">Notes</button>
-  <button id="tab_held" onclick="loadHeld()" title="Writes held out of shared memory until you approve or reject them: ones the linter flagged (secrets, injected instructions) and ones written to an approve-first namespace (admin token)">Held<span id="held_n"></span></button>
   <button id="tab_review" onclick="loadReview()" title="Notes written by agents that you have not looked at yet">Review</button>
+  <button id="tab_held" onclick="loadHeld()" title="Writes held out of shared memory until you approve or reject them: ones the linter flagged (secrets, injected instructions) and ones written to an approve-first namespace (admin token)">Held<span id="held_n"></span></button>
   <button id="tab_changes" onclick="loadChanges()" title="What changed in the last 24 hours">Changes</button>
+  </div>
+  <div class="seg seg2">
   <button id="tab_sessions" onclick="loadSessions()" title="Agent sessions Monomem recorded, each with its timeline">Sessions</button>
   <button id="tab_quality" onclick="loadQuality()" title="Duplicates, stale twins, held writes, linter findings, rows about to decay and writers who disagree (admin token)">Quality<span id="quality_n"></span></button>
-  <button id="tab_meter" onclick="loadMeter()" title="What Monomem costs you: tokens injected and saved, local-model tokens, database size">Meter</button>
+  <button id="tab_meter" onclick="loadMeter()" title="What Monomem costs you: tokens injected and saved, local-model tokens, database size">Usage<small class="tech">meter</small></button>
   <button id="tab_apps" hidden onclick="loadApps()" title="The apps that are allowed to connect, and what each may see (administrators only)">Apps</button>
-  <button id="tab_audit" hidden onclick="loadAudit()" title="Who changed what, and when (administrators only)">Audit</button>
+  <button id="tab_audit" hidden onclick="loadAudit()" title="Who changed what, and when (administrators only)">Activity log<small class="tech">audit</small></button>
+  </div>
 </nav>
 <main>
+  <div class="filters" role="group" aria-label="Filters">
+    <label class="fld"><span>Project<small class="tech">namespace</small></span><input id="ns" class="ns" placeholder="All projects"></label>
+    <label class="fld"><span>Label</span><select id="lvlf" aria-label="Show only notes with this label" onchange="applyFilter()"><option value="">all labels</option><option value="public">public</option><option value="internal">internal</option><option value="private">private</option></select></label>
+    <label class="chk" title="Also show notes written by writers an admin distrusts (marked DISTRUSTED)"><input type="checkbox" id="inc" aria-describedby="inc_help" onchange="load()"> Show notes from distrusted writers<span id="inc_help" class="sr">Also show notes written by writers an admin distrusts. They are marked DISTRUSTED.</span></label>
+    <button class="ghost" onclick="load()">Refresh</button>
+  </div>
   <div id="new" class="card">
     <div class="row">
       <input id="n_title" class="grow" aria-label="Title" placeholder="Title">
-      <input id="n_ns" class="grow" aria-label="Namespace (optional)" placeholder="namespace (optional)">
+      <input id="n_ns" class="grow" aria-label="Project (namespace), optional" placeholder="Project (namespace, optional)">
       <input id="n_tags" class="grow" aria-label="Tags, comma separated" placeholder="tags, comma, separated">
       <select id="n_lvl" aria-label="Who can see this note"><option value="internal">internal (normal)</option><option value="public">public (anyone)</option><option value="private">private (limited apps cannot see it; unlimited apps still can)</option></select>
     </div>
-    <textarea id="n_body" aria-label="Body" placeholder="Body..."></textarea>
+    <textarea id="n_body" aria-label="Body" placeholder="What should your assistants remember?"></textarea>
     <div class="row" style="margin-top:10px">
       <button onclick="addNote()">Save note</button>
       <span id="n_err" class="err" role="alert"></span>
@@ -182,19 +232,25 @@ export const DASHBOARD_HTML = `<!doctype html>
 </main>
 <footer>
   <span id="count" role="status"></span>
-  <button class="linkbtn" onclick="doExport()">Export JSON</button>
-  <button class="linkbtn" onclick="document.getElementById('imp').click()">Import JSON</button>
-  <input id="imp" type="file" accept="application/json" aria-label="Import JSON file" style="display:none" onchange="doImport(this)">
-  <button class="linkbtn" onclick="logout()">Change token</button>
+  <button class="linkbtn" onclick="doExport()" aria-describedby="exp_hint">Download backup<small class="tech">.json</small></button>
+  <span id="exp_hint" class="hint">every note your key can see, unencrypted</span>
+  <button class="linkbtn" onclick="document.getElementById('imp').click()">Add notes from a backup<small class="tech">.json</small></button>
+  <input id="imp" type="file" accept="application/json" aria-label="Backup file to add notes from (.json)" style="display:none" onchange="doImport(this)">
+  <button class="linkbtn" onclick="logout()">Sign out</button>
+  <p class="by">by Calas Automations</p>
 </footer>
 </div>
 
 <div id="gate" class="gate">
-  <h1 style="font-size:28px">mono<span style="color:var(--accent)">mem</span></h1>
-  <p class="muted"><label for="tok">Paste your Monomem token to view the store.</label> Easiest: run <code>monomem open</code> in a terminal and this page signs in for you. The token is in the <code>.token</code> file in your Monomem data folder; <code>monomem doctor</code> shows where that is.</p>
-  <input id="tok" type="password" placeholder="MONOMEM_TOKEN" onkeydown="if(event.key==='Enter')saveTok()">
-  <button onclick="saveTok()">Open</button>
-  <p id="gate_err" class="err" role="alert"></p>
+  <div class="gcard">
+    <div class="navy"><img src="/favicon.ico" alt="" width="56" height="56"><h1 class="gword">mono<span>mem</span></h1><p class="by">by Calas Automations</p></div>
+    <div class="gbody">
+      <p class="muted"><label for="tok">Paste your access key to open your notes.</label> Easiest: run <code>monomem open</code> in a terminal and this page signs you in. The key is in the <code>.token</code> file in your Monomem data folder (or in <code>MONOMEM_TOKEN</code>, if you set it); <code>monomem doctor</code> shows where that is.</p>
+      <input id="tok" type="password" placeholder="Your access key" onkeydown="if(event.key==='Enter')saveTok()">
+      <button onclick="saveTok()">Open</button>
+      <p id="gate_err" class="err" role="alert"></p>
+    </div>
+  </div>
 </div>
 <script src="/dashboard.js"></script>
 </body>
@@ -217,8 +273,8 @@ function hue(s){ s = String(s); if(hueOf[s] !== undefined) return hueOf[s];
   var used = {}; for(var k in hueOf) used[hueOf[k]] = 1;
   for(var j = 0; j < HUES.length; j++){ var c = HUES[(h + j) % HUES.length]; if(!used[c]){ return (hueOf[s] = c); } }
   return (hueOf[s] = HUES[h % HUES.length]); } // the stable hash picks a start; a hue another writer already has is skipped (past ten writers they repeat)
-function shownWriter(w){ return w === "primary" ? "admin (setup)" : w; } // display only: the stored label stays "primary"
-function chip(label){ return "<span class='chip' style='--h:"+hue(label)+"'>"+esc(shownWriter(label))+"</span>"; }
+function shownWriter(w){ return w === "primary" ? "admin (setup)" : w === "cli" ? "terminal" : w; } // display only: the stored label stays "primary" / "cli"
+function chip(label){ return "<span class='chip' style='--h:"+hue(label)+"'>"+esc(shownWriter(label))+(label === "cli" ? "<small class='tech'>cli</small>" : "")+"</span>"; }
 // A fact tag reads "deploy_target = render", not the raw fact:deploy_target=render.
 function tagChip(t){
   var m = /^fact:([^=]+)=(.*)$/.exec(String(t).trim());
@@ -232,7 +288,7 @@ function byLine(w){ return w ? " &middot; by "+chip(w) : ""; }
 function say(text, isErr){ var m = $("msg"); m.className = "msg" + (isErr ? " err" : ""); m.textContent = text || ""; }
 function fail(e){ say(e && e.message ? e.message : String(e), true); }
 function failList(e){ $("list").innerHTML = "<p class='err'>"+esc(e.message)+"</p>"; }
-function empty(text){ return "<p class='muted'>"+text+"</p>"; }
+function empty(text){ return "<p class='muted empty'>"+text+"</p>"; }
 
 // Inline confirm: the first click turns the button into "Confirm <label>?" for a few seconds; a second click runs fn.
 function arm(btn, fn){
@@ -240,7 +296,7 @@ function arm(btn, fn){
   if(btn.getAttribute("data-armed")){ clearTimeout(btn._t); btn.removeAttribute("data-armed"); if(al){ btn.setAttribute("aria-label", al.replace(/^confirm /, "")); } fn(); return; }
   var was = btn.textContent;
   btn.setAttribute("data-armed", "1");
-  btn.textContent = "Confirm " + was.toLowerCase() + "?";
+  btn.textContent = btn.getAttribute("data-confirm") || ("Confirm " + was.toLowerCase() + "?");
   if(al){ btn.setAttribute("aria-label", "confirm " + al); }
   var m = $("msg"); if(m){ m.className = "msg"; m.textContent = "Press " + was + " again within 4 seconds to confirm."; }
   var hint = m ? m.textContent : "";
@@ -257,6 +313,7 @@ function ask(text, okLabel, fn){
 }
 
 var VIEW = "list";
+var IS_ADMIN = false;
 // One h2 and one visible line per view (this replaces the tooltips as the way to learn what a tab is for).
 var VIEWS = {
   list:["Notes","All notes, newest first."],
@@ -266,9 +323,9 @@ var VIEWS = {
   sessions:["Sessions","Agent sessions Monomem recorded, each with its timeline."],
   session:["Session timeline",""],
   quality:["Quality","Duplicates, stale twins, held writes, linter findings, rows about to decay, and writers who disagree about a fact. Needs an admin token."],
-  meter:["Meter","What Monomem costs you: tokens injected and saved, local-model tokens, database size."],
+  meter:["Usage","What Monomem costs you: tokens injected and saved, local-model tokens, database size."],
   apps:["Apps","The apps that are allowed to connect, and the highest label each may see. Keys are never shown again after they are made. Needs an admin token."],
-  audit:["Audit","Who changed what, and when. Only who, what kind, where and how many; never the text of a note. Needs an admin token."]
+  audit:["Activity log","Who changed what, and when. Only who, what kind, where and how many; never the text of a note. Needs an admin token."]
 };
 // The view buttons are a tab bar: the active one carries aria-current.
 var TABS = { list:"list", held:"held", review:"review", changes:"changes", sessions:"sessions", session:"sessions", quality:"quality", meter:"meter", apps:"apps", audit:"audit" };
@@ -329,8 +386,12 @@ function start(){
   show(true);
   load();
   api("/whoami").then(function(w){
-    $("who").textContent = "Signed in as " + (w.label || "unnamed") + ": " + String(w.can_see || "").replace(/[.\\s]+$/, "") + ".";
     var isAdmin = w.scope === "admin" && !w.namespace && !w.max_sensitivity;
+    // Pin / Unpin buttons (PUT /pinned is admin-only): redraw the list once we know.
+    if(isAdmin && !IS_ADMIN){ IS_ADMIN = true; if(VIEW === "list"){ load(); } }
+    // An unlimited admin key sees everything; any other key keeps the server's own can_see wording.
+    if(isAdmin){ $("who").innerHTML = "You're the owner: you can see everything. Agents cannot change pinned notes; only you (terminal or this owner key) can pin or unpin.<small class='tech'>" + esc(w.label || "unnamed") + "</small>"; }
+    else { $("who").textContent = "Signed in as " + (w.label || "unnamed") + ": " + String(w.can_see || "").replace(/[.\\s]+$/, "") + "."; }
     $("tab_apps").hidden = !isAdmin;
     $("tab_audit").hidden = !isAdmin;
     if(isAdmin){ loadInsights(); }
@@ -368,8 +429,8 @@ function render(notes){
   var lf = ($("lvlf") || {}).value || "";
   if(lf){ notes = notes.filter(function(n){ return (n.sensitivity || "internal") === lf; }); $("count").textContent = notes.length + " note" + (notes.length===1?"":"s") + " labelled " + lf; }
   if(!notes.length){
-    list.innerHTML = lf ? empty("No notes with that label here.") : $("q").value.trim() ? empty("No notes match that search. Try fewer words, or clear the namespace box.")
-      : $("ns").value.trim() ? empty("No notes in namespace &quot;" + esc($("ns").value.trim()) + "&quot;. Clear the namespace box to see notes in every namespace.")
+    list.innerHTML = lf ? empty("No notes with that label here.") : $("q").value.trim() ? empty("No notes match that search. Try fewer words, or clear the Project box.")
+      : $("ns").value.trim() ? empty("No notes in project &quot;" + esc($("ns").value.trim()) + "&quot;. Clear the Project box to see notes in every project.")
       : empty("No notes yet. Ask your assistant to remember something, or run <code>monomem setup</code>.");
     return;
   }
@@ -383,13 +444,18 @@ function render(notes){
       acts(((n.tags||[]).indexOf("never-show") >= 0
         ? "<button class='ghost' aria-label='show note #"+Number(n.id)+" again' title='Let it be shown at session start again' onclick='neverShow("+n.id+",false)'>show again</button>"
         : "<button class='ghost' aria-label='never show note #"+Number(n.id)+"' title='Never inject this note at session start (it stays searchable)' onclick='neverShow("+n.id+",true)'>never show</button>")+
-      " <button class='danger' aria-label='delete note #"+Number(n.id)+"' onclick='arm(this,function(){del("+n.id+")})'>delete</button>")+"</div>"+
+      (!IS_ADMIN ? "" : n.pinned
+        ? " <button class='ghost' aria-label='unpin note #"+Number(n.id)+"' onclick='arm(this,function(){setPin("+Number(n.id)+",false)})'>Unpin</button>"
+        : " <button class='ghost' aria-label='pin note #"+Number(n.id)+"' title='Show it first at the start of every session. Agents cannot change a pinned note; only the owner can pin or unpin.' onclick='setPin("+Number(n.id)+",true)'>Pin (always shown)</button>")+
+      " <button class='danger' aria-label='delete note #"+Number(n.id)+"' data-confirm='Confirm permanent delete?' onclick='arm(this,function(){del("+Number(n.id)+")})'>delete</button>")+"</div>"+
       (n.body ? "<div class='body'>"+esc(n.body)+"</div>" : "")+"</div>";
   }).join("");
 }
 
 // The label on a note: public (anyone), internal (the normal level), private (only apps with no limit).
 var LVL_TEXT = { "public":"public", "internal":"internal", "private":"private" };
+// The same honest wording as the new-note picker: private does not hide a note from apps with no limit.
+var LVL_OPT = { "public":"public (anyone)", "internal":"internal (normal)", "private":"private (limited apps cannot see it; unlimited apps still can)" };
 function lvlBadge(l){
   l = LVL_TEXT[l] ? l : "internal";
   var tip = { "public":"Anyone who can connect may see this note.", "internal":"The normal level: apps allowed to see internal notes can read it.", "private":"Limited apps cannot see this; apps with no limit (including your main Claude connection) still can. Next: monomem connect <app> --max internal." }[l];
@@ -398,7 +464,7 @@ function lvlBadge(l){
 function lvlSelect(n){
   var l = LVL_TEXT[n.sensitivity] ? n.sensitivity : "internal";
   return "<div class='meta' style='margin-top:6px'><label>Who can see this? <select aria-label='Who can see note "+Number(n.id)+"' onchange='setLabel("+Number(n.id)+",this.value)'>"+
-    ["public","internal","private"].map(function(o){ return "<option value='"+o+"'"+(o===l?" selected":"")+">"+o+"</option>"; }).join("")+"</select></label></div>";
+    ["public","internal","private"].map(function(o){ return "<option value='"+o+"'"+(o===l?" selected":"")+">"+LVL_OPT[o]+"</option>"; }).join("")+"</select></label></div>";
 }
 function setLabel(id, level){
   api("/notes/" + id).then(function(j){
@@ -510,7 +576,7 @@ function loadReview(){
       var tags = tagsHtml(n.tags);
       return "<div class='card'><div class='cardhead'><div><h3>"+esc(n.title)+(n.pinned ? "<span class='badge-pin'>Pinned</span>" : "")+"</h3><div class='meta'>#"+n.id+" &middot; "+esc(n.namespace)+
         " &middot; written by "+chip(n.written_by)+" &middot; "+esc((n.updated_at||"").slice(0,16).replace("T"," "))+"</div>"+tags+"</div>"+
-        acts("<button aria-label='accept note #"+Number(n.id)+"' onclick='acceptNote("+n.id+")'>Accept</button> <button class='danger' aria-label='delete note #"+Number(n.id)+"' onclick='arm(this,function(){del("+n.id+")})'>delete</button>")+"</div>"+
+        acts("<button aria-label='accept note #"+Number(n.id)+"' onclick='acceptNote("+Number(n.id)+")'>Accept</button> <button class='danger' aria-label='delete note #"+Number(n.id)+"' data-confirm='Confirm permanent delete?' onclick='arm(this,function(){del("+Number(n.id)+")})'>delete</button>")+"</div>"+
         (n.body ? "<div class='body'>"+esc(n.body)+"</div>" : "")+"</div>";
     }).join("");
     $("list").innerHTML = "<div class='row'><select id='rv_writer' aria-label='Filter by writer' onchange='loadReview()'>"+opts+"</select>"+
@@ -594,7 +660,8 @@ function loadSessions(){
     $("list").innerHTML = ss.length ? ss.map(function(s){
       return "<div class='card'><div class='cardhead'><div><h3>"+esc(s.summary || "(no summary yet)")+"</h3>"+
         "<div class='meta'>"+when(s.started_at)+(s.ended_at ? " to "+when(s.ended_at) : " &middot; open")+" &middot; "+esc(s.namespace)+
-        " &middot; "+esc(s.cwd)+" &middot; "+Number(s.prompt_count||0)+" prompts, "+Number(s.event_count||0)+" events</div></div>"+
+        " &middot; "+esc(s.cwd)+" &middot; "+Number(s.prompt_count||0)+" prompts, "+Number(s.event_count||0)+" events</div>"+
+        "<div class='meta'>"+(s.model ? "Model at session start: <b>"+esc(s.model)+"</b> <small class='tech'>reported by the app, not verified; subagents and /model switches may differ</small>" : "Model: not reported by the app")+"</div></div>"+
         acts("<button class='ghost' data-sid='"+esc(s.id)+"' onclick='loadSession(this.getAttribute(&quot;data-sid&quot;))'>Timeline</button>")+"</div></div>";
     }).join("") : empty("No sessions recorded yet. Run <code>monomem setup --capture</code> to install the hooks.");
   }).catch(function(e){ incRefused(e); failList(e); });
@@ -677,7 +744,7 @@ function cfRow(g, gi){
   var pins = all.filter(function(n){ return n.pinned; }).map(function(n){ return "#"+Number(n.id); });
   return "<div class='cf'><h3><span class='tag'>"+esc(g.confidence)+"</span>"+esc(g.key)+"</h3>"+
     g.values.map(function(v){ return "<div class='cfval'><b>"+esc(v.value)+"</b>"+v.notes.map(cfNote).join("")+"</div>"; }).join("")+
-    "<div class='meta'>Namespace: <b>"+esc(g.namespace)+"</b>"+(pins.length ? " &middot; "+pins.join(", ")+" pinned: change it from the CLI" : "")+"</div>"+acts(btns.join(" "))+
+    "<div class='meta'>Project: <b>"+esc(g.namespace)+"</b>"+(pins.length ? " &middot; "+pins.join(", ")+" pinned: agents cannot change it; the owner can (CLI or an admin key)" : "")+"</div>"+acts(btns.join(" "))+
     (more.length ? "<details class='cfmore'><summary class='muted'>More</summary>"+acts(more.join(" "))+"</details>" : "")+
     "<div class='cfdlg' id='cfdlg"+gi+"'></div></div>";
 }
@@ -756,6 +823,11 @@ function qReplace(oldId, newId){
 function qPin(id){
   api("/pinned", { method:"PUT", body: JSON.stringify({ id: id, pinned: true }) }).then(loadQuality).catch(fail);
 }
+function setPin(id, on){
+  api("/pinned", { method:"PUT", body: JSON.stringify({ id: id, pinned: on }) })
+    .then(function(){ load(); say(on ? "Note #" + id + " is pinned: it is shown first at the start of every session." : "Note #" + id + " is no longer pinned."); })
+    .catch(fail);
+}
 function qDistrust(btn){
   api("/trust/distrust", { method:"POST", body: JSON.stringify({ namespace: btn.getAttribute("data-ns"), writer: btn.getAttribute("data-w") }) }).then(loadQuality).catch(fail);
 }
@@ -787,16 +859,17 @@ function loadMeter(){
     function num(v){ return Number(v||0).toLocaleString(); }
     $("count").textContent = num(t.sessions) + " metered session" + (t.sessions===1?"":"s");
     var rows = (m.recent || []).map(function(r){
-      return "<tr><td>"+when(r.updated_at)+"</td><td>"+(r.namespace ? esc(r.namespace) : "<span class='muted'>(none)</span>")+"</td><td>"+num(r.injected_tokens)+"</td><td>"+num(r.saved_tokens)+"</td><td>"+num(r.llm_tokens)+"</td></tr>";
+      return "<tr><td>"+when(r.updated_at)+"</td><td>"+(r.namespace ? esc(r.namespace) : "<span class='muted'>(none)</span>")+"</td><td class='n'>"+num(r.injected_tokens)+"</td><td class='n'>"+num(r.saved_tokens)+"</td><td class='n'>"+num(r.llm_tokens)+"</td></tr>";
     }).join("");
-    $("list").innerHTML = "<div class='card'><h3>Totals</h3><div>"+
-      "~"+num(t.injected_tokens)+" tokens injected at session start ("+num(t.injections)+(Number(t.injections) === 1 ? " time" : " times")+")<br>"+
-      "~"+num(t.saved_tokens)+" tokens saved (estimate): the full text of the notes shown, minus the tokens injected<br>"+
-      num(t.llm_tokens)+" local-model tokens (0 = the optional summarizer is off)<br>"+
-      num(m.capture_events)+" capture events recorded<br>"+
-      "database "+(Number(m.db_bytes||0)/1048576).toFixed(1)+" MB on disk</div>"+
+    function stat(big, text){ return "<div class='stat'><b>"+big+"</b><span>"+text+"</span></div>"; }
+    $("list").innerHTML = "<div class='card'><h3>Totals</h3><div class='stats'>"+
+      stat("~"+num(t.injected_tokens), "tokens injected at session start ("+num(t.injections)+(Number(t.injections) === 1 ? " time" : " times")+")")+
+      stat("~"+num(t.saved_tokens), "tokens saved (estimate): the full text of the notes shown, minus the tokens injected")+
+      stat(num(t.llm_tokens), "local-model tokens (0 = the optional summarizer is off)")+
+      stat(num(m.capture_events), "capture events recorded")+
+      stat((Number(m.db_bytes||0)/1048576).toFixed(1)+" MB", "database on disk")+"</div>"+
       "<div class='meta' style='margin-top:8px'>"+esc(m.note)+"</div></div>"+
-      (rows ? "<div class='card'><h3>Recent sessions</h3><div class='scroll'><table style='width:100%;font-size:13px'><tr class='muted'><th scope='col' align='left'>updated</th><th scope='col' align='left'>namespace</th><th scope='col' align='left'>injected</th><th scope='col' align='left'>saved</th><th scope='col' align='left'>model</th></tr>"+rows+"</table></div></div>"
+      (rows ? "<div class='card'><h3>Recent sessions</h3><div class='scroll'><table class='apps'><tr><th scope='col'>updated</th><th scope='col'>project</th><th scope='col' class='n'>injected</th><th scope='col' class='n'>saved</th><th scope='col' class='n'>model</th></tr>"+rows+"</table></div></div>"
         : empty("No session metered yet: the numbers start with the next session the SessionStart hook runs for."));
   }).catch(failList);
 }
@@ -815,7 +888,7 @@ function loadApps(){
       return "<tr><td>"+esc(a.label)+"</td><td>"+esc(a.scope)+"</td><td>"+esc(a.namespace || "all")+"</td><td>"+lim+"</td><td>"+(a.last_used ? when(a.last_used) : "not since the server started")+"</td><td>"+rm+"</td></tr>";
     }).join("");
     $("list").innerHTML =
-      "<div class='card'><h3>Apps that can connect</h3><table class='apps'><tr><th>name</th><th>may</th><th>namespace</th><th>sees notes labelled</th><th>last used</th><th></th></tr>"+rows+"</table>"+
+      "<div class='card'><h3>Apps that can connect</h3><table class='apps'><tr><th>name</th><th>may</th><th>project</th><th>sees notes labelled</th><th>last used</th><th></th></tr>"+rows+"</table>"+
       "<p class='meta'>Keys are not shown here. Removing an app cuts it off straight away.</p></div>"+
       "<div class='card'><h3>Add an app</h3><div class='row'>"+
       "<input id='ap_label' placeholder='name, e.g. cursor' aria-label='Name for the new app'>"+
@@ -885,7 +958,7 @@ function loadAudit(){
     var ops = ["", "create", "update", "delete"].map(function(o){ return "<option value='" + o + "'" + (o===op?" selected":"") + ">" + (o || "all actions") + "</option>"; }).join("");
     var wins = ["24h", "7d", "30d"].map(function(w){ return "<option value='" + w + "'" + (w===since?" selected":"") + ">last " + w + "</option>"; }).join("");
     $("list").innerHTML = "<div class='row'><select id='au_since' aria-label='How far back' onchange='loadAudit()'>" + wins + "</select><select id='au_op' aria-label='Kind of action' onchange='loadAudit()'>" + ops + "</select></div>" +
-      (rows ? "<div class='card'><table class='apps'><tr><th>when</th><th>action</th><th>app</th><th>namespace</th><th>note</th></tr>" + rows + "</table></div>" : empty("Nothing logged in that time."));
+      (rows ? "<div class='card'><table class='apps'><tr><th>when</th><th>action</th><th>app</th><th>project</th><th>note</th></tr>" + rows + "</table></div>" : empty("Nothing logged in that time."));
   }).catch(failList);
 }
 

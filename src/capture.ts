@@ -36,6 +36,8 @@ export interface CaptureEvent {
   /** Size of the raw input + output before truncation. */
   bytes: number;
   at: string;
+  /** session-start only: the model the app reported (Claude Code sends it sometimes). Unverified. */
+  model?: string;
 }
 
 export interface CaptureSettings {
@@ -132,7 +134,9 @@ export function normalizeHookInput(event: HookEvent, raw: unknown, now: Date = n
   else if (event === "session-start") input = str(r.source);
   else input = str(r.last_assistant_message ?? r.prompt_response ?? r.reason); // prompt_response: Gemini CLI AfterAgent
   const bytes = input.length + output.length;
-  return { session_id: sid, cwd, event, tool, input: cleanField(input), output: cleanField(output), ok, bytes, at: now.toISOString() };
+  // One printable line, at most 100 chars: it is shown in the dashboard and must not forge extra lines.
+  const model = event === "session-start" && typeof r.model === "string" ? r.model.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2028\u2029\u2066-\u2069]/g, "").trim().slice(0, 100) : "";
+  return { session_id: sid, cwd, event, tool, input: cleanField(input), output: cleanField(output), ok, bytes, at: now.toISOString(), ...(model ? { model } : {}) };
 }
 
 /**
@@ -165,6 +169,8 @@ export function recordEvent(store: Store, ev: CaptureEvent, namespace: string): 
         ev.event === "session-end" ? ", ended_at = ?" : ""
       } WHERE id = ?`
     ).run(...(ev.event === "session-end" ? [ev.at] : []), ev.session_id);
+    // Only when reported: a later session-start without it (after /clear) keeps the stored value.
+    if (ev.model) db.prepare("UPDATE sessions SET model = ? WHERE id = ?").run(ev.model, ev.session_id);
     db.exec("COMMIT");
     return { newSession: created === 1, seq };
   } catch (e) {

@@ -1750,6 +1750,9 @@ export class Store {
       // sessions.writer: who opened the session (set on first insert, NULL for older rows). POST /capture refuses a
       // different writer adding to it. A nullable column an older build simply ignores, so no schema version step.
       if (this.hasColumn("sessions", "writer") === false && this.hasColumn("sessions", "id")) this.addColumn("sessions", "writer", "TEXT");
+      // sessions.model: the model the app REPORTED at session start (Claude Code's SessionStart `model`). Not verified;
+      // never used for access or trust decisions. Same nullable, no-version-step pattern as writer.
+      if (this.hasColumn("sessions", "model") === false && this.hasColumn("sessions", "id")) this.addColumn("sessions", "model", "TEXT");
     } catch {
       /* read-only file: no writer can store a capture event either */
     }

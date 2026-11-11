@@ -74,7 +74,7 @@ repository's remote points.
 **What memory costs your agent.** Monomem itself spends no model tokens, but what it returns lands in your agent's context.
 The SessionStart hook injects up to 1,500 tokens per session (`MONOMEM_RECALL_TOKENS`, of which the project profile is up to
 300, `MONOMEM_PROFILE_TOKENS`; `MONOMEM_PROFILE=off`). Search results are whatever the agent asks for (`limit`). The
-dashboard's **Meter** view shows the estimate (about 4 characters a token).
+dashboard's **Usage** view shows the estimate (about 4 characters a token).
 
 ## Processes and loops
 
