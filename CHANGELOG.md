@@ -4,7 +4,14 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.3.4] - 2026-11-10
+
+### Added
+
+- **Sessions show the model the app reported.** When Claude Code's SessionStart hook includes `model` (it sometimes
+  leaves it out, for example after `/clear`), Monomem keeps it on that session and the dashboard's Sessions tab shows
+  "Model at session start: … (reported by the app, not verified; subagents and /model switches may differ)". It is not
+  stamped on individual notes, never used for access or trust, and no other app reports a model today.
 
 ### Fixed (docs)
 

@@ -660,7 +660,8 @@ function loadSessions(){
     $("list").innerHTML = ss.length ? ss.map(function(s){
       return "<div class='card'><div class='cardhead'><div><h3>"+esc(s.summary || "(no summary yet)")+"</h3>"+
         "<div class='meta'>"+when(s.started_at)+(s.ended_at ? " to "+when(s.ended_at) : " &middot; open")+" &middot; "+esc(s.namespace)+
-        " &middot; "+esc(s.cwd)+" &middot; "+Number(s.prompt_count||0)+" prompts, "+Number(s.event_count||0)+" events</div></div>"+
+        " &middot; "+esc(s.cwd)+" &middot; "+Number(s.prompt_count||0)+" prompts, "+Number(s.event_count||0)+" events</div>"+
+        "<div class='meta'>"+(s.model ? "Model at session start: <b>"+esc(s.model)+"</b> <small class='tech'>reported by the app, not verified; subagents and /model switches may differ</small>" : "Model: not reported by the app")+"</div></div>"+
         acts("<button class='ghost' data-sid='"+esc(s.id)+"' onclick='loadSession(this.getAttribute(&quot;data-sid&quot;))'>Timeline</button>")+"</div></div>";
     }).join("") : empty("No sessions recorded yet. Run <code>monomem setup --capture</code> to install the hooks.");
   }).catch(function(e){ incRefused(e); failList(e); });
