@@ -390,7 +390,7 @@ function start(){
     // Pin / Unpin buttons (PUT /pinned is admin-only): redraw the list once we know.
     if(isAdmin && !IS_ADMIN){ IS_ADMIN = true; if(VIEW === "list"){ load(); } }
     // An unlimited admin key sees everything; any other key keeps the server's own can_see wording.
-    if(isAdmin){ $("who").innerHTML = "You're the owner: you can see everything. Pinned notes change only from the terminal.<small class='tech'>" + esc(w.label || "unnamed") + "</small>"; }
+    if(isAdmin){ $("who").innerHTML = "You're the owner: you can see everything. Agents cannot change pinned notes; only you (terminal or this owner key) can pin or unpin.<small class='tech'>" + esc(w.label || "unnamed") + "</small>"; }
     else { $("who").textContent = "Signed in as " + (w.label || "unnamed") + ": " + String(w.can_see || "").replace(/[.\\s]+$/, "") + "."; }
     $("tab_apps").hidden = !isAdmin;
     $("tab_audit").hidden = !isAdmin;
@@ -446,8 +446,8 @@ function render(notes){
         : "<button class='ghost' aria-label='never show note #"+Number(n.id)+"' title='Never inject this note at session start (it stays searchable)' onclick='neverShow("+n.id+",true)'>never show</button>")+
       (!IS_ADMIN ? "" : n.pinned
         ? " <button class='ghost' aria-label='unpin note #"+Number(n.id)+"' onclick='arm(this,function(){setPin("+Number(n.id)+",false)})'>Unpin</button>"
-        : " <button class='ghost' aria-label='pin note #"+Number(n.id)+"' title='Show it first at the start of every session; only the monomem CLI can then change it' onclick='setPin("+Number(n.id)+",true)'>Pin (always shown)</button>")+
-      " <button class='danger' aria-label='delete note #"+Number(n.id)+"' data-confirm='Confirm permanent delete?' onclick='arm(this,function(){del("+n.id+")})'>delete</button>")+"</div>"+
+        : " <button class='ghost' aria-label='pin note #"+Number(n.id)+"' title='Show it first at the start of every session. Agents cannot change a pinned note; only the owner can pin or unpin.' onclick='setPin("+Number(n.id)+",true)'>Pin (always shown)</button>")+
+      " <button class='danger' aria-label='delete note #"+Number(n.id)+"' data-confirm='Confirm permanent delete?' onclick='arm(this,function(){del("+Number(n.id)+")})'>delete</button>")+"</div>"+
       (n.body ? "<div class='body'>"+esc(n.body)+"</div>" : "")+"</div>";
   }).join("");
 }
@@ -576,7 +576,7 @@ function loadReview(){
       var tags = tagsHtml(n.tags);
       return "<div class='card'><div class='cardhead'><div><h3>"+esc(n.title)+(n.pinned ? "<span class='badge-pin'>Pinned</span>" : "")+"</h3><div class='meta'>#"+n.id+" &middot; "+esc(n.namespace)+
         " &middot; written by "+chip(n.written_by)+" &middot; "+esc((n.updated_at||"").slice(0,16).replace("T"," "))+"</div>"+tags+"</div>"+
-        acts("<button aria-label='accept note #"+Number(n.id)+"' onclick='acceptNote("+n.id+")'>Accept</button> <button class='danger' aria-label='delete note #"+Number(n.id)+"' data-confirm='Confirm permanent delete?' onclick='arm(this,function(){del("+n.id+")})'>delete</button>")+"</div>"+
+        acts("<button aria-label='accept note #"+Number(n.id)+"' onclick='acceptNote("+Number(n.id)+")'>Accept</button> <button class='danger' aria-label='delete note #"+Number(n.id)+"' data-confirm='Confirm permanent delete?' onclick='arm(this,function(){del("+Number(n.id)+")})'>delete</button>")+"</div>"+
         (n.body ? "<div class='body'>"+esc(n.body)+"</div>" : "")+"</div>";
     }).join("");
     $("list").innerHTML = "<div class='row'><select id='rv_writer' aria-label='Filter by writer' onchange='loadReview()'>"+opts+"</select>"+
@@ -744,7 +744,7 @@ function cfRow(g, gi){
   var pins = all.filter(function(n){ return n.pinned; }).map(function(n){ return "#"+Number(n.id); });
   return "<div class='cf'><h3><span class='tag'>"+esc(g.confidence)+"</span>"+esc(g.key)+"</h3>"+
     g.values.map(function(v){ return "<div class='cfval'><b>"+esc(v.value)+"</b>"+v.notes.map(cfNote).join("")+"</div>"; }).join("")+
-    "<div class='meta'>Project: <b>"+esc(g.namespace)+"</b>"+(pins.length ? " &middot; "+pins.join(", ")+" pinned: change it from the CLI" : "")+"</div>"+acts(btns.join(" "))+
+    "<div class='meta'>Project: <b>"+esc(g.namespace)+"</b>"+(pins.length ? " &middot; "+pins.join(", ")+" pinned: agents cannot change it; the owner can (CLI or an admin key)" : "")+"</div>"+acts(btns.join(" "))+
     (more.length ? "<details class='cfmore'><summary class='muted'>More</summary>"+acts(more.join(" "))+"</details>" : "")+
     "<div class='cfdlg' id='cfdlg"+gi+"'></div></div>";
 }

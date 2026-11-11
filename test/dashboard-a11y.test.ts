@@ -104,7 +104,7 @@ describe("dashboard polish", () => {
     const admin = who({ label: "primary", scope: "admin" });
     admin.ctx.start();
     await settle();
-    assert.match(admin.el("who").innerHTML, /^You're the owner: you can see everything\. Pinned notes change only from the terminal\./);
+    assert.match(admin.el("who").innerHTML, /^You're the owner: you can see everything\. Agents cannot change pinned notes; only you \(terminal or this owner key\) can pin or unpin\./);
     assert.match(admin.el("who").innerHTML, /<small class='tech'>primary<\/small>/);
     for (const w of [{ label: "phone", scope: "write", can_see: "public and internal notes." }, { label: "boss", scope: "admin", max_sensitivity: "internal", can_see: "x" }, { label: "ns", scope: "admin", namespace: "work", can_see: "x" }]) {
       const p = who(w);

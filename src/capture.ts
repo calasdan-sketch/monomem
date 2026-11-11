@@ -135,7 +135,7 @@ export function normalizeHookInput(event: HookEvent, raw: unknown, now: Date = n
   else input = str(r.last_assistant_message ?? r.prompt_response ?? r.reason); // prompt_response: Gemini CLI AfterAgent
   const bytes = input.length + output.length;
   // One printable line, at most 100 chars: it is shown in the dashboard and must not forge extra lines.
-  const model = event === "session-start" && typeof r.model === "string" ? r.model.replace(/[\u0000-\u001f\u007f-\u009f]/g, "").trim().slice(0, 100) : "";
+  const model = event === "session-start" && typeof r.model === "string" ? r.model.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2028\u2029\u2066-\u2069]/g, "").trim().slice(0, 100) : "";
   return { session_id: sid, cwd, event, tool, input: cleanField(input), output: cleanField(output), ok, bytes, at: now.toISOString(), ...(model ? { model } : {}) };
 }
 

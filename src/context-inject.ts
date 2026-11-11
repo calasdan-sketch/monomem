@@ -114,6 +114,8 @@ export async function gitSignals(cwd: string): Promise<ContextSignals> {
 const tokensOf = (n: NoteRecord): number => Math.max(1, Math.ceil((n.title.length + n.body.length) / CHARS_PER_TOKEN));
 const typeOf = (n: NoteRecord): string => n.obs_type || n.kind || "note";
 const one = (s: string): string => (s || "").replace(/\s+/g, " ").trim();
+/** Control, zero-width, bidi-override and line/paragraph-separator characters: invisible, or able to reorder text. */
+export const INVISIBLE_RE = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2028\u2029\u2066-\u2069]/g;
 
 /** `#12 by cursor: [bugfix] Fixed failing npm test (2026-10-30, ~40 tok) {files 2d}` */
 export function indexLine(n: NoteRecord, why = "", withWriter = true): string {
@@ -165,7 +167,7 @@ export function newNotesSince(store: Store, sessionId: string, opts: { namespace
   return [
     `New since your last message (open with ${openToolName()}):`,
     ...fresh.slice(0, NEW_LINES).map((n) => indexLine(n)),
-    ...(more > 0 ? [`and ${more} more (${on === null || on.has("memory_since") ? "memory_since" : "catch_up"})`] : []),
+    ...(more > 0 ? [`and at least ${more} more (${on === null || on.has("memory_since") ? "memory_since" : "catch_up"})`] : []),
   ].join("\n");
 }
 
@@ -306,7 +308,8 @@ export async function injectContext(store: Store, opts: InjectOptions = {}): Pro
   const pinCap = Math.min(PINNED_CHARS, Math.floor(budget / 2));
   let pinUsed = PINNED_HEAD.length;
   for (const n of pinned) {
-    const snippet = one(n.body).slice(0, 200);
+    // Same treatment as titles: no invisible/bidi/control characters, and brackets cannot fake a "[type]" tag or writer.
+    const snippet = one(n.body).replace(INVISIBLE_RE, "").replace(/\[/g, "(").replace(/\]/g, ")").slice(0, 200);
     const line = `${indexLine(n)}${snippet ? ": " + snippet : ""}`;
     if (pinUsed + line.length + 1 > pinCap - 90) break; // 90: room for the "N more" line, so the block stays inside the cap
     pinLines.push(line);

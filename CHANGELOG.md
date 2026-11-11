@@ -45,7 +45,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   **Activity log** (audit), the namespace box is **Project** (namespace), the `cli` writer shows as **terminal** (cli),
   **Export JSON** / **Import JSON** are **Download backup** / **Add notes from a backup** (.json), **Change token** is
   **Sign out**, and the sign-in box asks for **Your access key**. An unlimited admin key now sees "You're the owner: you
-  can see everything. Pinned notes change only from the terminal." Delete now confirms with "Confirm permanent
+  can see everything. Agents cannot change pinned notes; only you (terminal or this owner key) can pin or unpin." Delete now confirms with "Confirm permanent
   delete?", and the per-note label picker uses the same honest private wording as the new-note one. No route, element
   id or behaviour changed.
 

@@ -85,7 +85,7 @@ describe("user-prompt hook: new notes since the last message", () => {
       await tick();
       const many = ctxOf(await runHook("user-prompt", ev("user-prompt"), opts));
       assert.equal((many.match(/^#\d+ by carol:/gm) ?? []).length, 5);
-      assert.match(many, /\nand 2 more \(memory_since\)/);
+      assert.match(many, /\nand at least 2 more \(memory_since\)/);
     } finally {
       s.close();
       rmSync(dir, { recursive: true, force: true });

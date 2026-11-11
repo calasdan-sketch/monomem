@@ -287,14 +287,14 @@ describe("dashboard conflicts UI", () => {
     assert.ok(html.includes("class='ghost'") && !html.includes("<button>"));
     assert.ok(html.includes("id='cfdlg0'"), "the confirmation lives inside the card");
   });
-  test("a pinned note hides the Keep that would change it and says to use the CLI", () => {
+  test("a pinned note hides the Keep that would change it and says agents cannot change it", () => {
     const { ctx } = page([]);
     const g = G();
     g.values[1].notes[0].pinned = true;
     const html: string = ctx.cfRow(g, 0);
     assert.ok(!html.includes("Keep Fly.io"), "keeping #1 would change the pinned #2");
     assert.ok(html.includes("Keep Render"));
-    assert.ok(html.includes("#2 pinned: change it from the CLI"));
+    assert.ok(html.includes("#2 pinned: agents cannot change it; the owner can (CLI or an admin key)"));
     assert.ok(!html.includes("Pin #2"));
   });
   test("everything from the server is escaped, in the card and in the dialog", async () => {
