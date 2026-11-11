@@ -807,6 +807,8 @@ interface NoteRow {
 }
 
 export const DEFAULT_NAMESPACE = "default";
+/** The capture's outside-content stamp (reserved-tags.ts re-exports it; defined here so update() can keep it without an import cycle). */
+export const ORIGIN_TOOL_PREFIX = "obs.origin:tool:";
 
 /** A pre-upgrade copy (`-backup`, a dated `-backup-YYYYMMDD-HHMMSS` kept copy) or an unfinished/killed one (`.<id>.partial` and its sidecars). */
 const PREMIGRATION_FILE_RE = /-backup(-\d{8}-\d{6}(-\d+)?)?(\.[0-9a-f]+\.partial(-journal|-wal|-shm)?)?$/;
@@ -3518,6 +3520,12 @@ export class Store {
     const existing = this.read(id);
     if (!existing) return null;
     this.refuseAgentOnPinned(id, "changing it");
+    // The outside-content stamp only grows, on every path (REST, MCP, file sync, import): no write can strip it.
+    const stamps = existing.tags.filter((t) => t.startsWith(ORIGIN_TOOL_PREFIX));
+    if (patch.tags !== undefined && stamps.some((t) => !patch.tags!.includes(t))) {
+      const given = patch.tags;
+      patch = { ...patch, tags: [...given, ...stamps.filter((t) => !given.includes(t))] };
+    }
     const newLabel = patch.sensitivity !== undefined ? this.labelForRelabel(patch.sensitivity, existing.sensitivity) : undefined;
     if (existing.status === "superseded") {
       throw new ValidationError(

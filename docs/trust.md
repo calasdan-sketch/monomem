@@ -143,6 +143,52 @@ monomem trust undistrust phone --namespace work
 
 Take a writer off with `undistrust`; its notes come back at once (nothing was changed or deleted).
 
+## The outside-content stamp
+
+The writer label says **who** saved a note. It cannot say where the text came from: an agent that read a poisoned web page
+and wrote the payload in its own words is still a trusted writer (the drill's known miss `SELF`). The stamp covers the part
+of that path Monomem can actually see.
+
+**What sets it.** When automatic capture distills a Claude Code session, the session summary gets the reserved tag
+`obs.origin:tool:<name>` for each tool in that session that returns outside content and gave output: `WebFetch`,
+`WebSearch`, and any MCP tool except Monomem's own (at most 3 names, sorted). The tool name comes from the hook payload
+Claude Code sends, never from text the model wrote. MCP servers you name in `MONOMEM_LOCAL_MCP_SERVERS` (a code index,
+say) do not count.
+
+**Why the summary.** It quotes the session's error lines and the agent's closing words, which can carry what an outside
+tool returned. Observations are not stamped: their text comes from your prompts and local commands, never from tool
+output. A stamp, once set on a summary, stays when the summary is rebuilt later in the session.
+
+**What it changes.**
+
+- At session start, a stamped latest summary is named but its text is **not pasted in**: the agent sees its title, the
+  reason, and how to open it.
+- Index lines end with `(session read outside content: WebFetch)`, and one legend line explains it.
+- The `WHO WROTE THIS` block on every MCP read says `Monomem saw this session read outside content through "WebFetch"
+  (stamped, not claimed)`.
+
+**It cannot be dropped.** Once a note has the stamp, every update path keeps it (REST, MCP, file sync, JSON import, the
+CLI): the stamp only grows. `obs.` tags are reserved, so an agent's note write can neither add nor remove one, and a
+trusted writer cannot quietly promote a stamped summary into a clean note. Two admin-level routes can *create* a note that
+already carries a stamp: `monomem import` / `POST /import` and a synced vault file. That can only add caution, never remove
+it. A tool name that is not plain name characters (letters, digits, `_ . -`, up to 80) is stamped as `other`, and so is
+one the write-time linter refuses, so a hostile name can neither reach the agent's context nor cost the session its
+summary. A stamped note's text is never pasted into the session-start block, pinned or not.
+
+**What it is not.** A note **without** the stamp is not thereby safe. Every note is still untrusted data. Not covered:
+
+- an agent that paraphrases outside text into an ordinary `state_write` (that is `SELF`, still a reported miss);
+- clients without Monomem's capture hooks (Cursor, Codex over plain MCP): nothing is stamped there;
+- local reads (`Read`, `Grep`) and `Bash` (`curl`, `git pull`), which run in nearly every session, so a downloaded README
+  read with `Read` is not stamped;
+- injection that acts inside the live session before anything is stored.
+
+An agent's own claim of origin stays a claim: the free-text `source` field is shown as `claims source="..." (unverified)`.
+Imported notes keep their own stamped label (`imported WITHOUT a verified attestation`).
+
+The safety does not rest on the stamp: the benchmark's E20 checks that a trusted writer which claims its note is its own is
+still held by the write-time linter.
+
 ## Stable writer identity
 
 `server_id` is per **database**, not per token. `writer_id = <server_id>/<label>`. A token that is

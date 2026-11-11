@@ -4,6 +4,25 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.5] - 2026-11-11
+
+### Added
+
+- **Outside-content stamp on captured session summaries.** When capture distills a Claude Code session that ran
+  `WebFetch`, `WebSearch` or another MCP server's tool, the session summary gets the reserved tag
+  `obs.origin:tool:<name>` (at most 3, from the hook payload's tool name, never from model text). A stamped summary is named
+  but not pasted into the session-start block, index lines say `(session read outside content: WebFetch)`, and the WHO WROTE
+  THIS block states it as stamped, not claimed. No update path can drop the stamp (it only grows), an agent's write cannot
+  add one, a pinned stamped note shows no text either, and an unsafe or linter-refused tool name is stamped `other`. It is not a clean bill for
+  unstamped notes, does not cover an agent paraphrasing outside text into `state_write` (the drill's `SELF` miss) or
+  clients without the capture hooks, and does not count `Read`/`Bash`. New `MONOMEM_LOCAL_MCP_SERVERS` names MCP servers
+  that only return local content. See docs/trust.md, "The outside-content stamp". Suggested by readers of the drill
+  write-up on dev.to.
+- **Benchmark E20: a trusted writer that claims its note is its own is still checked.** The write-time linter holds the
+  injected note regardless of the claimed source, so the stamp is extra, not what the safety rests on. `monomem drill` now
+  replays 23 attacks (the same 2 known misses).
+- **129 deterministic scenarios** (was 128): A 32, B 31, C 27, D 19, E 20.
+
 ## [1.3.4] - 2026-11-10
 
 ### Added

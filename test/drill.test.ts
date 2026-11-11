@@ -51,7 +51,7 @@ describe("monomem drill", () => {
       const before = { size: statSync(db).size, bytes: readFileSync(db) };
       const r = await runDrill({ dbPath: db });
       assert.equal(r.notes, 300);
-      assert.equal(r.attacks, 22);
+      assert.equal(r.attacks, 23);
       assert.deepEqual(r.reached.map((x) => x.id).sort(), ["E16", "SELF"]);
       assert.deepEqual(r.unexpected, []);
       assert.equal(r.ok, true);
@@ -59,7 +59,7 @@ describe("monomem drill", () => {
       const v = (id: string): string => r.rows.find((x) => x.id === id)?.verdict ?? "";
       assert.equal(v("E01"), "held", "quarantined = held");
       assert.equal(v("E07"), "blocked", "a blocked secret is not quarantine");
-      assert.match(renderDrill(r), /Poison reached the agent: 2 of 22 attacks \(known misses: E16 reworded override, self-poisoning\)/);
+      assert.match(renderDrill(r), /Poison reached the agent: 2 of 23 attacks \(known misses: E16 reworded override, self-poisoning\)/);
       assert.equal(statSync(db).size, before.size);
       assert.ok(readFileSync(db).equals(before.bytes), "the real database file is byte-for-byte unchanged");
       assert.deepEqual(leftovers(), []);
@@ -108,9 +108,9 @@ describe("monomem drill", () => {
       const code = await withEnv("MONOMEM_DB_PATH", db, () => drillMain(["--json"], (s) => lines.push(s)));
       assert.equal(code, 0);
       const j = JSON.parse(lines.join("\n")) as { attacks: number; ok: boolean; rows: unknown[] };
-      assert.equal(j.attacks, 22);
+      assert.equal(j.attacks, 23);
       assert.equal(j.ok, true);
-      assert.equal(j.rows.length, 22);
+      assert.equal(j.rows.length, 23);
 
       const gone = join(dir, "nope.db");
       const code2 = await withEnv("MONOMEM_DB_PATH", gone, () => drillMain([], () => undefined));
@@ -139,7 +139,7 @@ describe("monomem drill", () => {
     assert.equal(out.status, 0, out.stderr);
     assert.equal(readFileSync(join(PROJECT_ROOT, "evals", "poisoning-corpus.json"), "utf8"), out.stdout);
     const c = JSON.parse(out.stdout) as { attacks: Array<{ id: string; designed_miss?: string }> };
-    assert.equal(c.attacks.length, 20);
+    assert.equal(c.attacks.length, 21);
     assert.deepEqual(c.attacks.filter((a) => a.designed_miss).map((a) => a.id), ["E16", "SELF"]);
   });
 });
