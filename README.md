@@ -335,7 +335,7 @@ namespace isolation, and a Claude Code SessionStart recall hook.
 
 ## How it works
 
-![How it works: Claude Code, Claude Desktop and Cursor or Copilot talk to the MCP server (stdio and HTTP); a phone or web page reaches the REST API and dashboard through a tunnel; both send writes through the memory linter (secrets and injection scan) into one SQLite file. All of this runs in one Node process.](https://raw.githubusercontent.com/calasdan-sketch/monomem/main/docs/monomem-how-it-works.png)
+![How Monomem works: your agents save through MCP or REST; a write check refuses secrets and holds writes that match known attacks until you approve them; one SQLite file keeps each note's writer, history and privacy label; reads hide private notes from limited apps and leave out distrusted writers.](https://raw.githubusercontent.com/calasdan-sketch/monomem/main/docs/monomem-architecture.png)
 
 Write once in one assistant, read it back in another — every agent shares
 the same store.
