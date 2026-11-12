@@ -335,27 +335,7 @@ namespace isolation, and a Claude Code SessionStart recall hook.
 
 ## How it works
 
-```mermaid
-flowchart LR
-    subgraph Agents["Your agents"]
-        CC["Claude Code"]
-        CD["Claude Desktop"]
-        PH["Phone / Web"]
-        CU["Cursor / Copilot"]
-    end
-    subgraph OM["Monomem (one Node process)"]
-        MCP["MCP server\n(stdio + HTTP)"]
-        REST["REST API + Dashboard"]
-        LINT["Memory linter\n(secrets + injection scan)"]
-        DB[("SQLite\n(one file)")]
-    end
-    CC <--> MCP
-    CD <--> MCP
-    CU <--> MCP
-    PH <-->|tunnel| REST
-    MCP --> LINT --> DB
-    REST --> LINT
-```
+![How it works: Claude Code, Claude Desktop and Cursor or Copilot talk to the MCP server (stdio and HTTP); a phone or web page reaches the REST API and dashboard through a tunnel; both send writes through the memory linter (secrets and injection scan) into one SQLite file. All of this runs in one Node process.](https://raw.githubusercontent.com/calasdan-sketch/monomem/main/docs/monomem-how-it-works.png)
 
 Write once in one assistant, read it back in another — every agent shares
 the same store.
