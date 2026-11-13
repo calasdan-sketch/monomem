@@ -20,6 +20,7 @@ import {
   clampInt,
   REBUILD_CONFIRM_NOTE_COUNT,
   CHANGES_MAX_LIMIT,
+  QUARANTINE_CAS_NOTE,
   type NoteRecord,
 } from "./store.js";
 import type { LintFinding } from "./lint.js";
@@ -2097,17 +2098,22 @@ export function createMcpServer(
         "when MONOMEM_LINT says quarantine). Quarantined writes are not notes: they are invisible to " +
         "search, list, and recall until approved. action=list shows id, reasons, namespace and time only -- " +
         "never the held text, which a human reviews in the dashboard or with `monomem quarantine list`; " +
-        "approve applies the write as originally requested; reject discards it. " +
+        "context lists the other notes in the same namespace saved since the write was held that share its topic " +
+        "(ids, titles, times, writers; never the held text); " +
+        "approve applies the write as originally requested, keeping the time it was written (a held edit fails if the note changed since); " +
+        "keep_history stores it with its written time and marks it replaced by the newest related note from context (or `by`), " +
+        "and is refused when there is none; reject discards it. " +
         "Requires the admin scope." +
         (nsActive ? " Only this server's own namespace is visible." : ""),
       annotations: { destructiveHint: true },
       inputSchema: {
-        action: z.enum(["list", "approve", "reject"]).describe("list, approve, or reject."),
-        id: z.number().int().optional().describe("Quarantine id (required for approve/reject)."),
+        action: z.enum(["list", "context", "approve", "keep_history", "reject"]).describe("list, context, approve, keep_history, or reject."),
+        id: z.number().int().optional().describe("Quarantine id (required for every action but list)."),
+        by: z.number().int().optional().describe("keep_history only: the newer note that replaces it (default: the newest one context lists)."),
         limit: z.number().int().optional().describe("Max entries for list (default 50, max 500)."),
       },
     },
-    async ({ action, id, limit }) => {
+    async ({ action, id, by, limit }) => {
       try {
         const denied = denyIfUnder("admin");
         if (denied) return errorResult(denied);
@@ -2129,6 +2135,24 @@ export function createMcpServer(
         if (action === "reject") {
           store.rejectQuarantine(id);
           return textResult({ rejected: id });
+        }
+        if (action === "context") {
+          // Other notes only (ids, titles, times, writers), exactly what a list of the namespace shows; never the held text.
+          const ctx = store.quarantineContext(id)!;
+          return textResult({
+            id,
+            op: ctx.op,
+            target_id: ctx.target_id,
+            namespace: ctx.namespace,
+            held_at: ctx.held_at,
+            ...(ctx.target_changed !== undefined ? { target_changed: ctx.target_changed } : {}),
+            since_held: ctx.notes,
+            note: QUARANTINE_CAS_NOTE,
+          });
+        }
+        if (action === "keep_history") {
+          const kept = store.keepQuarantineAsHistory(id, by);
+          return textResult({ kept_as_history: id, note_id: kept.note.id, superseded_by: kept.superseded_by });
         }
         const note = store.approveQuarantine(id);
         await maybeEmbed(store, note);

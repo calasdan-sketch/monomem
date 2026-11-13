@@ -583,6 +583,25 @@ export interface QuarantineEntry {
   created_at: string;
 }
 
+/** Shown with every approval view (CLI, MCP, REST, dashboard). */
+export const QUARANTINE_CAS_NOTE =
+  "Approving keeps the time the write was made. A held edit is applied only to the exact version of the note it was written " +
+  "against: if the note changed since (compare-and-swap), approval fails and the edit stays held so you can reject it.";
+
+/** What was saved while a held write waited (Store.quarantineContext). Never the held text. */
+export interface QuarantineContext {
+  id: number;
+  op: "create" | "update";
+  target_id: number | null;
+  namespace: string;
+  /** When the write was held (= when it was written). */
+  held_at: string;
+  /** op=update only: the target note changed since the hold, so approving the edit will fail (compare-and-swap). */
+  target_changed?: boolean;
+  /** Other notes in the namespace, same topic, saved since held_at; newest first. */
+  notes: Array<{ id: number; title: string; updated_at: string; written_by: string }>;
+}
+
 /** How long change-log rows (incl. deletes) are kept for the change feed. */
 export const CHANGE_LOG_RETENTION_DAYS = 90;
 
@@ -590,7 +609,7 @@ export const CHANGE_LOG_RETENTION_DAYS = 90;
 const FTS_PREFIX_OPT = "prefix='1'";
 
 /** Current schema version (PRAGMA user_version). See Store.migrate. */
-export const SCHEMA_VERSION = 19;
+export const SCHEMA_VERSION = 20;
 
 /**
  * Notes fetched per page by exportBatch(), which both streaming export
@@ -767,6 +786,16 @@ export interface NoteRecord {
    * Not the `pinned` tag (which only keeps captured rows from decay).
    */
   pinned?: true;
+  /** v20: present only on notes that existed when the store was upgraded to 1.4.0 (the upgrade time). */
+  grandfathered_at?: string;
+  /** v20: present only on a held write that was approved: when, and by whom. created_at/updated_at keep the written time. */
+  approved_at?: string;
+  approved_by?: string;
+  /** v20: the latest qualifying confirm (kind human | admin | corroborated); it counts only while confirmed_rev equals rev. */
+  confirmed_at?: string;
+  confirmed_by?: string;
+  confirmed_kind?: string;
+  confirmed_rev?: number;
 }
 
 interface NoteRow {
@@ -804,6 +833,14 @@ interface NoteRow {
   pinned?: number | null;
   /** v19. NOT NULL in the table; optional here only because a few narrow projections do not select it. */
   sensitivity?: string | null;
+  /** v20 (absent from narrow projections). */
+  grandfathered_at?: string | null;
+  approved_at?: string | null;
+  approved_by?: string | null;
+  confirmed_at?: string | null;
+  confirmed_by?: string | null;
+  confirmed_kind?: string | null;
+  confirmed_rev?: number | null;
 }
 
 export const DEFAULT_NAMESPACE = "default";
@@ -880,6 +917,18 @@ function annotateRetention(row: NoteRow, rec: NoteRecord): NoteRecord {
     out.kind = row.kind as NoteKind;
     if (row.session_id) out.session_id = row.session_id;
     if (row.obs_type) out.obs_type = row.obs_type;
+  }
+  // v20: only when set, so a note written after the upgrade keeps its exact old shape.
+  if (row.grandfathered_at) out.grandfathered_at = row.grandfathered_at;
+  if (row.approved_at) {
+    out.approved_at = row.approved_at;
+    out.approved_by = row.approved_by ?? "";
+  }
+  if (row.confirmed_at) {
+    out.confirmed_at = row.confirmed_at;
+    out.confirmed_by = row.confirmed_by ?? "";
+    out.confirmed_kind = row.confirmed_kind ?? "";
+    out.confirmed_rev = Number(row.confirmed_rev ?? 0);
   }
   return out;
 }
@@ -2669,6 +2718,46 @@ export class Store {
       this.db.exec("CREATE INDEX IF NOT EXISTS idx_notes_live_updated ON notes(archived_at, updated_at DESC, id DESC)");
       this.createDeleteTrigger();
     }
+    if (v < 20) {
+      // v20 (1.4.0): trust. Everything the release needs lands in this one step (one backup, one transaction).
+      //  - notes.grandfathered_at: when the upgrade ran, for every note that existed then (new notes leave it NULL). Notes
+      //    from before the upgrade are exempt from the new holds, and any re-confirmation clock starts here, so upgrading
+      //    hides nothing.
+      //  - notes.approved_at / approved_by: a held write that was approved (its created_at/updated_at keep the WRITTEN time).
+      //  - notes.confirmed_*: the latest qualifying confirm (kind human|admin|corroborated), valid only while confirmed_rev = rev.
+      //  - quarantine.forget_after / confidence: a held write keeps them, so approving it applies them.
+      //  - sessions.outside_at: when a captured session last read outside content (web, other MCP servers).
+      //  - confirmations: every confirm, counted or not (who, whether authenticated, what source they named).
+      //  - note_links: add-only "derived from" links between notes.
+      for (const c of ["grandfathered_at", "approved_at", "approved_by", "confirmed_at", "confirmed_by", "confirmed_kind"]) this.addColumn("notes", c, "TEXT");
+      this.addColumn("notes", "confirmed_rev", "INTEGER");
+      this.addColumn("quarantine", "forget_after", "INTEGER");
+      this.addColumn("quarantine", "confidence", "REAL");
+      this.addColumn("sessions", "outside_at", "TEXT");
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS confirmations (
+          id INTEGER PRIMARY KEY,
+          note_id INTEGER NOT NULL,
+          note_rev INTEGER NOT NULL,
+          at TEXT NOT NULL,
+          by TEXT NOT NULL,
+          by_authed INTEGER NOT NULL,
+          kind TEXT NOT NULL,
+          source TEXT NOT NULL,
+          source_key TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_confirm_note ON confirmations(note_id, at);
+        CREATE TABLE IF NOT EXISTS note_links (
+          note_id INTEGER NOT NULL,
+          derived_from INTEGER NOT NULL,
+          added_at TEXT NOT NULL,
+          added_by TEXT NOT NULL,
+          PRIMARY KEY (note_id, derived_from)
+        );
+        CREATE INDEX IF NOT EXISTS idx_links_parent ON note_links(derived_from);
+      `);
+      this.db.prepare("UPDATE notes SET grandfathered_at = ? WHERE grandfathered_at IS NULL").run(new Date().toISOString());
+    }
   }
 
   /** The delete log row also remembers the deleted note's writers (v14). Caller holds the write lock. */
@@ -2854,6 +2943,8 @@ export class Store {
         tags: input.tags,
         source: input.source,
         createdAt: input.created_at,
+        forgetAfter: input.forget_after,
+        confidence: input.confidence,
         findings,
         writtenBy: opts.writtenBy,
         importedUnverified: opts.importedUnverified,
@@ -3511,6 +3602,8 @@ export class Store {
       importedUnverified?: boolean;
       /** Sync of another machine's file: its (origin, id), so approving the held update records the sync merge base. */
       syncIdentity?: { origin: string; id: number };
+      /** internal (approving a held edit): the time the edit was written; never earlier than the note's own updated_at. */
+      writtenAt?: string;
     } & LintOpts = {}
   ): NoteRecord | null {
     this.floodGate(opts.lint ?? "full", opts.noFloodCount !== true);
@@ -3586,6 +3679,8 @@ export class Store {
         body: patch.body,
         tags: patch.tags,
         source: patch.source,
+        forgetAfter: patch.forget_after,
+        confidence: patch.confidence,
         sensitivity: newLabel ?? existing.sensitivity ?? DEFAULT_SENSITIVITY,
         findings,
         writtenBy: opts.writtenBy,
@@ -3641,6 +3736,10 @@ export class Store {
         : existing.written_by;
     validateSizes({ title, body, tags: patch.tags ?? existing.tags });
     const now = new Date().toISOString();
+    // When the edit was written: now, or (approving a held edit) the hold time. Never before the note's own updated_at, so
+    // a note's time cannot move backwards (the approval's compare-and-swap means nothing changed in between anyway).
+    const held = isoOrNull(opts.writtenAt);
+    const writtenAt = held ? (held > existing.updated_at ? held : existing.updated_at) : now;
     // Re-seal: existing.body is already decrypted plaintext, so an update
     // that leaves the body alone still produces fresh ciphertext (new IV).
     // Retention: an explicit forget_after resets the deadline relative to
@@ -3648,7 +3747,7 @@ export class Store {
     // note's existing deadline instead of silently dropping it.
     const expiresAt =
       patch.forget_after !== undefined
-        ? retentionDeadline(patch.forget_after, now)
+        ? retentionDeadline(patch.forget_after, writtenAt)
         : existing.expires_at ?? null;
 
     const touched = [...new Set([existing.namespace, namespace])];
@@ -3726,7 +3825,7 @@ export class Store {
            WHERE id = ? AND (? IS NULL OR rev = ?) AND sensitivity = ?${this.ceilingSql()}`
         )
         .run(
-          namespace, title, sealed.body, tags, source, rev, now, sealed.bodyEnc, expiresAt, writer,
+          namespace, title, sealed.body, tags, source, rev, writtenAt, sealed.bodyEnc, expiresAt, writer,
           restamp ? 1 : 0, restamp ? 1 : 0, mergedAfter,
           confidenceSet ? 1 : 0, confidenceSet && typeof patch.confidence === "number" ? patch.confidence : null,
           confidenceSet ? 1 : 0, confidenceSet && typeof patch.confidence === "number" ? writerNow(opts) : "",
@@ -7823,6 +7922,10 @@ export class Store {
     tags?: string[];
     source?: string;
     createdAt?: string;
+    /** The write's forget_after days and confidence claim, applied on approval (v20; before, a hold dropped them). */
+    forgetAfter?: number;
+    /** A patch's `confidence: null` (clear) is not carried: approval leaves the confidence as it is. */
+    confidence?: number | null;
     /** op=update: the original patch moved the note to `namespace`. */
     setNamespace?: boolean;
     /** The label the held write carries (create: the new note's; update: the note's label after the write). */
@@ -7849,8 +7952,9 @@ export class Store {
       const res = this.db
         .prepare(
           `INSERT INTO quarantine (op, target_id, if_rev, namespace, title, body, tags, source,
-                                   created_at_override, reasons, created_at, set_namespace, sealed, written_by, sensitivity)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                                   created_at_override, reasons, created_at, set_namespace, sealed, written_by, sensitivity,
+                                   forget_after, confidence)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           q.op,
@@ -7867,7 +7971,9 @@ export class Store {
           q.setNamespace ? 1 : 0,
           key ? 1 : 0,
           q.writtenBy !== undefined ? cleanWriter(q.writtenBy) : currentWriter(),
-          q.sensitivity ?? DEFAULT_SENSITIVITY
+          q.sensitivity ?? DEFAULT_SENSITIVITY,
+          q.forgetAfter ?? null,
+          typeof q.confidence === "number" ? q.confidence : null
         );
       id = Number(res.lastInsertRowid);
       if (q.importedUnverified || q.syncIdentity) {
@@ -7953,48 +8059,70 @@ export class Store {
   approveQuarantine(id: number): NoteRecord {
     const q = this.getQuarantine(id);
     if (!q) throw new ValidationError(`no quarantined write with id ${id}`);
-    const drop = this.db.prepare("DELETE FROM quarantine WHERE id = ?");
+    const note = this.transaction(() => this.applyHeld(id, q));
+    this.audit({ op: "quarantine-approve", id, namespace: q.namespace });
+    return note;
+  }
+
+  /**
+   * Apply held write `id` (caller holds a transaction) and drop it from the queue.
+   *
+   * Times (1.4.0): the note keeps the time the write was WRITTEN (the hold time), not the approval time, so a late approval
+   * cannot make an old claim outrank a correction saved while it waited. approved_at/approved_by record the approval.
+   *  - create: created_at = the write's own created_at if it sent one, else the hold time; updated_at = the hold time.
+   *  - update: updated_at = the hold time, but never earlier than the note's current updated_at. The rev pin
+   *    (compare-and-swap) already guarantees the note did not change since the hold, so this only guards clock skew and
+   *    paths that touch updated_at without a rev bump; the note's time never moves backwards.
+   * forget_after counts from that written time; confidence is the writer's claim, as if the write had gone straight in.
+   */
+  private applyHeld(id: number, q: QuarantineEntry): NoteRecord {
+    const held = this.db
+      .prepare(
+        `SELECT op, if_rev, set_namespace, created_at, created_at_override, written_by, sensitivity, imported_unverified,
+                sync_origin, sync_origin_id, forget_after, confidence FROM quarantine WHERE id = ?`
+      )
+      .get(id) as {
+      if_rev: number | null;
+      set_namespace: number;
+      created_at: string;
+      created_at_override: string | null;
+      written_by: string | null;
+      sensitivity: string;
+      imported_unverified: number;
+      sync_origin: string | null;
+      sync_origin_id: number | null;
+      forget_after: number | null;
+      confidence: number | null;
+    };
+    const extras = {
+      ...(held.forget_after !== null ? { forget_after: Number(held.forget_after) } : {}),
+      ...(held.confidence !== null ? { confidence: Number(held.confidence) } : {}),
+    };
+    const unverified = Number(held.imported_unverified) === 1;
     let note: NoteRecord;
     if (q.op === "create") {
-      const row = this.db
-        .prepare("SELECT created_at_override, written_by, sensitivity, imported_unverified, sync_origin, sync_origin_id FROM quarantine WHERE id = ?")
-        .get(id) as {
-        created_at_override: string | null;
-        written_by: string | null;
-        sensitivity: string;
-        imported_unverified: number;
-        sync_origin: string | null;
-        sync_origin_id: number | null;
-      };
-      note = this.transaction(() => {
-        const n = this.create(
-          {
-            namespace: q.namespace,
-            title: q.title ?? "",
-            body: q.body ?? "",
-            tags: q.tags ?? undefined,
-            source: q.source ?? undefined,
-            created_at: row.created_at_override ?? undefined,
-            sensitivity: row.sensitivity,
-          },
-          { lint: "none", writtenBy: row.written_by ?? "", importedUnverified: Number(row.imported_unverified) === 1 }
-        );
-        if (row.sync_origin !== null && row.sync_origin_id !== null) {
-          this.syncLink(row.sync_origin, Number(row.sync_origin_id), n.id);
-          // What this store has now synced for the note, so an origin edit before the next sync merges as an update.
-          this.setSyncBase(n.id, syncContentHash(n));
-        }
-        drop.run(id);
-        return n;
-      });
+      note = this.create(
+        {
+          namespace: q.namespace,
+          title: q.title ?? "",
+          body: q.body ?? "",
+          tags: q.tags ?? undefined,
+          source: q.source ?? undefined,
+          created_at: held.created_at_override ?? held.created_at,
+          sensitivity: held.sensitivity,
+          ...extras,
+        },
+        { lint: "none", writtenBy: held.written_by ?? "", importedUnverified: unverified, updatedAt: held.created_at }
+      );
+      if (held.sync_origin !== null && held.sync_origin_id !== null) {
+        this.syncLink(held.sync_origin, Number(held.sync_origin_id), note.id);
+        // What this store has now synced for the note, so an origin edit before the next sync merges as an update.
+        this.setSyncBase(note.id, syncContentHash(note));
+      }
     } else {
-      const held = this.db
-        .prepare("SELECT if_rev, set_namespace, written_by, sensitivity, imported_unverified, sync_origin FROM quarantine WHERE id = ?")
-        .get(id) as { if_rev: number | null; set_namespace: number; written_by: string | null; sensitivity: string; imported_unverified: number; sync_origin: string | null };
-      const ifRev = held.if_rev;
       // Rows from before 1.1.0 may lack the rev the update was based on;
       // applying them unguarded could overwrite later edits.
-      if (ifRev === null) {
+      if (held.if_rev === null) {
         throw new ValidationError(
           `quarantined update #${id} predates rev tracking, so it can't be applied safely; reject it and re-submit the change`
         );
@@ -8012,8 +8140,9 @@ export class Store {
           // The rev pin above means the note is exactly as it was when the write was held, so re-applying its label is a no-op
           // unless the write itself relabelled the note.
           sensitivity: held.sensitivity,
+          ...extras,
         },
-        { ifRev, lint: "none", writtenBy: held.written_by ?? "", importedUnverified: Number(held.imported_unverified) === 1 }
+        { ifRev: held.if_rev, lint: "none", writtenBy: held.written_by ?? "", importedUnverified: unverified, writtenAt: held.created_at }
       );
       if (!updated) {
         throw new ValidationError(
@@ -8022,11 +8151,85 @@ export class Store {
       }
       // A held sync update: record the synced content as the merge base (else the next origin edit looks like a conflict).
       if (held.sync_origin !== null) this.setSyncBase(updated.id, syncContentHash(updated));
-      drop.run(id);
       note = updated;
     }
-    this.audit({ op: "quarantine-approve", id, namespace: q.namespace });
-    return note;
+    this.db.prepare("UPDATE notes SET approved_at = ?, approved_by = ? WHERE id = ?").run(new Date().toISOString(), currentWriter(), note.id);
+    this.db.prepare("DELETE FROM quarantine WHERE id = ?").run(id);
+    return this.read(note.id)!;
+  }
+
+  /**
+   * What changed while held write `id` waited (1.4.0): live notes in its namespace saved (created or edited) since it was
+   * held that share its topic, newest first. Ids, titles, times and writers only, never the held text. For a held edit
+   * the target note is left out of the list; `target_changed` says whether it changed since (then approval will fail,
+   * because a held edit is applied only to the exact version it was written against). The caller's own read rules apply
+   * (distrusted writers, sensitivity ceiling). null when there is no such held write.
+   */
+  quarantineContext(id: number): QuarantineContext | null {
+    const q = this.getQuarantine(id);
+    if (!q) return null;
+    const target = q.op === "update" && q.target_id !== null ? this.read(q.target_id) : null;
+    // A held edit that leaves the title alone is about its target's topic.
+    const topic = tokenize(`${q.title ?? target?.title ?? ""} ${(q.tags ?? []).join(" ")}`);
+    const words = new Set(topic);
+    // ponytail: newest 500 notes of the namespace, title-word overlap; a ranked search if the queue ever needs fuzzier matching.
+    const notes = this.list({ namespace: q.namespace, limit: 500 })
+      .notes.filter((n) => n.updated_at >= q.created_at && n.id !== q.target_id)
+      .filter((n) => tokenize(`${n.title} ${n.tags.join(" ")}`).some((w) => words.has(w)))
+      .map((n) => ({ id: n.id, title: n.title, updated_at: n.updated_at, written_by: n.written_by }));
+    return {
+      id: q.id,
+      op: q.op,
+      target_id: q.target_id,
+      namespace: q.namespace,
+      held_at: q.created_at,
+      ...(q.op === "update" ? { target_changed: !target || target.rev !== this.heldRev(id) } : {}),
+      notes,
+    };
+  }
+
+  /** The rev a held edit was written against (its compare-and-swap pin); null for a create or a pre-1.1.0 row. */
+  private heldRev(id: number): number | null {
+    const row = this.db.prepare("SELECT if_rev FROM quarantine WHERE id = ?").get(id) as { if_rev: number | null } | undefined;
+    return row?.if_rev ?? null;
+  }
+
+  /**
+   * "Keep as history" (1.4.0): approve held write `id` with its written time, then mark the note replaced by a newer related
+   * note (by default the newest one quarantineContext lists; `byId` must be one of them). The note is kept whole and
+   * retired exactly like a confirmed replacement (archived, superseded_by set, undo with supersede undo). Refused, with the
+   * write left queued, when nothing newer and related was saved since it was held.
+   */
+  keepQuarantineAsHistory(id: number, byId?: number): { note: NoteRecord; superseded_by: number } {
+    const ctx = this.quarantineContext(id);
+    if (!ctx) throw new ValidationError(`no quarantined write with id ${id}`);
+    if (!ctx.notes.length) {
+      throw new ValidationError(
+        `held write #${id}: nothing newer on the same topic was saved in "${ctx.namespace}" since it was held, so there is nothing to keep it as history of. Approve or reject it instead.`
+      );
+    }
+    const by = byId === undefined ? ctx.notes[0] : ctx.notes.find((n) => n.id === byId);
+    if (!by) throw new ValidationError(`note ${byId} is not one of the newer related notes saved since held write #${id} was held`);
+    const note = this.transaction(() => {
+      const n = this.applyHeld(id, this.getQuarantine(id)!);
+      if (n.id === by.id) throw new ValidationError("a note cannot replace itself");
+      const now = new Date().toISOString();
+      const actor = currentWriter();
+      const res = this.db
+        .prepare(
+          `UPDATE notes SET archived_at = ?, superseded_by = ?, superseded_at = ?, superseded_by_writer = ?, rev = rev + 1
+           WHERE id = ? AND archived_at IS NULL AND superseded_by IS NULL`
+        )
+        .run(now, by.id, now, actor, n.id);
+      if (Number(res.changes) === 0) throw new StaleWriteError(`note ${n.id} is no longer live; nothing was changed`);
+      this.db
+        .prepare("INSERT INTO supersede_log (at, actor, action, namespace, old_id, new_id, flags) VALUES (?, ?, 'supersede', ?, ?, ?, 'keep-history')")
+        .run(now, actor, n.namespace, n.id, by.id);
+      return n;
+    });
+    this.edgeIndexes.clear();
+    this.audit({ op: "quarantine-keep-history", id, namespace: ctx.namespace });
+    return { note: this.read(note.id)!, superseded_by: by.id };
   }
 
   /** Discard a quarantined write. Returns false when no such entry. */

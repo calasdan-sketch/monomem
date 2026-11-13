@@ -225,7 +225,7 @@ function usage(all = false): void {
       "  token add --label <name> --scope read|write|admin [--namespace ns] [--max public|internal|private] [--no-limit] | token list | token remove <label>",
       "            Make a random access token for an app and save it in tokens.json (shown once; restart a running server after).",
       "            list shows labels and scopes only. Commands that lower protection (token add, trust undistrust/attester-add/",
-      "            attester-unrevoke, quarantine approve, unpin, approve-first off, resume) need a real terminal and a typed yes.",
+      "            attester-unrevoke, quarantine approve/keep-history, unpin, approve-first off, resume) need a real terminal and a typed yes.",
       "  sync --git <repo-folder> [--remote name] [--encrypt] [--key-file f] [--dry-run] [--no-push] [--yes]",
       "            Keep your notes in step across your own computers through a PRIVATE git repository you own: fetch, merge,",
       "            three-way merge into the database, write back, commit, push. No Monomem server. --encrypt seals every",
@@ -243,8 +243,10 @@ function usage(all = false): void {
       "            Merge Markdown files back: newer side wins, conflicts are",
       "            reported and the losing version is saved under <dir>/.conflicts/.",
       "            Runs through the memory linter.",
-      "  quarantine [list | approve <id> | reject <id>]",
-      "            Review writes the memory linter held (MONOMEM_LINT) or an approve-first namespace held.",
+      "  quarantine [list | show <id> | approve <id> | keep-history <id> [--by <note id>] | reject <id>]",
+      "            Review writes the memory linter held (MONOMEM_LINT) or an approve-first namespace held. show lists what was",
+      "            saved on the same topic since; approve keeps the time it was written; keep-history stores it as replaced by",
+      "            that newer note.",
       "  approve-first [<namespace> on|off | --all on|off]",
       "            Hold every agent write to a namespace in the quarantine queue until you approve it.",
       "            --all on|off: the same for every namespace, including ones created later. No arguments: list the namespaces with it on, and the --all switch. Writes from monomem commands are not held.",
@@ -2591,10 +2593,10 @@ async function tokenCmd(): Promise<void> {
   }
 }
 
-// `monomem quarantine [list | approve <id> | reject <id>]`.
+// `monomem quarantine [list | show <id> | approve <id> | keep-history <id> [--by <note id>] | reject <id>]`.
 async function quarantineCmd(): Promise<void> {
   const { DB_PATH } = await import("./config.js");
-  const { Store, ValidationError } = await import("./store.js");
+  const { Store, ValidationError, QUARANTINE_CAS_NOTE } = await import("./store.js");
   const { maybeEmbed } = await import("./search-service.js");
   const [action = "list", idRaw] = process.argv.slice(3);
   const store = new Store(DB_PATH);
@@ -2614,13 +2616,30 @@ async function quarantineCmd(): Promise<void> {
           console.log(`    body: ${preview.replace(/\n/g, "\n          ")}`);
         }
       }
-      console.log("\nTo decide: monomem quarantine approve <id> | reject <id>  (in a terminal)");
+      console.log("\nTo decide: monomem quarantine show <id>, then approve <id> | keep-history <id> | reject <id>  (in a terminal)");
       return;
     }
     const id = Number(idRaw);
-    if ((action !== "approve" && action !== "reject") || !Number.isInteger(id)) {
-      console.error("Usage: monomem quarantine [list | approve <id> | reject <id>]");
+    if (!["show", "approve", "keep-history", "reject"].includes(action) || !Number.isInteger(id)) {
+      console.error("Usage: monomem quarantine [list | show <id> | approve <id> | keep-history <id> [--by <note id>] | reject <id>]");
       process.exit(1);
+    }
+    if (action === "show") {
+      showHeld(store, id, QUARANTINE_CAS_NOTE);
+      return;
+    }
+    if (action === "keep-history") {
+      const byAt = process.argv.indexOf("--by");
+      const by = byAt > 0 ? Number(process.argv[byAt + 1]) : undefined;
+      if (by !== undefined && !Number.isInteger(by)) {
+        console.error("--by takes a note id");
+        process.exit(1);
+      }
+      await requireOperator(`quarantine keep-history ${id}`);
+      const kept = store.keepQuarantineAsHistory(id, by);
+      await maybeEmbed(store, kept.note);
+      console.log(`Kept #${id} as history -> note #${kept.note.id} "${printable(kept.note.title)}", replaced by note #${kept.superseded_by}.`);
+      return;
     }
     if (action === "reject") {
       if (!store.rejectQuarantine(id)) {
@@ -2643,6 +2662,31 @@ async function quarantineCmd(): Promise<void> {
   } finally {
     store.close();
   }
+}
+
+/** `monomem quarantine show <id>`: the held write in full, plus what was saved in its namespace since it was held. */
+function showHeld(store: import("./store.js").Store, id: number, casNote: string): void {
+  const q = store.getQuarantine(id);
+  const ctx = store.quarantineContext(id);
+  if (!q || !ctx) {
+    console.error(`No quarantined write with id ${id}`);
+    process.exit(1);
+  }
+  const what = q.op === "update" ? `update of #${q.target_id}` : "new note";
+  console.log(`#${q.id} [${printable(q.namespace, 100)}] ${what}: ${q.title == null ? "(title unchanged)" : printable(q.title)}`);
+  console.log(`    written ${q.created_at}${q.written_by ? ` by ${printable(q.written_by, 100)}` : ""}`);
+  console.log(`    reasons: ${q.reasons.map((r) => `${r.label} in ${r.field}`).join("; ")}`);
+  if (q.body) console.log(`    body: ${q.body.replace(/\n/g, "\n          ")}`);
+  if (ctx.target_changed) console.log(`    Note #${q.target_id} has changed since this edit was held, so approving it will fail.`);
+  const n = ctx.notes.length;
+  if (n === 0) {
+    console.log(`\nNothing on the same topic was saved in ${printable(q.namespace, 100)} since this was held.`);
+  } else {
+    console.log(`\nSince this was held, ${n} newer note${n === 1 ? "" : "s"} in ${printable(q.namespace, 100)}:`);
+    for (const c of ctx.notes) console.log(`    #${c.id} "${printable(c.title)}" (${c.written_by ? `agent ${printable(c.written_by, 100)}, ` : ""}${c.updated_at.slice(0, 10)})`);
+  }
+  console.log(`\n${casNote}`);
+  console.log(`Decide: monomem quarantine approve ${id}${n ? ` | keep-history ${id}` : ""} | reject ${id}`);
 }
 
 // `monomem approve-first [<namespace> on|off]`: operator-only switch (no MCP tool sets it).

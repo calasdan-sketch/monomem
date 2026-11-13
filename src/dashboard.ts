@@ -638,9 +638,23 @@ function loadHeld(){
         " &middot; "+esc(q.namespace)+" &middot; "+when(q.created_at)+who+"</div>"+(why || "<span class='tag why'>held by policy</span>")+(heldTags ? "<div>"+heldTags+"</div>" : "")+"</div>"+
         acts("<button aria-label='reject held write #"+Number(q.id)+"' onclick='arm(this,function(){qQuarantine("+Number(q.id)+",&quot;reject&quot;)})'>Reject</button> "+
         "<button class='ghost' aria-label='approve held write #"+Number(q.id)+"' onclick='arm(this,function(){qQuarantine("+Number(q.id)+",&quot;approve&quot;)})'>Approve</button>")+"</div>"+
-        (q.body ? "<div class='heldbody'>"+esc(q.body)+"</div>" : "")+"</div>";
+        (q.body ? "<div class='heldbody'>"+esc(q.body)+"</div>" : "")+"<div id='qctx"+Number(q.id)+"' class='meta'></div></div>";
     }).join("") : empty("Nothing is held. Writes that look like secrets or injected instructions wait here for your approval.");
+    held.forEach(function(q){ loadHeldContext(Number(q.id)); });
   }).catch(failList);
+}
+// What was saved on the same topic while a held write waited (GET /quarantine/:id/context). Titles are stored text: esc().
+function loadHeldContext(id){
+  api("/quarantine/" + id + "/context").then(function(c){
+    var box = $("qctx" + id); if(!box){ return; }
+    var notes = c.notes || [];
+    var rows = notes.map(function(n){ return "<li>#"+Number(n.id)+" &ldquo;"+esc(n.title)+"&rdquo; ("+(n.written_by ? "agent "+esc(n.written_by)+", " : "")+when(n.updated_at)+")</li>"; }).join("");
+    box.innerHTML = (notes.length ? "Saved since this was held:<ul>"+rows+"</ul>"+
+        acts("<button class='ghost' aria-label='keep held write #"+id+" as history' onclick='arm(this,function(){qQuarantine("+id+",&quot;keep-history&quot;)})'>Keep as history</button>")
+      : "Nothing on the same topic was saved since this was held.") +
+      (c.target_changed ? "<div>The note this edit targets has changed since, so Approve will fail.</div>" : "") +
+      "<div>" + esc(c.note || "") + "</div>";
+  }).catch(function(){ var box = $("qctx" + id); if(box){ box.textContent = "Could not load what was saved since this was held."; } });
 }
 
 // ---- Sessions: what the capture hooks recorded, one session at a time (GET /sessions, GET /sessions/:id) ----
@@ -837,7 +851,7 @@ function qArchive(id){
 }
 function qQuarantine(id, action){
   api("/quarantine/" + id + "/" + action, { method:"POST" }).then(function(){
-    refreshHeld(); loadHeldCount(); say("Held write #" + id + (action === "approve" ? " stored." : " discarded."));
+    refreshHeld(); loadHeldCount(); say("Held write #" + id + (action === "approve" ? " stored." : action === "keep-history" ? " stored as history." : " discarded."));
   }).catch(fail);
 }
 

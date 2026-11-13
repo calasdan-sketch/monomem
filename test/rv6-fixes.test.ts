@@ -349,13 +349,13 @@ describe("RV6-b: the pre-upgrade copy is required, read-only directories get a r
       Store.freeBytes = () => 0;
       assert.throws(() => quietly(() => new Store(path)), /was not upgraded.*not enough free disk space.*MONOMEM_SKIP_PREMIGRATION_BACKUP=1/s);
       assert.equal(Store.peekSchemaVersion(path), 13, "the database is untouched");
-      assert.ok(!existsSync(path + ".pre-v19-backup"));
+      assert.ok(!existsSync(path + ".pre-v20-backup"));
       process.env.MONOMEM_SKIP_PREMIGRATION_BACKUP = "1";
       const r = quietly(() => new Store(path));
       r.out.close();
       assert.match(r.logged, /WITHOUT a pre-upgrade copy/);
       assert.equal(Store.peekSchemaVersion(path), SCHEMA_VERSION);
-      assert.ok(!existsSync(path + ".pre-v19-backup"));
+      assert.ok(!existsSync(path + ".pre-v20-backup"));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -365,7 +365,7 @@ describe("RV6-b: the pre-upgrade copy is required, read-only directories get a r
     for (const kind of ["unreadable", "empty", "garbage"] as const) {
       const { dir, path } = legacy();
       try {
-        const bak = path + ".pre-v19-backup";
+        const bak = path + ".pre-v20-backup";
         if (kind === "unreadable") {
           mkdirSync(bak); // stands in for a file this user may not open (running as root, permissions cannot be used)
           writeFileSync(join(bak, "precious"), "x");
@@ -373,7 +373,7 @@ describe("RV6-b: the pre-upgrade copy is required, read-only directories get a r
         const r = quietly(() => new Store(path));
         r.out.close();
         assert.ok(Store.verifyBackupFile(bak).ok, `${kind}: a fresh valid copy is in place`);
-        const kept = readdirSync(dir).filter((f) => /^state\.db\.pre-v19-backup-\d{8}-\d{6}/.test(f));
+        const kept = readdirSync(dir).filter((f) => /^state\.db\.pre-v20-backup-\d{8}-\d{6}/.test(f));
         if (kind === "unreadable") {
           assert.equal(kept.length, 1, "moved aside");
           assert.ok(existsSync(join(dir, kept[0], "precious")));

@@ -31,6 +31,7 @@ import {
   validateForgetAfter,
   coerceNumeric,
   DEFAULT_NAMESPACE,
+  QUARANTINE_CAS_NOTE,
 } from "./store.js";
 import { truthyParam } from "./trust.js";
 import { originAllowed, hostAllowed, hostRefusal, RateLimiter, AuthTarpit, clientKey, tokenKey, authenticateEntry, scopeAllows, LIMITS, audit, auditFailureCount, printable } from "./security.js";
@@ -164,7 +165,7 @@ function requiredScope(method: string | undefined, path: string): Scope {
   if (method === "POST" && path === "/sweep-expired") return "admin";
   // The quality view lists titles from every writer, and approving a held write is the linter's human gate.
   if (path === "/audit" || path === "/insights") return "admin";
-  if (path === "/quality" || path === "/quarantine" || /^\/quarantine\/\d+\/(approve|reject)$/.test(path)) return "admin";
+  if (path === "/quality" || path === "/quarantine" || /^\/quarantine\/\d+\/(approve|reject|keep-history|context)$/.test(path)) return "admin";
   // Approve-first is the switch in front of an agent's own writes: reading or flipping it is admin, like the queue itself.
   if (path === "/approve-first") return "admin";
   // Pins and rollback are operator switches, like approve-first.
@@ -1284,8 +1285,23 @@ export function createApiServer(
         return;
       }
 
-      // POST /quarantine/:id/approve | reject -> the memory_quarantine tool's approve / reject, for the dashboard.
-      const qMatch = /^\/quarantine\/(\d+)\/(approve|reject)$/.exec(path);
+      // GET /quarantine/:id/context -> other notes in the namespace saved since the write was held, same topic (admin).
+      const qCtxMatch = /^\/quarantine\/(\d+)\/context$/.exec(path);
+      if (req.method === "GET" && qCtxMatch) {
+        const id = Number(qCtxMatch[1]);
+        const entry = store.getQuarantine(id);
+        // Uniform "not found" for another namespace's entry: no existence oracle.
+        const ctx = entry && !(nsCtx.active && entry.namespace !== nsCtx.ownNamespace) ? store.quarantineContext(id) : null;
+        if (!ctx) {
+          sendJson(res, 404, { error: `no quarantined write with id ${id}` });
+          return;
+        }
+        sendJson(res, 200, { ...ctx, note: QUARANTINE_CAS_NOTE });
+        return;
+      }
+
+      // POST /quarantine/:id/approve | keep-history | reject -> the memory_quarantine tool's actions, for the dashboard.
+      const qMatch = /^\/quarantine\/(\d+)\/(approve|keep-history|reject)$/.exec(path);
       if (req.method === "POST" && qMatch) {
         const id = Number(qMatch[1]);
         const entry = store.getQuarantine(id);
@@ -1298,6 +1314,17 @@ export function createApiServer(
           if (qMatch[2] === "reject") {
             store.rejectQuarantine(id);
             sendJson(res, 200, { rejected: id });
+          } else if (qMatch[2] === "keep-history") {
+            let b: { by?: unknown } = {};
+            try {
+              b = JSON.parse((await readBody(req)) || "{}") as { by?: unknown };
+            } catch {
+              sendJson(res, 400, { error: "invalid JSON body" });
+              return;
+            }
+            const by = Number.isInteger(b.by) ? Number(b.by) : undefined;
+            const kept = store.keepQuarantineAsHistory(id, by);
+            sendJson(res, 200, { kept_as_history: id, note: kept.note, superseded_by: kept.superseded_by });
           } else {
             const note = store.approveQuarantine(id);
             await maybeEmbed(store, note);

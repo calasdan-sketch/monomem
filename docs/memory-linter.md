@@ -131,24 +131,53 @@ filter it out. The change feed counts quarantined writes in its window.
 
 ```
 memory_quarantine({ action: "list" })                 # admin scope
+memory_quarantine({ action: "context", id: 3 })
 memory_quarantine({ action: "approve", id: 3 })
+memory_quarantine({ action: "keep_history", id: 3 })  # optional: by: <note id>
 memory_quarantine({ action: "reject",  id: 3 })
 
 monomem quarantine                # list (with a body preview)
+monomem quarantine show 3         # the held write, plus what was saved since
 monomem quarantine approve 3
+monomem quarantine keep-history 3 # optional: --by <note id>
 monomem quarantine reject 3
+
+GET  /quarantine/3/context        # admin token
+POST /quarantine/3/approve | /quarantine/3/keep-history | /quarantine/3/reject
 ```
 
 The `memory_quarantine` MCP tool never returns the held text. `list`
-gives id, reasons, namespace and time only, and `approve` returns only the
-new note's id. The flagged text is exactly what must not reach a model, and
-an "untrusted data" wrapper is not the same as not reading it. A human reads
-the content in the dashboard or with `monomem quarantine`.
+gives id, reasons, namespace and time only, `context` lists only other
+notes, and `approve` returns only the new note's id. The flagged text is
+exactly what must not reach a model, and an "untrusted data" wrapper is not
+the same as not reading it. A human reads the content in the dashboard or
+with `monomem quarantine`.
 
-- **Approve** applies the write exactly as requested (same namespace, tags,
-  `created_at`; for an update, the same `if_rev` compare-and-swap). If the
-  target note has since changed or vanished, approval fails and the entry
-  stays queued so you can reject it.
+- **What changed while it waited.** `context` (MCP), `monomem quarantine
+  show`, `GET /quarantine/:id/context` and the dashboard's Held tab ("Saved
+  since this was held:") list the other notes in the same namespace that
+  were saved or edited after the write was held and share a word with its
+  title or tags: id, title, time and writer. This is a simple word match, so
+  it can miss a related note worded differently, and it can list one that
+  only shares a word.
+- **Approve** applies the write as requested (same namespace, tags, forget
+  date and confidence). The note keeps the time the write was made, not the
+  time you approved it: a held new note gets the hold time as its
+  `updated_at` (and as `created_at`, unless the write named its own), so an
+  old claim approved late does not rank above a correction saved while it
+  waited. `approved_at` and `approved_by` record the approval. A forget date
+  counts from the time the write was made.
+- **A held edit** is applied only to the exact version of the note it was
+  written against (compare-and-swap on `if_rev`). If the note has changed or
+  been deleted since, approval fails and the entry stays queued so you can
+  reject it. The edited note's `updated_at` becomes the hold time, but never
+  earlier than the time the note already had.
+- **Keep as history** stores the held write with the time it was made, then
+  marks it replaced by the newest note that `context` lists (or the one you
+  name). It is kept whole, left out of search and lists like any replaced
+  note, and `supersede undo` brings it back. It is refused, and the write
+  stays queued, when nothing newer on the same topic was saved since the
+  hold. For a held edit, the edited note is the one marked replaced.
 - Under server-side namespace resolution an admin only sees and acts on its
   own namespace's queue (foreign ids answer "no quarantined write", no
   existence oracle).

@@ -106,7 +106,7 @@ describe("archive_log is part of the v18 migration", () => {
       assert.equal(b.code, 0, b.err);
       const upgrades = (a.err + b.err).split("upgrading the database").length - 1;
       assert.equal(upgrades, 1, "one process migrated, the other found nothing to do");
-      assert.equal(Store.peekSchemaVersion(db), 19);
+      assert.equal(Store.peekSchemaVersion(db), 20);
       assert.deepEqual(archiveObjects(db), ["archive_log", "idx_archive_log_note", "notes_archive_log_ad", "notes_archive_log_au"]);
       const raw = new DatabaseSync(db, { readOnly: true });
       assert.equal((raw.prepare("SELECT COUNT(*) c FROM _meta WHERE key = 'archive_log_since'").get() as { c: number }).c, 1);
