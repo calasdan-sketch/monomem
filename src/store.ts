@@ -42,6 +42,19 @@ import { isStale, stalenessConfig, annotateStaleness } from "./staleness.js";
 import { encrypt, decryptIfEncrypted, isEncrypted, loadKey, keyPath, noteAad, captureAad } from "./crypto.js";
 import { currentActor, currentWriter, cleanWriter, currentCeiling, actorStore } from "./actor.js";
 import { redact } from "./redact.js";
+import {
+  ORIGIN_PREFIX,
+  ORIGIN_TOOL_PREFIX,
+  ORIGIN_DECLARED,
+  SESSION_TAINT_EXEMPT,
+  isOutsideTool,
+  isTainted,
+  toolTag,
+  sourceKey,
+  promotionRefusal,
+  UNCONFIRMED_LABEL,
+} from "./taint.js";
+import { taintWindowHours } from "./config.js";
 import { contentHash as syncContentHash } from "./sync-hash.js";
 import {
   type Sensitivity,
@@ -409,6 +422,11 @@ export interface NoteInput {
    * Anything else is rejected. See docs/sensitivity-labels.md.
    */
   sensitivity?: string;
+  /**
+   * 1.4.0: the writer says this note's content came from outside (a web page, another server). Adds `obs.origin:declared`;
+   * false or absent never removes taint.
+   */
+  outside?: boolean;
 }
 
 /**
@@ -658,6 +676,8 @@ export interface NotePatch {
   confidence?: number | null;
   /** Relabel the note ("public" | "internal" | "private"). Never above the caller's ceiling; lowering a label needs an admin. */
   sensitivity?: string;
+  /** 1.4.0: see NoteInput.outside (add-only). */
+  outside?: boolean;
 }
 
 export interface NoteRecord {
@@ -796,6 +816,10 @@ export interface NoteRecord {
   confirmed_by?: string;
   confirmed_kind?: string;
   confirmed_rev?: number;
+  /** 1.4.0: present (true) on a note from outside content that nobody confirmed for its current rev (taint.ts). */
+  unconfirmed?: true;
+  /** ... and the label shown with it. */
+  unconfirmed_label?: string;
 }
 
 interface NoteRow {
@@ -844,8 +868,8 @@ interface NoteRow {
 }
 
 export const DEFAULT_NAMESPACE = "default";
-/** The capture's outside-content stamp (reserved-tags.ts re-exports it; defined here so update() can keep it without an import cycle). */
-export const ORIGIN_TOOL_PREFIX = "obs.origin:tool:";
+/** The capture's outside-content stamp (reserved-tags.ts re-exports it; taint.ts imports nothing, so no import cycle). */
+export { ORIGIN_TOOL_PREFIX };
 
 /** A pre-upgrade copy (`-backup`, a dated `-backup-YYYYMMDD-HHMMSS` kept copy) or an unfinished/killed one (`.<id>.partial` and its sidecars). */
 const PREMIGRATION_FILE_RE = /-backup(-\d{8}-\d{6}(-\d+)?)?(\.[0-9a-f]+\.partial(-journal|-wal|-shm)?)?$/;
@@ -930,7 +954,35 @@ function annotateRetention(row: NoteRow, rec: NoteRecord): NoteRecord {
     out.confirmed_kind = row.confirmed_kind ?? "";
     out.confirmed_rev = Number(row.confirmed_rev ?? 0);
   }
+  // 1.4.0: tainted, not grandfathered (=== null: a narrow projection without the column is never flagged), no confirm for this rev.
+  if (row.grandfathered_at === null && isTainted(out.tags) && !(row.confirmed_kind && Number(row.confirmed_rev) === Number(row.rev))) {
+    out.unconfirmed = true;
+    out.unconfirmed_label = UNCONFIRMED_LABEL;
+  }
   return out;
+}
+
+/** Strength of a confirm kind: a weaker confirm never overwrites a stronger one for the same rev. */
+const CONFIRM_RANK: Record<string, number> = { corroborated: 1, admin: 2, human: 3 };
+
+/** A tainted note (not grandfathered) whose current rev has no HUMAN confirm: it may not be pinned or used as a replacement. */
+export function needsHumanConfirm(n: Pick<NoteRecord, "tags" | "rev" | "grandfathered_at" | "confirmed_kind" | "confirmed_rev">): boolean {
+  return isTainted(n.tags) && !n.grandfathered_at && !(n.confirmed_kind === "human" && n.confirmed_rev === n.rev);
+}
+
+/** What a confirm did (Store.confirm). `counted` false = recorded (when `recorded`) but releases nothing; `message` says why. */
+export interface ConfirmResult {
+  counted: boolean;
+  recorded: boolean;
+  kind: "human" | "admin" | "corroborated" | "not_counted";
+  reason?: string;
+  message: string;
+  id: number;
+  title: string;
+  rev: number;
+  by: string;
+  at: string;
+  source: string;
 }
 
 function tagsToStorage(tags: string[] | undefined): string {
@@ -2727,7 +2779,8 @@ export class Store {
       //  - notes.confirmed_*: the latest qualifying confirm (kind human|admin|corroborated), valid only while confirmed_rev = rev.
       //  - quarantine.forget_after / confidence: a held write keeps them, so approving it applies them.
       //  - sessions.outside_at: when a captured session last read outside content (web, other MCP servers).
-      //  - confirmations: every confirm, counted or not (who, whether authenticated, what source they named).
+      //  - confirmations: every confirm, counted or not (who, whether authenticated, what source they named; kind
+      //    'not_counted' with the rule in `reason`).
       //  - note_links: add-only "derived from" links between notes.
       for (const c of ["grandfathered_at", "approved_at", "approved_by", "confirmed_at", "confirmed_by", "confirmed_kind"]) this.addColumn("notes", c, "TEXT");
       this.addColumn("notes", "confirmed_rev", "INTEGER");
@@ -2744,7 +2797,8 @@ export class Store {
           by_authed INTEGER NOT NULL,
           kind TEXT NOT NULL,
           source TEXT NOT NULL,
-          source_key TEXT NOT NULL
+          source_key TEXT NOT NULL,
+          reason TEXT NOT NULL DEFAULT ''
         );
         CREATE INDEX IF NOT EXISTS idx_confirm_note ON confirmations(note_id, at);
         CREATE TABLE IF NOT EXISTS note_links (
@@ -2925,6 +2979,10 @@ export class Store {
     validateNames(input);
     validateForgetAfter(input.forget_after);
     validateConfidence(input.confidence);
+    // 1.4.0 taint, before the hold so a held write keeps it. Internal writes for someone else (writtenBy: an approval, a
+    // sync) and restores carry only what their own tags or `outside` say.
+    const taint = this.taintFor(input.namespace?.trim() || DEFAULT_NAMESPACE, input.outside, opts.bulkImport || opts.writtenBy !== undefined ? null : currentWriter());
+    if (taint.some((t) => !(input.tags ?? []).includes(t))) input = { ...input, tags: [...(input.tags ?? []), ...taint.filter((t) => !(input.tags ?? []).includes(t))] };
     const backdate = isoOrNull(input.created_at);
     if (backdate && Date.parse(backdate) > Date.now() + 5 * 60_000) {
       throw new ValidationError(`created_at ${input.created_at} is more than 5 minutes in the future`);
@@ -3613,11 +3671,19 @@ export class Store {
     const existing = this.read(id);
     if (!existing) return null;
     this.refuseAgentOnPinned(id, "changing it");
-    // The outside-content stamp only grows, on every path (REST, MCP, file sync, import): no write can strip it.
-    const stamps = existing.tags.filter((t) => t.startsWith(ORIGIN_TOOL_PREFIX));
-    if (patch.tags !== undefined && stamps.some((t) => !patch.tags!.includes(t))) {
-      const given = patch.tags;
-      patch = { ...patch, tags: [...given, ...stamps.filter((t) => !given.includes(t))] };
+    // The outside-content stamps (obs.origin:*) only grow, on every path (REST, MCP, file sync, import): no write can strip
+    // one, and a content edit by a connection that reads outside content adds its own (taintFor).
+    const stamps = existing.tags.filter((t) => t.startsWith(ORIGIN_PREFIX));
+    const contentEdit = (patch.title !== undefined && patch.title !== existing.title) || (patch.body !== undefined && patch.body !== existing.body);
+    const added =
+      contentEdit || patch.outside === true
+        ? this.taintFor(patch.namespace?.trim() || existing.namespace, patch.outside, opts.writtenBy !== undefined || opts.keepWriter ? null : currentWriter())
+        : [];
+    const newTaint = added.some((t) => !stamps.includes(t));
+    const keep = [...stamps, ...added.filter((t) => !stamps.includes(t))];
+    const given = patch.tags ?? existing.tags;
+    if ((patch.tags !== undefined || newTaint) && keep.some((t) => !given.includes(t))) {
+      patch = { ...patch, tags: [...given, ...keep.filter((t) => !given.includes(t))] };
     }
     const newLabel = patch.sensitivity !== undefined ? this.labelForRelabel(patch.sensitivity, existing.sensitivity) : undefined;
     if (existing.status === "superseded") {
@@ -3843,6 +3909,8 @@ export class Store {
         );
       }
       if (opts.importedUnverified) this.db.prepare("UPDATE notes SET imported_unverified = 1 WHERE id = ?").run(id);
+      // New outside content in a pre-upgrade note: the 1.4.0 exemption covered what it said then, not this.
+      if (newTaint) this.db.prepare("UPDATE notes SET grandfathered_at = NULL WHERE id = ?").run(id);
 
       // Invalidate the embedding: the note's text just changed, so the stored
       // vector is now stale. Drop it rather than keep a vector that no longer
@@ -4440,6 +4508,8 @@ export class Store {
         | undefined;
       if (!target || target.archived_at !== null || target.superseded_by !== null || this.idHidden(input.newId)) throw new ValidationError("the replacing note is no longer a live note; nothing was changed");
       if (input.newRev !== undefined && target.rev !== input.newRev) throw new StaleWriteError("the replacing note was edited after the preview; nothing was changed");
+      // 1.4.0: the replacement takes the old notes' place, so outside content no person confirmed cannot be it.
+      this.requireHumanConfirm(input.newId, "use it as a replacement");
       const upd = this.db.prepare(
         `UPDATE notes SET archived_at = ?, superseded_by = ?, superseded_at = ?, superseded_by_writer = ?, rev = rev + 1
          WHERE id = ? AND rev = ? AND archived_at IS NULL AND superseded_by IS NULL AND namespace = ?`
@@ -7862,11 +7932,172 @@ export class Store {
   /** Pin or unpin a note. False when there is no such note. Not a content change: rev, written_by and the change feed are untouched. */
   setPinned(id: number, on: boolean, namespaces?: string[]): boolean {
     if (namespaces && namespaces.length === 0) return false;
+    if (on) {
+      const ns = (this.db.prepare("SELECT namespace FROM notes WHERE id = ?").get(id) as { namespace: string } | undefined)?.namespace;
+      if (ns === undefined || (namespaces && !namespaces.includes(ns))) return false; // a note outside the caller's namespaces reads as missing
+      this.requireHumanConfirm(id, "pin");
+    }
     const where = namespaces ? ` AND namespace IN (${namespaces.map(() => "?").join(",")})` : "";
     const res = this.db.prepare(`UPDATE notes SET pinned = ? WHERE id = ?${where}`).run(on ? 1 : 0, id, ...(namespaces ?? []));
     const ok = Number(res.changes) > 0;
     if (ok) this.audit({ op: on ? "pin" : "unpin", id });
     return ok;
+  }
+
+  // --- Outside-content taint and confirms (1.4.0, taint.ts) -------------------------------------------
+
+  /**
+   * The `obs.origin:*` tags a write gets: `outside: true` (declared), the connection's own (ActorRef.taint: via:memory,
+   * a reads_outside token), and the hook session signal. `writer` null = an internal write for someone else (only `declared`).
+   */
+  private taintFor(namespace: string, declared: boolean | undefined, writer: string | null): string[] {
+    const out = new Set<string>(declared === true ? [ORIGIN_DECLARED] : []);
+    if (writer === null) return [...out];
+    for (const t of actorStore.getStore()?.taint ?? []) if (t.startsWith(ORIGIN_PREFIX)) out.add(t);
+    if (!SESSION_TAINT_EXEMPT.has(writer)) for (const t of this.sessionOutsideTags(namespace)) out.add(t);
+    return [...out];
+  }
+
+  /**
+   * The hook signal: a session in this namespace that has not ended read outside content within the taint window.
+   * Namespace-coarse on purpose (the MCP server never learns the host's session id), so a browsing session can taint a
+   * sibling session's writes; a person's confirm clears that. Returns the tools' stamps (at most 3), or `...:other`.
+   */
+  private sessionOutsideTags(namespace: string): string[] {
+    const hours = taintWindowHours();
+    if (hours <= 0) return [];
+    const cutoff = new Date(Date.now() - hours * 3_600_000).toISOString();
+    const ids = (this.db.prepare("SELECT id FROM sessions WHERE namespace = ? AND ended_at IS NULL AND outside_at >= ?").all(namespace, cutoff) as Array<{ id: string }>).map((r) => r.id);
+    if (!ids.length) return [];
+    const tools = this.db
+      .prepare(`SELECT DISTINCT tool FROM capture_events WHERE session_id IN (${ids.map(() => "?").join(",")}) AND event IN ('post-tool', 'post-tool-failure') AND at >= ?`)
+      .all(...ids, cutoff) as Array<{ tool: string }>;
+    const tags = [...new Set(tools.map((r) => r.tool).filter((t) => isOutsideTool(t)).map(toolTag))].sort().slice(0, 3);
+    return tags.length ? tags : [toolTag("other")];
+  }
+
+  /**
+   * A spooled outside-content event stored late (capture.ts drainSpool): notes written in its namespace after it, within the
+   * taint window, get its stamp now. Add-only, no rev bump (the content did not change). Returns how many notes it marked.
+   */
+  retroTaint(namespace: string, atIso: string, tool: string): number {
+    const hours = taintWindowHours();
+    if (hours <= 0 || !isOutsideTool(tool)) return 0;
+    const until = new Date(Date.parse(atIso) + hours * 3_600_000).toISOString();
+    const tag = toolTag(tool);
+    const rows = this.db
+      .prepare("SELECT id, tags, written_by FROM notes WHERE namespace = ? AND updated_at >= ? AND updated_at <= ? AND archived_at IS NULL AND COALESCE(kind, 'note') = 'note'")
+      .all(namespace, atIso, until) as Array<{ id: number; tags: string; written_by: string | null }>;
+    let n = 0;
+    for (const r of rows) {
+      const tags = parseTags(r.tags);
+      if (SESSION_TAINT_EXEMPT.has(r.written_by ?? "") || tags.includes(tag)) continue;
+      this.db.prepare("UPDATE notes SET tags = ? WHERE id = ?").run(tagsToStorage([...tags, tag]), r.id);
+      n++;
+    }
+    if (n) this.audit({ op: "retro-taint", namespace, detail: `${n} note(s) marked ${tag}` });
+    return n;
+  }
+
+  /** Live unconfirmed notes (tainted, not grandfathered, no confirm for the current rev), in `namespaces` or everywhere. */
+  unconfirmedCount(namespaces?: string[]): number {
+    if (namespaces && namespaces.length === 0) return 0;
+    const ns = namespaces ? ` AND namespace IN (${namespaces.map(() => "?").join(",")})` : "";
+    const dis = this.distrustFragment(NOTE_COLUMNS, namespaces);
+    const rows = this.db
+      .prepare(
+        `SELECT tags FROM notes WHERE archived_at IS NULL AND grandfathered_at IS NULL AND tags LIKE '%obs.origin:%'
+           AND NOT (confirmed_kind IS NOT NULL AND confirmed_rev = rev)${ns}${this.ceilingSql()}${dis.sql}`
+      )
+      .all(...(namespaces ?? []), ...dis.params) as Array<{ tags: string }>;
+    return rows.filter((r) => isTainted(parseTags(r.tags))).length;
+  }
+
+  /**
+   * Promotion guard (pin, replace-with, keep-as-history): a tainted note needs a HUMAN confirm for its current rev. The
+   * local CLI (writer `cli`) gets through and its pass is recorded as the human confirm: the CLI command asks for the
+   * operator gate (terminal + typed yes) before it calls this. Everyone else, admin tokens included, is refused.
+   */
+  requireHumanConfirm(id: number, verb: string): void {
+    const n = this.read(id);
+    if (!n || !needsHumanConfirm(n)) return;
+    if (currentWriter() === "cli") {
+      this.confirm(id, { source: `operator: ${verb}` });
+      return;
+    }
+    throw new ValidationError(promotionRefusal(verb, id));
+  }
+
+  /**
+   * Confirm a note (bound to its current rev). Who counts (SPEC 1c):
+   *   human        the local CLI (writer `cli`; the command runs the operator gate first). Always counts.
+   *   admin        `opts.admin` (the dashboard / an admin REST token). Releases the session-start hold, not the promotion block.
+   *   corroborated a different AUTHENTICATED token writer naming a source whose key differs from the note's own source and
+   *                every earlier qualifying confirm of this rev. Releases the session-start hold only.
+   * Recorded but not counted: the note's own writers (written_by, created_by, attested_writer, merged_from_writers), any
+   * stdio / unauthenticated writer, a distrusted writer, a connection that read this note while unconfirmed, a writer with a
+   * note derived from this one, and a second confirm by the same writer for the same rev. Confirms count in the flood guard.
+   */
+  confirm(id: number, opts: { source?: string; admin?: boolean } = {}): ConfirmResult | null {
+    const n = this.readVisible(id, { hideArchived: true }); // gate-ok: a hidden note answers like a missing one (null)
+    if (!n) return null;
+    const w = currentWriter();
+    const human = w === "cli";
+    if (!human) this.floodGate("full");
+    const source = (opts.source ?? "").replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 200);
+    const key = source ? sourceKey(source) : "";
+    const at = new Date().toISOString();
+    const base = { id, title: n.title, rev: n.rev, by: w, at, source };
+    const refusal = this.confirmRefusal(n, w, human, opts.admin === true, key);
+    if (refusal?.code === "already") return { ...base, counted: false, recorded: false, kind: "not_counted", reason: refusal.code, message: refusal.message };
+    const kind: ConfirmResult["kind"] = refusal ? "not_counted" : human ? "human" : opts.admin ? "admin" : "corroborated";
+    const write = (): void => {
+      this.db
+        .prepare("INSERT INTO confirmations (note_id, note_rev, at, by, by_authed, kind, source, source_key, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(id, n.rev, at, w, actorStore.getStore()?.authed ? 1 : 0, kind, source, key, refusal?.code ?? "");
+      const cur = n.confirmed_rev === n.rev ? CONFIRM_RANK[n.confirmed_kind ?? ""] ?? 0 : 0;
+      if (!refusal && CONFIRM_RANK[kind] >= cur) {
+        this.db.prepare("UPDATE notes SET confirmed_at = ?, confirmed_by = ?, confirmed_kind = ?, confirmed_rev = ? WHERE id = ? AND rev = ?").run(at, w, kind, n.rev, id, n.rev);
+      }
+    };
+    // Inside a caller's transaction (a CLI supersede's commit) the rows ride on it.
+    if (this.db.isTransaction) write();
+    else this.transaction(write);
+    this.audit({ op: refusal ? "confirm-not-counted" : "confirm", id, namespace: n.namespace, detail: refusal ? refusal.code : kind });
+    const checked = source ? ` Checked against: ${source}.` : "";
+    const message = refusal ? refusal.message : `Confirmed "${n.title.slice(0, 80)}" by ${w || "(unknown)"} at ${at.slice(0, 16).replace("T", " ")}.${checked}`;
+    return { ...base, counted: !refusal, recorded: true, kind, ...(refusal ? { reason: refusal.code } : {}), message };
+  }
+
+  /** Why a confirm does not count (null = it counts). Plain words, naming the rule. */
+  private confirmRefusal(n: NoteRecord, w: string, human: boolean, admin: boolean, key: string): { code: string; message: string } | null {
+    const who = w || "an unidentified writer";
+    const again = this.db
+      .prepare("SELECT 1 FROM confirmations WHERE note_id = ? AND note_rev = ? AND by = ? AND reason = '' LIMIT 1")
+      .get(n.id, n.rev, w);
+    if (again) return { code: "already", message: `Not counted again: ${who} already confirmed this version of the note. One confirm per writer per version.` };
+    if (human) return null;
+    const own = [n.written_by, n.created_by, n.attested_writer ?? "", ...(n.merged_from_writers ?? [])].filter(Boolean);
+    if (w && own.includes(w)) return { code: "same_writer", message: `Not counted: ${who} wrote this note, so it can't confirm it. A person or a different agent must confirm.` };
+    const actor = actorStore.getStore();
+    if (!actor?.authed || w === "" || w === "stdio" || w.startsWith("stdio:")) {
+      return { code: "unauthenticated", message: `Not counted: ${who} is a local connection without its own key, so its name is a claim, not an identity. The confirm is recorded but does not count. A person (monomem confirm ${n.id}) or an agent with its own key must confirm.` };
+    }
+    if (this.isDistrusted({ namespace: n.namespace, written_by: w })) return { code: "distrusted", message: `Not counted: ${who} is on the distrust list for this namespace.` };
+    if (actor.taintedReads?.has(n.id)) {
+      return { code: "read_it", message: `Not counted: ${who} read this note's text while it was unconfirmed, so the confirm could be the note talking. A person or an agent that has not read it must confirm.` };
+    }
+    const derived = this.db
+      .prepare("SELECT 1 FROM note_links l JOIN notes c ON c.id = l.note_id WHERE l.derived_from = ? AND (c.written_by = ? OR c.created_by = ?) LIMIT 1")
+      .get(n.id, w, w);
+    if (derived) return { code: "derived", message: `Not counted: ${who} wrote a note built from this one, so it can't confirm it.` };
+    if (admin) return null;
+    if (!key) return { code: "no_source", message: "Not counted: an agent's confirm must name the source it checked the note against (source)." };
+    const used = this.db.prepare("SELECT source_key FROM confirmations WHERE note_id = ? AND note_rev = ? AND reason = ''").all(n.id, n.rev) as Array<{ source_key: string }>;
+    if ((n.source && sourceKey(n.source) === key) || used.some((u) => u.source_key === key)) {
+      return { code: "same_source", message: "Not counted: that source is the note's own, or one an earlier confirm already named. Name a different source." };
+    }
+    return null;
   }
 
   /** Pinned notes (id, namespace, title), oldest first; `namespaces` limits it to those. */
@@ -8210,6 +8441,12 @@ export class Store {
     }
     const by = byId === undefined ? ctx.notes[0] : ctx.notes.find((n) => n.id === byId);
     if (!by) throw new ValidationError(`note ${byId} is not one of the newer related notes saved since held write #${id} was held`);
+    // 1.4.0: retiring one note in favour of another is a promotion of the other; neither side may be outside content no person
+    // has confirmed. The CLI (behind its operator gate) decides that itself.
+    if (currentWriter() !== "cli" && isTainted(this.getQuarantine(id)?.tags ?? [])) {
+      throw new ValidationError(`Can't keep as history: held write #${id} came from outside content. A person must decide it in a terminal: monomem quarantine keep-history ${id}`);
+    }
+    this.requireHumanConfirm(by.id, "use it as a replacement");
     const note = this.transaction(() => {
       const n = this.applyHeld(id, this.getQuarantine(id)!);
       if (n.id === by.id) throw new ValidationError("a note cannot replace itself");

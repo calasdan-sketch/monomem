@@ -41,6 +41,7 @@ import { rollbackPreview, rollbackConfirm, embedRestored } from "./rollback.js";
 import { supersedePreview, supersedeConfirm, supersedeUndo, noteHistory, restoreVersion, purgeNoteHistory, SupersedeError, type Caller } from "./supersede.js";
 import { runnerStatus } from "./liveness.js";
 import { assertPlainWriteTags, assertReviewedTag } from "./reserved-tags.js";
+import { ORIGIN_DECLARED, ORIGIN_VIA_MEMORY, unconfirmedIdsIn } from "./taint.js";
 import { withFacts, factFeedback, COMMON_FACT_KEYS, type FactFeedback } from "./facts.js";
 import { waitForChanges, parseWait, WAIT_MAX_SECONDS, WAIT_RECOMMENDED_SECONDS } from "./change-wait.js";
 import { type Scope, PACKAGE_VERSION } from "./config.js";
@@ -340,6 +341,10 @@ export interface ConnectionCtx {
   local?: boolean;
   /** The token's sensitivity ceiling (config `max_sensitivity`); the store hides every note above it from this connection. */
   maxSensitivity?: Sensitivity;
+  /** 1.4.0: the token is marked reads_outside: every note this connection writes is marked `obs.origin:declared`. */
+  readsOutside?: boolean;
+  /** 1.4.0: the set of unconfirmed note ids this writer has read (kept by the HTTP front door across requests). */
+  taintedReads?: Set<number>;
 }
 
 /**
@@ -469,6 +474,10 @@ export function createMcpServer(
   const enabled =
     opts.tools === "all" ? null : opts.tools ? new Set(opts.tools) : enabledToolNames();
   const localGuard = conn.local === true && !stdioAdminToolsAllowed();
+  // 1.4.0: unconfirmed notes this connection has read. The stdio server is one process = one agent: its own set. An
+  // HTTP connection gets a new server per request, so mcp-http.ts passes the token writer's set from its registry.
+  const taintedReads: Set<number> = conn.taintedReads ?? new Set();
+  const connTaint = (): string[] => [...(taintedReads.size ? [ORIGIN_VIA_MEMORY] : []), ...(conn.readsOutside ? [ORIGIN_DECLARED] : [])];
   /** Whether a tool is offered on this server: descriptions name only tools the model was actually given. */
   const has = (name: string): boolean => !enabled || enabled.has(name);
   const registerRaw = server.registerTool.bind(server) as (...a: unknown[]) => unknown;
@@ -530,6 +539,8 @@ export function createMcpServer(
           authed: conn.authed === true,
           ...(conn.maxSensitivity !== undefined ? { maxSensitivity: conn.maxSensitivity } : {}),
           canDeclassify: scopeAllows(scope, "admin"),
+          taint: connTaint(),
+          taintedReads,
         },
         () => {
           const out = (handler as (...x: unknown[]) => unknown)(...args);
@@ -552,6 +563,8 @@ export function createMcpServer(
         payload = undefined;
       }
       if (payload && typeof payload === "object" && "error" in payload) return r;
+      // 1.4.0: this connection has now read outside content nobody confirmed; what it writes next is marked via:memory.
+      for (const id of unconfirmedIdsIn(payload)) taintedReads.add(id);
       const query = typeof a?.query === "string" ? a.query : typeof a?.message === "string" ? a.message : a;
       store.logAccess({ tool, namespaces: typeof a?.namespace === "string" ? [a.namespace] : [], query, payload });
       return r;
@@ -739,9 +752,15 @@ export function createMcpServer(
           .describe(
             "Who may read this note: public, internal (default) or private. A connection with a ceiling cannot read, write or relabel above it; lowering a label needs an admin."
           ),
+        outside: z
+          .boolean()
+          .optional()
+          .describe(
+            "Set true when this note's content came from outside (a web page, a document, another server). The note is then marked unconfirmed until a person confirms it. It can only add the mark, never remove it."
+          ),
       },
     },
-    async ({ id, namespace, title: givenTitle, body, tags: plainTags, facts, source, if_rev, forget_after, confidence, sensitivity }) => {
+    async ({ id, namespace, title: givenTitle, body, tags: plainTags, facts, source, if_rev, forget_after, confidence, sensitivity, outside }) => {
       const warnings: LintFinding[] = [];
       let title = givenTitle;
       let tags = plainTags;
@@ -771,8 +790,8 @@ export function createMcpServer(
           }
           if (facts !== undefined) tags = withFacts(plainTags, facts, target.tags);
           const patch = nsActive
-            ? { title, body, tags, source, forget_after, confidence, sensitivity }
-            : { namespace, title, body, tags, source, forget_after, confidence, sensitivity };
+            ? { title, body, tags, source, forget_after, confidence, sensitivity, outside }
+            : { namespace, title, body, tags, source, forget_after, confidence, sensitivity, outside };
           const updated = store.update(id, patch, { ifRev: if_rev, lintWarnings: warnings });
           if (!updated) return errorResult(`no note with id ${id}`);
           await maybeEmbed(store, updated);
@@ -792,8 +811,8 @@ export function createMcpServer(
         tags = withFacts(plainTags, facts);
         const created = store.create(
           nsActive
-            ? { namespace: ownNs, title, body, tags, source, forget_after, sensitivity, ...(typeof confidence === "number" ? { confidence } : {}) }
-            : { namespace, title, body, tags, source, forget_after, sensitivity, ...(typeof confidence === "number" ? { confidence } : {}) },
+            ? { namespace: ownNs, title, body, tags, source, forget_after, sensitivity, outside, ...(typeof confidence === "number" ? { confidence } : {}) }
+            : { namespace, title, body, tags, source, forget_after, sensitivity, outside, ...(typeof confidence === "number" ? { confidence } : {}) },
           { lintWarnings: warnings }
         );
         await maybeEmbed(store, created);
@@ -801,6 +820,34 @@ export function createMcpServer(
         return untrustedResult(withConflicts(withWarnings({ note: noBody(created), ...(titleGenerated ? { title_generated: `No title was given, so it was made from the body's first line. To change it: state_write id=${created.id} title="..."` } : {}), ...(sim ? { similar_note: { id: sim.id, title: sim.title, hint: `looks similar to #${sim.id} - consider updating it (state_write with id=${sim.id}) if this is the same thing` } } : {}) }, warnings), store, created, facts));
       } catch (e) {
         if (e instanceof QuarantinedError) return quarantinedResult(e);
+        return errorFor(e);
+      }
+    }
+  );
+
+  // 1.4.0: not in DEFAULT_TOOLS (it costs context every turn, and over stdio a confirm never counts). A token agent that
+  // checks notes for others turns it on with MONOMEM_TOOLS. It never lifts the block on pinning: only a person can.
+  server.registerTool(
+    "memory_confirm",
+    {
+      title: "Confirm a note from outside content",
+      description:
+        "Record that you checked a note marked unconfirmed (from outside content) against a source. It counts only when you did not write the note, connect with your own key (not a local connection), name a source different from the note's own and from earlier confirms, and have not read the note's text yet. A counted confirm is corroboration, not verification: it lets the note back into session start, never lets it be pinned. The reply says whether it counted and why.",
+      inputSchema: {
+        id: zInt().describe("Id of the note to confirm."),
+        source: z.string().max(200).optional().describe("What you checked it against (a URL or a short description). Required for it to count."),
+      },
+    },
+    async ({ id, source }) => {
+      try {
+        const denied = denyIfUnder("write");
+        if (denied) return errorResult(denied);
+        const probe = store.read(id); // gate-ok: namespace check only; confirm() re-reads through readVisible
+        if (!probe || (nsActive && !canRead(grants, ownNs, probe.namespace))) return errorResult(`no note with id ${id}`);
+        const r = store.confirm(id, { source });
+        if (!r) return errorResult(noNote(id));
+        return untrustedResult({ counted: r.counted, kind: r.kind, ...(r.reason ? { reason: r.reason } : {}), message: r.message, id: r.id, rev: r.rev });
+      } catch (e) {
         return errorFor(e);
       }
     }

@@ -31,6 +31,9 @@ export interface IndexRow {
   tokens: number;
   /** A session summary the local model rewrote (llm.ts), not the deterministic text. */
   model_written?: true;
+  /** 1.4.0: from outside content, not confirmed yet (taint.ts). */
+  unconfirmed?: true;
+  unconfirmed_label?: string;
 }
 
 export interface IndexQuery {
@@ -73,6 +76,7 @@ export function toRows(store: Store, notes: NoteRecord[]): IndexRow[] {
     files: [...new Set((files.get(n.id) ?? []).map((f) => f.path))].slice(0, 20),
     tokens: Math.max(1, Math.ceil((n.title.length + n.body.length) / 4)),
     ...(n.distrusted ? { distrusted: true } : {}),
+    ...(n.unconfirmed ? { unconfirmed: true as const, unconfirmed_label: n.unconfirmed_label } : {}),
     ...(isModelWritten(n) ? { model_written: true as const } : {}),
   }));
 }

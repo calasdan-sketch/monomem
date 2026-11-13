@@ -49,7 +49,7 @@ describe("schema v20", () => {
         assert.ok(cols(db, "quarantine").includes("forget_after"));
         assert.ok(cols(db, "quarantine").includes("confidence"));
         assert.ok(cols(db, "sessions").includes("outside_at"));
-        assert.deepEqual(cols(db, "confirmations").sort(), ["at", "by", "by_authed", "id", "kind", "note_id", "note_rev", "source", "source_key"]);
+        assert.deepEqual(cols(db, "confirmations").sort(), ["at", "by", "by_authed", "id", "kind", "note_id", "note_rev", "reason", "source", "source_key"]);
         assert.deepEqual(cols(db, "note_links").sort(), ["added_at", "added_by", "derived_from", "note_id"]);
       } finally {
         db.close();
@@ -67,6 +67,8 @@ describe("schema v20", () => {
       for (let i = 0; i < 12; i++) s0.create({ namespace: "work", title: `deploy note ${i}`, body: `how we deploy, step ${i}` });
       s0.create({ namespace: "work", title: "web summary", body: "deploy notes from a page", tags: ["obs.origin:tool:WebFetch"] }, { kind: "summary", sessionId: "s1" });
       s0.create({ namespace: "work", title: "other topic", body: "lunch" });
+      // The "before" view is what 1.3.5 showed: rows written by this v20 build are marked pre-1.4 so none of the 1.4.0 holds apply.
+      s0.captureDb().prepare("UPDATE notes SET grandfathered_at = '2026-01-01T00:00:00.000Z'").run();
       const before = await snapshot(s0);
       s0.close();
       downgradeTo(path, 19);

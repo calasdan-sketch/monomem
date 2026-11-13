@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Benchmark E21 and E22: laundering outside content into a pinned note.** A trusted writer that rewrites a web page in
+  its own words (E21), or an agent that summarises an unconfirmed note it read (E22), gets a note marked as from outside
+  content; pinning it is refused until a person confirms it, and its text stays out of session start. Monomem can only see
+  outside reads its hooks, its own connections or a declaration show it. `monomem drill` now replays 25 attacks (the same
+  2 known misses).
+- **131 deterministic scenarios** (was 129): A 32, B 31, C 27, D 19, E 22.
+
 ## [1.3.5] - 2026-11-11
 
 ### Added

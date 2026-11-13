@@ -392,6 +392,12 @@ export interface TokenEntry {
    * token. The primary token never carries one.
    */
   max_sensitivity?: Sensitivity;
+  /**
+   * 1.4.0: this token's app reads outside content (the web, other servers) and Monomem has no hooks there to see it. Every
+   * note it writes is marked `obs.origin:declared` (from outside content, unconfirmed until confirmed). Add-only: there is
+   * no setting that removes taint.
+   */
+  reads_outside?: true;
 }
 
 /**
@@ -463,8 +469,10 @@ export function resolveTokens(): TokenEntry[] {
     label: unknown,
     lock = false,
     namespace?: unknown,
-    maxSensitivity?: unknown
+    maxSensitivity?: unknown,
+    readsOutside?: unknown
   ): void => {
+    const outside = readsOutside === true ? { reads_outside: true as const } : {};
     if (typeof token !== "string" || !token.trim()) return;
     const t = token.trim();
     if (!isScope(scope)) {
@@ -553,6 +561,7 @@ export function resolveTokens(): TokenEntry[] {
             label: scopeDown && typeof label === "string" ? label : existing.label,
             ...(nextNs !== undefined ? { namespace: nextNs } : {}),
             ...(nextCeil !== undefined ? { max_sensitivity: nextCeil } : {}),
+            ...(existing.reads_outside ? { reads_outside: true as const } : {}),
           });
         } else if (ns !== undefined && existing.namespace !== undefined && ns !== existing.namespace) {
           console.error(
@@ -561,6 +570,9 @@ export function resolveTokens(): TokenEntry[] {
           );
         }
       }
+      // reads_outside only adds: either listing marking it is enough.
+      const cur = byToken.get(t);
+      if (cur && outside.reads_outside && !cur.reads_outside) byToken.set(t, { ...cur, ...outside });
       return;
     }
     byToken.set(t, {
@@ -569,6 +581,7 @@ export function resolveTokens(): TokenEntry[] {
       label: typeof label === "string" ? label : "",
       ...(ns !== undefined ? { namespace: ns } : {}),
       ...(ceiling !== undefined ? { max_sensitivity: ceiling } : {}),
+      ...outside,
     });
     if (lock) locked.add(t);
   };
@@ -596,7 +609,7 @@ export function resolveTokens(): TokenEntry[] {
       return;
     }
     for (const e of arr) {
-      const o = e as { token?: unknown; scope?: unknown; label?: unknown; namespace?: unknown; max_sensitivity?: unknown };
+      const o = e as { token?: unknown; scope?: unknown; label?: unknown; namespace?: unknown; max_sensitivity?: unknown; reads_outside?: unknown };
       // A misspelt ceiling key ("maxSensitivity", "max_sensitivty") would otherwise be ignored and leave the token unrestricted.
       const lookalikes = o && typeof o === "object" ? Object.keys(o).filter((k) => k !== "max_sensitivity" && /sens|ceil/i.test(k)) : [];
       if (lookalikes.length) {
@@ -613,7 +626,7 @@ export function resolveTokens(): TokenEntry[] {
         refused.add(o.token.trim());
         continue;
       }
-      add(o?.token, o?.scope, o?.label, false, o?.namespace, o?.max_sensitivity);
+      add(o?.token, o?.scope, o?.label, false, o?.namespace, o?.max_sensitivity, o?.reads_outside);
     }
   };
 
@@ -813,6 +826,15 @@ function parseTagList(raw: string | undefined, def: string): string[] {
  * operators can change them without a restart of the importing module, and
  * so tests can override them). Invalid values fall back to the defaults.
  */
+/**
+ * 1.4.0 taint window: a note written while a hook-equipped session in the same namespace read outside content within this
+ * many hours (and has not ended) is marked as from outside content. MONOMEM_TAINT_WINDOW_HOURS, default 12; 0 turns the
+ * session signal off (the per-connection and declared signals stay).
+ */
+export function taintWindowHours(): number {
+  return envNum("MONOMEM_TAINT_WINDOW_HOURS", 12);
+}
+
 export function stalenessConfig(): StalenessConfig {
   return {
     staleDays: parsePositiveDays(process.env.MONOMEM_STALE_DAYS, 90),

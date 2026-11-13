@@ -15,6 +15,7 @@ import { embed, embeddingsEnabled, embeddingsConfig, noteEmbeddingText } from ".
 import { filterByTimeRange, parseTimePhrase, type TimeRange } from "./time-parse.js";
 import { TIME_ZONE } from "./config.js";
 import { extractKeywords } from "./keywords.js";
+import { UNCONFIRMED_FACTOR } from "./taint.js";
 import {
   stalenessConfig,
   stalePenaltyFactor,
@@ -268,7 +269,8 @@ function applyStalePenalty(
   cfg: StalenessConfig
 ): Array<{ note: NoteRecord; score: number }> {
   return hits
-    .map((h) => ({ ...h, score: h.score * stalePenaltyFactor(h.note, cfg) }))
+    // 1.4.0: unconfirmed outside content is mildly demoted too (still returned, labelled).
+    .map((h) => ({ ...h, score: h.score * stalePenaltyFactor(h.note, cfg) * (h.note.unconfirmed ? UNCONFIRMED_FACTOR : 1) }))
     .sort((a, b) => b.score - a.score); // stable: ties keep fetch order
 }
 

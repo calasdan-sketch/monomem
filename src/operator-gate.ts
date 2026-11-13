@@ -13,6 +13,18 @@ export async function gatePinned(store: import("./store.js").Store, ids: number[
   if (hit !== undefined) await requireOperator(`${what} on pinned note #${hit}`);
 }
 
+/**
+ * 1.4.0: pinning (or replacing with) a note from outside content no person confirmed. The Store lets the CLI through and
+ * records the pass as the human confirm, so the person must be at a terminal and type yes, exactly like gatePinned.
+ */
+export async function gateOutside(store: import("./store.js").Store, ids: number[], what: string): Promise<void> {
+  const { needsHumanConfirm } = await import("./store.js");
+  const hit = ids.find((i) => {
+    const n = store.read(i); // gate-ok: the CLI is the operator
+    return n !== null && needsHumanConfirm(n);
+  });
+  if (hit !== undefined) await requireOperator(`${what} note #${hit}, which came from outside content and no person has confirmed,`);
+}
 
 /**
  * Operator gate for commands that LOWER protection (undistrust, attester-add/unrevoke, quarantine approve).

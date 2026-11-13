@@ -124,6 +124,7 @@ let scanIds = 0;
 import { SupersedeError, supersedePreview, supersedeConfirm, supersedeUndo, noteHistory, restoreVersion, purgeNoteHistory, type Caller } from "./supersede.js";
 import { withFacts, factFeedback } from "./facts.js";
 import { assertPlainWriteTags, assertReviewedTag } from "./reserved-tags.js";
+import { ORIGIN_DECLARED, ORIGIN_VIA_MEMORY, newTaintRegistry, unconfirmedIdsIn } from "./taint.js";
 import { waitForChanges, parseWait, WaitBusyError } from "./change-wait.js";
 import type { LintFinding } from "./lint.js";
 import { memoryIndex, memoryTimeline, memoryGet, sessionList, sessionGet, fileTimeline, type ReadScope } from "./progressive.js";
@@ -174,6 +175,8 @@ function requiredScope(method: string | undefined, path: string): Scope {
   if (path === "/access" || path === "/flood" || path === "/flood/resume") return "admin";
   // A note's earlier versions can hold text that was taken out on purpose: administrators only, reads included.
   if (/^\/notes\/\d+\/history(\/restore)?$/.test(path)) return "admin";
+  // 1.4.0: any writer may confirm; who counts (and as what kind) is decided by Store.confirm, an admin token as `admin`.
+  if (method === "POST" && /^\/notes\/\d+\/confirm$/.test(path)) return "write";
   if (method === "POST" || method === "PUT") return "write";
   return "read";
 }
@@ -183,8 +186,8 @@ function requiredScope(method: string | undefined, path: string): Scope {
 // a generic 500 so SQL/internal details never leak to the client.
 // REST note bodies: a field Monomem does not know (a client sent `content` for `body`) used to be dropped, leaving an empty note.
 // written_by / created_by are accepted and ignored: the server stamps the writer from the token.
-const POST_NOTE_FIELDS = ["namespace", "title", "body", "tags", "source", "created_at", "forget_after", "confidence", "facts", "written_by", "created_by", "sensitivity"];
-const PUT_NOTE_FIELDS = ["namespace", "title", "body", "tags", "source", "forget_after", "confidence", "if_rev", "facts", "written_by", "created_by", "sensitivity"];
+const POST_NOTE_FIELDS = ["namespace", "title", "body", "tags", "source", "created_at", "forget_after", "confidence", "facts", "written_by", "created_by", "sensitivity", "outside"];
+const PUT_NOTE_FIELDS = ["namespace", "title", "body", "tags", "source", "forget_after", "confidence", "if_rev", "facts", "written_by", "created_by", "sensitivity", "outside"];
 // Fields of a note the server returns. A client that GETs a note and PUTs it back whole sends these; they are ignored (never applied).
 // `rev` is ignored too: use `if_rev` for compare-and-swap.
 const PUT_READ_ONLY_FIELDS = [
@@ -192,6 +195,7 @@ const PUT_READ_ONLY_FIELDS = [
   "imported_unverified", "attested_writer", "attested_by", "attested_writer_id", "merged_from_writers", "distrusted", "confidence_claimed_by",
   "status", "superseded_by", "superseded_at", "superseded_by_writer", "access_count", "last_accessed", "expires_at", "archived_at",
   "pinned", "session_id", "obs_type", "stale", "ageDays", "staleWarning", "unreadable", "encrypted", "neighbors", "history", "files", "score", "breakdown",
+  "grandfathered_at", "approved_at", "approved_by", "confirmed_at", "confirmed_by", "confirmed_kind", "confirmed_rev", "unconfirmed", "unconfirmed_label",
 ];
 /** A 400 message naming the unknown top-level fields of a note body, or null when there are none. */
 export function unknownNoteFields(body: unknown, allowed: readonly string[], ignored: readonly string[] = []): string | null {
@@ -378,6 +382,8 @@ export function createApiServer(
   const authFailures = new RateLimiter();
   const tarpit = new AuthTarpit();
   const perToken = new RateLimiter();
+  // 1.4.0: unconfirmed notes each token has read, kept across its requests (taint.ts).
+  const taintedReadsFor = newTaintRegistry();
   const anon = new RateLimiter();
 
   // Server-side namespace resolution, active only when the entry point
@@ -600,6 +606,10 @@ export function createApiServer(
         // The token's sensitivity ceiling rides on the same per-request context, and the store applies it inside its queries.
         if (principal.max_sensitivity !== undefined) actorRef.maxSensitivity = principal.max_sensitivity;
         actorRef.canDeclassify = scopeAllows(principal.scope, "admin");
+        // 1.4.0 taint: what this token read while unconfirmed (kept per token for the process), and its declared flag.
+        const reads = taintedReadsFor(currentWriter());
+        actorRef.taintedReads = reads;
+        actorRef.taint = [...(reads.size ? [ORIGIN_VIA_MEMORY] : []), ...(principal.reads_outside ? [ORIGIN_DECLARED] : [])];
       } else if (principal.max_sensitivity !== undefined) {
         // Cannot happen (every request runs inside actorStore.run), but a ceiling that cannot be applied must never be skipped.
         sendJson(res, 500, { error: "internal error" });
@@ -626,7 +636,12 @@ export function createApiServer(
       if (isReadRoute(req.method, path)) {
         const nsHint = url.searchParams.get("namespace");
         const tool = `${req.method} ${path.replace(/\/\d+(?=\/|$)/g, "/:id").replace(/^\/sessions\/[^/]+$/, "/sessions/:id")}`;
-        pendingReads.set(res, (payload) => store.logAccess({ tool, namespaces: nsHint ? [nsHint] : [], query: readQuery, payload }));
+        pendingReads.set(res, (payload) => {
+          // 1.4.0: an unconfirmed note handed to this token: what it writes next is marked via:memory.
+          const reads = actorRef?.taintedReads;
+          if (reads instanceof Set) for (const id of unconfirmedIdsIn(payload)) reads.add(id);
+          store.logAccess({ tool, namespaces: nsHint ? [nsHint] : [], query: readQuery, payload });
+        });
       }
 
       // include_distrusted switches the trust policy OFF for the call, so it is an
@@ -773,6 +788,10 @@ export function createApiServer(
           sendJson(res, 400, { error: "created_at needs the 'admin' scope; leave it out and the note is dated now" });
           return;
         }
+        if (parsed.outside !== undefined && typeof parsed.outside !== "boolean") {
+          sendJson(res, 400, { error: "outside must be true or false" });
+          return;
+        }
         if (parsed.forget_after !== undefined) parsed.forget_after = coerceNumeric(parsed.forget_after) as number;
         if (parsed.confidence !== undefined) parsed.confidence = coerceNumeric(parsed.confidence) as number;
         try {
@@ -860,6 +879,10 @@ export function createApiServer(
           sendJson(res, 400, { error: badPut });
           return;
         }
+        if (parsed && parsed.outside !== undefined && typeof parsed.outside !== "boolean") {
+          sendJson(res, 400, { error: "outside must be true or false" });
+          return;
+        }
         if (parsed && parsed.forget_after !== undefined) parsed.forget_after = coerceNumeric(parsed.forget_after) as number;
         if (parsed && parsed.confidence !== undefined && parsed.confidence !== null) parsed.confidence = coerceNumeric(parsed.confidence) as number;
         // Compare-and-swap, as in the MCP tool state_write: `if_rev` is the revision the caller last read; the edit is
@@ -908,6 +931,37 @@ export function createApiServer(
           }
           await maybeEmbed(store, note);
           sendJson(res, 200, { note, ...(warnings.length ? { warnings } : {}), ...(putFacts === undefined ? {} : factFeedback(store, note)) });
+        } catch (e) {
+          sendError(res, e);
+        }
+        return;
+      }
+
+      // POST /notes/:id/confirm { source? } -> 1.4.0 confirm. An admin token (the dashboard) confirms as kind `admin`; any
+      // other token as a corroboration that counts only by Store.confirm's rules. 200 either way: `counted` says which.
+      const confirmMatch = /^\/notes\/(\d+)\/confirm$/.exec(path);
+      if (req.method === "POST" && confirmMatch) {
+        const id = Number(confirmMatch[1]);
+        let body: { source?: unknown };
+        try {
+          body = JSON.parse((await readBody(req)) || "{}") as { source?: unknown };
+        } catch {
+          sendJson(res, 400, { error: "invalid JSON body" });
+          return;
+        }
+        if (body.source !== undefined && typeof body.source !== "string") {
+          sendJson(res, 400, { error: "source must be text" });
+          return;
+        }
+        try {
+          const probe = store.read(id); // gate-ok: namespace check; confirm() re-reads through readVisible
+          if (nsCtx.active && !denyUnreadable(nsCtx, res, probe)) return;
+          const r = store.confirm(id, { source: body.source, admin: isAdmin });
+          if (!r) {
+            sendJson(res, 404, { error: "not found" });
+            return;
+          }
+          sendJson(res, 200, r);
         } catch (e) {
           sendError(res, e);
         }
@@ -1244,8 +1298,14 @@ export function createApiServer(
           sendJson(res, 400, { error: "expected { id: number, pinned: boolean }" });
           return;
         }
-        if (!store.setPinned(id, body.pinned, own)) {
-          sendJson(res, 404, { error: "no note with that number" });
+        try {
+          // 1.4.0: a note from outside content that no person confirmed is refused (400, the message says what to do).
+          if (!store.setPinned(id, body.pinned, own)) {
+            sendJson(res, 404, { error: "no note with that number" });
+            return;
+          }
+        } catch (e) {
+          sendError(res, e);
           return;
         }
         sendJson(res, 200, { id, pinned: body.pinned });

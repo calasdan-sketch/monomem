@@ -14,7 +14,7 @@ description: >-
   session_handoff, memory_stats, memory_receipt, memory_why, memory_quarantine,
   memory_consolidation_candidates, memory_consolidate, memory_rebuild_edges,
   memory_history, memory_restore_version, memory_history_purge, memory_rollback,
-  memory_index, memory_timeline, memory_get, session_list.
+  memory_index, memory_timeline, memory_get, session_list, memory_confirm.
   Works in any MCP-capable agent (Claude Code, Claude Desktop,
   Cursor, Copilot, Windsurf, Cline, and more).
 license: MIT

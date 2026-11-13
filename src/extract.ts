@@ -20,6 +20,7 @@ import { scanForInjection } from "./lint.js";
 import { extractKeywords } from "./keywords.js";
 import { captureAad, eventInput } from "./capture.js";
 import { MODEL_WRITTEN_TAG, ORIGIN_TOOL_PREFIX } from "./reserved-tags.js";
+import { isOutsideTool, OTHER_TOOL, toolTag } from "./taint.js";
 
 export const OBS_TYPES = ["bugfix", "feature", "refactor", "change", "discovery", "decision", "security_alert", "security_note"] as const;
 export type ObsType = (typeof OBS_TYPES)[number];
@@ -59,20 +60,8 @@ export interface Observation {
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 const READ_TOOLS = new Set(["Read", "Grep", "Glob"]);
 
-/**
- * Tools whose output is outside content: the web, and MCP servers other than Monomem itself. The name is the hook
- * payload's tool_name, recorded by capture.ts, never text the model wrote.
- * ponytail: local reads (Read/Grep/Glob) and Bash (curl, git pull) are not counted: they run in nearly every session, so
- * the label would mean nothing. A downloaded README read with Read is therefore NOT stamped (said in docs/trust.md).
- */
-export function isOutsideTool(tool: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  if (tool === "WebFetch" || tool === "WebSearch") return true;
-  if (!tool.startsWith("mcp__") || /^mcp__(plugin_monomem_)?monomem__/.test(tool)) return false;
-  // MONOMEM_LOCAL_MCP_SERVERS: MCP servers the owner says return only local content (a code index, say), by server name.
-  const server = tool.slice(5).split("__")[0].toLowerCase();
-  const local = (env.MONOMEM_LOCAL_MCP_SERVERS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
-  return !local.includes(server);
-}
+// isOutsideTool lives in taint.ts (the store needs it too, without importing this file).
+export { isOutsideTool, OTHER_TOOL };
 /** At most this many tool names are stamped on one summary (sorted); a session that used more still gets the first ones. */
 export const MAX_ORIGIN_TOOLS = 3;
 
@@ -80,13 +69,9 @@ export const MAX_ORIGIN_TOOLS = 3;
 export function originTags(events: readonly { event: string; tool: string; output: string }[]): string[] {
   const seen = new Set<string>();
   // A tool name lands in a tag and in agent context: anything but plain name characters is stamped as "other" (still stamped).
-  for (const e of events)
-    if ((e.event === "post-tool" || e.event === "post-tool-failure") && e.output && isOutsideTool(e.tool)) seen.add(SAFE_TOOL_NAME.test(e.tool) ? e.tool : OTHER_TOOL);
-  return [...seen].sort().slice(0, MAX_ORIGIN_TOOLS).map((t) => ORIGIN_TOOL_PREFIX + t);
+  for (const e of events) if ((e.event === "post-tool" || e.event === "post-tool-failure") && e.output && isOutsideTool(e.tool)) seen.add(toolTag(e.tool));
+  return [...seen].sort().slice(0, MAX_ORIGIN_TOOLS);
 }
-const SAFE_TOOL_NAME = /^[A-Za-z0-9_.-]{1,80}$/;
-/** The stamp used when a tool's name is unsafe to print, or when the linter refuses the named stamp. */
-export const OTHER_TOOL = "other";
 const TEST_CMD = /\b(?:node\s+--test|(?:npm|pnpm|yarn)\s+(?:run\s+)?test|npx\s+(?:jest|vitest)|jest|vitest|pytest|cargo\s+test|go\s+test)\b/;
 const BUILD_CMD = /\b(?:(?:npm|pnpm|yarn)\s+run\s+build|tsc\b|cargo\s+build|go\s+build|make\b)/;
 const TEST_FAILED =

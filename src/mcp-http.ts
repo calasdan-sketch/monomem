@@ -20,6 +20,7 @@ import { resolve } from "node:path";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { Store } from "./store.js";
 import { createMcpServer } from "./mcp-server-core.js";
+import { newTaintRegistry } from "./taint.js";
 import { originAllowed, hostAllowed, hostRefusal, RateLimiter, AuthTarpit, clientKey, tokenKey, authenticateEntry } from "./security.js";
 import { type TokenEntry } from "./config.js";
 import { type ServerNamespaceOpts, resolveRequestNamespace } from "./namespace.js";
@@ -52,6 +53,8 @@ export function createMcpHttpServer(
   const authFailures = new RateLimiter();
   const tarpit = new AuthTarpit();
   const perToken = new RateLimiter();
+  // 1.4.0: unconfirmed notes each token has read, kept across its requests (taint.ts).
+  const taintedReadsOf = newTaintRegistry();
 
   // Resolve the namespace context for ONE request: the token's own pin wins
   // over the server's startup-resolved namespace. A fresh McpServer is built
@@ -128,6 +131,8 @@ export function createMcpHttpServer(
         label: principal.label,
         authed: true,
         ...(principal.max_sensitivity !== undefined ? { maxSensitivity: principal.max_sensitivity } : {}),
+        ...(principal.reads_outside ? { readsOutside: true } : {}),
+        taintedReads: taintedReadsOf(principal.label),
         signal: gone.signal,
       });
       const transport = new StreamableHTTPServerTransport({

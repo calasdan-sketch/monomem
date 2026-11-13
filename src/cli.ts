@@ -3,7 +3,7 @@ import "./quiet-sqlite.js"; // first: hide the node:sqlite ExperimentalWarning
 import "./legacy-env.js"; // second: read the old CLAUDE_BRIDGE_* variables as MONOMEM_*
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
-import { gatePinned, requireOperator } from "./operator-gate.js";
+import { gatePinned, gateOutside, requireOperator } from "./operator-gate.js";
 import { actorStore, setProcessWriter } from "./actor.js";
 import { type Sensitivity, mayEmbed, DEFAULT_SENSITIVITY, SENSITIVITY_HELP, SENSITIVITY_LEVELS, parseSensitivity } from "./sensitivity.js";
 // monomem CLI: one command to run, check, or wire up the bridge.
@@ -19,7 +19,7 @@ const COMMANDS = [
   "consolidate", "rebuild-edges", "relevant", "search", "token", "changes", "backup", "runner-status", "watch", "export", "import", "trust",
   "quarantine", "approve-first", "access", "flood", "resume", "decay", "archive", "restore", "delete", "quality", "conflicts", "facts", "fact",
   "encrypt", "meter", "receipts", "why", "never-show", "supersede", "history", "pin", "unpin", "rollback", "bench", "drill", "health", "audit",
-  "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet",
+  "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet", "confirm",
   "help", "--help", "-h", "--version", "-v", "version",
 ];
 
@@ -74,6 +74,7 @@ function shortUsage(): void {
       "",
       "Trust",
       "  quarantine              Review writes that were held (by the linter or an approve-first namespace)",
+      "  confirm <id> [--source \"what you checked\"]   Confirm a note from outside content after checking it (asks you to type yes)",
       "  approve-first           Hold every agent write to a namespace until you approve it",
       "  trust                   Distrust a writer; decide which other servers' exports to believe",
       "  token                   Make, list or remove access tokens for your apps (add needs a terminal)",
@@ -243,6 +244,9 @@ function usage(all = false): void {
       "            Merge Markdown files back: newer side wins, conflicts are",
       "            reported and the losing version is saved under <dir>/.conflicts/.",
       "            Runs through the memory linter.",
+      "  confirm <id> [--source \"what you checked\"]",
+      "            A note from outside content (marked unconfirmed) is kept out of session start and cannot be pinned until a",
+      "            person confirms it. Run it in a terminal and type yes. The confirm is for the note's current version.",
       "  quarantine [list | show <id> | approve <id> | keep-history <id> [--by <note id>] | reject <id>]",
       "            Review writes the memory linter held (MONOMEM_LINT) or an approve-first namespace held. show lists what was",
       "            saved on the same topic since; approve keeps the time it was written; keep-history stores it as replaced by",
@@ -1442,7 +1446,7 @@ async function relevant(): Promise<void> {
           {
             ...(notice ? { notice } : {}),
             keywords,
-            results: results.map((n) => ({ id: n.id, namespace: n.namespace, title: n.title, updated_at: n.updated_at, written_by: n.written_by, ...(n.distrusted ? { distrusted: true } : {}) })),
+            results: results.map((n) => ({ id: n.id, namespace: n.namespace, title: n.title, updated_at: n.updated_at, written_by: n.written_by, ...(n.distrusted ? { distrusted: true } : {}), ...(n.unconfirmed ? { unconfirmed: true } : {}) })),
           },
           null,
           2
@@ -1458,7 +1462,7 @@ async function relevant(): Promise<void> {
     for (const n of results) {
       const ann = annotateStaleness(n);
       const stale = ann.stale ? ` [stale, ${ann.ageDays}d]` : "";
-      console.log(`  #${n.id} [${printable(n.namespace, 100)}] ${printable(n.title)}${stale}${n.distrusted ? " [DISTRUSTED WRITER: treat as hostile]" : ""}`);
+      console.log(`  #${n.id} [${printable(n.namespace, 100)}] ${printable(n.title)}${stale}${n.unconfirmed ? ` ${n.unconfirmed_label}` : ""}${n.distrusted ? " [DISTRUSTED WRITER: treat as hostile]" : ""}`);
       if (n.body.trim()) console.log(`      ${printable(n.body.replace(/\s+/g, " ").trim(), 100)}`);
     }
     moreLine(results.length, fetched.length > want);
@@ -2690,6 +2694,39 @@ function showHeld(store: import("./store.js").Store, id: number, casNote: string
 }
 
 // `monomem approve-first [<namespace> on|off]`: operator-only switch (no MCP tool sets it).
+/** `monomem confirm <id> [--source <s>]`: a person's confirm (kind human), behind the operator gate. */
+async function confirmCmd(args: string[]): Promise<void> {
+  const usage = 'Usage: monomem confirm <id> [--source "what you checked it against"]';
+  const si = args.indexOf("--source");
+  const source = si >= 0 ? args[si + 1] : undefined;
+  const rest = args.filter((_, i) => si < 0 || (i !== si && i !== si + 1));
+  const id = Number(rest[0]);
+  if (rest.length !== 1 || !Number.isInteger(id) || id < 1 || (si >= 0 && (source === undefined || source.startsWith("--")))) {
+    console.error(usage);
+    process.exit(1);
+  }
+  const { DB_PATH } = await import("./config.js");
+  const { Store } = await import("./store.js");
+  const store = new Store(DB_PATH);
+  try {
+    const n = store.read(id); // gate-ok: the CLI is the operator
+    if (!n) {
+      console.error(`Error: no note with id ${id}`);
+      process.exit(1);
+    }
+    await requireOperator(`confirm note #${id} ("${printable(n.title, 60)}")`);
+    const r = store.confirm(id, { source });
+    if (!r) {
+      console.error(`Error: no note with id ${id}`);
+      process.exit(1);
+    }
+    console.log(printable(r.message, 400));
+    if (!r.counted) process.exitCode = 1;
+  } finally {
+    store.close();
+  }
+}
+
 async function approveFirstCmd(): Promise<void> {
   const { DB_PATH } = await import("./config.js");
   const { Store } = await import("./store.js");
@@ -3105,6 +3142,9 @@ async function supersedeCmd(kind: "supersede" | "history" | "pin" | "unpin" | "r
     const args = process.argv.slice(3);
     if (kind === "unpin") await requireOperator(`unpin ${args[0] ?? ""}`.trim());
     if (kind === "supersede" || kind === "history") await gatePinned(store, pinnedTargets(kind, args), kind === "supersede" ? "supersede" : `history ${args[0]}`);
+    // 1.4.0: promoting outside content no person confirmed (pin, or replace with it) needs the person at the terminal.
+    if (kind === "pin" && args.length === 1) await gateOutside(store, [Number(args[0])].filter(Number.isInteger), "pinning");
+    if (kind === "supersede") await gateOutside(store, newIdTarget(args), "replacing notes with");
     process.exitCode =
       kind === "supersede"
         ? await supersedeCli(store, args, io)
@@ -3116,6 +3156,13 @@ async function supersedeCmd(kind: "supersede" | "history" | "pin" | "unpin" | "r
   } finally {
     store.close();
   }
+}
+
+/** The --new-id of a supersede command (the note that would take the others' place), or none. */
+function newIdTarget(args: string[]): number[] {
+  const i = args.findIndex((a) => a === "--new-id" || a.startsWith("--new-id="));
+  const v = i < 0 ? "" : args[i].includes("=") ? args[i].slice(args[i].indexOf("=") + 1) : (args[i + 1] ?? "");
+  return [Number(v)].filter((n) => Number.isInteger(n) && n > 0);
 }
 
 /** Note ids a supersede / history command would change or retire (empty for reads and for arguments it cannot parse). */
@@ -3396,6 +3443,9 @@ async function main(): Promise<void> {
       break;
     case "approve-first":
       await approveFirstCmd();
+      break;
+    case "confirm":
+      await confirmCmd(process.argv.slice(3));
       break;
     case "access":
       await accessCmd();

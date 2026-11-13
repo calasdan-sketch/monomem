@@ -36,8 +36,11 @@ const EXPECTED_SITES: Record<string, string[]> = {
     "tag-guard lookup only (no content returned)",
     "archive/restore: denyUnwritable probe, hidden note is 404",
     "GET /export is admin-only (a full backup)",
+    "namespace check; confirm() re-reads through readVisible",
   ],
+  "operator-gate.ts": ["the CLI is the operator"],
   "cli.ts": [
+    "the CLI is the operator",
     "local shell command (reindex): the operator owns the database file",
     "local shell command (permanent delete): the operator owns the database file",
     "local shell command (show): the operator owns the database file",
@@ -61,6 +64,7 @@ const EXPECTED_SITES: Record<string, string[]> = {
     "consolidation candidates (admin): filtered with filterVisible",
     "consolidation candidates (admin): filtered with filterVisible",
     "admin consolidate: namespace check only",
+    "namespace check only; confirm() re-reads through readVisible",
   ],
   "setup.ts": ["setup reads back the test note it wrote a moment ago"],
   "sync.ts": [
@@ -166,7 +170,7 @@ describe("B: one gate for reading a note", () => {
     const mcp = read("mcp-server-core.ts");
     const tools = new Set<string>([...mcp.matchAll(/server\.registerTool\(\s*"([a-z_]+)"/g)].map((m) => m[1]));
     const NOTE_TOOLS = ["state_read", "state_search", "state_relevant", "state_list", "memory_stats", "memory_receipt", "memory_why", "memory_consolidation_candidates", "memory_since", "task_get", "task_list", "catch_up", "memory_ack", "memory_history", "memory_index", "memory_timeline", "memory_get", "session_list"];
-    const OTHER_TOOLS = ["state_write", "state_delete", "memory_consolidate", "memory_rebuild_edges", "task_put", "task_claim", "task_approve", "session_handoff", "memory_quarantine", "runner_status", "trust_policy", "memory_supersede_preview", "memory_supersede_confirm", "memory_supersede_undo", "memory_restore_version", "memory_history_purge", "memory_rollback"];
+    const OTHER_TOOLS = ["state_write", "state_delete", "memory_consolidate", "memory_rebuild_edges", "task_put", "task_claim", "task_approve", "session_handoff", "memory_quarantine", "runner_status", "trust_policy", "memory_supersede_preview", "memory_supersede_confirm", "memory_supersede_undo", "memory_restore_version", "memory_history_purge", "memory_rollback", "memory_confirm"];
     assert.deepEqual([...tools].sort(), [...NOTE_TOOLS, ...OTHER_TOOLS].sort(), "an MCP tool was added: classify it here (and canary-test it below if it returns note content)");
   });
 });
