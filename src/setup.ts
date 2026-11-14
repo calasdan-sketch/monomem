@@ -171,6 +171,20 @@ export function detectClients(e: SetupEnv): ClientTarget[] {
   return out;
 }
 
+/** 1.5.0: the app config files that exist and hold an Authorization header (an app key in plain text). Used by `monomem doctor`. */
+export function appKeyFiles(e: SetupEnv): string[] {
+  return detectClients(e)
+    .filter((t) => HTTP_CAPABLE.includes(t.id) && t.exists)
+    .filter((t) => {
+      try {
+        return /"authorization"/i.test(readFileSync(t.file, "utf8"));
+      } catch {
+        return false;
+      }
+    })
+    .map((t) => t.file);
+}
+
 // ---- the entry we write ------------------------------------------------------------------------------------------------
 
 export interface ServerEntry {

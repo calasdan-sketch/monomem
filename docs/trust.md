@@ -164,6 +164,9 @@ refuses to make them pinned notes until a person confirms them. Read what it can
   play two writers.
 - **A stated source is a claim.** Monomem never fetches it. A second agent's confirm is corroboration, not verification:
   a lying agent can name any source.
+- **A key proves which key wrote, not which agent.** App keys sit in the app's own config file (and the primary key in `.token`);
+  any program running as your user, including an agent with a shell tool, can read them and act as that app. That is why a second
+  key's confirm is only corroboration ("two keys agreed") and never lifts the promotion block. The full list of files is in SECURITY.md.
 - **`derived_from` only works if agents fill it in**, and it looks one hop back. A copy without it is not linked.
 - **An admin key can release the session-start hold.** REST cannot tell a person from an agent holding an admin key; only
   the pin block needs a person at the terminal. An admin key that was handed the note while unconfirmed is refused like

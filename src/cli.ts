@@ -542,6 +542,12 @@ async function doctor(): Promise<void> {
   }
 
   await doctorSecurityChecks(DATA_DIR, BIND_HOST, warn);
+  {
+    // 1.5.0 (R1-09): where an app key sits on this machine. Said once, plainly; SECURITY.md has the full list.
+    const { appKeyFiles, realEnv } = await import("./setup.js");
+    const files = [resolvePath(DATA_DIR, ".token"), resolvePath(DATA_DIR, "tokens.json"), ...appKeyFiles(realEnv("", process.argv[1] ?? ""))].filter((f) => existsSync(f));
+    if (files.length) ok(`keys are kept in: ${files.join(", ")}. Any program running as you can read these (SECURITY.md lists every place).`);
+  }
 
   // Pre-upgrade copies (`<db>.pre-v*-backup`) hold the notes as they were before an upgrade, outside
   // retention, deletes and at-rest encryption. Say that they exist, how big and how old, and how to remove them.

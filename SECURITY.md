@@ -308,7 +308,12 @@ disclosure within 90 days. Please do not file public issues for security reports
 
 These are known gaps, written down so nobody assumes they are covered:
 
-- **Keys are stored as they are.** Tokens in `tokens.json` and the main token file are kept in plain text (mode 0600), not as one-way hashes. Anyone who can read your data folder can use them. Hashing them is planned; until then protect the folder.
+- **Where your keys sit, and what follows from it.** A key is kept in each of these places, and anything that can read the file has the key:
+  - `.token` in the data folder: the primary (admin) key, plain text by design, because the CLI and the dashboard sign-in need it.
+  - `tokens.json` in the data folder: your app keys. Stored as one-way hashes (1.5.0; keys made by an older version are hashed the first time 1.5.0 starts). `tokens.json.bak` is not kept.
+  - Each connected app's own config, which must hold the key in plain text to send it: `~/.claude.json` (Claude Code), `~/.cursor/mcp.json` (Cursor), VS Code's `Code/User/mcp.json`, and `./.mcp.json` when you connect with `--project`. (Keyless stdio entries hold no key.)
+  - `.key` (the encryption key) and `.attest-key` (the signing key) in the data folder; the dashboard's `sessionStorage` while a tab is open; and the `login-code` file, whose `t` flag ("minted at a terminal") any program running as you can forge.
+  Any program running as your user, including an agent with a shell tool, can read these and act as that app. A key proves which key wrote, not which agent. That is why a second key's confirm is called corroboration ("two keys agreed") and never lifts the promotion block. `monomem doctor` lists which of these files exist and hold keys.
 - **No key rotation for at-rest encryption.** `monomem encrypt` uses one key. Changing it means decrypting and re-encrypting by hand (export, new store, import).
 - **A backup does not carry the encryption key by default** (`monomem backup --include-key` does copy it). Keep your own copy of the key somewhere separate.
 - **Host check is a second layer, not a wall.** A request under an unexpected host name is refused (see `MONOMEM_ALLOWED_HOSTS`), but a request through a proxy or tunnel is let through that check and still needs a valid key.
