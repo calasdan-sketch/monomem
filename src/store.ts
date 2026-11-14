@@ -1570,7 +1570,7 @@ function archivedClause(includeArchived?: boolean, archivedOnly?: boolean, inclu
   if (includeArchived) return "";
   if (supersededOnly) return " AND superseded_by IS NOT NULL";
   // A replaced note is archived too, but it has its own view (supersededOnly) and its own way back (supersede undo).
-  if (archivedOnly) return " AND archived_at IS NOT NULL AND superseded_by IS NULL";
+  if (archivedOnly) return includeSuperseded ? " AND archived_at IS NOT NULL" : " AND archived_at IS NOT NULL AND superseded_by IS NULL";
   if (includeSuperseded) return " AND (archived_at IS NULL OR superseded_by IS NOT NULL)";
   return " AND archived_at IS NULL";
 }

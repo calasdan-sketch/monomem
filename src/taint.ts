@@ -70,6 +70,16 @@ export const OTHER_TOOL = "other";
 /** `obs.origin:tool:<name>`, or `...:other` for a name that is not plain name characters. */
 export const toolTag = (tool: string): string => ORIGIN_TOOL_PREFIX + (SAFE_TOOL_NAME.test(tool) ? tool : OTHER_TOOL);
 
+/** 1.5.0 (R1-18): a note's `obs.origin:*` stamps in plain words for the CLI ("" when it has none). Tool names are already safe characters. */
+export function originText(tags: readonly string[]): string {
+  const tools = tags.filter((t) => t.startsWith(ORIGIN_TOOL_PREFIX)).map((t) => t.slice(ORIGIN_TOOL_PREFIX.length));
+  return [
+    tools.length ? `written during a session that read outside content (${tools.join(", ")})` : "",
+    tags.includes(ORIGIN_VIA_MEMORY) ? "written after reading unconfirmed notes" : "",
+    tags.includes(ORIGIN_DECLARED) ? "the writer declared it outside content" : "",
+  ].filter(Boolean).join("; ");
+}
+
 /**
  * The comparable form of a stated source: a URL becomes its lowercased host without `www.`; anything else is the trimmed,
  * lowercased text. A stated source is a CLAIM: Monomem never fetches it.

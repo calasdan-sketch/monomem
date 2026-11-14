@@ -92,8 +92,13 @@ export async function showCmd(args: string[]): Promise<void> {
     const n = store.readVisible(id, { includeDistrusted: true }); // local shell: the machine owner
     if (!n) fail(`No note #${id}.`);
     if (args.includes("--json")) return void console.log(JSON.stringify(n, null, 2));
-    console.log(`#${n.id} [${printable(n.namespace, 100)}] ${printable(n.title)}${n.archived_at ? "  (archived)" : ""}`);
-    console.log(`label: ${n.sensitivity ?? "internal"}   tags: ${printable(n.tags.join(", "), 400) || "none"}   written by: ${printable(n.written_by || "unknown", 80)}   version ${n.rev}`);
+    const { noteFlags, originText, ORIGIN_PREFIX } = await import("./taint.js");
+    const state = n.superseded_by != null ? `  (replaced by #${n.superseded_by})` : n.archived_at ? "  (archived)" : "";
+    console.log(`#${n.id} [${printable(n.namespace, 100)}] ${printable(n.title)}${noteFlags(n)}${state}`);
+    const tags = n.tags.filter((t) => !t.startsWith(ORIGIN_PREFIX));
+    console.log(`label: ${n.sensitivity ?? "internal"}   tags: ${printable(tags.join(", "), 400) || "none"}   written by: ${printable(n.written_by || "unknown", 80)}   version ${n.rev}`);
+    const origin = originText(n.tags);
+    if (origin) console.log(`origin: ${origin}`);
     console.log(`updated: ${n.updated_at}`);
     console.log("");
     console.log(printableBlock(n.body, 20000));
@@ -114,7 +119,9 @@ export async function lsCmd(args: string[]): Promise<void> {
   const store = new Store(DB_PATH);
   try {
     const archived = flags.archived === true;
-    const page = store.list({ ...(ns ? { namespace: ns } : {}), limit, ...(archived ? { archivedOnly: true } : {}) });
+    const { noteFlags } = await import("./taint.js");
+    // --archived also lists notes kept as history (replaced by another note): they are archived too.
+    const page = store.list({ ...(ns ? { namespace: ns } : {}), limit, ...(archived ? { archivedOnly: true, includeSuperseded: true } : {}) });
     const notes = page.notes;
     const moreLine = (): void => {
       if (page.total > notes.length) console.log(`Showing ${notes.length} of ${page.total} (newest first). More: monomem ls${archived ? " --archived" : ""}${ns ? ` --ns ${ns}` : ""} --limit ${Math.min(500, Math.max(limit * 2, 50))}`);
@@ -122,7 +129,10 @@ export async function lsCmd(args: string[]): Promise<void> {
     if (flags.json) return void console.log(JSON.stringify(notes.map((n) => ({ id: n.id, namespace: n.namespace, title: n.title, updated_at: n.updated_at, sensitivity: n.sensitivity ?? "internal" })), null, 2));
     if (archived) {
       if (!notes.length) return void console.log(`No archived notes${ns ? ` in namespace "${printable(ns, 100)}"` : ""}.`);
-      for (const n of notes) console.log(`#${n.id} [${printable(n.namespace, 100)}] ${printable(n.title, 70)}   (bring back: monomem restore ${n.id})`);
+      for (const n of notes) {
+        const back = n.superseded_by != null ? `replaced by #${n.superseded_by}; bring back: monomem supersede undo ${n.id}` : `bring back: monomem restore ${n.id}`;
+        console.log(`#${n.id} [${printable(n.namespace, 100)}] ${printable(n.title, 70)}${noteFlags(n)}   (${back})`);
+      }
       return moreLine();
     }
     if (!notes.length && ns) {
@@ -130,7 +140,7 @@ export async function lsCmd(args: string[]): Promise<void> {
       return void console.log(`No notes in namespace "${printable(ns, 100)}". ${used.length ? `Namespaces in use: ${used.slice(0, 30).join(", ")}${used.length > 30 ? ", ..." : ""}` : "There are no notes in any namespace yet."}`);
     }
     if (!notes.length) return void console.log("No notes yet. Add one with: monomem add \"something worth remembering\"");
-    for (const n of notes) console.log(`#${n.id} [${printable(n.namespace, 100)}] ${printable(n.title, 70)}${n.sensitivity === "private" ? "  (private)" : ""}`);
+    for (const n of notes) console.log(`#${n.id} [${printable(n.namespace, 100)}] ${printable(n.title, 70)}${noteFlags(n)}${n.sensitivity === "private" ? "  (private)" : ""}`);
     moreLine();
   } finally {
     store.close();

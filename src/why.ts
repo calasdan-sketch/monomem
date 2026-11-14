@@ -17,6 +17,16 @@ export interface WhyShown {
   rank: number;
   why: string;
 }
+export interface WhyConfirmation {
+  at: string;
+  by: string;
+  version: number;
+  kind: string;
+  source: string;
+  /** Released the hold for that version; false = recorded but not counted (`reason` says why). */
+  counted: boolean;
+  reason: string;
+}
 export interface Why {
   id: number;
   namespace: string;
@@ -28,6 +38,8 @@ export interface Why {
   approve_first_namespace: boolean;
   created_by: { writer: string; kind: string };
   timeline: WhyEvent[];
+  /** 1.5.0 (R1-18): every confirm of this note, counted or not, oldest first. */
+  confirmations: WhyConfirmation[];
   shown_to: { total: number; recent: WhyShown[]; retention_days: number };
   reads: { total: number; last: string | null; attributable: false };
   body?: string;
@@ -37,7 +49,7 @@ export interface Why {
 const SHOWN_LIMIT = 20;
 export const NOT_RECORDED =
   "Not recorded: who read this note (only a total and the last read time are kept), when it was pinned or by whom, " +
-  "the approval of a held write once it is approved, and versions older than the history limit or sessions older than the access-log retention.";
+  "and versions older than the history limit or sessions older than the access-log retention.";
 
 /** What a stored writer label is: a marker set by Monomem's own entry point, or a label from your config. */
 export function writerKind(w: string, claimed = false): string {
@@ -104,6 +116,10 @@ export function noteWhy(store: Store, note: NoteRecord, opts: { namespaces?: str
     tl.push({ at: q.created_at, what: `an edit by ${p(q.written_by || "unknown")} is HELD, waiting for approval${why ? ` (${why})` : ""}` });
   }
 
+  if (note.approved_at) tl.push({ at: note.approved_at, what: `held write approved by ${who(note.approved_by ?? "")}` });
+  const confirmations = (db.prepare("SELECT at, by, note_rev, kind, source, reason FROM confirmations WHERE note_id = ? ORDER BY at, id").all(id) as Array<{ at: string; by: string; note_rev: number; kind: string; source: string; reason: string }>)
+    .map((c) => ({ at: c.at, by: c.by, version: Number(c.note_rev), kind: c.kind, source: p(c.source), counted: c.kind !== "not_counted", reason: p(c.reason) }));
+
   // Receipts: which session starts showed it (ids and tags only; kept for the access-log window).
   let shown: WhyShown[] = [];
   const hasReceipts = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_receipts'").get();
@@ -126,6 +142,7 @@ export function noteWhy(store: Store, note: NoteRecord, opts: { namespaces?: str
     approve_first_namespace: store.isApproveFirst(note.namespace),
     created_by: { writer: creator, kind: writerKind(creator, claimed) },
     timeline: tl,
+    confirmations,
     shown_to: { total: shown.length, recent: shown.slice(0, SHOWN_LIMIT), retention_days: accessLogDays() },
     reads: { total: note.access_count, last: note.last_accessed, attributable: false },
     ...(opts.body ? { body: note.body } : {}),
@@ -155,6 +172,13 @@ export async function whyCmd(args: string[]): Promise<void> {
     console.log(`#${w.id} "${printable(w.title)}"  namespace ${printable(w.namespace)}`);
     for (const e of w.timeline) console.log(`  ${localTime(e.at)}  ${e.what}`);
     const flags = [w.pinned ? "pinned by the operator" : "", w.distrusted_writer ? "writer is distrusted: hidden from agents" : "", w.approve_first_namespace ? "namespace is approve-first" : ""].filter(Boolean);
+    if (w.confirmations.length) {
+      console.log("Confirmations:");
+      for (const c of w.confirmations) {
+        const counted = c.counted ? `counted (${p(c.kind)})` : `not counted: ${c.reason || "no reason recorded"}`;
+        console.log(`  ${localTime(c.at)}  version ${c.version} by ${who(c.by)}, source ${c.source || "none"}, ${counted}`);
+      }
+    }
     console.log(`status: ${w.status}${flags.length ? ` (${flags.join("; ")})` : ""}`);
     console.log(`shown at ${plural(w.shown_to.total, "session start")} (receipts kept ${w.shown_to.retention_days} days)`);
     console.log(`read ${plural(w.reads.total, "time")}${w.reads.last ? `, last ${localTime(w.reads.last)}` : ""}; who read it is not recorded`);
