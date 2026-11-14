@@ -17,6 +17,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   connected app's own config, `.key`, `.attest-key`, the dashboard's `sessionStorage`, the `login-code` file's forgeable flag)
   and say plainly that a key proves which key wrote, not which agent. `monomem doctor` names the key files that exist here. A
   test fails if a connect target that can hold a key is not named in SECURITY.md.
+- **Windows data folder is limited to its owner.** A data folder Monomem creates gets `icacls` permissions for your account and
+  SYSTEM only (best effort: a failure is one warning). `monomem doctor` checks an existing folder and prints the fix command.
+  This keeps other accounts on the PC out; it does not stop programs running as you.
+- **`connect --project` will not commit a key.** In a git repository that does not ignore `.mcp.json`, a connection that
+  carries a key is refused (also with `--yes`); keyless entries are unchanged.
 - A reply from any route or tool that carries an unconfirmed note now marks the reader, and a test enumerates every route
   and tool so a new one cannot skip it (`memory_since` was one that did).
 

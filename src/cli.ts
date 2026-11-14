@@ -546,6 +546,18 @@ async function doctor(): Promise<void> {
     // 1.5.0 (R1-09): where an app key sits on this machine. Said once, plainly; SECURITY.md has the full list.
     const { appKeyFiles, realEnv } = await import("./setup.js");
     const files = [resolvePath(DATA_DIR, ".token"), resolvePath(DATA_DIR, "tokens.json"), ...appKeyFiles(realEnv("", process.argv[1] ?? ""))].filter((f) => existsSync(f));
+    if (process.platform === "win32") {
+      // 1.5.0 (R1-11): an existing data folder may be open to other accounts on this PC. Read once, here; never on the hot path.
+      try {
+        const { execFileSync } = await import("node:child_process");
+        const { wideAccessGroups, lockdownArgs } = await import("./config.js");
+        const wide = wideAccessGroups(execFileSync("icacls", [DATA_DIR], { encoding: "utf8", timeout: 15_000, windowsHide: true }));
+        const args = lockdownArgs(DATA_DIR);
+        if (wide.length) warn(`the data folder is also open to ${wide.join(", ")} (other accounts on this PC). This does not stop programs running as you.`, args ? `To limit it to you and SYSTEM, run:  icacls "${DATA_DIR}" ${args.slice(1).map((x) => `"${x}"`).join(" ")}` : "Limit the folder's permissions to your own account in its Security tab.");
+      } catch {
+        /* icacls missing or the folder unreadable: say nothing */
+      }
+    }
     const plainKeys = (await import("./tokens-admin.js")).plainKeyCount();
     if (plainKeys) warn(`${plainKeys} app key(s) are stored in plain text in tokens.json.`, "Run: monomem token harden  (the apps keep working)");
     if (files.length) ok(`keys are kept in: ${files.join(", ")}. Any program running as you can read these (SECURITY.md lists every place).`);

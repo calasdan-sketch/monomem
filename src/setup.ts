@@ -812,7 +812,18 @@ function planToml(e: SetupEnv, opts: SetupOptions, target: ClientTarget, text: s
   return { change: { client: target.id, label: target.label, file: target.file, before: text, ops, lines, inverse: [{ op: "remove", path: ["mcp_servers"], key: "monomem" }], allowEmpty: opts.forceEmpty, format: "toml" }, already: [], conflicts: [], warnings: [] };
 }
 
+/** Is `file` inside a git work tree and NOT ignored by it? (No git, or not a repository: false.) */
+function gitWouldCommit(cwd: string, file: string): boolean {
+  const git = (args: string[]): number | null => spawnSync("git", args, { cwd, stdio: "ignore", timeout: 10_000, windowsHide: true }).status;
+  if (git(["rev-parse", "--is-inside-work-tree"]) !== 0) return false;
+  return git(["check-ignore", "-q", file]) !== 0;
+}
+
 export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, shared: SharedPlan): { change: FileChange | null; already: string[]; conflicts: string[]; warnings: string[] } {
+  // 1.5.0: a key in ./.mcp.json of a git repository that does not ignore it would be committed with the next `git add .`.
+  if (target.id === "project" && opts.httpEntry && gitWouldCommit(e.cwd, target.file)) {
+    return { change: null, already: [], conflicts: ["This folder is a git repository and .mcp.json is not ignored, so the key would be committed. Add .mcp.json to .gitignore, or connect without --project."], warnings: [] };
+  }
   const text = readTextFile(target.file);
   if (text === "" && !opts.forceEmpty) return { change: null, already: [], conflicts: [EMPTY_FILE_MSG(target.file)], warnings: [] };
   if (target.id === "codex") {
