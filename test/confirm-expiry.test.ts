@@ -182,3 +182,98 @@ describe("re-confirmation expiry", () => {
     s.close();
   });
 });
+
+// 1.5.0 R1-01: the clock measures content and real (person/admin) confirms only.
+import { actorStore } from "../src/actor.js";
+import { needsHumanConfirm } from "../src/store.js";
+
+/** Make a note's CONTENT look `days` old: every time column that could start the clock. */
+function ageContent(s: Store, id: number, days: number): void {
+  age(s, id, days);
+  try {
+    s.captureDb().prepare("UPDATE notes SET content_at = ? WHERE id = ?").run(ago(days), id);
+  } catch {
+    /* pre-v21 schema: updated_at is the content time */
+  }
+}
+const asToken = <T>(label: string, fn: () => T): T => actorStore.run({ label, authed: true }, fn);
+
+describe("R1-01 the expiry clock measures content, not metadata", () => {
+  test("a stdio tags-only write does not restart the clock and does not change the writer", () => {
+    const s = new Store(":memory:");
+    setProcessWriter("stdio:bot");
+    const n = s.create({ title: "stale rates", body: "b" });
+    ageContent(s, n.id, 40);
+    assert.equal(s.read(n.id)!.expired, true);
+    s.update(n.id, { tags: ["x"] });
+    const r = s.read(n.id)!;
+    assert.equal(r.expired, true, "a tag edit is not a re-confirmation");
+    assert.equal(r.written_by, "stdio:bot");
+    s.close();
+  });
+
+  test("another token's confidence-only PUT does not restart the clock", () => {
+    const s = new Store(":memory:");
+    setProcessWriter("stdio:bot");
+    const n = s.create({ title: "stale rates", body: "b" });
+    ageContent(s, n.id, 40);
+    asToken("tokA", () => s.update(n.id, { confidence: 0.9 }));
+    assert.equal(s.read(n.id)!.expired, true);
+    s.close();
+  });
+
+  test("a corroborated confirm releases the hold (counted) but the note stays expired", () => {
+    const s = new Store(":memory:");
+    setProcessWriter("stdio:bot");
+    const n = s.create({ title: "stale rates", body: "b" });
+    ageContent(s, n.id, 40);
+    const r = asToken("tokB", () => s.confirm(n.id, { source: "vendor price list" }))!;
+    assert.equal(r.counted, true, r.message);
+    assert.equal(r.kind, "corroborated");
+    assert.match(r.message, /does not restart the re-confirmation clock/);
+    assert.equal(s.read(n.id)!.expired, true);
+    s.close();
+  });
+
+  test("an admin confirm does restart the clock", () => {
+    const s = new Store(":memory:");
+    setProcessWriter("stdio:bot");
+    const n = s.create({ title: "stale rates", body: "b" });
+    ageContent(s, n.id, 40);
+    const r = asToken("adm", () => s.confirm(n.id, { source: "x", admin: true }))!;
+    assert.equal(r.kind, "admin", r.message);
+    assert.equal(s.read(n.id)!.expired, undefined);
+    s.close();
+  });
+
+  test("a human confirm survives an agent's metadata-only edit (still confirmed for the new rev)", () => {
+    const s = new Store(":memory:");
+    setProcessWriter("stdio:bot");
+    const n = s.create({ title: "web page", body: "b", outside: true });
+    setProcessWriter("cli");
+    assert.equal(s.confirm(n.id, { source: "checked" })!.kind, "human");
+    assert.equal(needsHumanConfirm(s.read(n.id)!), false);
+    asToken("tokA", () => s.update(n.id, { confidence: 0.5 }));
+    const after = s.read(n.id)!;
+    assert.equal(needsHumanConfirm(after), false, "metadata-only edit carries the human confirm forward");
+    assert.equal(after.unconfirmed, undefined);
+    // a CONTENT edit still needs a fresh confirm
+    asToken("tokA", () => s.update(n.id, { body: "changed" }));
+    assert.equal(needsHumanConfirm(s.read(n.id)!), true);
+    s.close();
+  });
+
+  test("label -> enforce keeps every due date; off -> label restarts the clock", () => {
+    const s = new Store(":memory:");
+    setProcessWriter("stdio:bot");
+    const n = s.create({ title: "stale rates", body: "b" });
+    ageContent(s, n.id, 40);
+    setProcessWriter("cli");
+    s.setConfirmSettings({ mode: "enforce" });
+    assert.equal(s.read(n.id)!.expired, true, "label -> enforce does not forgive a note that is already due");
+    s.setConfirmSettings({ mode: "off" });
+    s.setConfirmSettings({ mode: "label" });
+    assert.equal(s.read(n.id)!.expired, undefined, "off -> label starts every clock now");
+    s.close();
+  });
+});
