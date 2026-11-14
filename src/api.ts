@@ -1417,7 +1417,11 @@ export function createApiServer(
               sendJson(res, 400, { error: "invalid JSON body" });
               return;
             }
-            const by = Number.isInteger(b.by) ? Number(b.by) : undefined;
+            const by = b.by === undefined ? undefined : typeof b.by === "number" && Number.isSafeInteger(b.by) && b.by > 0 ? b.by : typeof b.by === "string" && /^[1-9][0-9]{0,14}$/.test(b.by) ? Number(b.by) : null;
+            if (by === null) {
+              sendJson(res, 400, { error: "by must be a note id (a positive whole number)" });
+              return;
+            }
             const kept = store.keepQuarantineAsHistory(id, by);
             sendJson(res, 200, { kept_as_history: id, note: kept.note, superseded_by: kept.superseded_by });
           } else {

@@ -240,6 +240,8 @@ function historyAad(hid: number): string {
  * the REST layer answers 409 so a client can tell "re-read and retry" from "bad request".
  */
 export class StaleWriteError extends ValidationError {}
+/** A held write another process (or an earlier click) already approved, kept as history or rejected: REST answers 409. */
+const heldHandled = (id: number): StaleWriteError => new StaleWriteError(`held write ${id} was already handled (approved, kept as history or rejected); refresh the list`);
 
 /**
  * A rebuild was requested while another one is already running in this
@@ -8765,6 +8767,8 @@ export class Store {
     // write lock (see writeKey) so a concurrent `encrypt disable` cannot
     // strand a sealed row.
     const nested = this.db.isTransaction;
+    // What a held EDIT clears (confidence / forget_after set to null) is stored in the INSERT itself, not by a second statement.
+    const clears = q.op === "update" ? (["forget_after", "confidence"] as const).filter((f) => (f === "confidence" ? q.confidence : q.forgetAfter) === null) : [];
     if (!nested) this.db.exec("BEGIN IMMEDIATE");
     let id: number;
     try {
@@ -8775,8 +8779,8 @@ export class Store {
         .prepare(
           `INSERT INTO quarantine (op, target_id, if_rev, namespace, title, body, tags, source,
                                    created_at_override, reasons, created_at, set_namespace, sealed, written_by, sensitivity,
-                                   forget_after, confidence)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                                   forget_after, confidence, clears)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           q.op,
@@ -8795,11 +8799,10 @@ export class Store {
           q.writtenBy !== undefined ? cleanWriter(q.writtenBy) : currentWriter(),
           q.sensitivity ?? DEFAULT_SENSITIVITY,
           q.forgetAfter ?? null,
-          typeof q.confidence === "number" ? q.confidence : null
+          typeof q.confidence === "number" ? q.confidence : null,
+          clears.length ? JSON.stringify(clears) : null
         );
       id = Number(res.lastInsertRowid);
-      const clears = q.op === "update" ? (["forget_after", "confidence"] as const).filter((f) => (f === "confidence" ? q.confidence : q.forgetAfter) === null) : [];
-      if (clears.length) this.db.prepare("UPDATE quarantine SET clears = ? WHERE id = ?").run(JSON.stringify(clears), id);
       if (q.importedUnverified || q.syncIdentity) {
         this.db
           .prepare("UPDATE quarantine SET imported_unverified = ?, sync_origin = ?, sync_origin_id = ? WHERE id = ?")
@@ -8881,11 +8884,15 @@ export class Store {
    * named a namespace.
    */
   approveQuarantine(id: number): NoteRecord {
-    const q = this.getQuarantine(id);
-    if (!q) throw new ValidationError(`no quarantined write with id ${id}`);
-    const note = this.transaction(() => this.applyHeld(id, q));
-    this.audit({ op: "quarantine-approve", id, namespace: q.namespace });
-    return note;
+    if (!this.getQuarantine(id)) throw new ValidationError(`no quarantined write with id ${id}`);
+    // The row is read again INSIDE the write transaction: another process may have approved or rejected it since the check above.
+    const done = this.transaction(() => {
+      const q = this.getQuarantine(id);
+      if (!q) throw heldHandled(id);
+      return { note: this.applyHeld(id, q), namespace: q.namespace };
+    });
+    this.audit({ op: "quarantine-approve", id, namespace: done.namespace });
+    return done.note;
   }
 
   /**
@@ -8905,7 +8912,8 @@ export class Store {
         `SELECT op, if_rev, set_namespace, created_at, created_at_override, written_by, sensitivity, imported_unverified,
                 sync_origin, sync_origin_id, forget_after, confidence, clears FROM quarantine WHERE id = ?`
       )
-      .get(id) as unknown as HeldRow;
+      .get(id) as unknown as HeldRow | undefined;
+    if (!held) throw heldHandled(id);
     const note = q.op === "create" ? this.applyHeldCreate(q, held) : this.applyHeldUpdate(id, q, held);
     this.db.prepare("UPDATE notes SET approved_at = ?, approved_by = ? WHERE id = ?").run(new Date().toISOString(), currentWriter(), note.id);
     this.db.prepare("DELETE FROM quarantine WHERE id = ?").run(id);
@@ -8913,12 +8921,14 @@ export class Store {
   }
 
   /** The held write's forget_after and confidence as a patch; a held EDIT that cleared one (null) clears it again. */
-  private heldExtras(held: HeldRow): { forget_after?: number; confidence?: number | null } {
+  private heldExtras(held: HeldRow, id: number): { forget_after?: number; confidence?: number | null } {
     let clears: string[] = [];
     try {
       clears = held.clears ? (JSON.parse(held.clears) as string[]) : [];
+      if (!Array.isArray(clears)) throw new Error("not a list");
     } catch {
-      /* a damaged list clears nothing */
+      // A damaged list must not quietly clear nothing: the approved edit would keep a value the writer meant to remove.
+      throw new ValidationError(`held write ${id} has a damaged record of what it clears, so it cannot be approved safely; reject it and re-submit the change`);
     }
     return {
       ...(held.forget_after !== null ? { forget_after: Number(held.forget_after) } : clears.includes("forget_after") ? { forget_after: null as unknown as number } : {}),
@@ -8937,7 +8947,7 @@ export class Store {
         created_at: held.created_at_override ?? held.created_at,
         sensitivity: held.sensitivity,
         // A create has nothing to clear (heldExtras clears only for an edit), so no null reaches here.
-        ...(this.heldExtras(held) as { forget_after?: number; confidence?: number }),
+        ...(this.heldExtras(held, q.id) as { forget_after?: number; confidence?: number }),
       },
       { lint: "none", writtenBy: held.written_by ?? "", importedUnverified: Number(held.imported_unverified) === 1, updatedAt: held.created_at }
     );
@@ -8959,7 +8969,9 @@ export class Store {
     }
     // A stale if_rev makes update() throw "stale write" -- a conflict the
     // admin resolves (reject, or re-submit), never a silent overwrite.
-    const updated = this.update(
+    let updated: NoteRecord | null;
+    try {
+      updated = this.update(
       q.target_id ?? -1,
       {
         ...(held.set_namespace ? { namespace: q.namespace } : {}),
@@ -8970,10 +8982,14 @@ export class Store {
         // The rev pin above means the note is exactly as it was when the write was held, so re-applying its label is a no-op
         // unless the write itself relabelled the note.
         sensitivity: held.sensitivity,
-        ...this.heldExtras(held),
+        ...this.heldExtras(held, id),
       },
       { ifRev: held.if_rev, lint: "none", writtenBy: held.written_by ?? "", importedUnverified: Number(held.imported_unverified) === 1, writtenAt: held.created_at }
-    );
+      );
+    } catch (e) {
+      if (e instanceof StaleWriteError) throw new StaleWriteError("The note changed since this edit was held; reject it or edit the note by hand.");
+      throw e;
+    }
     if (!updated) {
       throw new ValidationError(
         `quarantined update #${id} targets note ${q.target_id}, which no longer exists; reject it instead`
@@ -9055,8 +9071,10 @@ export class Store {
     }
     const note = this.transaction(() => {
       // Inside the transaction: if applying the held write fails, the operator's pass is not left behind as a confirm.
+      const held = this.getQuarantine(id); // read again here: another process may have decided it since the checks above
+      if (!held) throw heldHandled(id);
       this.requireHumanConfirm(by.id, "use it as a replacement");
-      const n = this.applyHeld(id, this.getQuarantine(id)!);
+      const n = this.applyHeld(id, held);
       if (n.id === by.id) throw new ValidationError("a note cannot replace itself");
       const now = new Date().toISOString();
       const actor = currentWriter();
@@ -9081,7 +9099,8 @@ export class Store {
   rejectQuarantine(id: number): boolean {
     const q = this.getQuarantine(id);
     if (!q) return false;
-    this.db.prepare("DELETE FROM quarantine WHERE id = ?").run(id);
+    // One statement: if another process decided it first, nothing is deleted and nothing is audited.
+    if (Number(this.db.prepare("DELETE FROM quarantine WHERE id = ?").run(id).changes) === 0) return false;
     this.audit({ op: "quarantine-reject", id, namespace: q.namespace });
     return true;
   }

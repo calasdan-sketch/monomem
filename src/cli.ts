@@ -2682,6 +2682,10 @@ async function quarantineCmd(): Promise<void> {
         console.error("--by takes a note id");
         process.exit(1);
       }
+      if (!store.getQuarantine(id)) {
+        console.error(`no quarantined write with id ${id}`);
+        process.exit(1);
+      }
       await requireOperator(`quarantine keep-history ${id}`);
       const kept = store.keepQuarantineAsHistory(id, by);
       await maybeEmbed(store, kept.note);
@@ -2695,6 +2699,10 @@ async function quarantineCmd(): Promise<void> {
       }
       console.log(`Rejected quarantined write #${id}.`);
       return;
+    }
+    if (!store.getQuarantine(id)) {
+      console.error(`no quarantined write with id ${id}`);
+      process.exit(1);
     }
     await requireOperator(`quarantine approve ${id}`);
     const note = store.approveQuarantine(id);
