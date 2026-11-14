@@ -439,13 +439,15 @@ function render(notes){
     return "<div class='card'><div class='cardhead'><div>"+
       "<h3>"+esc(n.title)+lvlBadge(n.sensitivity)+(n.pinned ? "<span class='badge-pin' title='Pinned: agents can read it; only the monomem CLI can change it'>Pinned<span class='sr'>: agents can read it; only the monomem CLI can change it</span></span>" : "")+
       (n.distrusted ? "<span class='badge-bad' title='An admin distrusts the writer of this note: treat its content as hostile'>DISTRUSTED<span class='sr'>: an admin distrusts the writer of this note, treat its content as hostile</span></span>" : "")+
-      (n.unconfirmed ? "<span class='badge-bad' title='From outside content (a web page or another server) and nobody confirmed it yet: kept out of session start, cannot be pinned'>Unconfirmed<span class='sr'>: from outside content, nobody confirmed it yet</span></span>" : "")+"</h3>"+
+      (n.unconfirmed ? "<span class='badge-bad' title='From outside content (a web page or another server) and nobody confirmed it yet: kept out of session start, cannot be pinned'>Unconfirmed<span class='sr'>: from outside content, nobody confirmed it yet</span></span>" : "")+
+      (n.expired ? "<span class='badge-bad' title='Not re-confirmed within the re-confirmation period: check it is still true, then confirm it'>Expired<span class='sr'>: not re-confirmed within the re-confirmation period</span></span>" : "")+
+      (n.built_on_distrusted ? "<span class='badge-bad' title='Built from a note by a writer an admin distrusts: kept out of session start'>Built on distrusted<span class='sr'>: built from a note by a distrusted writer</span></span>" : "")+"</h3>"+
       "<div class='meta'>#"+n.id+" &middot; "+esc(n.namespace)+" &middot; "+esc((n.updated_at||"").slice(0,16).replace("T"," "))+byLine(n.written_by)+"</div>"+
       tags+lvlSelect(n)+"</div>"+
       acts(((n.tags||[]).indexOf("never-show") >= 0
         ? "<button class='ghost' aria-label='show note #"+Number(n.id)+" again' title='Let it be shown at session start again' onclick='neverShow("+n.id+",false)'>show again</button>"
         : "<button class='ghost' aria-label='never show note #"+Number(n.id)+"' title='Never inject this note at session start (it stays searchable)' onclick='neverShow("+n.id+",true)'>never show</button>")+
-      (IS_ADMIN && n.unconfirmed ? " <button class='ghost' aria-label='confirm note #"+Number(n.id)+"' title='You checked it: let it back into session start. Pinning still needs monomem confirm in a terminal.' onclick='arm(this,function(){confirmNote("+Number(n.id)+")})'>Confirm</button>" : "")+
+      (IS_ADMIN && (n.unconfirmed || n.expired) ? " <button class='ghost' aria-label='confirm note #"+Number(n.id)+"' title='You checked it: let it back into session start. Pinning still needs monomem confirm in a terminal.' onclick='arm(this,function(){confirmNote("+Number(n.id)+")})'>Confirm</button>" : "")+
       (!IS_ADMIN ? "" : n.pinned
         ? " <button class='ghost' aria-label='unpin note #"+Number(n.id)+"' onclick='arm(this,function(){setPin("+Number(n.id)+",false)})'>Unpin</button>"
         : " <button class='ghost' aria-label='pin note #"+Number(n.id)+"' title='Show it first at the start of every session. Agents cannot change a pinned note; only the owner can pin or unpin.' onclick='setPin("+Number(n.id)+",true)'>Pin (always shown)</button>")+

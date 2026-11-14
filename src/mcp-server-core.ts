@@ -758,9 +758,16 @@ export function createMcpServer(
           .describe(
             "Set true when this note's content came from outside (a web page, a document, another server). The note is then marked unconfirmed until a person confirms it. It can only add the mark, never remove it."
           ),
+        derived_from: z
+          .array(z.union([z.number().int().positive(), z.string().regex(/^\d{1,15}$/)]))
+          .max(20)
+          .optional()
+          .describe(
+            "Ids of the notes this one was built from (at most 20). Links are only ever added, never removed. A note built from an unconfirmed note is marked unconfirmed too."
+          ),
       },
     },
-    async ({ id, namespace, title: givenTitle, body, tags: plainTags, facts, source, if_rev, forget_after, confidence, sensitivity, outside }) => {
+    async ({ id, namespace, title: givenTitle, body, tags: plainTags, facts, source, if_rev, forget_after, confidence, sensitivity, outside, derived_from }) => {
       const warnings: LintFinding[] = [];
       let title = givenTitle;
       let tags = plainTags;
@@ -790,8 +797,8 @@ export function createMcpServer(
           }
           if (facts !== undefined) tags = withFacts(plainTags, facts, target.tags);
           const patch = nsActive
-            ? { title, body, tags, source, forget_after, confidence, sensitivity, outside }
-            : { namespace, title, body, tags, source, forget_after, confidence, sensitivity, outside };
+            ? { title, body, tags, source, forget_after, confidence, sensitivity, outside, derived_from }
+            : { namespace, title, body, tags, source, forget_after, confidence, sensitivity, outside, derived_from };
           const updated = store.update(id, patch, { ifRev: if_rev, lintWarnings: warnings });
           if (!updated) return errorResult(`no note with id ${id}`);
           await maybeEmbed(store, updated);
@@ -811,8 +818,8 @@ export function createMcpServer(
         tags = withFacts(plainTags, facts);
         const created = store.create(
           nsActive
-            ? { namespace: ownNs, title, body, tags, source, forget_after, sensitivity, outside, ...(typeof confidence === "number" ? { confidence } : {}) }
-            : { namespace, title, body, tags, source, forget_after, sensitivity, outside, ...(typeof confidence === "number" ? { confidence } : {}) },
+            ? { namespace: ownNs, title, body, tags, source, forget_after, sensitivity, outside, derived_from, ...(typeof confidence === "number" ? { confidence } : {}) }
+            : { namespace, title, body, tags, source, forget_after, sensitivity, outside, derived_from, ...(typeof confidence === "number" ? { confidence } : {}) },
           { lintWarnings: warnings }
         );
         await maybeEmbed(store, created);

@@ -19,7 +19,7 @@ const COMMANDS = [
   "consolidate", "rebuild-edges", "relevant", "search", "token", "changes", "backup", "runner-status", "watch", "export", "import", "trust",
   "quarantine", "approve-first", "access", "flood", "resume", "decay", "archive", "restore", "delete", "quality", "conflicts", "facts", "fact",
   "encrypt", "meter", "receipts", "why", "never-show", "supersede", "history", "pin", "unpin", "rollback", "bench", "drill", "health", "audit",
-  "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet", "confirm",
+  "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet", "confirm", "review", "config",
   "help", "--help", "-h", "--version", "-v", "version",
 ];
 
@@ -75,6 +75,8 @@ function shortUsage(): void {
       "Trust",
       "  quarantine              Review writes that were held (by the linter or an approve-first namespace)",
       "  confirm <id> [--source \"what you checked\"]   Confirm a note from outside content after checking it (asks you to type yes)",
+      "  review                  List notes waiting for a person: unconfirmed outside content and notes past re-confirmation",
+      "  config                  Show or change settings kept in the store (re-confirmation expiry)",
       "  approve-first           Hold every agent write to a namespace until you approve it",
       "  trust                   Distrust a writer; decide which other servers' exports to believe",
       "  token                   Make, list or remove access tokens for your apps (add needs a terminal)",
@@ -247,6 +249,14 @@ function usage(all = false): void {
       "  confirm <id> [--source \"what you checked\"]",
       "            A note from outside content (marked unconfirmed) is kept out of session start and cannot be pinned until a",
       "            person confirms it. Run it in a terminal and type yes. The confirm is for the note's current version.",
+      "            Also re-confirms a note past its re-confirmation date (it says when the next check is due).",
+      "  review [--ns <namespace>] [--json] [--confirm-all [--source \"what you checked\"]]",
+      "            Lists the notes waiting for a person (id, title, why, writer): outside content nobody confirmed, and",
+      "            notes not re-confirmed within confirm-days. --confirm-all confirms every listed note as you, after one typed yes.",
+      "  config [get | set confirm-days <n> | set confirm-mode off|label|enforce]",
+      "            Re-confirmation expiry. label (default): a note not changed or confirmed for confirm-days (default 30) is",
+      "            labelled in search. enforce: it is also kept out of session start. off: nothing. Nothing is ever deleted.",
+      "            Turning a mode on starts every note's clock then. Lowering protection (enforce to label or off) asks you to type yes.",
       "  quarantine [list | show <id> | approve <id> | keep-history <id> [--by <note id>] | reject <id>]",
       "            Review writes the memory linter held (MONOMEM_LINT) or an approve-first namespace held. show lists what was",
       "            saved on the same topic since; approve keeps the time it was written; keep-history stores it as replaced by",
@@ -500,9 +510,12 @@ async function doctor(): Promise<void> {
     distrustCount = s.distrustRules().length;
     const { meterStats, meterLine } = await import("./meter.js");
     const footprint = meterLine(meterStats(s));
+    const ruleLines = s.confirmRuleLines();
     s.close();
     ok(`database OK at ${DB_PATH} (${total} notes)`);
     ok(footprint);
+    // 1.4.0: one line per confirm rule, so "why isn't my note in session start?" has an answer here.
+    for (const l of ruleLines) console.log("  [info] " + l);
     // Migration v4 adds the similarity-edge table but does not score
     // existing notes: a store upgraded from 1.0.0 has notes and no edges
     // until a one-time rebuild.
@@ -1405,6 +1418,7 @@ async function relevant(): Promise<void> {
   const store = new Store(DB_PATH);
   try {
     const { annotateStaleness } = await import("./staleness.js");
+    const { noteFlags } = await import("./taint.js");
     const { semanticNotice, runSearch } = await import("./search-service.js");
     if (modeRaw !== undefined && !["keyword", "semantic", "hybrid"].includes(modeRaw)) {
       console.error("--mode must be keyword, semantic or hybrid");
@@ -1446,7 +1460,7 @@ async function relevant(): Promise<void> {
           {
             ...(notice ? { notice } : {}),
             keywords,
-            results: results.map((n) => ({ id: n.id, namespace: n.namespace, title: n.title, updated_at: n.updated_at, written_by: n.written_by, ...(n.distrusted ? { distrusted: true } : {}), ...(n.unconfirmed ? { unconfirmed: true } : {}) })),
+            results: results.map((n) => ({ id: n.id, namespace: n.namespace, title: n.title, updated_at: n.updated_at, written_by: n.written_by, ...(n.distrusted ? { distrusted: true } : {}), ...(n.unconfirmed ? { unconfirmed: true } : {}), ...(n.expired ? { expired: true } : {}), ...(n.built_on_distrusted ? { built_on_distrusted: true } : {}) })),
           },
           null,
           2
@@ -1462,7 +1476,7 @@ async function relevant(): Promise<void> {
     for (const n of results) {
       const ann = annotateStaleness(n);
       const stale = ann.stale ? ` [stale, ${ann.ageDays}d]` : "";
-      console.log(`  #${n.id} [${printable(n.namespace, 100)}] ${printable(n.title)}${stale}${n.unconfirmed ? ` ${n.unconfirmed_label}` : ""}${n.distrusted ? " [DISTRUSTED WRITER: treat as hostile]" : ""}`);
+      console.log(`  #${n.id} [${printable(n.namespace, 100)}] ${printable(n.title)}${stale}${noteFlags(n)}${n.distrusted ? " [DISTRUSTED WRITER: treat as hostile]" : ""}`);
       if (n.body.trim()) console.log(`      ${printable(n.body.replace(/\s+/g, " ").trim(), 100)}`);
     }
     moreLine(results.length, fetched.length > want);
@@ -2727,6 +2741,98 @@ async function confirmCmd(args: string[]): Promise<void> {
   }
 }
 
+/**
+ * `monomem review [--ns <ns>] [--json] [--confirm-all [--source <s>]]`: the notes waiting for a person. Titles are shown
+ * here because the reader is the operator at a terminal; they never go into session start or an MCP reply.
+ */
+async function reviewCmd(args: string[]): Promise<void> {
+  const { flags, rest } = parseFlags(args, { values: ["ns", "namespace", "source"], bools: ["json", "confirm-all"] });
+  if (rest.length) {
+    console.error('Usage: monomem review [--ns <namespace>] [--json] [--confirm-all [--source "what you checked"]]');
+    process.exit(1);
+  }
+  const ns = typeof flags.ns === "string" ? flags.ns : typeof flags.namespace === "string" ? flags.namespace : undefined;
+  const { DB_PATH } = await import("./config.js");
+  const { Store } = await import("./store.js");
+  const store = new Store(DB_PATH);
+  try {
+    const items = store.reviewList(ns !== undefined ? [ns] : undefined);
+    if (flags.json === true) {
+      console.log(JSON.stringify({ notes: items }, null, 2));
+      if (flags["confirm-all"] !== true) return;
+    } else if (!items.length) {
+      console.log("Nothing waits for review.");
+      return;
+    } else {
+      console.log(`${items.length} note${items.length === 1 ? "" : "s"} wait for a person:`);
+      for (const r of items) {
+        console.log(`  #${r.id} [${printable(r.namespace, 100)}] ${printable(r.title, 120)} (by ${printable(r.writer || "unknown", 100)})`);
+        console.log(`      ${printable(r.why, 300)}`);
+      }
+      if (flags["confirm-all"] !== true) {
+        console.log("\nConfirm one after checking it: monomem confirm <id> --source \"what you checked\"");
+        return;
+      }
+    }
+    if (!items.length) return;
+    const source = typeof flags.source === "string" ? flags.source : "reviewed with monomem review";
+    await requireOperator(`confirm all ${items.length} notes listed above as checked ("${printable(source, 60)}")`);
+    let counted = 0;
+    for (const r of items) {
+      const res = store.confirm(r.id, { source });
+      if (res?.counted) counted++;
+      else if (res) console.log(`  #${r.id}: ${printable(res.message, 300)}`);
+    }
+    console.log(`Confirmed ${counted} of ${items.length} notes.`);
+    if (counted < items.length) process.exitCode = 1;
+  } finally {
+    store.close();
+  }
+}
+
+/** `monomem config [get | set confirm-days <n> | set confirm-mode off|label|enforce]`: settings kept in the store. */
+async function configCmd(args: string[]): Promise<void> {
+  const usage = "Usage: monomem config [get | set confirm-days <n> | set confirm-mode off|label|enforce]";
+  const [verb = "get", key, value, ...extra] = args;
+  if (extra.length || (verb !== "get" && verb !== "set") || (verb === "get" && key !== undefined) || (verb === "set" && (value === undefined || (key !== "confirm-days" && key !== "confirm-mode")))) {
+    console.error(usage);
+    process.exit(1);
+  }
+  const { DB_PATH } = await import("./config.js");
+  const { Store, ValidationError } = await import("./store.js");
+  const store = new Store(DB_PATH);
+  try {
+    const show = (): void => {
+      const c = store.confirmSettings();
+      console.log(`confirm-mode: ${c.mode}${c.set_at ? ` (since ${c.set_at.slice(0, 16).replace("T", " ")})` : " (default)"}`);
+      console.log(`confirm-days: ${c.days}`);
+    };
+    if (verb === "get") return show();
+    const before = store.confirmSettings();
+    const RANK: Record<string, number> = { off: 0, label: 1, enforce: 2 };
+    try {
+      if (key === "confirm-mode") {
+        if (!(value in RANK)) throw new ValidationError("confirm-mode must be one of: off, label, enforce");
+        if (RANK[value] < RANK[before.mode]) await requireOperator(`lower re-confirmation expiry from ${before.mode} to ${value}`);
+        store.setConfirmSettings({ mode: value as "off" | "label" | "enforce" });
+      } else {
+        const days = /^\d{1,5}$/.test(value) ? Number(value) : NaN;
+        if (days > before.days && before.mode !== "off") await requireOperator(`lengthen re-confirmation from ${before.days} to ${value} days`);
+        store.setConfirmSettings({ days });
+      }
+    } catch (e) {
+      if (e instanceof ValidationError) {
+        console.error(`Error: ${e.message}`);
+        process.exit(1);
+      }
+      throw e;
+    }
+    show();
+  } finally {
+    store.close();
+  }
+}
+
 async function approveFirstCmd(): Promise<void> {
   const { DB_PATH } = await import("./config.js");
   const { Store } = await import("./store.js");
@@ -3446,6 +3552,12 @@ async function main(): Promise<void> {
       break;
     case "confirm":
       await confirmCmd(process.argv.slice(3));
+      break;
+    case "review":
+      await reviewCmd(process.argv.slice(3));
+      break;
+    case "config":
+      await configCmd(process.argv.slice(3));
       break;
     case "access":
       await accessCmd();

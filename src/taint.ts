@@ -71,6 +71,36 @@ export function unconfirmedCountLine(n: number): string {
   return `Monomem: ${n} ${n === 1 ? "note" : "notes"} from outside content ${n === 1 ? "waits" : "wait"} for confirmation (not shown). Review: monomem review`;
 }
 
+// ---- re-confirmation expiry (1a) and derived_from (1d) ---------------------------------------------------------------
+// Expiry is computed, never stored: due = max(updated_at, confirmed_at for this rev, grandfathered_at, mode switch) + days.
+// off: nothing. label (default): flagged on reads and search. enforce: also kept out of session start, mildly demoted.
+
+export type ConfirmMode = "off" | "label" | "enforce";
+export const CONFIRM_MODES: readonly ConfirmMode[] = ["off", "label", "enforce"];
+export const DEFAULT_CONFIRM_DAYS = 30;
+export const MAX_CONFIRM_DAYS = 3650;
+export const expiredLabel = (days: number): string => `[expired - not re-confirmed in ${days} days]`;
+/** Shown next to a note whose derived_from includes a note a distrusted writer touched (one hop). */
+export const DISTRUSTED_BASE_LABEL = "[built on a distrusted writer]";
+/** How many notes one write may say it was built from. */
+export const MAX_DERIVED_FROM = 20;
+
+/** Session-start line for notes held back in enforce mode ("" when none). No titles. */
+export function expiredCountLine(n: number, days: number): string {
+  if (n <= 0) return "";
+  return `Monomem: ${n} ${n === 1 ? "note" : "notes"} not re-confirmed in ${days} days (not shown). Review: monomem review`;
+}
+
+/** The text labels for a note's 1.4.0 flags, each with a leading space ("" when none). */
+export function noteFlags(n: { unconfirmed_label?: string; expired_label?: string; built_on_distrusted_label?: string }): string {
+  return [n.unconfirmed_label, n.expired_label, n.built_on_distrusted_label].filter(Boolean).map((l) => ` ${l}`).join("");
+}
+
+/** Kept out of session start: unconfirmed outside content, a note built on a distrusted writer, an expired note in enforce mode. */
+export function heldFromSessionStart(n: { unconfirmed?: true; built_on_distrusted?: true; expired?: true }, enforce: boolean): boolean {
+  return n.unconfirmed === true || n.built_on_distrusted === true || (enforce && n.expired === true);
+}
+
 // ---- notes a connection read while they were unconfirmed ------------------------------------------------------------
 // Per authenticated writer, per server (REST and MCP over HTTP make a new handler per request, so the memory has to outlive
 // one: each HTTP front door keeps one registry). The stdio server keeps its own set (one process = one agent). Cleared

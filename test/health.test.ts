@@ -37,13 +37,14 @@ describe("grade rule", () => {
 });
 
 describe("monomem health", () => {
-  test("clean store: grade A, exit 0, eleven lines", async () => {
+  test("clean store: grade A, exit 0, twelve lines (1.4.0: the confirm-rules line)", async () => {
     const { dir, opts } = setup();
     try {
       const r = await runHealth(opts);
       assert.equal(r.grade, "A", JSON.stringify(r.checks));
       assert.equal(r.exit_code, 0);
-      assert.equal(r.checks.length, 11);
+      assert.equal(r.checks.length, 12);
+      assert.match(find(r, "confirm").text, /Unconfirmed notes .*: 0; Re-confirmation expiry: label, every 30 days.*per connection/);
       assert.equal(r.date, "2026-11-05");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });

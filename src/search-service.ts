@@ -264,13 +264,23 @@ function newerFirst(a: NoteRecord, b: NoteRecord): number {
  * only a *recently* re-read stale note can still outrank fresh -- which is
  * the intended recency signal, not a bug.
  */
+/** Re-confirmation expiry in enforce mode (a partial test double without the settings counts as off). */
+export function expiryEnforced(store: Store): boolean {
+  return typeof store.confirmSettings === "function" && store.confirmSettings().mode === "enforce";
+}
+
 function applyStalePenalty(
   hits: Array<{ note: NoteRecord; score: number }>,
-  cfg: StalenessConfig
+  cfg: StalenessConfig,
+  enforceExpiry = false
 ): Array<{ note: NoteRecord; score: number }> {
   return hits
-    // 1.4.0: unconfirmed outside content is mildly demoted too (still returned, labelled).
-    .map((h) => ({ ...h, score: h.score * stalePenaltyFactor(h.note, cfg) * (h.note.unconfirmed ? UNCONFIRMED_FACTOR : 1) }))
+    // 1.4.0: unconfirmed outside content is mildly demoted too (still returned, labelled), and so is a note past its
+    // re-confirmation date in enforce mode (enforceExpiry): x0.9 each, at most x0.81 together.
+    .map((h) => ({
+      ...h,
+      score: h.score * stalePenaltyFactor(h.note, cfg) * (h.note.unconfirmed ? UNCONFIRMED_FACTOR : 1) * (enforceExpiry && h.note.expired ? UNCONFIRMED_FACTOR : 1),
+    }))
     .sort((a, b) => b.score - a.score); // stable: ties keep fetch order
 }
 
@@ -411,7 +421,7 @@ export function describeWhen(created: string, now: Date = new Date(), relativeTo
  */
 export function rankHits(store: Store, hits: Array<{ note: NoteRecord; score: number }>, staleCfg: StalenessConfig = stalenessConfig()): NoteRecord[] {
   const ranked = accessRerankEnabled()
-    ? demoteStaleTwins(store, applyStalePenalty(boostAndRank(hits), staleCfg), staleCfg).ranked
+    ? demoteStaleTwins(store, applyStalePenalty(boostAndRank(hits), staleCfg, expiryEnforced(store)), staleCfg).ranked
     : [...hits].sort((a, b) => b.score - a.score); // native relevance only (stable)
   return ranked.map((h) => h.note);
 }
@@ -501,7 +511,7 @@ function finalizeExplained(
   // report the true base rather than the post-boost score.
   const baseById = new Map<number, number>(hits.map((h) => [h.note.id, h.score]));
   const demoted = accessRerankEnabled()
-    ? demoteStaleTwins(store, applyStalePenalty(boostAndRank(hits), staleCfg), staleCfg)
+    ? demoteStaleTwins(store, applyStalePenalty(boostAndRank(hits), staleCfg, expiryEnforced(store)), staleCfg)
     : { ranked: [...hits].sort((a, b) => b.score - a.score), behind: new Map<number, number>() };
   const ranked = demoted.ranked;
   const top = (spread ? capPerSessionBy(ranked, (h) => h.note) : ranked).slice(0, limit);

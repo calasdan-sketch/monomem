@@ -35,7 +35,7 @@ describe("confirm rules", () => {
     const r = s.confirm(n.id, { source: "vendor site" })!;
     assert.equal(r.counted, true);
     assert.equal(r.kind, "human");
-    assert.match(r.message, /^Confirmed "Acme pricing" by cli at \d{4}-\d\d-\d\d \d\d:\d\d\. Checked against: vendor site\.$/);
+    assert.match(r.message, /^Confirmed "Acme pricing" by cli at \d{4}-\d\d-\d\d \d\d:\d\d\. Checked against: vendor site\. Next check due \d{4}-\d\d-\d\d\.$/);
     const after = s.read(n.id)!;
     assert.equal(after.unconfirmed, undefined);
     assert.equal(after.confirmed_kind, "human");

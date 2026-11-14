@@ -53,6 +53,14 @@ import {
   sourceKey,
   promotionRefusal,
   UNCONFIRMED_LABEL,
+  ORIGIN_VIA_MEMORY,
+  CONFIRM_MODES,
+  DEFAULT_CONFIRM_DAYS,
+  MAX_CONFIRM_DAYS,
+  MAX_DERIVED_FROM,
+  DISTRUSTED_BASE_LABEL,
+  expiredLabel,
+  type ConfirmMode,
 } from "./taint.js";
 import { taintWindowHours } from "./config.js";
 import { contentHash as syncContentHash } from "./sync-hash.js";
@@ -427,6 +435,11 @@ export interface NoteInput {
    * false or absent never removes taint.
    */
   outside?: boolean;
+  /**
+   * 1.4.0: ids of the notes this one was built from (at most 20, each must exist). Stored as add-only links; a note built
+   * from an unconfirmed note is marked `obs.origin:via:memory`. Numeric strings are accepted (MCP/REST clients send them).
+   */
+  derived_from?: Array<number | string>;
 }
 
 /**
@@ -678,6 +691,8 @@ export interface NotePatch {
   sensitivity?: string;
   /** 1.4.0: see NoteInput.outside (add-only). */
   outside?: boolean;
+  /** 1.4.0: see NoteInput.derived_from. Adds links; never removes one. */
+  derived_from?: Array<number | string>;
 }
 
 export interface NoteRecord {
@@ -820,6 +835,38 @@ export interface NoteRecord {
   unconfirmed?: true;
   /** ... and the label shown with it. */
   unconfirmed_label?: string;
+  /** 1.4.0 (1a): present (true) when re-confirmation expiry is on and the note is past its due date; with its label. */
+  expired?: true;
+  expired_label?: string;
+  /** 1.4.0 (1d): the notes this one says it was built from (add-only links); present only when there are any. */
+  derived_from?: number[];
+  /** 1.4.0 (1d): one of those notes was written or touched by a distrusted writer (one hop); with its label. */
+  built_on_distrusted?: true;
+  built_on_distrusted_label?: string;
+}
+
+/** The re-confirmation expiry settings (_meta; Store.confirmSettings). `set_at`: when the mode was last changed. */
+export interface ConfirmSettings {
+  mode: ConfirmMode;
+  days: number;
+  set_at?: string;
+}
+
+/** One row of `monomem review` (Store.reviewList). */
+export interface ReviewItem {
+  id: number;
+  namespace: string;
+  title: string;
+  writer: string;
+  why: string;
+}
+interface ReviewRow {
+  id: number;
+  namespace: string;
+  title: string;
+  written_by: string | null;
+  tags: string;
+  updated_at: string;
 }
 
 interface NoteRow {
@@ -2981,7 +3028,14 @@ export class Store {
     validateConfidence(input.confidence);
     // 1.4.0 taint, before the hold so a held write keeps it. Internal writes for someone else (writtenBy: an approval, a
     // sync) and restores carry only what their own tags or `outside` say.
-    const taint = this.taintFor(input.namespace?.trim() || DEFAULT_NAMESPACE, input.outside, opts.bulkImport || opts.writtenBy !== undefined ? null : currentWriter());
+    // ponytail: a held create (quarantine) keeps the inherited taint but not the links themselves; carry them in the hold if asked.
+    const derived = this.derivedIds(input.derived_from);
+    const taint = [
+      ...new Set([
+        ...this.taintFor(input.namespace?.trim() || DEFAULT_NAMESPACE, input.outside, opts.bulkImport || opts.writtenBy !== undefined ? null : currentWriter()),
+        ...this.inheritedTaint(derived),
+      ]),
+    ];
     if (taint.some((t) => !(input.tags ?? []).includes(t))) input = { ...input, tags: [...(input.tags ?? []), ...taint.filter((t) => !(input.tags ?? []).includes(t))] };
     const backdate = isoOrNull(input.created_at);
     if (backdate && Date.parse(backdate) > Date.now() + 5 * 60_000) {
@@ -3100,6 +3154,7 @@ export class Store {
         const sealed = this.sealBody(body, noteAad(id, namespace));
         this.db.prepare("UPDATE notes SET body = ?, body_enc = ? WHERE id = ?").run(sealed.body, sealed.bodyEnc, id);
       }
+      this.addLinks(id, derived, writer, now);
       // An archived (restored-as-forgotten) note stays out of the edge graph.
       if (!archivedAt) this.noteWritten(namespace, id, { rev: startRev, title: input.title, body });
       // Link the new note into the similarity graph (same namespace only).
@@ -3375,7 +3430,39 @@ export class Store {
       r.access_count += p.n;
       if (!r.last_accessed || p.at > r.last_accessed) r.last_accessed = p.at;
     }
-    return annotateRetention(row, r);
+    return this.annotateConfirmRules(row, annotateRetention(row, r));
+  }
+
+  /**
+   * 1.4.0: re-confirmation expiry (1a) and derived_from (1d) on a record. Fields appear only when set, so other notes keep
+   * their exact shape. A narrow projection without the v20 columns gets neither.
+   */
+  private annotateConfirmRules(row: NoteRow, out: NoteRecord): NoteRecord {
+    if (row.grandfathered_at === undefined) return out;
+    const live = !row.archived_at && row.superseded_by == null && !out.pinned && !out.kind;
+    const c = live ? this.confirmSettings() : null;
+    if (c && c.mode !== "off") {
+      const confirmed = row.confirmed_at && Number(row.confirmed_rev) === Number(row.rev) ? row.confirmed_at : null;
+      const base = Math.max(...[row.updated_at, confirmed, row.grandfathered_at, c.set_at ?? null].map((t) => (t ? Date.parse(t) : 0)).filter((t) => !Number.isNaN(t)));
+      if (base + c.days * 86_400_000 <= Date.now()) {
+        out.expired = true;
+        out.expired_label = expiredLabel(c.days);
+      }
+    }
+    const links = (this.db.prepare("SELECT derived_from FROM note_links WHERE note_id = ? ORDER BY rowid").all(row.id) as Array<{ derived_from: number }>).map((l) => Number(l.derived_from));
+    if (!links.length) return out;
+    out.derived_from = links;
+    const rules = this.distrustRules();
+    if (rules.length) {
+      // ponytail: one hop only (the parents' own writers); a recursive walk up the chain is 1.4.1.
+      const sid = this.serverId();
+      const parents = this.db.prepare(`SELECT * FROM notes WHERE id IN (${links.map(() => "?").join(",")})`).all(...links) as unknown as NoteRow[];
+      if (parents.some((p) => matchesDistrust(rules, rowToRecord(p, sid), sid))) {
+        out.built_on_distrusted = true;
+        out.built_on_distrusted_label = DISTRUSTED_BASE_LABEL;
+      }
+    }
+    return out;
   }
 
   /**
@@ -3675,10 +3762,16 @@ export class Store {
     // one, and a content edit by a connection that reads outside content adds its own (taintFor).
     const stamps = existing.tags.filter((t) => t.startsWith(ORIGIN_PREFIX));
     const contentEdit = (patch.title !== undefined && patch.title !== existing.title) || (patch.body !== undefined && patch.body !== existing.body);
-    const added =
-      contentEdit || patch.outside === true
-        ? this.taintFor(patch.namespace?.trim() || existing.namespace, patch.outside, opts.writtenBy !== undefined || opts.keepWriter ? null : currentWriter())
-        : [];
+    // 1.4.0 (1d): links only grow; a new link to an unconfirmed note marks this one via:memory.
+    const derived = this.derivedIds(patch.derived_from, id);
+    const added = [
+      ...new Set([
+        ...(contentEdit || patch.outside === true
+          ? this.taintFor(patch.namespace?.trim() || existing.namespace, patch.outside, opts.writtenBy !== undefined || opts.keepWriter ? null : currentWriter())
+          : []),
+        ...this.inheritedTaint(derived),
+      ]),
+    ];
     const newTaint = added.some((t) => !stamps.includes(t));
     const keep = [...stamps, ...added.filter((t) => !stamps.includes(t))];
     const given = patch.tags ?? existing.tags;
@@ -3911,6 +4004,7 @@ export class Store {
       if (opts.importedUnverified) this.db.prepare("UPDATE notes SET imported_unverified = 1 WHERE id = ?").run(id);
       // New outside content in a pre-upgrade note: the 1.4.0 exemption covered what it said then, not this.
       if (newTaint) this.db.prepare("UPDATE notes SET grandfathered_at = NULL WHERE id = ?").run(id);
+      this.addLinks(id, derived, writerNow(opts), now);
 
       // Invalidate the embedding: the note's text just changed, so the stored
       // vector is now stale. Drop it rather than keep a vector that no longer
@@ -7959,6 +8053,38 @@ export class Store {
   }
 
   /**
+   * 1.4.0 (1d): a write's `derived_from`, checked: a list of at most MAX_DERIVED_FROM note ids (numbers or digit strings),
+   * each an existing note the caller may see, never the note itself. Duplicates collapse. Absent = [].
+   */
+  private derivedIds(list: unknown, self?: number): number[] {
+    if (list === undefined || list === null) return [];
+    if (!Array.isArray(list)) throw new ValidationError("derived_from must be a list of note ids");
+    if (list.length > MAX_DERIVED_FROM) throw new ValidationError(`derived_from: at most ${MAX_DERIVED_FROM} notes`);
+    const ids = list.map((v) => {
+      const n = typeof v === "number" ? v : typeof v === "string" && /^\s*\d{1,15}\s*$/.test(v) ? Number(v) : NaN;
+      if (!Number.isSafeInteger(n) || n < 1) throw new ValidationError(`derived_from: ${JSON.stringify(String(v).slice(0, 40))} is not a note id`);
+      return n;
+    });
+    const uniq = [...new Set(ids)];
+    for (const id of uniq) {
+      if (id === self) throw new ValidationError("derived_from: a note cannot be built from itself");
+      if (!this.read(id)) throw new ValidationError(`derived_from: no note with id ${id}`);
+    }
+    return uniq;
+  }
+
+  /** A note built from an unconfirmed note is marked as written after reading unconfirmed memory. */
+  private inheritedTaint(parents: number[]): string[] {
+    return parents.some((p) => this.read(p)?.unconfirmed === true) ? [ORIGIN_VIA_MEMORY] : [];
+  }
+
+  /** Add-only: links are inserted, never deleted or replaced. Runs inside the caller's write transaction. */
+  private addLinks(id: number, parents: number[], by: string, at: string): void {
+    const ins = this.db.prepare("INSERT OR IGNORE INTO note_links (note_id, derived_from, added_at, added_by) VALUES (?, ?, ?, ?)");
+    for (const p of parents) ins.run(id, p, at, by);
+  }
+
+  /**
    * The hook signal: a session in this namespace that has not ended read outside content within the taint window.
    * Namespace-coarse on purpose (the MCP server never learns the host's session id), so a browsing session can taint a
    * sibling session's writes; a person's confirm clears that. Returns the tools' stamps (at most 3), or `...:other`.
@@ -8001,16 +8127,125 @@ export class Store {
 
   /** Live unconfirmed notes (tainted, not grandfathered, no confirm for the current rev), in `namespaces` or everywhere. */
   unconfirmedCount(namespaces?: string[]): number {
-    if (namespaces && namespaces.length === 0) return 0;
+    return this.unconfirmedRows(namespaces).length;
+  }
+
+  private unconfirmedRows(namespaces?: string[]): ReviewRow[] {
+    if (namespaces && namespaces.length === 0) return [];
     const ns = namespaces ? ` AND namespace IN (${namespaces.map(() => "?").join(",")})` : "";
     const dis = this.distrustFragment(NOTE_COLUMNS, namespaces);
     const rows = this.db
       .prepare(
-        `SELECT tags FROM notes WHERE archived_at IS NULL AND grandfathered_at IS NULL AND tags LIKE '%obs.origin:%'
-           AND NOT (confirmed_kind IS NOT NULL AND confirmed_rev = rev)${ns}${this.ceilingSql()}${dis.sql}`
+        `SELECT id, namespace, title, written_by, tags, updated_at FROM notes WHERE archived_at IS NULL AND grandfathered_at IS NULL AND tags LIKE '%obs.origin:%'
+           AND NOT (confirmed_kind IS NOT NULL AND confirmed_rev = rev)${ns}${this.ceilingSql()}${dis.sql} ORDER BY id`
       )
-      .all(...(namespaces ?? []), ...dis.params) as Array<{ tags: string }>;
-    return rows.filter((r) => isTainted(parseTags(r.tags))).length;
+      .all(...(namespaces ?? []), ...dis.params) as unknown as ReviewRow[];
+    return rows.filter((r) => isTainted(parseTags(r.tags)));
+  }
+
+  // --- Re-confirmation expiry (1.4.0, 1a) ---------------------------------------------------------------------------
+  // Settings in _meta (confirm_mode, confirm_days, confirm_mode_set_at), like approve_first. Read at most once a second
+  // per Store (every record read consults them), so a change made by another process shows within a second.
+  private confirmCache: { at: number; v: ConfirmSettings } | null = null;
+
+  confirmSettings(): ConfirmSettings {
+    const now = Date.now();
+    if (this.confirmCache && now - this.confirmCache.at < 1000) return this.confirmCache.v;
+    const m = this.getMeta("confirm_mode");
+    const d = Number(this.getMeta("confirm_days"));
+    const setAt = this.getMeta("confirm_mode_set_at");
+    const v: ConfirmSettings = {
+      mode: (CONFIRM_MODES as readonly string[]).includes(m ?? "") ? (m as ConfirmMode) : "label",
+      days: Number.isInteger(d) && d >= 1 && d <= MAX_CONFIRM_DAYS ? d : DEFAULT_CONFIRM_DAYS,
+      ...(setAt ? { set_at: setAt } : {}),
+    };
+    this.confirmCache = { at: now, v };
+    return v;
+  }
+
+  /**
+   * Change the expiry settings (operator: the CLI gates lowering protection). A mode change records when, so turning
+   * expiry on starts every note's clock then, not at its last edit.
+   */
+  setConfirmSettings(s: { mode?: ConfirmMode; days?: number }): ConfirmSettings {
+    if (s.mode !== undefined && !CONFIRM_MODES.includes(s.mode)) throw new ValidationError(`confirm-mode must be one of: ${CONFIRM_MODES.join(", ")}`);
+    if (s.days !== undefined && !(Number.isInteger(s.days) && s.days >= 1 && s.days <= MAX_CONFIRM_DAYS)) {
+      throw new ValidationError(`confirm-days must be a whole number from 1 to ${MAX_CONFIRM_DAYS}`);
+    }
+    const before = this.confirmSettings();
+    this.transaction(() => {
+      if (s.days !== undefined) this.setMeta("confirm_days", String(s.days));
+      if (s.mode !== undefined && s.mode !== before.mode) {
+        this.setMeta("confirm_mode", s.mode);
+        this.setMeta("confirm_mode_set_at", new Date().toISOString());
+      }
+    });
+    this.confirmCache = null;
+    const after = this.confirmSettings();
+    this.audit({ op: "confirm-settings", detail: `mode ${after.mode}, days ${after.days}` });
+    return after;
+  }
+
+  /** Live ordinary notes past their re-confirmation date (none when the mode is off). Pinned notes are exempt. */
+  private expiredRows(namespaces?: string[]): ReviewRow[] {
+    const c = this.confirmSettings();
+    if (c.mode === "off" || (namespaces && namespaces.length === 0)) return [];
+    const ns = namespaces ? ` AND namespace IN (${namespaces.map(() => "?").join(",")})` : "";
+    const dis = this.distrustFragment(NOTE_COLUMNS, namespaces);
+    const cutoff = Date.now() - c.days * 86_400_000;
+    // ponytail: scans the live notes' times in JS (same rule as annotateConfirmRules); SQL MAX over mixed time formats is not safe.
+    const rows = this.db
+      .prepare(
+        `SELECT id, namespace, title, written_by, tags, updated_at, confirmed_at, confirmed_rev, rev, grandfathered_at FROM notes
+          WHERE archived_at IS NULL AND superseded_by IS NULL AND COALESCE(pinned, 0) = 0 AND COALESCE(kind, 'note') = 'note'${ns}${this.ceilingSql()}${dis.sql} ORDER BY id`
+      )
+      .all(...(namespaces ?? []), ...dis.params) as unknown as Array<ReviewRow & { confirmed_at: string | null; confirmed_rev: number | null; rev: number; grandfathered_at: string | null }>;
+    return rows.filter((r) => {
+      const confirmed = r.confirmed_at && Number(r.confirmed_rev) === Number(r.rev) ? r.confirmed_at : null;
+      const base = Math.max(...[r.updated_at, confirmed, r.grandfathered_at, c.set_at ?? null].map((t) => (t ? Date.parse(t) : 0)).filter((t) => !Number.isNaN(t)));
+      return base <= cutoff;
+    });
+  }
+
+  /** How many notes are past their re-confirmation date, in `namespaces` or everywhere (0 when the mode is off). */
+  expiredCount(namespaces?: string[]): number {
+    return this.expiredRows(namespaces).length;
+  }
+
+  /** `monomem review`: unconfirmed and expired notes, with why and who wrote them. For a person at a terminal only. */
+  reviewList(namespaces?: string[]): ReviewItem[] {
+    const days = this.confirmSettings().days;
+    const out = new Map<number, ReviewItem>();
+    const add = (r: ReviewRow, why: string): void => {
+      const cur = out.get(r.id);
+      if (cur) out.set(r.id, { ...cur, why: `${cur.why}; ${why}` });
+      else out.set(r.id, { id: Number(r.id), namespace: r.namespace, title: r.title, writer: r.written_by ?? "", why });
+    };
+    for (const r of this.unconfirmedRows(namespaces)) {
+      const origins = parseTags(r.tags).filter((t) => t.startsWith(ORIGIN_PREFIX)).map((t) => t.slice(ORIGIN_PREFIX.length));
+      add(r, `unconfirmed: from outside content (${origins.join(", ")}), nobody confirmed this version`);
+    }
+    for (const r of this.expiredRows(namespaces)) add(r, `expired: not re-confirmed in ${days} days (last changed ${r.updated_at.slice(0, 10)})`);
+    return [...out.values()].sort((a, b) => a.id - b.id);
+  }
+
+  /** Plain-English lines for `monomem doctor` and `monomem health`: one per 1.4.0 confirm rule, with counts. */
+  confirmRuleLines(): string[] {
+    const c = this.confirmSettings();
+    const unconfirmed = this.unconfirmedCount();
+    const expired = this.expiredCount();
+    const hours = taintWindowHours();
+    const plural = (n: number): string => `${n} note${n === 1 ? "" : "s"}`;
+    return [
+      `Unconfirmed notes (from outside content, kept out of session start until confirmed): ${unconfirmed}${unconfirmed ? " (monomem review)" : ""}`,
+      c.mode === "off"
+        ? "Re-confirmation expiry: off (no note expires; turn on: monomem config set confirm-mode label)"
+        : `Re-confirmation expiry: ${c.mode}, every ${c.days} days; ${plural(expired)} past due (${c.mode === "enforce" ? "kept out of session start" : "labelled in search, still shown"})`,
+      hours > 0
+        ? `Outside-content window: notes written within ${hours} hours of a hooked session reading outside content in the same namespace are marked (MONOMEM_TAINT_WINDOW_HOURS)`
+        : "Outside-content window: off (MONOMEM_TAINT_WINDOW_HOURS=0), so hooked sessions' outside reads mark nothing",
+      "Read-taint: a connection that reads an unconfirmed note marks what it writes next. This is per connection; it resets when the server restarts.",
+    ];
   }
 
   /**
@@ -8065,16 +8300,21 @@ export class Store {
     else this.transaction(write);
     this.audit({ op: refusal ? "confirm-not-counted" : "confirm", id, namespace: n.namespace, detail: refusal ? refusal.code : kind });
     const checked = source ? ` Checked against: ${source}.` : "";
-    const message = refusal ? refusal.message : `Confirmed "${n.title.slice(0, 80)}" by ${w || "(unknown)"} at ${at.slice(0, 16).replace("T", " ")}.${checked}`;
+    const cs = this.confirmSettings();
+    const due = cs.mode === "off" ? "" : ` Next check due ${new Date(Date.parse(at) + cs.days * 86_400_000).toISOString().slice(0, 10)}.`;
+    const message = refusal ? refusal.message : `Confirmed "${n.title.slice(0, 80)}" by ${w || "(unknown)"} at ${at.slice(0, 16).replace("T", " ")}.${checked}${due}`;
     return { ...base, counted: !refusal, recorded: true, kind, ...(refusal ? { reason: refusal.code } : {}), message };
   }
 
   /** Why a confirm does not count (null = it counts). Plain words, naming the rule. */
   private confirmRefusal(n: NoteRecord, w: string, human: boolean, admin: boolean, key: string): { code: string; message: string } | null {
     const who = w || "an unidentified writer";
+    // With expiry on, a confirm older than the expiry period no longer blocks a new one: re-confirming is the point.
+    const c = this.confirmSettings();
+    const since = c.mode === "off" ? "" : new Date(Date.now() - c.days * 86_400_000).toISOString();
     const again = this.db
-      .prepare("SELECT 1 FROM confirmations WHERE note_id = ? AND note_rev = ? AND by = ? AND reason = '' LIMIT 1")
-      .get(n.id, n.rev, w);
+      .prepare("SELECT 1 FROM confirmations WHERE note_id = ? AND note_rev = ? AND by = ? AND reason = '' AND at > ? LIMIT 1")
+      .get(n.id, n.rev, w, since);
     if (again) return { code: "already", message: `Not counted again: ${who} already confirmed this version of the note. One confirm per writer per version.` };
     if (human) return null;
     const own = [n.written_by, n.created_by, n.attested_writer ?? "", ...(n.merged_from_writers ?? [])].filter(Boolean);
