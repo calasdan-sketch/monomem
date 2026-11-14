@@ -164,6 +164,8 @@ refuses to make them pinned notes until a person confirms them. Read what it can
 - **`derived_from` only works if agents fill it in**, and it looks one hop back. A copy without it is not linked.
 - **An admin key can release the session-start hold.** REST cannot tell a person from an agent holding an admin key; only
   the pin block needs a person at the terminal.
+- **"A person at the terminal" means stdin and stdout are terminals.** A tool that opens a pseudo-terminal passes that
+  check, for the typed-yes commands and for the session-signal exemption below alike.
 
 The word "taint" below means this outside-content mark (reserved `obs.origin:*` tags). It is separate from the **taint set**
 of writers described above (`merged_from_writers`).
@@ -175,7 +177,7 @@ of which only adds:
 
 | Mark | When |
 |---|---|
-| `obs.origin:tool:<name>` | A hook-equipped session in the **same namespace** recorded output from an outside tool (`WebFetch`, `WebSearch`, any MCP server except Monomem and those in `MONOMEM_LOCAL_MCP_SERVERS`) within the last `MONOMEM_TAINT_WINDOW_HOURS` (default 12; `0` = off) and has not ended. Up to 3 tool names, or `other`. Writes by the `monomem` CLI, capture, the server's own jobs, the runner and imports are not marked by this signal. |
+| `obs.origin:tool:<name>` | A hook-equipped session in the **same namespace** recorded output from an outside tool (`WebFetch`, `WebSearch`, any MCP server except Monomem and those in `MONOMEM_LOCAL_MCP_SERVERS`) within the last `MONOMEM_TAINT_WINDOW_HOURS` (default 12; `0` = off) and has not ended. Up to 3 tool names, or `other`. Writes by capture, the server's own jobs, the runner and imports are not marked by this signal, and neither are writes by the `monomem` CLI **at a terminal** (stdin and stdout both terminals). Run from an agent's shell tool, a script or a pipe, `monomem remember` / `monomem add` are marked like any other writer. |
 | `obs.origin:via:memory` | The connection writing the note had been handed an unconfirmed note (in a read, a search or a list), or the note names an unconfirmed note in `derived_from`. |
 | `obs.origin:declared` | The writer said so: `outside: true` on MCP `state_write` or REST `POST`/`PUT /notes`, `monomem add --outside`, or a token entry with `"reads_outside": true` ([configuration.md](./configuration.md)). `outside: false` removes nothing. |
 
@@ -188,7 +190,9 @@ version). An agent's write cannot add or remove `obs.` tags itself; only the `ou
 
 **Unconfirmed.** A marked note that has no counted confirm for its current version is **unconfirmed**. It is:
 
-- kept out of session start: its text, its title, the pinned list, the profile and the per-prompt new-notes block. One
+- kept out of session start: its text, its title, the pinned list, the profile, the fact-dispute line, the task board
+  (an unconfirmed task or handoff is left off it), the per-prompt new-notes block and the file-context hook (which says how
+  many notes about the file it held back, without titles). One
   line, with no titles, says how many: `Monomem: 3 notes from outside content wait for confirmation (not shown). Review:
   monomem review`;
 - labelled `[unconfirmed - from outside content]` in search, reads, index lines and the dashboard (records carry
@@ -197,7 +201,14 @@ version). An agent's write cannot add or remove `obs.` tags itself; only the `ou
 - never hidden, archived or deleted.
 
 A marked note that **is** confirmed is shown at session start as an index line only, never its text. Notes that existed
-before the 1.4.0 upgrade are exempt (`grandfathered_at`), unless a later edit adds a new mark.
+before the 1.4.0 upgrade are exempt from this hold (`grandfathered_at`) until an edit brings outside content into them
+(a mark, new or one they already carry) or a spooled outside read marks them. They are **not** exempt from the promotion
+block below.
+
+**Who has read an unconfirmed note.** A connection is marked once it is handed an unconfirmed note: in a read, search,
+list, task or handoff read, `catch_up`, `memory_why`, `memory_receipt`, `memory_supersede_preview` or the held-write
+context. Over HTTP this is kept per key and shared by the REST API and MCP over HTTP on the same server, so a read over
+one and a write over the other is the same writer.
 
 ## Confirming notes
 
@@ -223,8 +234,13 @@ Confirmed "Acme pricing" by cli at 2026-11-13 14:02. Checked against: vendor sit
 not write the note (`written_by`, `created_by`, `attested_writer` or the taint set); it is not distrusted; its connection
 has not been handed this note while unconfirmed; it has not written a note built from this one (`derived_from`); and it
 names a source whose key differs from the note's own `source` and from every earlier counted confirm of this version (a URL
-compares by host without `www.`, other text as lowercased text). One counted confirm per writer per version. Confirms by
-agents count toward the flood guard.
+or bare host name compares by host, lowercased, without `www.` or a trailing dot, international names as punycode; other
+text as lowercased text). With expiry on, a confirm older than the expiry period no longer blocks the same writer or the
+same source. One counted confirm per writer per version. Confirms by agents count toward the flood guard.
+
+An **admin** confirm (the dashboard's button, an admin key on REST) is not refused because the dashboard listed the note:
+it only releases the session-start hold. The reply to an agent or a key names the note by id, not by its title (the title
+is outside text); `monomem confirm` in your terminal shows the title.
 
 Otherwise the confirm is **recorded but not counted**, and the reply names the rule:
 
@@ -237,12 +253,13 @@ identity.` Every confirm, counted or not, is kept in the `confirmations` table a
 that already counted is answered but not stored).
 
 **What each kind releases.** Human, admin and corroborated confirms all let the note back into session start. Only a
-**human** confirm lifts the promotion block below. A weaker confirm never overwrites a stronger one's record, and so does not
-restart the expiry clock after it.
+**human** confirm lifts the promotion block below. A counted confirm always restarts the expiry clock; the note keeps the
+strongest kind it has for this version, so an agent's corroboration after a person's confirm leaves it a person's confirm.
 
 ## No promotion without a person
 
-A marked note without a **human** confirm for its current version cannot be:
+A marked note without a **human** confirm for its current version cannot be (this includes notes from before the 1.4.0
+upgrade that carry a 1.3.5 outside-content stamp: they keep their session-start treatment, but promoting one needs a person):
 
 - pinned (`monomem pin`, REST `PUT /pinned`, the dashboard);
 - used as the replacement in a replace (`monomem supersede`, the replace preview and confirm on every surface);
@@ -256,8 +273,8 @@ Can't pin: this note came from outside content. A person must confirm it first: 
 ```
 
 Admin keys and agents are refused too. The only way through is the `monomem` CLI in a terminal: `monomem pin`,
-`monomem supersede` and `monomem quarantine keep-history` ask you to type yes first, and that yes is recorded as your human
-confirm. An agent that can run shell commands can run the CLI itself; see SECURITY.md. A marked note can still be replaced
+`monomem supersede` (also with `--confirm-token`) and `monomem quarantine keep-history` ask you to type yes first, and that
+yes is recorded as your human confirm, in the same transaction as the pin or replace (if that fails, no confirm is left). An agent that can run shell commands can run the CLI itself; see SECURITY.md. A marked note can still be replaced
 **by** a clean note.
 
 ## `derived_from`

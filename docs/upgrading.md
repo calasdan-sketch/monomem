@@ -17,7 +17,10 @@ Applies to Monomem 1.3.x. A fresh install needs none of this.
 - Afterwards run `monomem doctor`, then `monomem health`. What is new: [CHANGELOG.md](../CHANGELOG.md).
 
 **Day 1.** Session start, search and lists show the same notes as before. Notes that existed at the upgrade are exempt from the
-outside-content hold (unless a later edit marks them). What is new: notes written from now on after an agent read a web page or another MCP server's output
+outside-content hold (unless a later edit marks them). One change: an old note that carries a 1.3.5 outside-content stamp (a
+session summary that read the web) can no longer be pinned or used as a replacement by an admin key or an agent; `monomem
+pin` in a terminal still can, after you type yes. Also new: `monomem remember` / `monomem add` run from an agent's shell or a
+script (not a terminal) are marked like any other writer's notes. What is new: notes written from now on after an agent read a web page or another MCP server's output
 (when Monomem can see it) land **unconfirmed**. They are labelled, kept out of session start, and one line says how many:
 `Monomem: N notes from outside content wait for confirmation (not shown). Review: monomem review`. See
 [trust.md](./trust.md#outside-content-and-taint-140).

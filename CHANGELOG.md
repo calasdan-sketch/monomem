@@ -22,33 +22,41 @@ turn on `enforce`). Upgrade notes: docs/upgrading.md (schema v19 to v20, one way
   when Monomem can see one of three things: a hook-equipped session in the same namespace read outside content within
   the last 12 hours and has not ended (`MONOMEM_TAINT_WINDOW_HOURS`, `0` = off); the connection writing it had read an
   unconfirmed note; or the writer declared it (`outside: true` on MCP `state_write`, REST `POST`/`PUT /notes`,
-  `monomem add --outside`, or `"reads_outside": true` on a token). The mark only grows: no update path, import or agent
+  `monomem add --outside`, or `"reads_outside": true` on a token). The local `monomem` command counts as the person
+  only at a real terminal: run from an agent's shell tool or a script (`monomem remember`, `monomem add`), its notes are
+  marked like any other writer's. The mark only grows: no update path, import or agent
   write removes it. An unconfirmed note is kept out of session start (text and title; one count line says
   `Monomem: N notes from outside content wait for confirmation (not shown). Review: monomem review`), labelled
   `[unconfirmed - from outside content]` in search and reads, ranked slightly lower (x0.9), and still returned. It is
-  never hidden or deleted. The window is per namespace, so a browsing session can mark a sibling session's notes; a
-  person's confirm clears that. Notes that existed before the upgrade are exempt. See docs/trust.md.
+  never hidden or deleted. Open tasks and handoffs follow the same rule: an unconfirmed one is left off the session-start
+  board and counted in the same line. The window is per namespace, so a browsing session can mark a sibling session's
+  notes; a person's confirm clears that. Notes that existed before the upgrade are exempt from this hold. See docs/trust.md.
 - **Confirming notes.** `monomem confirm <id> [--source "what you checked"]` (asks you to type yes) records who, when
   and against what: `Confirmed "Acme pricing" by cli at 2026-11-13 14:02. Checked against: vendor site. Next check due
   2026-12-13.` Also REST `POST /notes/:id/confirm` (write scope), a **Confirm** button in the dashboard, and the MCP tool
   `memory_confirm` (not in the default tool set; turn it on with `MONOMEM_TOOLS`). A person's confirm always counts. An
-  admin key (dashboard, REST) releases the session-start hold. Another agent counts only with its own key, a different
+  admin key (dashboard, REST) releases the session-start hold, even after the dashboard has listed the note. Another
+  agent counts only with its own key, a different
   writer from the note's, a stated source different from the note's own and from earlier confirms, and only if its
   connection has not read the note while unconfirmed and has not written a note built from it. That is corroboration,
   not verification: a lying agent can still claim a different source. A local (stdio) app's confirm is recorded but
   never counts. A refused confirm names the rule (`Not counted: research-bot wrote this note, so it can't confirm it. A
   person or a different agent must confirm.`). A confirm is bound to the note's version: an edit makes a marked note
-  unconfirmed again. See docs/trust.md, "Confirming notes".
+  unconfirmed again. A counted confirm always restarts the re-confirmation clock and the note keeps the strongest kind it
+  has (a person's confirm stays a person's when an agent corroborates later), so "Next check due" is the date stored. To
+  an agent the reply names the note by id, not by its title. See docs/trust.md, "Confirming notes".
 - **No promotion without a person.** A marked note that no person has confirmed cannot be pinned (CLI, REST
   `PUT /pinned`, dashboard), used as the replacement in a replace, or kept as history over another note. The refusal
   reads `Can't pin: this note came from outside content. A person must confirm it first: monomem confirm <id>`. In a
   terminal, `monomem pin` and `monomem supersede` ask you to type yes and record that as your confirm. An admin key's
-  or another agent's confirm does not lift this block. See docs/trust.md.
+  or another agent's confirm does not lift this block. This also applies to notes from before the upgrade that carry a
+  1.3.5 outside-content stamp: they stay in session start as before, but pinning one now needs a person. See docs/trust.md.
 - **Re-confirmation expiry, label only by default.** A note nobody has changed or confirmed in 30 days gets
   `[expired - not re-confirmed in 30 days]` on reads, search and session-start index lines. It is still shown, ranked as
   before, never archived or deleted. `monomem config set confirm-mode enforce` also keeps expired notes out of session
   start (one count line) and ranks them slightly lower; `confirm-mode off` turns it off (asks you to type yes);
-  `monomem config set confirm-days <n>` changes the period (1 to 3650). The clock starts at the latest of the last edit,
+  `monomem config set confirm-days <n>` changes the period (1 to 3650; under `enforce`, shortening it asks you to type yes
+  and restarts the clock, so nothing disappears at once). The clock starts at the latest of the last edit,
   a confirm of the current version, the upgrade, and the last mode change. Pinned, replaced, archived and captured rows
   are exempt. No per-tag or per-writer periods yet. See docs/search.md, "Re-confirmation expiry".
 - **`monomem review`** lists notes waiting for a person (unconfirmed and expired: id, namespace, title, writer, why).
@@ -91,9 +99,19 @@ turn on `enforce`). Upgrade notes: docs/upgrading.md (schema v19 to v20, one way
   made; `approved_at` and `approved_by` record the approval. A held edit's time never moves a note backwards. See
   docs/memory-linter.md.
 - **A held write no longer drops its forget date and confidence.** Both are kept and applied on approval; the forget date
-  counts from the time the write was made. Limit: a held edit that clears confidence (`null`) is not carried.
+  counts from the time the write was made. A held edit that clears them (`null`) clears them on approval.
 - **docs/memory-linter.md** said approval kept a held note's creation time. It did not; it does now, and the page says
   exactly what approval keeps.
+
+### Limits found in review, not changed in this release
+
+- Restoring a backup from before the upgrade and upgrading it again marks every note in it as from before the upgrade
+  (exempt from the session-start hold) again. That is by design: the notes really are that old.
+- `monomem import` (admin) and the foreign, rules and `--claude` imports bring notes in unmarked: the file says nothing
+  about where its text came from. Review an imported file before importing it.
+- A note marked later from the spool (an outside read the hook could not store at once) is not marked when the local
+  `monomem` command wrote it, because whether that write came from a terminal is not recorded.
+- The terminal check is the same as for typed-yes commands: a tool that opens a pseudo-terminal passes it.
 
 ### Not in this release (planned for 1.4.1)
 
