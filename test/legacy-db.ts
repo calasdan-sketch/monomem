@@ -67,7 +67,7 @@ export function downgradeTo(path: string, version: 11 | 12 | 13 | 14 | 15 | 16 |
   try {
     // v21 additions (1.5.0), removed for every older shape.
     for (const c of ["content_at", "writer_cwd"]) raw.exec(`ALTER TABLE notes DROP COLUMN ${c}`);
-    raw.exec("DROP INDEX IF EXISTS idx_capture_spool; ALTER TABLE capture_events DROP COLUMN spool_id;");
+    raw.exec("DROP TRIGGER IF EXISTS notes_links_ad; "+"DROP INDEX IF EXISTS idx_capture_spool; ALTER TABLE capture_events DROP COLUMN spool_id;");
     if (version === 20) {
       raw.exec("PRAGMA user_version = 20");
       return;

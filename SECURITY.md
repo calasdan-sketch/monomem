@@ -308,6 +308,7 @@ disclosure within 90 days. Please do not file public issues for security reports
 
 These are known gaps, written down so nobody assumes they are covered:
 
+- **Hidden notes answer like missing ones, but not in the same time.** A note a key cannot see (other namespace, above its ceiling, a distrusted writer) gets the same status and body as an id that does not exist, on every by-id route and tool, and a note's `derived_from` lists only parents that key could read itself. A caller that measures response time may still tell the two apart; that is not covered.
 - **Where your keys sit, and what follows from it.** A key is kept in each of these places, and anything that can read the file has the key:
   - `.token` in the data folder: the primary (admin) key, plain text by design, because the CLI and the dashboard sign-in need it.
   - `tokens.json` in the data folder: your app keys. Stored as one-way hashes (1.5.0; keys made by an older version are hashed the first time 1.5.0 starts). `tokens.json.bak` is not kept.

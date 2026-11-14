@@ -2976,7 +2976,18 @@ export class Store {
       this.addColumn("notes", "writer_cwd", "TEXT");
       //  - capture_events.spool_id: the id a spooled hook event carries; a second insert of the same id is ignored, so a drain cut
       //    off after the insert cannot store (and count) an event twice (R1-13). Live hook events have NULL.
+      //  - notes_links_ad: deleting a note removes its note_links rows (either column) and its confirmations, so no row names an id
+      //    that no longer exists (and a later note that reuses the id cannot inherit them). Orphans already there are removed.
       this.addColumn("capture_events", "spool_id", "TEXT");
+      this.db.exec(`
+        DELETE FROM note_links WHERE note_id NOT IN (SELECT id FROM notes) OR derived_from NOT IN (SELECT id FROM notes);
+        DELETE FROM confirmations WHERE note_id NOT IN (SELECT id FROM notes);
+        DROP TRIGGER IF EXISTS notes_links_ad;
+        CREATE TRIGGER notes_links_ad AFTER DELETE ON notes BEGIN
+          DELETE FROM note_links WHERE note_id = old.id OR derived_from = old.id;
+          DELETE FROM confirmations WHERE note_id = old.id;
+        END;
+      `);
       this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_capture_spool ON capture_events(spool_id) WHERE spool_id IS NOT NULL");
     }
   }
@@ -3584,13 +3595,29 @@ export class Store {
     if (!links.length) return out;
     out.derived_from = links;
     const rules = this.distrustRules();
-    if (rules.length) {
+    // 1.5.0 (R1-12): a reader is told only the parent ids it could read itself (its namespaces, its sensitivity ceiling, and for a
+    // key that cannot declassify the distrust list), so a link is no way to learn the id of a hidden note.
+    const actor = actorStore.getStore();
+    const readable = actor?.readable;
+    const restricted = readable !== undefined || currentCeiling() !== undefined || (actor?.authed === true && actor.canDeclassify !== true && rules.length > 0);
+    if (rules.length || restricted) {
       // ponytail: one hop only (the parents' own writers); a recursive walk up the chain is 1.4.1.
       const sid = this.serverId();
       const parents = this.db.prepare(`SELECT * FROM notes WHERE id IN (${links.map(() => "?").join(",")})`).all(...links) as unknown as NoteRow[];
-      if (parents.some((p) => matchesDistrust(rules, rowToRecord(p, sid), sid))) {
+      if (rules.length && parents.some((p) => matchesDistrust(rules, rowToRecord(p, sid), sid))) {
         out.built_on_distrusted = true;
         out.built_on_distrusted_label = DISTRUSTED_BASE_LABEL;
+      }
+      if (restricted) {
+        const byId = new Map(parents.map((p) => [Number(p.id), p]));
+        out.derived_from = links.filter((id) => {
+          const p = byId.get(id);
+          if (!p) return false;
+          if (readable && !readable.includes(p.namespace)) return false;
+          if (currentCeiling() !== undefined && this.hiddenByCeiling(p as unknown as { sensitivity?: string | null })) return false;
+          return !(actor?.authed === true && actor.canDeclassify !== true && rules.length > 0 && matchesDistrust(rules, rowToRecord(p, sid), sid));
+        });
+        if (!out.derived_from.length) delete out.derived_from;
       }
     }
     return out;
