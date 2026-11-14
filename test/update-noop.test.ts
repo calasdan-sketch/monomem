@@ -4,6 +4,8 @@ import { test, describe, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { Store } from "../src/store.js";
 import { setProcessWriter } from "../src/actor.js";
+import { createApiServer } from "../src/api.js";
+import type { AddressInfo } from "node:net";
 
 afterEach(() => setProcessWriter(""));
 
@@ -65,5 +67,28 @@ describe("R1-02 an unchanged write is a no-op", () => {
     assert.equal(s.update(n.id, { confidence: 0.4 })!.rev, n.rev + 1);
     assert.equal(s.update(n.id, { tags: ["new"] })!.rev, n.rev + 2);
     s.close();
+  });
+
+  test("REST PUT with nothing new answers 200 with unchanged: true and the rev stays", async () => {
+    const s = new Store(":memory:");
+    setProcessWriter("cli");
+    const n = s.create({ title: "t", body: "b" });
+    const http = createApiServer(s, [{ token: "k".repeat(24), scope: "admin", label: "boss" }]);
+    await new Promise<void>((r) => http.listen(0, "127.0.0.1", () => r()));
+    const base = `http://127.0.0.1:${(http.address() as AddressInfo).port}`;
+    try {
+      const h = { authorization: `Bearer ${"k".repeat(24)}`, "content-type": "application/json" };
+      const same = (await (await fetch(`${base}/notes/${n.id}`, { method: "PUT", headers: h, body: JSON.stringify({ body: "b" }) })).json()) as any;
+      assert.equal(same.unchanged, true);
+      assert.equal(same.note.rev, n.rev);
+      assert.equal(same.note.unchanged, undefined, "the flag is on the reply, not inside the note");
+      const diff = (await (await fetch(`${base}/notes/${n.id}`, { method: "PUT", headers: h, body: JSON.stringify({ body: "c" }) })).json()) as any;
+      assert.equal(diff.unchanged, undefined);
+      assert.equal(diff.note.rev, n.rev + 1);
+    } finally {
+      http.closeAllConnections();
+      await new Promise<void>((r) => http.close(() => r()));
+      s.close();
+    }
   });
 });

@@ -1034,6 +1034,39 @@ function annotateRetention(row: NoteRow, rec: NoteRecord): NoteRecord {
   return out;
 }
 
+/**
+ * R1-02: true when `patch` changes nothing about `existing` (title, body, tag set, source, namespace, sensitivity,
+ * confidence, forget date all equal after normalisation) and carries no side effect (outside/derived/internal flags,
+ * a stale if_rev). Such a write is a no-op: no rev bump, no updated_at, no history, no flood count.
+ */
+function isNoopPatch(
+  existing: NoteRecord,
+  patch: NotePatch,
+  opts: { ifRev?: number; writtenAt?: string; keepWriter?: boolean; alsoTouchedBy?: string[]; replaceTaint?: string[]; importedUnverified?: boolean; holdForApproval?: boolean; historyReason?: string }
+): boolean {
+  if (opts.writtenAt || opts.keepWriter || opts.alsoTouchedBy?.length || opts.replaceTaint || opts.importedUnverified || opts.holdForApproval) return false;
+  if (opts.historyReason && opts.historyReason !== "update") return false;
+  if (opts.ifRev !== undefined && opts.ifRev !== existing.rev) return false;
+  if (patch.outside === true || patch.derived_from?.length) return false;
+  if (patch.title !== undefined && patch.title !== existing.title) return false;
+  if (patch.body !== undefined && patch.body !== existing.body) return false;
+  const ns = patch.namespace?.trim();
+  if (ns && ns !== existing.namespace) return false;
+  if (patch.sensitivity !== undefined && patch.sensitivity !== existing.sensitivity) return false;
+  if (patch.source !== undefined && patch.source.replace(/[\u{E0000}-\u{E007F}]/gu, "").slice(0, 200) !== existing.source) return false;
+  const conf = patch.confidence as number | null | undefined;
+  if (conf !== undefined && conf !== (existing.confidence ?? null)) return false;
+  const forget = patch.forget_after as number | null | undefined;
+  if (forget !== undefined && !((forget === 0 || forget === null) && !existing.expires_at)) return false;
+  if (patch.tags !== undefined) {
+    // The store re-adds outside-content stamps a patch drops, so they count as present.
+    const want = new Set([...patch.tags.map((t) => t.trim()), ...existing.tags.filter((t) => t.startsWith(ORIGIN_PREFIX))]);
+    const have = new Set(existing.tags);
+    if (want.size !== have.size || [...want].some((t) => !have.has(t))) return false;
+  }
+  return true;
+}
+
 /** Strength of a confirm kind: a weaker confirm never overwrites a stronger one for the same rev. */
 const CONFIRM_RANK: Record<string, number> = { corroborated: 1, admin: 2, human: 3 };
 /** CONFIRM_RANK as SQL, for the kind stored in column `col`. */
@@ -3840,12 +3873,14 @@ export class Store {
       writtenAt?: string;
     } & LintOpts = {}
   ): NoteRecord | null {
-    this.floodGate(opts.lint ?? "full", opts.noFloodCount !== true);
+    this.floodGate(opts.lint ?? "full", false); // a paused writer is refused even for a no-op; the write is counted below
     validateNames(patch);
     validateForgetAfter(patch.forget_after);
     validateConfidence(patch.confidence);
     const existing = this.read(id);
     if (!existing) return null;
+    if (isNoopPatch(existing, patch, opts)) return { ...existing, unchanged: true };
+    this.floodGate(opts.lint ?? "full", opts.noFloodCount !== true);
     this.refuseAgentOnPinned(id, "changing it");
     // The outside-content stamps (obs.origin:*) only grow, on every path (REST, MCP, file sync, import): no write can strip
     // one, and a content edit by a connection that reads outside content adds its own (taintFor).

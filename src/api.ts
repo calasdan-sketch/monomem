@@ -946,13 +946,13 @@ export function createApiServer(
             assertReviewedTag(parsed.tags, currentTags, isAdmin);
           }
           const warnings: LintFinding[] = [];
-          const note = store.update(id, parsed, { lintWarnings: warnings, ...(ifRev !== undefined ? { ifRev } : {}) });
-          if (!note) {
+          const { unchanged, ...note } = store.update(id, parsed, { lintWarnings: warnings, ...(ifRev !== undefined ? { ifRev } : {}) }) ?? ({} as NoteRecord);
+          if (!note.id) {
             sendJson(res, 404, { error: "not found" });
             return;
           }
-          await maybeEmbed(store, note);
-          sendJson(res, 200, { note, ...(warnings.length ? { warnings } : {}), ...(putFacts === undefined ? {} : factFeedback(store, note)) });
+          if (!unchanged) await maybeEmbed(store, note);
+          sendJson(res, 200, { note, ...(unchanged ? { unchanged: true } : {}), ...(warnings.length ? { warnings } : {}), ...(putFacts === undefined ? {} : factFeedback(store, note)) });
         } catch (e) {
           sendError(res, e);
         }

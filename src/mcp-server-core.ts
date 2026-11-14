@@ -825,12 +825,13 @@ export function createMcpServer(
           const patch = nsActive
             ? { title, body, tags, source, forget_after, confidence, sensitivity, outside, derived_from }
             : { namespace, title, body, tags, source, forget_after, confidence, sensitivity, outside, derived_from };
-          const updated = store.update(id, patch, { ifRev: if_rev, lintWarnings: warnings });
-          if (!updated) return errorResult(`no note with id ${id}`);
-          await maybeEmbed(store, updated);
+          const result = store.update(id, patch, { ifRev: if_rev, lintWarnings: warnings });
+          if (!result) return errorResult(`no note with id ${id}`);
+          const { unchanged, ...updated } = result;
+          if (!unchanged) await maybeEmbed(store, updated);
           // A partial update echoes back the merged note, which can include a
           // pre-existing body planted by someone else -- wrap it as untrusted.
-          return untrustedResult(withConflicts(withWarnings({ note: noBody(updated) }, warnings), store, updated, facts));
+          return untrustedResult(withConflicts(withWarnings({ note: noBody(updated), ...(unchanged ? { unchanged: true } : {}) }, warnings), store, updated, facts));
         }
         let titleGenerated = false;
         if (!title || !title.trim()) {
