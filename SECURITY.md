@@ -191,6 +191,12 @@ prompt-injection / "memory poisoning"** channel. Layers:
 These protect memory from agents that reach it through MCP or REST. **An agent with a shell tool can run the `monomem`
 CLI itself, so none of them stops an agent that can run commands.**
 
+- **Outside-content marks follow the writer, not the namespace (1.5.0).** When a hooked session read the web, the notes written
+  by local apps with no key of their own (a stdio server, matched by the folder it was launched in; the `monomem` command
+  without a terminal) are marked while that session is active (30 minutes idle ends it) and within `MONOMEM_TAINT_WINDOW_HOURS`.
+  Not covered, by design: an app with its own key (set `reads_outside` on it), an agent that starts a stdio server from a
+  folder with a clean hooked session, and what Monomem cannot see (`Bash` `curl`, apps without hooks). A person can end open
+  windows with `monomem taint clear`. A session summary is written only by the capture hooks; an agent cannot edit one.
 - **Operator gate on the CLI.** These commands lower protection, so they refuse to run unless both standard input and
   output are a terminal, and then ask for a typed `yes`; there is no `--yes` for them: `unpin`, `approve-first <ns> off`, `approve-first --all off`,
   `resume`, `quarantine approve`, `trust undistrust`, `trust attester-add`, `trust attester-unrevoke`, `token add`, `connect <app> --restricted`, `connect <app> --max <level>` and `connect <app> --print` (each makes a new write key; `--dry-run` makes none and is not gated) and `taint clear` (ends an open outside-content window). The same gate applies to a **pinned** note: `archive`, `restore`, `delete` (with or
