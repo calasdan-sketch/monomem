@@ -8408,8 +8408,11 @@ export class Store {
     if (!marks.length) return 0;
     // One transaction; a note it marks is new outside content, so a pre-upgrade (grandfathered) note loses its exemption.
     this.transaction(() => {
-      const up = this.db.prepare("UPDATE notes SET tags = ?, grandfathered_at = NULL WHERE id = ?");
-      for (const r of marks) up.run(tagsToStorage([...parseTags(r.tags), tag]), r.id);
+      // 1.5.0 (R1-15): rev and updated_at move so the change feed, sync and embeddings see the new stamp, and a writer holding the
+      // old rev gets the normal stale-write answer. content_at stays (expiry unaffected); a confirm that was current carries over.
+      const up = this.db.prepare("UPDATE notes SET tags = ?, grandfathered_at = NULL, rev = rev + 1, updated_at = ?, confirmed_rev = CASE WHEN confirmed_rev = rev THEN rev + 1 ELSE confirmed_rev END WHERE id = ?");
+      const now = new Date().toISOString();
+      for (const r of marks) up.run(tagsToStorage([...parseTags(r.tags), tag]), now, r.id);
     });
     this.audit({ op: "retro-taint", detail: `${marks.length} note(s) marked ${tag}` });
     return marks.length;
