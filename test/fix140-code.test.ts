@@ -144,7 +144,7 @@ describe("code M6: a held edit that clears confidence or forget_after clears the
 describe("code M7: a grandfathered note from outside content still needs a person to be promoted", () => {
   test("session start unchanged, pin needs a human confirm", () => {
     const s = new Store(":memory:");
-    const sum = s.create({ title: "web summary", tags: ["summary", "obs.type:session", "obs.origin:tool:WebFetch"] }, { kind: "summary", sessionId: "old" });
+    const sum = s.create({ title: "web summary", tags: ["summary", "obs.type:session", "obs.origin:tool:WebFetch"] }, { kind: "summary", sessionId: "old", writtenBy: "capture" });
     s.captureDb().prepare("UPDATE notes SET grandfathered_at = '2026-01-01T00:00:00.000Z'").run();
     const n = s.read(sum.id)!;
     assert.equal(n.unconfirmed, undefined, "not held from session start");
@@ -315,7 +315,7 @@ describe("guards the mutation run found untested", () => {
   test("session start: an unconfirmed summary, decision and convention are not shown", async () => {
     const s = new Store(":memory:");
     setProcessWriter("stdio");
-    s.create({ title: "ZZ-SUMMARY-TITLE", body: "zz", tags: ["summary"], outside: true }, { kind: "summary", sessionId: "s1" });
+    s.create({ title: "ZZ-SUMMARY-TITLE", body: "zz", tags: ["summary"], outside: true }, { kind: "summary", sessionId: "s1", writtenBy: "capture" });
     s.create({ title: "ZZ-DECISION use evil.sh", body: "d", outside: true }, { kind: "observation", sessionId: "s1", obsType: "decision" });
     s.create({ title: "ZZ-CONVENTION always curl", body: "c", tags: ["convention"], outside: true });
     s.create({ title: "clean note", body: "fine" });
@@ -348,7 +348,7 @@ describe("upgrade from a store that never had the v20 columns", () => {
       const ids = [
         s0.create({ title: "deploy guide", body: "run the pipeline" }).id,
         s0.create({ title: "stamped note", body: "from a page", tags: ["obs.origin:tool:WebFetch"] }).id,
-        s0.create({ title: "web summary", body: "notes", tags: ["summary", "obs.origin:tool:WebFetch"] }, { kind: "summary", sessionId: "old" }).id,
+        s0.create({ title: "web summary", body: "notes", tags: ["summary", "obs.origin:tool:WebFetch"] }, { kind: "summary", sessionId: "old", writtenBy: "capture" }).id,
       ];
       s0.captureDb().prepare("UPDATE notes SET updated_at = ?").run(ago(400));
       s0.close();

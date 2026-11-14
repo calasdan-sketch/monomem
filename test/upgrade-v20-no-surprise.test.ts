@@ -38,7 +38,7 @@ describe("upgrade-v20-no-surprise", () => {
       setProcessWriter("stdio");
       const plain = s0.create({ title: "deploy guide", body: "run the pipeline" });
       setProcessWriter("");
-      const sum = s0.create({ title: "web summary", body: "notes from a page", tags: ["summary", "obs.type:session", "obs.origin:tool:WebFetch"] }, { kind: "summary", sessionId: "old" });
+      const sum = s0.create({ title: "web summary", body: "notes from a page", tags: ["summary", "obs.type:session", "obs.origin:tool:WebFetch"] }, { kind: "summary", sessionId: "old", writtenBy: "capture" });
       s0.close();
       downgradeTo(path, 19);
       const s = quietOpen(path);

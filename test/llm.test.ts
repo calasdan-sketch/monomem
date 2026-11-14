@@ -16,6 +16,11 @@ import { captureHook } from "../src/hook.js";
 import { isModelWritten } from "../src/reserved-tags.js";
 import { memoryGet, memoryIndex } from "../src/progressive.js";
 import { indexLine, injectContext } from "../src/context-inject.js";
+import { setProcessWriter } from "../src/actor.js";
+
+// Session summaries are written by the capture hooks (R1-06); the llm summary rewrites one.
+before(() => setProcessWriter("capture"));
+after(() => setProcessWriter(""));
 
 const SECRET = "AKIAIOSFODNN7EXAMPLE";
 let reply: (req: IncomingMessage, body: string, res: ServerResponse) => void = () => {};

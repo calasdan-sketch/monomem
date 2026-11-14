@@ -114,11 +114,11 @@ describe("R3-3: connect --restricted --dry-run makes nothing", () => {
       assert.match(String(r.stdout), /nothing has been created/);
       assert.ok(!existsSync(join(home, "data", "tokens.json")), "no tokens.json");
       assert.ok(!existsSync(join(home, ".cursor", "mcp.json")), "no settings file");
-      // A real run for an app whose wiring is refused leaves no key behind.
+      // 1.5.0 (R1-08): a real run needs a person at a terminal, so a script is refused and leaves no key behind.
       const bad = cli(home, "connect", "zed", "--restricted", "--yes");
-      assert.equal(bad.status, 0);
-      const f = join(home, "data", "tokens.json");
-      if (existsSync(f)) assert.equal((JSON.parse(readFileSync(f, "utf8")) as unknown[]).length, 1, "only the key that was printed for pasting");
+      assert.equal(bad.status, 1);
+      assert.match(String(bad.stderr), /Refused: connect zed/);
+      assert.ok(!existsSync(join(home, "data", "tokens.json")), "no key was made");
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
@@ -126,7 +126,9 @@ describe("R3-3: connect --restricted --dry-run makes nothing", () => {
 });
 
 describe("R3-6: connect replaces Monomem's own keyless entry", () => {
-  test("it shows the change, writes a limited entry, and setup --undo puts the old one back", () => {
+  // 1.5.0 (R1-08): replacing the entry mints a key, which needs a person at a terminal; a script is refused and the file is untouched.
+  // (planFile/runSetup with an httpEntry, which write the limited entry, are covered by the setup tests.)
+  test("a script is refused: the keyless entry is left exactly as it was", () => {
     const home = mk("om-r3-rep-");
     try {
       mkdirSync(join(home, ".cursor"), { recursive: true });
@@ -134,14 +136,11 @@ describe("R3-6: connect replaces Monomem's own keyless entry", () => {
       const old = { mcpServers: { monomem: { command: "monomem", args: ["mcp"] } } };
       writeFileSync(file, JSON.stringify(old, null, 2));
       const r = cli(home, "connect", "cursor", "--restricted", "--yes");
-      assert.equal(r.status, 0, String(r.stderr) + String(r.stdout));
-      assert.ok(!/Monomem setup \(version/.test(String(r.stdout)), "the setup banner is not repeated");
-      const after = JSON.parse(readFileSync(file, "utf8"));
-      assert.match(after.mcpServers.monomem.headers.Authorization, /^Bearer [0-9a-f]{64}$/);
-      assert.equal(readdirBackups(join(home, ".cursor")) > 0, true, "a backup copy was saved beside the file");
-      const u = cli(home, "setup", "--undo", "--yes");
-      assert.equal(u.status, 0, String(u.stderr) + String(u.stdout));
+      assert.equal(r.status, 1, String(r.stderr) + String(r.stdout));
+      assert.match(String(r.stderr), /Refused: connect cursor/);
       assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), old);
+      assert.equal(readdirBackups(join(home, ".cursor")), 0);
+      assert.ok(!existsSync(join(home, "data", "tokens.json")), "no key was made");
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
