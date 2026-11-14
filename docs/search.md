@@ -141,14 +141,14 @@ every so often.
 
 **When a note is due.** Due = the latest of these, plus `confirm-days` (default 30):
 
-- its last edit (`updated_at`);
-- the last confirm of its current version;
+- the last change to its **title or body** (`content_at`; a tag, source, confidence, namespace or forget-date edit does not count, and an edit that changes nothing is a no-op);
+- the last **person's or admin's** confirm of its current version (a corroboration by another agent releases the session-start hold but never restarts the clock);
 - the 1.4.0 upgrade (`grandfathered_at`, on notes that existed then);
 - the last time the mode was changed.
 
 It is computed on every read, never stored. Pinned, archived and replaced notes and captured rows (observations, session
-summaries), tasks and handoffs never expire. A confirm by another agent after a stronger confirm (a person's, or an admin key's) is recorded
-but does not restart the clock.
+summaries), tasks and handoffs never expire. A confirm by another agent (corroboration) is recorded but never restarts the clock. A content change by an agent
+DOES restart it: the note is re-stamped to that agent, a new claim under a new name (and if it is tainted it waits for confirmation anyway).
 
 **Modes.** Set with `monomem config set confirm-mode <mode>` ([configuration.md](./configuration.md#settings-kept-in-the-store-monomem-config)):
 
@@ -163,7 +163,7 @@ No mode ever archives or deletes a note for being expired.
 **What this means after an upgrade.** Nothing changes on day 1. About 30 days after upgrading, notes that nobody edited
 or confirmed since start showing `[expired - not re-confirmed in 30 days]`. They are still shown and ranked as before. To
 turn the label off: `monomem config set confirm-mode off` (asks you to type yes). To make expiry hide notes from session
-start: `monomem config set confirm-mode enforce`. The clock then restarts for every note.
+start: `monomem config set confirm-mode enforce`. Switching between `label` and `enforce` keeps every due date; turning expiry on from `off` starts the clock for every note.
 
 **Re-confirming.** `monomem confirm <id> --source "what you checked"` (a person; see [trust.md](./trust.md#confirming-notes)),
 or `monomem review` to see every expired and unconfirmed note with the reason, and `monomem review --confirm-all` to

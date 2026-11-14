@@ -98,7 +98,7 @@ export function unconfirmedCountLine(n: number): string {
 }
 
 // ---- re-confirmation expiry (1a) and derived_from (1d) ---------------------------------------------------------------
-// Expiry is computed, never stored: due = max(updated_at, confirmed_at for this rev, grandfathered_at, mode switch) + days.
+// Expiry is computed, never stored: due = max(content_at (title/body change), human/admin confirmed_at for this rev, grandfathered_at, mode switch) + days.
 // off: nothing. label (default): flagged on reads and search. enforce: also kept out of session start, mildly demoted.
 
 export type ConfirmMode = "off" | "label" | "enforce";

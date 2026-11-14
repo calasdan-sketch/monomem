@@ -1,18 +1,18 @@
 # Upgrading
 
-## Monomem 1.4.0 (database schema v19 to v20)
+## Monomem 1.4.0 and 1.5.0 (database schema v19 to v21)
 
-Applies to Monomem 1.3.x. A fresh install needs none of this.
+Applies to Monomem 1.3.x (and to a development build that already made the store v20). A fresh install needs none of this.
 
-- **What changes.** The first start migrates the database from schema v19 to **v20**: new columns on notes (when the upgrade ran,
+- **What changes.** The first start migrates the database from schema v19 to **v21** (1.4.0 and 1.5.0 ship as one step): new columns on notes (when the upgrade ran,
   who approved a held write and when, the latest confirm), two on held writes (their forget date and confidence), one on capture
-  sessions, and two new tables (confirms, and "derived from" links between notes). No note text is rewritten. Every note that exists
+  sessions, and two new tables (confirms, and "derived from" links between notes), and, from 1.5.0, when a note's title or body last changed (the re-confirmation clock starts there, not at any edit) and the folder of the local process that wrote it. No note text is rewritten. Every note that exists
   at the upgrade is marked with the upgrade time, so nothing that showed before the upgrade is hidden after it.
-- **A verified backup is made first**, at `<database>.pre-v20-backup`. The upgrade does not run if that copy cannot be made.
+- **A verified backup is made first**, at `<database>.pre-v21-backup`. The upgrade does not run if that copy cannot be made.
   Remove it when you are happy: `monomem backup --prune-premigration`.
-- **One way only.** Monomem 1.3.x and older refuse a v20 database instead of opening it. If several machines share one database,
+- **One way only.** Monomem 1.3.x and older refuse a v21 database instead of opening it. If several machines share one database,
   upgrade all of them.
-- **To go back to 1.3.x:** close every app that uses Monomem and stop the server, then `monomem restore <database>.pre-v20-backup --yes`
+- **To go back to 1.3.x:** close every app that uses Monomem and stop the server, then `monomem restore <database>.pre-v21-backup --yes`
   and install the older version (`npm i -g monomem@1.3.5`). Anything written after the upgrade is not in the backup; the copy-aside keeps it.
 - Afterwards run `monomem doctor`, then `monomem health`. What is new: [CHANGELOG.md](../CHANGELOG.md).
 

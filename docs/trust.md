@@ -260,9 +260,10 @@ that already counted is answered but not stored).
 
 **What each kind releases.** Human, admin and corroborated confirms all let the note back into session start. Only a
 **human** confirm lifts the promotion block below. Only a confirm at least as strong as the note's current one for this
-version (human > admin > corroborated) replaces it and restarts the expiry clock. An agent's corroboration after a person's
-or an admin's confirm is recorded but changes nothing: if that confirm has expired, the reply says so, and a person or an
-admin must confirm again.
+version (human > admin > corroborated) replaces it. Only a human or admin confirm restarts the expiry clock: a corroboration
+("two keys agreed") releases the session-start hold but never restarts it, and the reply says so. An agent's corroboration
+after a person's or an admin's confirm is recorded but changes nothing: if that confirm has expired, a person or an admin
+must confirm again. A metadata-only edit (tags, confidence, source) keeps a confirm of the current version; a content edit does not.
 
 ## No promotion without a person
 

@@ -14,7 +14,7 @@ claim Monomem does not fetch or check, and a second agent's confirm is corrobora
 app's confirm never counts, because its name is a config claim. `derived_from` only helps when agents fill it in, and it
 looks one hop back. The read signal is per connection and resets when the server restarts. Upgrading hides nothing; about
 30 days after the upgrade, notes nobody has touched or confirmed get a `[expired - ...]` label (labels only, unless you
-turn on `enforce`). Upgrade notes: docs/upgrading.md (schema v19 to v20, one way, verified backup first).
+turn on `enforce`). Upgrade notes: docs/upgrading.md (schema v19 to v21, one way, verified backup first).
 
 ### Added
 
@@ -87,9 +87,9 @@ turn on `enforce`). Upgrade notes: docs/upgrading.md (schema v19 to v20, one way
 
 ### Changed
 
-- **Schema v20.** New columns on notes (`grandfathered_at`, `approved_at`/`approved_by`, `confirmed_*`), on held
+- **Schema v21.** New columns on notes (`content_at`, `writer_cwd`, `grandfathered_at`, `approved_at`/`approved_by`, `confirmed_*`), on held
   writes (forget date, confidence) and on capture sessions, plus two add-only tables (confirms, derived-from links). A
-  verified backup `<database>.pre-v20-backup` is made first; older builds refuse a v20 file. No note text is rewritten,
+  verified backup `<database>.pre-v21-backup` is made first; older builds refuse a v21 file. No note text is rewritten,
   and list, search and session start show the same notes right after the upgrade. Records gain the new fields only when
   they are set. See docs/upgrading.md.
 - **The 1.3.5 outside-content stamp now applies to every marked note**, not only captured session summaries; summaries

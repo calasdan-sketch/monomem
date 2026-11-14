@@ -62,9 +62,15 @@ const V14_DELETE_TRIGGER = `
 `;
 
 /** Rewrite the database file at `path` (closed by the caller) as it looked at `version`. */
-export function downgradeTo(path: string, version: 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19): void {
+export function downgradeTo(path: string, version: 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20): void {
   const raw = new DatabaseSync(path);
   try {
+    // v21 additions (1.5.0), removed for every older shape.
+    for (const c of ["content_at", "writer_cwd"]) raw.exec(`ALTER TABLE notes DROP COLUMN ${c}`);
+    if (version === 20) {
+      raw.exec("PRAGMA user_version = 20");
+      return;
+    }
     // v20 additions (1.4.0 trust: approval/confirm columns, confirmations, note_links), removed for every older shape.
     raw.exec("DROP TABLE IF EXISTS confirmations; DROP TABLE IF EXISTS note_links;");
     for (const c of ["grandfathered_at", "approved_at", "approved_by", "confirmed_at", "confirmed_by", "confirmed_kind", "confirmed_rev", "cli_tty"]) raw.exec(`ALTER TABLE notes DROP COLUMN ${c}`);

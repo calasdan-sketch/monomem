@@ -139,7 +139,7 @@ describe("N3: a weaker confirm never moves a stronger confirm's clock", () => {
     setProcessWriter("cli");
     s.confirm(n.id, { source: "called them" });
     setProcessWriter("");
-    s.captureDb().prepare("UPDATE notes SET confirmed_at = ?, updated_at = ?, grandfathered_at = NULL WHERE id = ?").run(ago(31), ago(31), n.id);
+    s.captureDb().prepare("UPDATE notes SET confirmed_at = ?, updated_at = ?, content_at = ?, grandfathered_at = NULL WHERE id = ?").run(ago(31), ago(31), ago(31), n.id);
     s.captureDb().prepare("UPDATE confirmations SET at = ?").run(ago(31));
     const before = s.read(n.id)!.confirmed_at;
     const r = as("checker", () => s.confirm(n.id, { source: "https://acme.example" }))!;

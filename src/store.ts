@@ -660,7 +660,7 @@ export const CHANGE_LOG_RETENTION_DAYS = 90;
 const FTS_PREFIX_OPT = "prefix='1'";
 
 /** Current schema version (PRAGMA user_version). See Store.migrate. */
-export const SCHEMA_VERSION = 20;
+export const SCHEMA_VERSION = 21;
 
 /**
  * Notes fetched per page by exportBatch(), which both streaming export
@@ -932,6 +932,9 @@ interface NoteRow {
   confirmed_by?: string | null;
   confirmed_kind?: string | null;
   confirmed_rev?: number | null;
+  /** v21: when the title or body last changed (the expiry clock); writer_cwd: see migrate. */
+  content_at?: string | null;
+  writer_cwd?: string | null;
 }
 
 export const DEFAULT_NAMESPACE = "default";
@@ -1037,18 +1040,24 @@ const rankSql = (col: string): string => `CASE ${col} WHEN 'human' THEN 3 WHEN '
 /** The times a note's re-confirmation clock may start from (the v20 columns). */
 interface DueRow {
   updated_at: string;
+  content_at?: string | null;
   confirmed_at?: string | null;
+  confirmed_kind?: string | null;
   confirmed_rev?: number | null;
   rev: number;
   grandfathered_at?: string | null;
 }
 /**
- * When a note's re-confirmation clock started (ms): the latest of its last change, a confirm of its current rev, the
- * upgrade (grandfathered) and the mode switch. Due = this + days. The ONE formula for labels and counts.
+ * When a note's re-confirmation clock started (ms): the latest of its last CONTENT change (title/body), a person's or an
+ * admin's confirm of its current rev (a corroboration releases the session-start hold but never restarts the clock), the
+ * upgrade (grandfathered) and the mode switch. Due = this + days. The ONE formula for labels and counts. 0 = no usable time:
+ * the caller treats that as not due.
  */
 export function dueBase(r: DueRow, c: { set_at?: string }): number {
-  const confirmed = r.confirmed_at && Number(r.confirmed_rev) === Number(r.rev) ? r.confirmed_at : null;
-  return Math.max(...[r.updated_at, confirmed, r.grandfathered_at, c.set_at ?? null].map((t) => (t ? Date.parse(t) : 0)).filter((t) => !Number.isNaN(t)));
+  const confirmed =
+    r.confirmed_at && Number(r.confirmed_rev) === Number(r.rev) && (r.confirmed_kind === "human" || r.confirmed_kind === "admin") ? r.confirmed_at : null;
+  const times = [r.content_at ?? r.updated_at, confirmed, r.grandfathered_at, c.set_at ?? null].map((t) => (t ? Date.parse(t) : NaN)).filter((t) => !Number.isNaN(t));
+  return times.length ? Math.max(...times) : 0;
 }
 
 /**
@@ -2908,6 +2917,24 @@ export class Store {
       `);
       this.db.prepare("UPDATE notes SET grandfathered_at = ? WHERE grandfathered_at IS NULL").run(new Date().toISOString());
     }
+    if (v < 21) {
+      // v21 (1.5.0): everything round 1 of 1.5.0 needs, in this one step (one backup, one transaction). Later 1.5.0 items add
+      // their columns here too: the release ships as one schema bump. Every step is idempotent.
+      //  - notes.content_at: when the TITLE or BODY last changed (or the held write was written). The re-confirmation clock
+      //    starts from this, not from updated_at, so a tag/confidence/TTL edit or a corroboration can no longer restart it.
+      //    Existing notes get their updated_at, except a note whose current version carries a corroborated confirm: that
+      //    confirm used to restart the clock, so its time is kept and upgrading changes no due date (hides nothing).
+      //  - notes.writer_cwd: the folder of the local, unauthenticated process that last wrote the content (stdio server launch
+      //    folder, or the CLI at a non-terminal). Taint windows are matched by folder, not by the namespace the writer names.
+      //    Never exported or synced. NULL = unknown origin.
+      if (!this.hasColumn("notes", "content_at")) {
+        this.addColumn("notes", "content_at", "TEXT");
+        this.db.exec(
+          `UPDATE notes SET content_at = CASE WHEN confirmed_kind = 'corroborated' AND confirmed_rev = rev AND confirmed_at > updated_at THEN confirmed_at ELSE updated_at END WHERE content_at IS NULL`
+        );
+      }
+      this.addColumn("notes", "writer_cwd", "TEXT");
+    }
   }
 
   /** The delete log row also remembers the deleted note's writers (v14). Caller holds the write lock. */
@@ -3169,8 +3196,8 @@ export class Store {
           `INSERT INTO notes (namespace, title, body, tags, source, written_by, created_by, imported_written_by,
                               imported_created_by, attested_writer, attested_by, merged_from_writers,
                               created_at, updated_at, rev, body_enc, expires_at, archived_at, imported_unverified,
-                              confidence, confidence_by, kind, session_id, obs_type, sensitivity)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                              confidence, confidence_by, kind, session_id, obs_type, sensitivity, content_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           namespace,
@@ -3196,7 +3223,8 @@ export class Store {
           opts.kind ?? "note",
           opts.sessionId ?? "",
           opts.obsType ?? "",
-          sensitivity
+          sensitivity,
+          updatedAt
         );
       id = Number(result.lastInsertRowid);
       if (encrypting) {
@@ -3501,7 +3529,8 @@ export class Store {
     // Tasks and handoffs are the board's own records (claimed, finished, handed on): re-confirmation expiry is for notes.
     const live = !row.archived_at && row.superseded_by == null && !out.pinned && !out.kind && !out.tags.includes("task") && !out.tags.includes("handoff");
     const c = live ? this.confirmSettings() : null;
-    if (c && c.mode !== "off" && dueBase(row, c) + c.days * 86_400_000 <= Date.now()) {
+    const base = c ? dueBase(row, c) : 0;
+    if (c && c.mode !== "off" && base > 0 && base + c.days * 86_400_000 <= Date.now()) {
       out.expired = true;
       out.expired_label = expiredLabel(c.days);
     }
@@ -4039,7 +4068,9 @@ export class Store {
                             merged_from_writers = ?,
                             confidence = CASE WHEN ? = 1 THEN ? ELSE confidence END,
                             confidence_by = CASE WHEN ? = 1 THEN ? ELSE confidence_by END,
-                            sensitivity = CASE WHEN ? = 1 THEN ? ELSE sensitivity END
+                            sensitivity = CASE WHEN ? = 1 THEN ? ELSE sensitivity END,
+                            content_at = CASE WHEN ? = 1 THEN ? ELSE content_at END,
+                            confirmed_rev = CASE WHEN ? = 0 AND confirmed_rev = ? THEN ? ELSE confirmed_rev END
            WHERE id = ? AND (? IS NULL OR rev = ?) AND sensitivity = ?${this.ceilingSql()}`
         )
         .run(
@@ -4048,6 +4079,8 @@ export class Store {
           confidenceSet ? 1 : 0, confidenceSet && typeof patch.confidence === "number" ? patch.confidence : null,
           confidenceSet ? 1 : 0, confidenceSet && typeof patch.confidence === "number" ? writerNow(opts) : "",
           newLabel ? 1 : 0, newLabel ?? "",
+          contentChanged ? 1 : 0, writtenAt,
+          contentChanged || newTaint ? 1 : 0, existing.rev, rev,
           id, want, want, existing.sensitivity ?? DEFAULT_SENSITIVITY
         );
 
@@ -8270,11 +8303,13 @@ export class Store {
     }
     const before = this.confirmSettings();
     // Shortening the period while enforce is on would hide notes at once; like turning expiry on, it restarts the clock.
+    // label <-> enforce keeps every due date: switching between the two never restarts a note's clock.
     const shrinksUnderEnforce = s.days !== undefined && s.days < before.days && (s.mode ?? before.mode) === "enforce";
     this.transaction(() => {
       if (s.days !== undefined) this.setMeta("confirm_days", String(s.days));
       if (s.mode !== undefined && s.mode !== before.mode) this.setMeta("confirm_mode", s.mode);
-      if ((s.mode !== undefined && s.mode !== before.mode) || shrinksUnderEnforce) this.setMeta("confirm_mode_set_at", new Date().toISOString());
+      const turnsOn = s.mode !== undefined && s.mode !== before.mode && before.mode === "off";
+      if (turnsOn || shrinksUnderEnforce) this.setMeta("confirm_mode_set_at", new Date().toISOString());
     });
     this.confirmCache = null;
     const after = this.confirmSettings();
@@ -8294,12 +8329,15 @@ export class Store {
     const loose = new Date(cutoff + 86_400_000).toISOString();
     const rows = this.db
       .prepare(
-        `SELECT id, namespace, title, written_by, tags, updated_at, confirmed_at, confirmed_rev, rev, grandfathered_at FROM notes
+        `SELECT id, namespace, title, written_by, tags, updated_at, content_at, confirmed_at, confirmed_kind, confirmed_rev, rev, grandfathered_at FROM notes
           WHERE archived_at IS NULL AND superseded_by IS NULL AND COALESCE(pinned, 0) = 0 AND COALESCE(kind, 'note') = 'note'
-            AND tags NOT LIKE '%"task"%' AND tags NOT LIKE '%"handoff"%' AND updated_at <= ?${ns}${this.ceilingSql()}${dis.sql} ORDER BY id`
+            AND tags NOT LIKE '%"task"%' AND tags NOT LIKE '%"handoff"%' AND COALESCE(content_at, updated_at) <= ?${ns}${this.ceilingSql()}${dis.sql} ORDER BY id`
       )
       .all(loose, ...(namespaces ?? []), ...dis.params) as unknown as Array<ReviewRow & DueRow>;
-    return rows.filter((r) => dueBase(r, c) <= cutoff);
+    return rows.filter((r) => {
+      const base = dueBase(r, c);
+      return base > 0 && base <= cutoff;
+    });
   }
 
   /** How many notes are past their re-confirmation date, in `namespaces` or everywhere (0 when the mode is off). */
@@ -8417,8 +8455,12 @@ export class Store {
     // The due date is the one stored: this confirm's, or the stronger one the note keeps.
     const dueAt = kept ? Date.parse((kept as { at: string }).at) + cs.days * 86_400_000 : Date.parse(at) + cs.days * 86_400_000;
     const dueDay = new Date(dueAt).toISOString().slice(0, 10);
+    const keptKind = kept ? (kept as { kind: string }).kind : "";
+    const weakOnly = !refusal && (stored ? kind === "corroborated" : keptKind === "corroborated");
     const due =
-      cs.mode === "off" ? "" : dueAt <= Date.now() ? ` It is past its re-confirmation date (${dueDay}): a person or an admin must confirm it again.` : ` Next check due ${dueDay}.`;
+      weakOnly
+        ? " This releases the session-start hold. It does not restart the re-confirmation clock: a person or an admin must confirm for that."
+        : cs.mode === "off" ? "" : dueAt <= Date.now() ? ` It is past its re-confirmation date (${dueDay}): a person or an admin must confirm it again.` : ` Next check due ${dueDay}.`;
     // Only the person at the terminal sees the title echoed: to an agent a title is outside text it did not ask to read.
     const what = human ? `"${n.title.slice(0, 80)}"` : `note #${id}`;
     const keptNote = kept ? ` The note keeps its stronger ${(kept as { kind: string }).kind} confirm; this one is recorded but does not restart its clock.` : "";

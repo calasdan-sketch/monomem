@@ -18,7 +18,7 @@ afterEach(() => setProcessWriter(""));
 
 /** Make a note look `days` old (written then, never confirmed). */
 function age(s: Store, id: number, days: number): void {
-  s.captureDb().prepare("UPDATE notes SET updated_at = ?, created_at = ? WHERE id = ?").run(ago(days), ago(days), id);
+  s.captureDb().prepare("UPDATE notes SET updated_at = ?, created_at = ?, content_at = ? WHERE id = ?").run(ago(days), ago(days), ago(days), id);
 }
 function setMetaRaw(s: Store, key: string, value: string): void {
   s.captureDb().prepare("INSERT INTO _meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, value);
@@ -75,6 +75,8 @@ describe("re-confirmation expiry", () => {
     s.create({ title: "current guide", body: "quokka now" });
     age(s, n.id, 40);
     setProcessWriter("cli");
+    // 1.5.0: label <-> enforce keeps every due date; only turning expiry on from off starts the clock (R1-01).
+    s.setConfirmSettings({ mode: "off" });
     s.setConfirmSettings({ mode: "enforce" });
     assert.equal(s.read(n.id)!.expired, undefined, "switching on does not expire old notes at once");
     setMetaRaw(s, "confirm_mode_set_at", ago(31));
@@ -128,7 +130,10 @@ describe("re-confirmation expiry", () => {
     assert.equal(s.confirmSettings().days, 7);
     assert.equal(s.confirmSettings().set_at, undefined, "days alone is not a mode switch");
     s.setConfirmSettings({ mode: "enforce" });
-    assert.ok(s.confirmSettings().set_at);
+    assert.equal(s.confirmSettings().set_at, undefined, "label -> enforce keeps due dates (1.5.0)");
+    s.setConfirmSettings({ mode: "off" });
+    s.setConfirmSettings({ mode: "label" });
+    assert.ok(s.confirmSettings().set_at, "off -> on records when");
     s.close();
   });
 
@@ -142,7 +147,7 @@ describe("re-confirmation expiry", () => {
       assert.match(cli("config").stdout, /confirm-mode: label \(default\)\s+confirm-days: 30/);
       const up = cli("config", "set", "confirm-mode", "enforce");
       assert.equal(up.status, 0, up.stderr);
-      assert.match(up.stdout, /confirm-mode: enforce \(since/);
+      assert.match(up.stdout, /confirm-mode: enforce/);
       const down = cli("config", "set", "confirm-mode", "off");
       assert.notEqual(down.status, 0);
       assert.match(down.stderr, /Refused/);

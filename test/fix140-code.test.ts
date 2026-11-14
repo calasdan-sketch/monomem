@@ -78,27 +78,27 @@ describe("code M3: expired count with the SQL pre-filter", () => {
     s.create({ title: "fresh" });
     const db = s.captureDb();
     db.prepare("UPDATE notes SET grandfathered_at = NULL").run();
-    db.prepare("UPDATE notes SET updated_at = ? WHERE id = ?").run(ago(40), old.id);
-    db.prepare("UPDATE notes SET updated_at = ? WHERE id = ?").run(ago(40).replace("T", " ").slice(0, 19), oldSpace.id);
+    db.prepare("UPDATE notes SET updated_at = ?, content_at = ? WHERE id = ?").run(ago(40), ago(40), old.id);
+    db.prepare("UPDATE notes SET updated_at = ?, content_at = ? WHERE id = ?").run(ago(40).replace("T", " ").slice(0, 19), ago(40).replace("T", " ").slice(0, 19), oldSpace.id);
     assert.equal(s.expiredCount(), 2);
     s.close();
   });
 });
 
 describe("code M4: the confirm message gives the due date that was stored", () => {
-  test("corroborated at day 0, another agent at day 31: the clock restarts and the message says the stored date", () => {
+  test("corroborated at day 0, another agent at day 31: counted, the note stays expired (1.5.0: corroboration never restarts the clock)", () => {
     const s = new Store(":memory:");
     const n = as("research-bot", () => s.create({ title: "Acme pricing", body: "40", outside: true }));
     as("checker", () => s.confirm(n.id, { source: "https://one.example" }));
-    s.captureDb().prepare("UPDATE notes SET confirmed_at = ?, updated_at = ?, grandfathered_at = NULL WHERE id = ?").run(ago(31), ago(31), n.id);
+    s.captureDb().prepare("UPDATE notes SET confirmed_at = ?, updated_at = ?, content_at = ?, grandfathered_at = NULL WHERE id = ?").run(ago(31), ago(31), ago(31), n.id);
     s.captureDb().prepare("UPDATE confirmations SET at = ?").run(ago(31));
     assert.equal(s.read(n.id)!.expired, true);
     const r = as("checker2", () => s.confirm(n.id, { source: "https://acme.example/pricing" }))!;
     assert.equal(r.counted, true, r.message);
     const after = s.read(n.id)!;
-    assert.equal(after.expired, undefined, "the stored row agrees with the message");
+    assert.equal(after.expired, true, "the stored row agrees with the message: only a person or an admin restarts the clock");
     assert.equal(after.confirmed_kind, "corroborated");
-    assert.match(r.message, new RegExp(`Next check due ${new Date(Date.parse(after.confirmed_at!) + 30 * DAY).toISOString().slice(0, 10)}`));
+    assert.match(r.message, /does not restart the re-confirmation clock/);
     s.close();
   });
 });
@@ -182,7 +182,7 @@ describe("code LOW: shortening the period under enforce restarts the clock (and 
     const s = new Store(":memory:");
     s.setConfirmSettings({ mode: "enforce", days: 30 });
     const n = s.create({ title: "twenty days old" });
-    s.captureDb().prepare("UPDATE notes SET updated_at = ?, grandfathered_at = NULL WHERE id = ?").run(ago(20), n.id);
+    s.captureDb().prepare("UPDATE notes SET updated_at = ?, content_at = ?, grandfathered_at = NULL WHERE id = ?").run(ago(20), ago(20), n.id);
     s.captureDb().prepare("UPDATE _meta SET value = ? WHERE key = 'confirm_mode_set_at'").run(ago(40));
     (s as any).confirmCache = null;
     assert.equal(s.expiredCount(), 0);
