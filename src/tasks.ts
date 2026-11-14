@@ -26,6 +26,7 @@ import { runChanges, type ChangesResponse } from "./changes.js";
 import { RESERVED_TAG_PREFIX } from "./reserved-tags.js";
 import { runnerNotice } from "./liveness.js";
 import { currentWriter } from "./actor.js";
+import { heldFromSessionStart } from "./taint.js";
 import {
   TASK_STATUSES,
   TASK_TAG,
@@ -145,6 +146,10 @@ export interface Task {
   created_by: string;
   /** True only when a read opted in with include_distrusted and the writer is on the distrust list. */
   distrusted?: true;
+  /** 1.4.0: the note's hold flags (taint.ts), copied so a read marks the reader and session start can leave it out. */
+  unconfirmed?: true;
+  built_on_distrusted?: true;
+  expired?: true;
   created_at: string;
   updated_at: string;
 }
@@ -152,7 +157,7 @@ export interface Task {
 /** The compact shape catch_up and the board use: no notes, no command params. */
 export type TaskSummary = Pick<
   Task,
-  "id" | "namespace" | "title" | "status" | "owner" | "next_step" | "priority" | "due" | "parent_id" | "blocked_by" | "rev" | "written_by" | "writer_id" | "distrusted" | "updated_at"
+  "id" | "namespace" | "title" | "status" | "owner" | "next_step" | "priority" | "due" | "parent_id" | "blocked_by" | "rev" | "written_by" | "writer_id" | "distrusted" | "unconfirmed" | "built_on_distrusted" | "expired" | "updated_at"
 >;
 
 export function compactTask(t: Task): TaskSummary {
@@ -171,6 +176,7 @@ export function compactTask(t: Task): TaskSummary {
     written_by: t.written_by,
     writer_id: t.writer_id,
     ...(t.distrusted ? { distrusted: true as const } : {}),
+    ...holdFlags(t),
     updated_at: t.updated_at,
   };
 }
@@ -341,8 +347,18 @@ export function taskFromNote(n: NoteRecord, store?: Store, now = Date.now()): Ta
     writer_id: n.writer_id ?? "",
     created_by: n.created_by,
     ...(n.distrusted ? { distrusted: true as const } : {}),
+    ...holdFlags(n),
     created_at: n.created_at,
     updated_at: n.updated_at,
+  };
+}
+
+/** The 1.4.0 hold flags of a note (or a task / handoff made from one), only those set. */
+function holdFlags(n: { unconfirmed?: true; built_on_distrusted?: true; expired?: true }): { unconfirmed?: true; built_on_distrusted?: true; expired?: true } {
+  return {
+    ...(n.unconfirmed ? { unconfirmed: true as const } : {}),
+    ...(n.built_on_distrusted ? { built_on_distrusted: true as const } : {}),
+    ...(n.expired ? { expired: true as const } : {}),
   };
 }
 
@@ -1030,6 +1046,10 @@ export interface Handoff {
   writer_id?: string;
   /** True only when a read opted in with include_distrusted and the writer is on the distrust list. */
   distrusted?: true;
+  /** 1.4.0: as on Task. */
+  unconfirmed?: true;
+  built_on_distrusted?: true;
+  expired?: true;
 }
 
 function items(v: unknown, name: string): string[] {
@@ -1072,6 +1092,7 @@ export function handoffFromNote(n: NoteRecord): Handoff {
     written_by: n.written_by,
     writer_id: n.writer_id ?? "",
     ...(n.distrusted ? { distrusted: true as const } : {}),
+    ...holdFlags(n),
   };
   let section: "done" | "pending" | "decisions" | null = null;
   for (const raw of n.body.split("\n")) {
@@ -1287,6 +1308,23 @@ export function isOverdue(due: string | undefined, now = new Date()): boolean {
 export function overdueFirst<T extends { due?: string }>(tasks: T[], now = new Date()): T[] {
   const late = tasks.filter((t) => isOverdue(t.due, now)).sort((a, b) => (a.due! < b.due! ? -1 : a.due! > b.due! ? 1 : 0));
   return [...late, ...tasks.filter((t) => !isOverdue(t.due, now))];
+}
+
+/**
+ * The SessionStart board (open tasks + the latest handoff), minus anything held from session start (taint.ts
+ * heldFromSessionStart: unconfirmed outside content, built on a distrusted writer, expired in enforce mode). Those are
+ * counted by the session's count lines (context-inject), never shown here: a task title is text an agent wrote.
+ */
+export function sessionBoard(
+  store: Store,
+  opts: { namespaces?: string[]; writtenBy?: string; notWrittenBy?: string; includeDistrusted?: boolean } = {}
+): string {
+  const enforce = store.confirmSettings().mode === "enforce";
+  // ponytail: scans up to 200 open tasks so an old overdue one is not lost behind the 10 newest; add a due-date index if boards get bigger.
+  const open = listTasks(store, { ...opts, limit: 200 });
+  const shown = open.tasks.filter((t) => !heldFromSessionStart(t, enforce));
+  const handoff = listHandoffs(store, { ...opts, limit: 5 }).find((h) => !heldFromSessionStart(h, enforce)) ?? null;
+  return buildBoardSummary(overdueFirst(shown).slice(0, 10), handoff, undefined, open.total - (open.tasks.length - shown.length));
 }
 
 export function buildBoardSummary(

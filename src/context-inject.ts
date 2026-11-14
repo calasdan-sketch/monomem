@@ -22,7 +22,7 @@ import { extractKeywords } from "./keywords.js";
 import { rrfScores, rankHits, anyKeywordHits, expiryEnforced } from "./search-service.js";
 import { buildSummary, titleText } from "./recall.js";
 import { TASK_TAG, HANDOFF_TAG, listTasks } from "./tasks.js";
-import { NEVER_SHOW_TAG, isModelWritten, originFlag, originTools, ORIGIN_LEGEND } from "./reserved-tags.js";
+import { NEVER_SHOW_TAG, isModelWritten, originFlag, originTools, originLegend } from "./reserved-tags.js";
 import { disputedLines } from "./facts.js";
 import { enabledToolNames } from "./mcp-server-core.js";
 import { expiredCountLine, heldFromSessionStart, isTainted, noteFlags, unconfirmedCountLine } from "./taint.js";
@@ -393,7 +393,8 @@ export async function injectContext(store: Store, opts: InjectOptions = {}): Pro
   if (heldLine) parts.push(heldLine);
   if (shown.some((n) => n !== latestSummary)) parts.push(WHY_LEGEND);
   if ([...pinLines, ...lines].some((l) => /^#\d+ by /.test(l))) parts.push(WRITER_LEGEND);
-  if (shown.some((n) => isTainted(n.tags))) parts.push(ORIGIN_LEGEND);
+  const legend = originLegend(shown); // only the label kinds shown; "" when none (as in 1.3.5)
+  if (legend) parts.push(legend);
   const ns = opts.namespace;
   const captured = Number(
     (

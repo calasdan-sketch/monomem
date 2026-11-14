@@ -8,12 +8,14 @@ import { join } from "node:path";
 import { Store } from "../src/store.js";
 import { normalizeHookInput, recordEvent, spoolEvent, drainSpool, type HookEvent } from "../src/capture.js";
 import { setProcessWriter } from "../src/actor.js";
+import { setTtyCheck } from "../src/taint.js";
 
 const fetchEv = (sid: string, at = new Date(), tool = "WebFetch", ev: HookEvent = "post-tool") =>
   normalizeHookInput(ev, { session_id: sid, cwd: "C:/w", tool_name: tool, tool_input: { url: "https://x.example" }, tool_response: "page text" }, at);
 
 afterEach(() => {
   setProcessWriter("");
+  setTtyCheck(undefined);
   delete process.env.MONOMEM_TAINT_WINDOW_HOURS;
 });
 
@@ -57,6 +59,7 @@ describe("taint from a hook session", () => {
     assert.equal(s.create({ title: "d" }).unconfirmed, undefined, "Read is not outside content");
     recordEvent(s, fetchEv("web"), "default");
     setProcessWriter("cli");
+    setTtyCheck(() => true); // a person at a terminal (1.4.0: from an agent's shell the CLI is marked like any writer)
     assert.equal(s.create({ title: "e" }).unconfirmed, undefined, "the operator's own write");
     s.close();
   });

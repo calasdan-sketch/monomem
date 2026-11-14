@@ -23,6 +23,23 @@ export const UNCONFIRMED_FACTOR = 0.9;
 /** Writers whose notes the session window never taints: the operator (CLI), the capture writer (it stamps its own exact tools), the server's own jobs, imports, library callers. */
 export const SESSION_TAINT_EXEMPT: ReadonlySet<string> = new Set(["", "cli", "capture", "server", "runner", "import:claude"]);
 
+const realTty = (): boolean => Boolean(process.stdin.isTTY && process.stdout.isTTY);
+let ttyCheck: () => boolean = realTty;
+/** Tests only: stand in for "is this a terminal on both ends" (undefined restores the real check). */
+export function setTtyCheck(f: (() => boolean) | undefined): void {
+  ttyCheck = f ?? realTty;
+}
+
+/**
+ * Whether the session window leaves this writer's NEW write alone. The CLI counts as the operator only at a real terminal
+ * (stdin and stdout both TTYs): `monomem remember` run by an agent's shell tool is just another writer.
+ * ponytail: a pseudo-terminal passes, as for requireOperator (SECURITY.md says so).
+ */
+export function sessionTaintExempt(writer: string): boolean {
+  if (writer === "cli") return ttyCheck();
+  return SESSION_TAINT_EXEMPT.has(writer);
+}
+
 export const isTainted = (tags: readonly string[]): boolean => tags.some((t) => t.startsWith(ORIGIN_PREFIX));
 
 /**
@@ -52,14 +69,16 @@ export const toolTag = (tool: string): string => ORIGIN_TOOL_PREFIX + (SAFE_TOOL
  */
 export function sourceKey(s: string): string {
   const t = s.trim();
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(t)) {
+  // A URL, or a bare host ("www.Vendor.com."): the host, IDN as punycode (URL does that), no trailing dot, no www.
+  const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(t) ? t : /^[^\s/:@]+\.[^\s/:@]+\.?$/.test(t) ? `http://${t}` : "";
+  if (url) {
     try {
-      return new URL(t).hostname.toLowerCase().replace(/^www\./, "");
+      return new URL(url).hostname.toLowerCase().replace(/\.+$/, "").replace(/^www\./, "");
     } catch {
       /* not a URL after all: fall through */
     }
   }
-  return t.toLowerCase();
+  return t.toLowerCase().replace(/\.+$/, "");
 }
 
 export const promotionRefusal = (verb: string, id: number): string =>
@@ -102,9 +121,9 @@ export function heldFromSessionStart(n: { unconfirmed?: true; built_on_distruste
 }
 
 // ---- notes a connection read while they were unconfirmed ------------------------------------------------------------
-// Per authenticated writer, per server (REST and MCP over HTTP make a new handler per request, so the memory has to outlive
-// one: each HTTP front door keeps one registry). The stdio server keeps its own set (one process = one agent). Cleared
-// only by a restart.
+// Per authenticated writer, per Store (REST and MCP over HTTP make a new handler per request, so the memory has to outlive
+// one, and both front doors on one Store share it: a read over one and a write over the other is the same writer). The
+// stdio server keeps its own set (one process = one agent). Cleared only by a restart.
 // ponytail: unbounded per writer for the server's lifetime; a set of note ids is tiny next to the notes themselves.
 export function newTaintRegistry(): (writer: string) => Set<number> {
   const byWriter = new Map<string, Set<number>>();
@@ -113,6 +132,14 @@ export function newTaintRegistry(): (writer: string) => Set<number> {
     if (!s) byWriter.set(writer, (s = new Set()));
     return s;
   };
+}
+
+const registries = new WeakMap<object, (writer: string) => Set<number>>();
+/** The one read-taint registry for a Store, keyed by the server-stamped writer (currentWriter()). */
+export function taintRegistryFor(store: object): (writer: string) => Set<number> {
+  let r = registries.get(store);
+  if (!r) registries.set(store, (r = newTaintRegistry()));
+  return r;
 }
 
 /** Ids of every `unconfirmed: true` note object inside a read result (any nesting the tools use). */

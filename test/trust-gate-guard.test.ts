@@ -58,6 +58,7 @@ const EXPECTED_SITES: Record<string, string[]> = {
   ],
   "mcp-server-core.ts": [
     "tag-guard lookup only (no content returned)",
+    "read-taint probe, a flag check, nothing returned",
     "access probe: readVisible decides before anything is returned",
     "admin delete: namespace check only",
     "admin forget: existence + archived check only, nothing returned",

@@ -2818,6 +2818,8 @@ async function configCmd(args: string[]): Promise<void> {
       } else {
         const days = /^\d{1,5}$/.test(value) ? Number(value) : NaN;
         if (days > before.days && before.mode !== "off") await requireOperator(`lengthen re-confirmation from ${before.days} to ${value} days`);
+        // Under enforce, shortening the period takes notes out of session start; the store restarts the clock, and a person decides.
+        if (days < before.days && before.mode === "enforce") await requireOperator(`shorten re-confirmation under enforce from ${before.days} to ${value} days`);
         store.setConfirmSettings({ days });
       }
     } catch (e) {
@@ -3251,6 +3253,15 @@ async function supersedeCmd(kind: "supersede" | "history" | "pin" | "unpin" | "r
     // 1.4.0: promoting outside content no person confirmed (pin, or replace with it) needs the person at the terminal.
     if (kind === "pin" && args.length === 1) await gateOutside(store, [Number(args[0])].filter(Number.isInteger), "pinning");
     if (kind === "supersede") await gateOutside(store, newIdTarget(args), "replacing notes with");
+    // --confirm-token: the code names the replacement (made by a preview, maybe over MCP while the note was not yet marked).
+    // Confirming it from the CLI would record the operator's human confirm, so the person must be at the terminal.
+    if (kind === "supersede") {
+      const code = confirmTokenArg(args);
+      if (code) {
+        const { supersedeTokenNewId } = await import("./supersede.js");
+        await gateOutside(store, [supersedeTokenNewId(store, code)].filter((n) => n > 0), "replacing notes with");
+      }
+    }
     process.exitCode =
       kind === "supersede"
         ? await supersedeCli(store, args, io)
@@ -3262,6 +3273,12 @@ async function supersedeCmd(kind: "supersede" | "history" | "pin" | "unpin" | "r
   } finally {
     store.close();
   }
+}
+
+/** The --confirm-token value of a supersede command, or "". */
+function confirmTokenArg(args: string[]): string {
+  const i = args.findIndex((a) => a === "--confirm-token" || a.startsWith("--confirm-token="));
+  return i < 0 ? "" : args[i].includes("=") ? args[i].slice(args[i].indexOf("=") + 1) : (args[i + 1] ?? "");
 }
 
 /** The --new-id of a supersede command (the note that would take the others' place), or none. */

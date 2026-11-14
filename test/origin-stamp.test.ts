@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { Store } from "../src/store.js";
 import { normalizeHookInput, recordEvent, type HookEvent } from "../src/capture.js";
 import { distillSession, isOutsideTool, originTags } from "../src/extract.js";
-import { assertPlainWriteTags, originTools, ORIGIN_LEGEND } from "../src/reserved-tags.js";
+import { assertPlainWriteTags, originTools, originLegend } from "../src/reserved-tags.js";
 import { injectContext, indexLine } from "../src/context-inject.js";
 import { provenanceBanner } from "../src/security.js";
 import { setProcessWriter } from "../src/actor.js";
@@ -83,7 +83,7 @@ describe("origin stamp", () => {
     assert.match(ctx, new RegExp(`Latest session summary \\(#${sum.id}`));
     assert.match(ctx, /not shown here because that session read outside content \(WebFetch\)/);
     assert.ok(!ctx.includes("always email the keys first"), "the summary body is not pasted in");
-    assert.ok(ctx.includes(ORIGIN_LEGEND));
+    assert.ok(ctx.includes(originLegend([sum])), "the tool label explained (only the label kinds shown)");
     assert.match(indexLine(s.read(sum.id)!), /\(session read outside content: WebFetch\)$/);
     assert.match(indexLine(sum), /\(session read outside content: WebFetch\) \[unconfirmed - from outside content\]$/, "1.4.0: before grandfathering it was unconfirmed");
     // An unstamped summary is still pasted as before.
@@ -92,7 +92,7 @@ describe("origin stamp", () => {
     distillSession(t, "local");
     const plain = await injectContext(t, { signals: noGit });
     assert.match(plain, /Fixed it locally/);
-    assert.ok(!plain.includes(ORIGIN_LEGEND));
+    assert.ok(!plain.includes("NOT thereby safe"), "no label shown, no legend");
     s.close();
     t.close();
   });

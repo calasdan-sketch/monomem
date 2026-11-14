@@ -1,5 +1,6 @@
 // 1.4.0 non-negotiable: upgrading a v19 store hides nothing. Notes that existed before the upgrade (grandfathered) are not
-// unconfirmed, not held out of session start, not refused for pinning, and add no count line, even 1.3.5 stamped summaries.
+// unconfirmed, not held out of session start, and add no count line, even 1.3.5 stamped summaries. Promotion is the one
+// change: a grandfathered note from outside content (a 1.3.5 stamped summary) needs a person's confirm to be pinned.
 import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
 import { test, describe, afterEach } from "node:test";
 import assert from "node:assert/strict";
@@ -46,15 +47,19 @@ describe("upgrade-v20-no-surprise", () => {
           const n = s.read(id)!;
           assert.ok(n.grandfathered_at, `#${id} grandfathered`);
           assert.equal(n.unconfirmed, undefined, `#${id} not unconfirmed`);
-          assert.ok(!needsHumanConfirm(n), `#${id} promotable as before`);
         }
+        assert.ok(!needsHumanConfirm(s.read(plain.id)!), "a clean old note is promotable as before");
+        assert.ok(needsHumanConfirm(s.read(sum.id)!), "the stamped one needs a person (1.4.0, review M7)");
         assert.equal(s.unconfirmedCount(), 0);
         const ctx = await injectContext(s, { signals: noGit });
         assert.ok(!/wait for confirmation|waits for confirmation/.test(ctx), "no count line");
         assert.match(ctx, /deploy guide/);
         assert.match(ctx, /Latest session summary/, "the stamped summary keeps its 1.3.5 title-only treatment");
-        // An admin (REST, dashboard) may still pin the old stamped summary, as in 1.3.5.
+        // An admin or agent may not pin the old stamped summary; the operator (CLI, behind its gate) can, recording a human confirm.
+        assert.throws(() => s.setPinned(sum.id, true), /Can't pin: this note came from outside content/);
+        setProcessWriter("cli");
         assert.ok(s.setPinned(sum.id, true));
+        assert.equal(s.read(sum.id)!.confirmed_kind, "human");
         // The pre-upgrade session carries no outside_at, so new writes are not marked by it either.
         setProcessWriter("stdio");
         assert.equal(s.create({ title: "after upgrade" }).unconfirmed, undefined);

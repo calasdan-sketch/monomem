@@ -124,7 +124,7 @@ let scanIds = 0;
 import { SupersedeError, supersedePreview, supersedeConfirm, supersedeUndo, noteHistory, restoreVersion, purgeNoteHistory, type Caller } from "./supersede.js";
 import { withFacts, factFeedback } from "./facts.js";
 import { assertPlainWriteTags, assertReviewedTag } from "./reserved-tags.js";
-import { ORIGIN_DECLARED, ORIGIN_VIA_MEMORY, newTaintRegistry, unconfirmedIdsIn } from "./taint.js";
+import { ORIGIN_DECLARED, ORIGIN_VIA_MEMORY, taintRegistryFor, unconfirmedIdsIn } from "./taint.js";
 import { waitForChanges, parseWait, WaitBusyError } from "./change-wait.js";
 import type { LintFinding } from "./lint.js";
 import { memoryIndex, memoryTimeline, memoryGet, sessionList, sessionGet, fileTimeline, type ReadScope } from "./progressive.js";
@@ -382,8 +382,8 @@ export function createApiServer(
   const authFailures = new RateLimiter();
   const tarpit = new AuthTarpit();
   const perToken = new RateLimiter();
-  // 1.4.0: unconfirmed notes each token has read, kept across its requests (taint.ts).
-  const taintedReadsFor = newTaintRegistry();
+  // 1.4.0: unconfirmed notes each token has read, kept across its requests and shared with MCP over HTTP (taint.ts).
+  const taintedReadsFor = taintRegistryFor(store);
   const anon = new RateLimiter();
 
   // Server-side namespace resolution, active only when the entry point
@@ -619,6 +619,8 @@ export function createApiServer(
       // cwd-resolved namespace. This is the isolation boundary for this
       // request -- resolved here, once, so every gate below reads `ns`.
       nsCtx = resolveRequestNamespace(principal.namespace, serverNs);
+      // 1.4.0: a write's derived_from may only name notes this request could read (Store.derivedIds).
+      if (actorRef && nsCtx.active) actorRef.readable = readable(nsCtx);
       // Enforce the token's scope: a read-only token can't write/delete, etc.
       const need = requiredScope(req.method, path);
       if (!scopeAllows(scope, need)) {
@@ -961,7 +963,9 @@ export function createApiServer(
             sendJson(res, 404, { error: "not found" });
             return;
           }
-          sendJson(res, 200, r);
+          // No title in the reply: to the caller (an agent's key, or the dashboard that already shows it) it is outside text.
+          const { title: _title, ...reply } = r;
+          sendJson(res, 200, reply);
         } catch (e) {
           sendError(res, e);
         }

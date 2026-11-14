@@ -377,7 +377,27 @@ const READ_TOOLS = new Set([
   "session_list",
   "task_get",
   "task_list",
+  // 1.4.0: these name notes (titles, ids) without the note objects' flags; logRead looks the ids up (ID_PROBE_TOOLS).
+  "memory_why",
+  "memory_receipt",
+  "memory_supersede_preview",
+  "memory_quarantine",
 ]);
+
+/**
+ * Read tools whose replies name notes without carrying their `unconfirmed` flag: every note id in the call's arguments and
+ * reply is looked up, and an unconfirmed one marks the connection like a read of it (taint.ts). memory_quarantine counts
+ * only for action=context (list shows no notes; approve/reject are decisions, not reads).
+ */
+const ID_PROBE_TOOLS = new Set(["memory_why", "memory_receipt", "memory_supersede_preview", "memory_quarantine"]);
+const ID_KEYS = new Set(["id", "ids", "new_id", "old_ids", "note_id", "target_id", "by"]);
+function noteIdsIn(v: unknown, depth = 0, key = ""): number[] {
+  if (depth > 6 || v === null || v === undefined) return [];
+  if (typeof v === "number") return ID_KEYS.has(key) && Number.isSafeInteger(v) && v > 0 ? [v] : [];
+  if (Array.isArray(v)) return v.flatMap((x) => noteIdsIn(x, depth + 1, key));
+  if (typeof v !== "object") return [];
+  return Object.entries(v as Record<string, unknown>).flatMap(([k, x]) => noteIdsIn(x, depth + 1, k));
+}
 
 const STDIO_ADMIN_HINT =
   "This is an operator action and is off over the local stdio connection. Do it yourself in the dashboard " +
@@ -541,6 +561,8 @@ export function createMcpServer(
           canDeclassify: scopeAllows(scope, "admin"),
           taint: connTaint(),
           taintedReads,
+          // 1.4.0: a write's derived_from may only name notes this connection could read.
+          ...(nsActive ? { readable: readable() } : {}),
         },
         () => {
           const out = (handler as (...x: unknown[]) => unknown)(...args);
@@ -563,8 +585,12 @@ export function createMcpServer(
         payload = undefined;
       }
       if (payload && typeof payload === "object" && "error" in payload) return r;
+      if (tool === "memory_quarantine" && a?.action !== "context") return r;
       // 1.4.0: this connection has now read outside content nobody confirmed; what it writes next is marked via:memory.
       for (const id of unconfirmedIdsIn(payload)) taintedReads.add(id);
+      if (ID_PROBE_TOOLS.has(tool)) {
+        for (const id of new Set([...noteIdsIn(a), ...noteIdsIn(payload)])) if (store.read(id)?.unconfirmed) taintedReads.add(id); // gate-ok: read-taint probe, a flag check, nothing returned
+      }
       const query = typeof a?.query === "string" ? a.query : typeof a?.message === "string" ? a.message : a;
       store.logAccess({ tool, namespaces: typeof a?.namespace === "string" ? [a.namespace] : [], query, payload });
       return r;

@@ -33,6 +33,11 @@ export interface ActorRef {
   taint?: readonly string[];
   /** 1.4.0: ids of unconfirmed notes this connection has read (its confirm of one of them does not count). */
   taintedReads?: ReadonlySet<number>;
+  /**
+   * 1.4.0: the namespaces this connection may read, when its server confines it (a namespace-pinned token or server).
+   * Undefined = no boundary. The store checks a write's derived_from against it, so a link cannot probe other namespaces.
+   */
+  readable?: readonly string[];
 }
 
 export const actorStore = new AsyncLocalStorage<ActorRef>();

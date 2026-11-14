@@ -266,6 +266,15 @@ export interface SupersedeResult {
   created_replacement: boolean;
 }
 
+/**
+ * The existing note a confirmation code would make the replacement (0 = none: a new note, or not a readable code). The CLI
+ * asks it before confirming so it can put the operator gate in front of a replacement from outside content (cli.ts).
+ */
+export function supersedeTokenNewId(store: Store, token: string): number {
+  const t = store.openToken(TOKEN_DOMAIN, token);
+  return t ? Number(t.ni) || 0 : 0;
+}
+
 /** Step 2. The ONLY path that retires a note. Needs a valid, unexpired, unused code made for this caller. */
 export function supersedeConfirm(
   store: Store,
