@@ -664,6 +664,13 @@ export function createApiServer(
           if (reads instanceof ReadTaint) for (const id of unconfirmedIdsIn(payload)) reads.add(id);
           store.logAccess({ tool, namespaces: nsHint ? [nsHint] : [], query: readQuery, payload });
         });
+      } else if (actorRef && !(req.method === "POST" && /^\/(notes|tasks|handoffs)$/.test(path))) {
+        // R1-05: any other reply that carries an unconfirmed note (PUT /notes/:id, POST /tasks/:id/claim ...) marks the token too.
+        // Creating routes are left out: the note in their reply is the caller's own. No access-log row for these.
+        pendingReads.set(res, (payload) => {
+          const reads = actorRef.taintedReads;
+          if (reads instanceof ReadTaint) for (const id of unconfirmedIdsIn(payload)) reads.add(id);
+        });
       }
 
       // include_distrusted switches the trust policy OFF for the call, so it is an

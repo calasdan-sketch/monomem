@@ -391,7 +391,9 @@ const READ_TOOLS = new Set([
  * reply is looked up, and an unconfirmed one marks the connection like a read of it (taint.ts). memory_quarantine counts
  * only for action=context (list shows no notes; approve/reject are decisions, not reads).
  */
-const ID_PROBE_TOOLS = new Set(["memory_why", "memory_receipt", "memory_supersede_preview", "memory_quarantine"]);
+const ID_PROBE_TOOLS = new Set(["memory_why", "memory_receipt", "memory_supersede_preview", "memory_quarantine", "memory_history"]);
+/** Tools that CREATE a note when called without an id: the note in their reply is the caller's own, not something it read. */
+const CREATING_TOOLS = new Set(["state_write", "task_put", "session_handoff"]);
 const ID_KEYS = new Set(["id", "ids", "new_id", "old_ids", "note_id", "target_id", "by"]);
 function noteIdsIn(v: unknown, depth = 0, key = ""): number[] {
   if (depth > 6 || v === null || v === undefined) return [];
@@ -569,9 +571,29 @@ export function createMcpServer(
         },
         () => {
           const out = (handler as (...x: unknown[]) => unknown)(...args);
-          return READ_TOOLS.has(name as string) ? logRead(name as string, args[0] as Record<string, unknown> | undefined, out) : out;
+          // R1-05: EVERY reply that hands this connection an unconfirmed note marks it, not only the read tools (a metadata edit,
+          // a task claim and a history call echo the text too). The access log stays for read tools only.
+          return READ_TOOLS.has(name as string) ? logRead(name as string, args[0] as Record<string, unknown> | undefined, out) : markReads(name as string, args[0] as Record<string, unknown> | undefined, out);
       });
     }
+  };
+
+  const markReads = (tool: string, a: Record<string, unknown> | undefined, out: unknown): unknown => {
+    const mark = (r: unknown): unknown => {
+      if (CREATING_TOOLS.has(tool) && a?.id === undefined) return r;
+      const res = r as { isError?: boolean; content?: Array<{ text?: unknown }> } | undefined;
+      const text = res?.content?.[0]?.text;
+      if (res?.isError || typeof text !== "string") return r;
+      let payload: unknown;
+      try {
+        payload = JSON.parse(text.startsWith(UNTRUSTED_BANNER) ? text.slice(UNTRUSTED_BANNER.length) : text);
+      } catch {
+        return r;
+      }
+      for (const id of unconfirmedIdsIn(payload)) taintedReads.add(id);
+      return r;
+    };
+    return out instanceof Promise ? out.then(mark) : mark(out);
   };
 
   // Read access log (Store.logAccess): one row per successful read tool call, written inside the caller's actor context
