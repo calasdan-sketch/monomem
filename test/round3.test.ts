@@ -356,7 +356,7 @@ describe("R3-5/10: scrub wording, per-command help, rules import, token text", (
         });
       const r = run('{ label: "tx", max: "internal" }', false);
       assert.equal(r.status, 0, String(r.stderr));
-      assert.match(String(r.stdout), /plain text/);
+      assert.match(String(r.stdout), /one-way hash/);
       assert.ok(!/Monomem keeps it/.test(String(r.stdout)));
       const n = run('{ label: "nolim", noLimit: true }', true);
       assert.match(String(n.stdout), /NO LIMIT/);

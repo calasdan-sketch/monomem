@@ -8,9 +8,11 @@ import { DB_PATH, API_PORT, BIND_HOST, resolveTokens, startTokenReload, assertSa
 import { resolveStartupNamespace } from "./namespace.js";
 import { warnUnlabelledExposure } from "./sensitivity.js";
 import { openStoreOrExit } from "./db-problem.js";
+import { hardenTokensFile } from "./tokens-admin.js";
 
 prepareDataDir();
 assertSafeExposure();
+hardenTokensFile(); // 1.5.0: plain-text keys in tokens.json become hashes on the first start
 const tokens = resolveTokens();
 const store = openStoreOrExit(DB_PATH);
 warnUnlabelledExposure(store, tokens);

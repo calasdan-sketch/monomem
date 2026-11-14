@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - Unreleased
+
+### Security
+
+- **App keys in `tokens.json` are stored as one-way hashes, and existing ones are hashed automatically on the first start.**
+  The rewrite is atomic, no plain-text `tokens.json.bak` is left, and running it again changes nothing. Your apps keep working
+  with the keys they already hold. **Downgrading to 1.4.x or older cannot read hashed keys:** run `monomem connect <app>` again
+  for each app. The main key (`.token`) stays in plain text. `monomem token harden` does it by hand; `monomem doctor` warns
+  about any key still in plain text.
+- **Honest key disclosure.** SECURITY.md and docs/trust.md now list every place a key sits (`.token`, `tokens.json`, each
+  connected app's own config, `.key`, `.attest-key`, the dashboard's `sessionStorage`, the `login-code` file's forgeable flag)
+  and say plainly that a key proves which key wrote, not which agent. `monomem doctor` names the key files that exist here. A
+  test fails if a connect target that can hold a key is not named in SECURITY.md.
+- A reply from any route or tool that carries an unconfirmed note now marks the reader, and a test enumerates every route
+  and tool so a new one cannot skip it (`memory_since` was one that did).
+
 ## [1.4.0] - 2026-11-13
 
 **What this release can't do.** Monomem marks a note as from outside content only when it can see the outside read: a

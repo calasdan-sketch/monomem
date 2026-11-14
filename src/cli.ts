@@ -546,6 +546,8 @@ async function doctor(): Promise<void> {
     // 1.5.0 (R1-09): where an app key sits on this machine. Said once, plainly; SECURITY.md has the full list.
     const { appKeyFiles, realEnv } = await import("./setup.js");
     const files = [resolvePath(DATA_DIR, ".token"), resolvePath(DATA_DIR, "tokens.json"), ...appKeyFiles(realEnv("", process.argv[1] ?? ""))].filter((f) => existsSync(f));
+    const plainKeys = (await import("./tokens-admin.js")).plainKeyCount();
+    if (plainKeys) warn(`${plainKeys} app key(s) are stored in plain text in tokens.json.`, "Run: monomem token harden  (the apps keep working)");
     if (files.length) ok(`keys are kept in: ${files.join(", ")}. Any program running as you can read these (SECURITY.md lists every place).`);
   }
 
@@ -2571,7 +2573,7 @@ async function tokenCmd(): Promise<void> {
   const { envTokenLabels } = await import("./token-file.js");
   const { flags, rest } = parseFlags(process.argv.slice(3), { values: ["label", "scope", "namespace", "max"], bools: ["admin", "json", "no-limit"] });
   const action = rest[0];
-  const usageLine = "Usage: monomem token add <name> [--scope read|write|admin] [--namespace ns] [--max public|internal|private | --no-limit] | token list | token remove <name>";
+  const usageLine = "Usage: monomem token add <name> [--scope read|write|admin] [--namespace ns] [--max public|internal|private | --no-limit] | token list | token remove <name> | token harden";
   try {
     if (action === "new") {
       console.log(t.newTokenValue());
@@ -2592,6 +2594,10 @@ async function tokenCmd(): Promise<void> {
       });
       console.log(t.addedReport(made, noLimit));
       console.log("Client setup (Claude Code, Cursor, Codex): INSTALL.md, section 'Connect to a shared server'.");
+    } else if (action === "harden" && rest.length === 1) {
+      // Raises protection (plain-text keys become hashes), so it is not operator-gated. Normally already done on first start.
+      const r = t.hardenTokensFile();
+      console.log(r.converted ? `Hashed ${r.converted} app key(s) in ${t.tokensPath()}. The apps keep working with the keys they already have.` : `Nothing to do: no app key is stored in plain text in ${t.tokensPath()}.`);
     } else if (action === "list" && rest.length === 1) {
       const apps = t.listApps().filter((a) => a.source === "file" || flags.json === true);
       if (flags.json === true) {

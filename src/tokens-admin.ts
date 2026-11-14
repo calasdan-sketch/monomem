@@ -6,14 +6,17 @@
 import { randomBytes } from "node:crypto";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { API_PORT, BIND_HOST, DATA_DIR, MCP_HTTP_PORT, resolveTokens, type Scope } from "./config.js";
+import { API_PORT, BIND_HOST, DATA_DIR, MCP_HTTP_PORT, MIN_TOKEN_LENGTH, resolveTokens, sha256Hex, tokenId, type Scope } from "./config.js";
 import { audit } from "./security.js";
 import { DEFAULT_SENSITIVITY, SENSITIVITY_HELP, parseSensitivity, type Sensitivity } from "./sensitivity.js";
 
 export class TokenAdminError extends Error {}
 
 interface RawEntry {
-  token: string;
+  /** Plain-text key: only in a file written by 1.4.x or earlier (hashed automatically on first start of 1.5.0). */
+  token?: string;
+  /** sha256 (hex) of the key: how 1.5.0 stores it. */
+  token_sha256?: string;
   scope: Scope;
   label: string;
   namespace?: string;
@@ -96,8 +99,8 @@ function friendlyFsError(e: unknown): unknown {
 function writeRaw(entries: RawEntry[], opts: { keepBackup?: boolean } = {}): void {
   const f = tokensPath();
   mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-  // tokens.json keeps keys in plain text (mode 0600), so a backup copy is one more place a key could sit. Removing an app
-  // deletes the backup instead of leaving the revoked key in it.
+  // A file written by 1.4.x or earlier keeps keys in plain text, so a backup copy is one more place a key could sit. Removing an
+  // app (and hardening) deletes the backup instead of leaving a revoked or plain-text key in it.
   if (opts.keepBackup !== false && existsSync(f)) {
     copyFileSync(f, f + ".bak");
     try {
@@ -123,12 +126,12 @@ export const newTokenValue = (): string => randomBytes(32).toString("hex");
 export function listApps(): ListedApp[] {
   const fileLabels = new Map<string, RawEntry>();
   try {
-    for (const e of readRaw()) if (e && typeof e.label === "string") fileLabels.set(e.token, e);
+    for (const e of readRaw()) if (e && typeof e.label === "string" && (e.token || e.token_sha256)) fileLabels.set(tokenId(e), e);
   } catch {
     /* a broken file is reported by add/remove; list shows what is accepted */
   }
   return resolveTokens().map((t) => {
-    const f = fileLabels.get(t.token);
+    const f = fileLabels.get(tokenId(t));
     return {
       label: t.label || "(unnamed)",
       scope: t.scope,
@@ -186,7 +189,7 @@ export function addApp(o: AddOptions): { token: string; app: ListedApp; ceilingW
   const taken = new Set([...entries.map((e) => (e.label ?? "").toLowerCase()), ...resolveTokens().map((t) => (t.label ?? "").toLowerCase()), "primary"]);
   if (taken.has(label.toLowerCase())) throw new TokenAdminError(`An app called "${label}" already exists. Pick another name, or remove it first: monomem token remove "${label}"`);
   const token = newTokenValue();
-  const entry: RawEntry = { token, scope, label, ...(ns ? { namespace: ns } : {}), ...(max !== undefined ? { max_sensitivity: max } : {}), created_at: new Date().toISOString() };
+  const entry: RawEntry = { token_sha256: sha256Hex(token), scope, label, ...(ns ? { namespace: ns } : {}), ...(max !== undefined ? { max_sensitivity: max } : {}), created_at: new Date().toISOString() };
   writeRaw([...entries, entry]);
   audit({ op: "token.add", label: o.by ?? "cli", kind: "token", detail: `${label} scope=${scope} ns=${ns ?? "-"} max=${max ?? "none"}` });
   return {
@@ -195,6 +198,53 @@ export function addApp(o: AddOptions): { token: string; app: ListedApp; ceilingW
     app: { label, scope, namespace: ns ?? null, max_sensitivity: max ?? null, source: "file" as const, created_at: entry.created_at! },
   };
   });
+}
+
+/**
+ * 1.5.0 (owner decision): replace every plain-text key in tokens.json by its sha256, once, on the first start of the new
+ * version. The rewrite is atomic (temporary file, then rename) under the same lock as every other change, no plain-text copy
+ * (tokens.json.bak) is left behind, and running it again changes nothing. Clients keep sending the same key, so nothing
+ * changes for them. A key too short to be accepted is left as it is (hashing it would make it acceptable). A file that
+ * cannot be read or written is left alone: the plain-text keys keep working. Downgrading to 1.4.x or earlier afterwards
+ * cannot read the hashed entries: run `monomem connect <app>` again for each app (docs/upgrading.md).
+ */
+export function hardenTokensFile(): { converted: number } {
+  const f = tokensPath();
+  if (!existsSync(f) && !existsSync(f + ".bak")) return { converted: 0 };
+  try {
+    return withLock(() => {
+      let converted = 0;
+      if (existsSync(f)) {
+        let entries: RawEntry[];
+        try {
+          entries = readRaw();
+        } catch {
+          return { converted: 0 }; // a broken file is reported by resolveTokens; its .bak may be the only good copy
+        }
+        const next = entries.map((e) => {
+          if (!e || typeof e !== "object" || typeof e.token !== "string" || e.token_sha256 !== undefined || e.token.trim().length < MIN_TOKEN_LENGTH) return e;
+          const { token, ...rest } = e;
+          converted++;
+          return { token_sha256: sha256Hex(token.trim()), ...rest } as RawEntry;
+        });
+        if (converted > 0) writeRaw(next, { keepBackup: false });
+      }
+      rmSync(f + ".bak", { force: true });
+      return { converted };
+    });
+  } catch (e) {
+    console.error(`[monomem] could not harden ${f} (${(e as Error).message}); the keys in it keep working as they are. Try: monomem token harden`);
+    return { converted: 0 };
+  }
+}
+
+/** How many entries in tokens.json still hold a key in plain text (`monomem doctor` says so; `monomem token harden` fixes it). */
+export function plainKeyCount(): number {
+  try {
+    return readRaw().filter((e) => e && typeof e.token === "string").length;
+  } catch {
+    return 0;
+  }
 }
 
 export function removeApp(label: string, by = "cli"): boolean {
@@ -245,7 +295,7 @@ export function addedReport(made: { token: string; app: ListedApp; ceilingWasDef
   if (noLimit) out.push(`\n!! WARNING: "${made.app.label}" has NO LIMIT. It can read every private note and change any note's label. Only give this key to an app you trust completely.`);
   out.push(describeAccess(made.app));
   if (made.ceilingWasDefault) out.push("(You did not choose a limit, so it can see public and internal notes only. Change it with --max public|internal|private.)");
-  out.push(`\nThis is its key. It is shown ONCE and Monomem will not print it again. (It is stored in plain text in ${tokensPath()}, readable only by you, so keep that file private.)\n`);
+  out.push(`\nThis is its key. It is shown ONCE and Monomem will not print it again. (${tokensPath()} keeps only a one-way hash of it; the app's own config file holds the key.)\n`);
   out.push("  " + made.token + "\n");
   out.push(connectionSnippet(made.token));
   out.push(`\nThe running server notices the change within a couple of seconds. To take access away later: monomem token remove "${made.app.label}"`);

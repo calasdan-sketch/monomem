@@ -56,5 +56,5 @@ Invoke-RestMethod -Headers @{ Authorization = "Bearer ALICES_KEY" } http://local
 
 - Alice and Bob each see the other's `internal` notes. If that is not what you want, use `--namespace` to give each their own space.
 - It does not stop a developer who can run commands on the server machine from opening the database file.
-- Keys are stored in plain text in `tokens.json` in the data volume.
+- From 1.5.0, `tokens.json` in the data volume keeps only a one-way hash of each key (older keys are hashed the first time 1.5.0 starts). Each developer's own app config still holds their key in plain text.
 - This walk-through was written from the code and the other docs; the Docker steps were not run when it was written, so report anything that differs.

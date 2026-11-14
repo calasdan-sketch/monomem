@@ -45,9 +45,10 @@ a safety net for well-behaved apps, not a lock.
 
 In `tokens.json` inside your Monomem data folder (`monomem doctor` shows where). The file is private
 to your user (mode 0600) and is written safely: a half-written file is never used, and the previous
-copy is kept as `tokens.json.bak` (removing an app deletes that copy, so the removed key is not left behind).
-**Keys are stored in plain text**, so keep that file out of cloud folders and repositories. Hashing the keys is on the
-roadmap.
+copy is kept as `tokens.json.bak` only when the file still holds plain-text keys (1.4.x and older), and is deleted once they are hashed.
+**From 1.5.0 the file keeps only a one-way hash of each key**, so reading it does not give anyone a working key. (The app's own
+config file still holds the key in plain text, because the app has to send it: see SECURITY.md, "Where your keys sit".) Keys
+made by an older version are hashed automatically the first time 1.5.0 starts; `monomem token harden` does it by hand.
 
 ## Taking access away: how fast, and one catch
 

@@ -3,7 +3,7 @@
 // state file and accept the same token.
 
 import { homeDataDir } from "./legacy-env.js"; // first: CLAUDE_BRIDGE_* (the old name) are read as MONOMEM_*
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   chmodSync,
   closeSync,
@@ -361,7 +361,10 @@ export function resolveToken(): string {
 export type Scope = "read" | "write" | "admin";
 
 export interface TokenEntry {
-  token: string;
+  /** The key itself. Present for the primary key and keys given in plain text (MONOMEM_TOKENS); absent for a hashed entry. */
+  token?: string;
+  /** 1.5.0: sha256 (hex) of the key, for entries read from tokens.json. Exactly one of `token` and `token_sha256` is set. */
+  token_sha256?: string;
   scope: Scope;
   label: string;
   /**
@@ -400,13 +403,24 @@ export interface TokenEntry {
   reads_outside?: true;
 }
 
+export const sha256Hex = (s: string): string => createHash("sha256").update(s).digest("hex");
+const HASH_RE = /^[0-9a-f]{64}$/i;
+/** The identity of a token entry that is the same whether it is stored as the key or as its hash. */
+export const tokenId = (e: Pick<TokenEntry, "token" | "token_sha256">): string => (e.token_sha256 ?? sha256Hex(e.token ?? "")).toLowerCase();
+
 /**
  * Every access-token value configured right now (primary MONOMEM_TOKEN or .token, MONOMEM_TOKENS, tokens.json), read
  * without side effects (unlike resolveToken, it never creates a token). The linter refuses a note that contains one.
  * Cached on the env values and the two files' size and mtime, so a write pays two stat calls.
  */
-let tokenValueCache: { key: string; values: string[] } | null = null;
-export function configuredTokenValues(): string[] {
+let tokenValueCache: { key: string; values: ConfiguredTokens } | null = null;
+export interface ConfiguredTokens {
+  /** Keys held in plain text (primary, MONOMEM_TOKENS, legacy tokens.json entries). */
+  plain: string[];
+  /** sha256 (lower-case hex) of keys held hashed (1.5.0 tokens.json entries). */
+  hashes: Set<string>;
+}
+export function configuredTokenValues(): ConfiguredTokens {
   const tokensFile = join(DATA_DIR, "tokens.json");
   const sig = (f: string): string => {
     try {
@@ -416,9 +430,10 @@ export function configuredTokenValues(): string[] {
       return "-";
     }
   };
-  const key = [process.env.MONOMEM_TOKEN ?? "", process.env.MONOMEM_TOKENS ?? "", TOKEN_FILE, sig(TOKEN_FILE), sig(tokensFile)].join("\0");
+  const key = [process.env.MONOMEM_TOKEN ?? "", process.env.MONOMEM_TOKENS ?? "", TOKEN_FILE, sig(TOKEN_FILE), sig(tokensFile)].join(" ");
   if (tokenValueCache?.key === key) return tokenValueCache.values;
   const out = new Set<string>();
+  const hashes = new Set<string>();
   const add = (t: unknown): void => {
     if (typeof t === "string" && t.trim().length >= 16) out.add(t.trim());
   };
@@ -431,12 +446,18 @@ export function configuredTokenValues(): string[] {
   for (const read of [() => process.env.MONOMEM_TOKENS ?? "", () => readFileSync(tokensFile, "utf8")]) {
     try {
       const arr: unknown = JSON.parse(read());
-      if (Array.isArray(arr)) for (const e of arr) add((e as { token?: unknown } | null)?.token);
+      if (Array.isArray(arr)) {
+        for (const e of arr) {
+          add((e as { token?: unknown } | null)?.token);
+          const h = (e as { token_sha256?: unknown } | null)?.token_sha256;
+          if (typeof h === "string" && HASH_RE.test(h)) hashes.add(h.toLowerCase());
+        }
+      }
     } catch {
       /* absent or broken: resolveTokens reports that */
     }
   }
-  tokenValueCache = { key, values: [...out] };
+  tokenValueCache = { key, values: { plain: [...out], hashes } };
   return tokenValueCache.values;
 }
 
@@ -470,11 +491,17 @@ export function resolveTokens(): TokenEntry[] {
     lock = false,
     namespace?: unknown,
     maxSensitivity?: unknown,
-    readsOutside?: unknown
+    readsOutside?: unknown,
+    hash?: unknown
   ): void => {
     const outside = readsOutside === true ? { reads_outside: true as const } : {};
-    if (typeof token !== "string" || !token.trim()) return;
-    const t = token.trim();
+    // 1.5.0: an entry is its key (plain text) or the sha256 of it. Everything below is keyed by that hash, so the same key
+    // listed in both shapes is one entry.
+    const hashed = typeof hash === "string" && HASH_RE.test(hash) ? hash.toLowerCase() : undefined;
+    if (hashed === undefined && (typeof token !== "string" || !token.trim())) return;
+    const plain = hashed === undefined ? (token as string).trim() : undefined;
+    const t = hashed ?? sha256Hex(plain!);
+    const ident = plain !== undefined ? { token: plain } : { token_sha256: t };
     if (!isScope(scope)) {
       // A misspelt scope used to drop the token without a word; say so, and suggest the likely word.
       const guess = typeof scope === "string" ? didYouMean(scope, ["read", "write", "admin"]) : null;
@@ -486,10 +513,10 @@ export function resolveTokens(): TokenEntry[] {
       refused.add(t);
       return;
     }
-    if (!lock && t.length < MIN_TOKEN_LENGTH) {
+    if (plain !== undefined && !lock && plain.length < MIN_TOKEN_LENGTH) {
       console.error(
         `[monomem] ignoring token ${typeof label === "string" && label ? `"${label}"` : "(unnamed)"}: ` +
-          `it is ${t.length} characters; user-supplied tokens must be at least ${MIN_TOKEN_LENGTH}. ` +
+          `it is ${plain.length} characters; user-supplied tokens must be at least ${MIN_TOKEN_LENGTH}. ` +
           `To add an app, let Monomem make the token for you: monomem token add <name>`
       );
       return;
@@ -556,7 +583,7 @@ export function resolveTokens(): TokenEntry[] {
             );
           }
           byToken.set(t, {
-            token: t,
+            ...(existing.token !== undefined ? { token: existing.token } : { token_sha256: existing.token_sha256 }),
             scope: scopeDown ? scope : existing.scope,
             label: scopeDown && typeof label === "string" ? label : existing.label,
             ...(nextNs !== undefined ? { namespace: nextNs } : {}),
@@ -576,7 +603,7 @@ export function resolveTokens(): TokenEntry[] {
       return;
     }
     byToken.set(t, {
-      token: t,
+      ...ident,
       scope,
       label: typeof label === "string" ? label : "",
       ...(ns !== undefined ? { namespace: ns } : {}),
@@ -609,7 +636,7 @@ export function resolveTokens(): TokenEntry[] {
       return;
     }
     for (const e of arr) {
-      const o = e as { token?: unknown; scope?: unknown; label?: unknown; namespace?: unknown; max_sensitivity?: unknown; reads_outside?: unknown };
+      const o = e as { token?: unknown; token_sha256?: unknown; scope?: unknown; label?: unknown; namespace?: unknown; max_sensitivity?: unknown; reads_outside?: unknown };
       // A misspelt ceiling key ("maxSensitivity", "max_sensitivty") would otherwise be ignored and leave the token unrestricted.
       const lookalikes = o && typeof o === "object" ? Object.keys(o).filter((k) => k !== "max_sensitivity" && /sens|ceil/i.test(k)) : [];
       if (lookalikes.length) {
@@ -617,16 +644,24 @@ export function resolveTokens(): TokenEntry[] {
           `[monomem] ignoring token ${typeof o.label === "string" && o.label ? `"${o.label}"` : "(unnamed)"}: unknown key ${lookalikes.map((k) => JSON.stringify(k)).join(", ")} looks like "max_sensitivity". ` +
             `Fix the spelling in ${where}; the token will not work until then.`
         );
-        if (typeof o.token === "string") refused.add(o.token.trim());
+        if (typeof o.token === "string") refused.add(sha256Hex(o.token.trim()));
+        continue;
+      }
+      const idOf = (): string | undefined => (typeof o?.token_sha256 === "string" && HASH_RE.test(o.token_sha256) ? o.token_sha256.toLowerCase() : typeof o?.token === "string" && o.token.trim() ? sha256Hex(o.token.trim()) : undefined);
+      // One shape per entry: a key AND a hash, or a hash that is not 64 hex characters, is refused (it could be the stricter listing).
+      if (o && typeof o === "object" && o.token_sha256 !== undefined && (typeof o.token_sha256 !== "string" || !HASH_RE.test(o.token_sha256) || (typeof o.token === "string" && o.token.trim()))) {
+        console.error(`[monomem] ignoring token ${typeof o.label === "string" && o.label ? `"${o.label}"` : "(unnamed)"}: an entry has either "token" or "token_sha256" (64 hex characters), not both. Fix it in ${where}; the token will not work until then.`);
+        const id = idOf();
+        if (id) refused.add(id);
         continue;
       }
       // "primary" is the main key's name: another key carrying it would be treated as the unrestricted main key.
-      if (typeof o?.label === "string" && o.label.trim().toLowerCase() === "primary" && typeof o.token === "string" && !locked.has(o.token.trim())) {
+      if (typeof o?.label === "string" && o.label.trim().toLowerCase() === "primary" && typeof o.token === "string" && !locked.has(sha256Hex(o.token.trim()))) {
         console.error(`[monomem] ignoring a token in ${where}: the name "primary" is reserved for the main key. Rename it (monomem token add <name> makes a new one).`);
-        refused.add(o.token.trim());
+        refused.add(sha256Hex(o.token.trim()));
         continue;
       }
-      add(o?.token, o?.scope, o?.label, false, o?.namespace, o?.max_sensitivity, o?.reads_outside);
+      add(o?.token, o?.scope, o?.label, false, o?.namespace, o?.max_sensitivity, o?.reads_outside, o?.token_sha256);
     }
   };
 

@@ -140,3 +140,21 @@ describe("R1-10 (owner decision) keys from an older version are hashed on first 
     assert.ok(!existsSync(FILE + ".bak"));
   });
 });
+
+describe("R1-10 doctor and the manual command", () => {
+  test("plainKeyCount sees plain-text entries (including ones too short to harden); harden is a safe no-op after", async () => {
+    const { plainKeyCount } = await import("../src/tokens-admin.js");
+    writeFileSync(FILE, JSON.stringify([{ token: LEGACY, scope: "read", label: "a" }, { token_sha256: sha(LEGACY2), scope: "read", label: "b" }]));
+    assert.equal(plainKeyCount(), 1);
+    hardenTokensFile();
+    assert.equal(plainKeyCount(), 0);
+    assert.equal(hardenTokensFile().converted, 0);
+  });
+
+  test("every server entry point hardens before it reads the list", () => {
+    for (const f of ["index.ts", "start.ts", "mcp-http.ts"]) {
+      const src = readFileSync(join(process.cwd(), "src", f), "utf8");
+      assert.ok(src.indexOf("hardenTokensFile()") > 0 && src.indexOf("hardenTokensFile()") < src.indexOf("resolveTokens();"), `${f} must call hardenTokensFile() before resolveTokens()`);
+    }
+  });
+});

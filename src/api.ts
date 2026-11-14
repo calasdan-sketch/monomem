@@ -35,7 +35,7 @@ import {
 } from "./store.js";
 import { truthyParam } from "./trust.js";
 import { originAllowed, hostAllowed, hostRefusal, RateLimiter, AuthTarpit, clientKey, tokenKey, authenticateEntry, scopeAllows, LIMITS, audit, auditFailureCount, printable } from "./security.js";
-import { type Scope, type TokenEntry, TIME_ZONE, PROJECT_ROOT, DATA_DIR, resolveToken } from "./config.js";
+import { type Scope, type TokenEntry, TIME_ZONE, PROJECT_ROOT, DATA_DIR, resolveToken, tokenId, sha256Hex } from "./config.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -578,7 +578,7 @@ export function createApiServer(
           return;
         }
         const session = randomBytes(24).toString("hex");
-        const label = tokens.find((t) => t.token === key)?.label ?? "";
+        const label = tokens.find((t) => tokenId(t) === sha256Hex(key))?.label ?? "";
         dashboardSessions.set(session, { label, exp: Date.now() + DASHBOARD_SESSION_TTL_MS });
         if (dashboardSessions.size > 100) dashboardSessions.delete(dashboardSessions.keys().next().value as string);
         sendJson(res, 200, { token: key, dashboard_session: session });
@@ -614,7 +614,7 @@ export function createApiServer(
         else sendJson(res, 401, { error: "unauthorized", hint: "Send your key as the header  Authorization: Bearer <key>.  Your keys: monomem token list.  To open the dashboard already signed in: monomem open" });
         return;
       }
-      if (!perToken.check(tokenKey(principal.token))) {
+      if (!perToken.check(tokenKey(tokenId(principal)))) {
         sendJson(res, 429, { error: "rate limit exceeded" });
         return;
       }
@@ -757,7 +757,7 @@ export function createApiServer(
               by: principal.label || "(unnamed)",
             });
             // Take effect now, not at the next 2-second check (only this change is applied, nothing else is re-read).
-            tokens.push({ token: made.token, scope: made.app.scope, label: made.app.label, ...(made.app.namespace ? { namespace: made.app.namespace } : {}), ...(made.app.max_sensitivity ? { max_sensitivity: made.app.max_sensitivity } : {}) });
+            tokens.push({ token_sha256: sha256Hex(made.token), scope: made.app.scope, label: made.app.label, ...(made.app.namespace ? { namespace: made.app.namespace } : {}), ...(made.app.max_sensitivity ? { max_sensitivity: made.app.max_sensitivity } : {}) });
             sendJson(res, 201, { token: made.token, app: made.app, access: describeAccess(made.app), ceiling_was_default: made.ceilingWasDefault, snippet: connectionSnippet(made.token) });
             return;
           }
@@ -1963,7 +1963,7 @@ export function createApiServer(
               // `wait` and `wait_seconds` are the same thing (MCP spells it wait_seconds).
               waitSeconds: parseWait(url.searchParams.get("wait") ?? url.searchParams.get("wait_seconds")),
               signal: abort.signal,
-              key: tokenKey(principal.token),
+              key: tokenKey(tokenId(principal)),
               scopeKey: waitScopeKey(namespaces),
             }
           );

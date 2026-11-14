@@ -8,7 +8,7 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSyn
 import { createHash, timingSafeEqual } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import type { IncomingMessage } from "node:http";
-import { DATA_DIR, envNum, isLoopback, type Scope, type TokenEntry } from "./config.js";
+import { DATA_DIR, envNum, isLoopback, sha256Hex, type Scope, type TokenEntry } from "./config.js";
 import { isWriterMarker, MARKER_DESCRIPTIONS } from "./actor.js";
 import { ORIGIN_TOOL_PREFIX } from "./reserved-tags.js";
 
@@ -560,8 +560,10 @@ export function authenticateEntry(
   if (!match) return null;
   const provided = match[1];
   let found: TokenEntry | null = null;
+  const providedHash = sha256Hex(provided); // 1.5.0: a hashed entry (tokens.json) is compared on the hash, a plain one on the key
   for (const t of tokens) {
-    if (constantTimeEqual(provided, t.token)) found = t;
+    const hit = t.token_sha256 !== undefined ? constantTimeEqual(providedHash, t.token_sha256.toLowerCase()) : constantTimeEqual(provided, t.token ?? "");
+    if (hit) found = t;
   }
   return found;
 }

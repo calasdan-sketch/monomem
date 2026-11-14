@@ -23,7 +23,7 @@ import { createMcpServer } from "./mcp-server-core.js";
 import { taintRegistryFor } from "./taint.js";
 import { actorStore, currentWriter } from "./actor.js";
 import { originAllowed, hostAllowed, hostRefusal, RateLimiter, AuthTarpit, clientKey, tokenKey, authenticateEntry } from "./security.js";
-import { type TokenEntry } from "./config.js";
+import { type TokenEntry, tokenId } from "./config.js";
 import { type ServerNamespaceOpts, resolveRequestNamespace } from "./namespace.js";
 import { PayloadTooLargeError, readBody, normalizeTokens, exitOnListenError, applyServerLimits } from "./http-common.js";
 
@@ -96,7 +96,7 @@ export function createMcpHttpServer(
       else sendJson(res, 401, { error: "unauthorized", hint: "Send your key as the header  Authorization: Bearer <key>.  Your keys: monomem token list." });
       return;
     }
-    if (!perToken.check(tokenKey(principal.token))) {
+    if (!perToken.check(tokenKey(tokenId(principal)))) {
       sendJson(res, 429, { error: "rate limit exceeded" });
       return;
     }
@@ -128,7 +128,7 @@ export function createMcpHttpServer(
       // state is shared between requests.
       const gone = new AbortController();
       const server = createMcpServer(store, scope, resolveNsForRequest(principal.namespace), {
-        waitKey: tokenKey(principal.token),
+        waitKey: tokenKey(tokenId(principal)),
         label: principal.label,
         authed: true,
         ...(principal.max_sensitivity !== undefined ? { maxSensitivity: principal.max_sensitivity } : {}),
@@ -173,6 +173,7 @@ async function runStandalone(): Promise<void> {
   const { resolveStartupNamespace } = await import("./namespace.js");
   prepareDataDir();
   assertSafeExposure();
+  (await import("./tokens-admin.js")).hardenTokensFile(); // 1.5.0: plain-text keys in tokens.json become hashes on the first start
   const tokens = resolveTokens();
   const { openStoreOrExit } = await import("./db-problem.js");
   const store = openStoreOrExit(DB_PATH);

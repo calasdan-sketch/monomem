@@ -1156,8 +1156,8 @@ describe("panel 4: no relevance breakdown for a ceilinged caller", () => {
     await new Promise<void>((r) => server.listen(0, r));
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     const get = async (t: string): Promise<string> => (await fetch(`${base}/search?q=zebra&explain=1`, { headers: { Authorization: `Bearer ${t}` } })).text();
-    assert.match(await get(toks[0].token), /breakdown/);
-    assert.doesNotMatch(await get(toks[1].token), /breakdown/);
+    assert.match(await get(toks[0].token!), /breakdown/);
+    assert.doesNotMatch(await get(toks[1].token!), /breakdown/);
     await new Promise<void>((r) => server.close(() => r()));
     const open = await mcp(f.store, "read");
     const capped = await mcp(f.store, "read", "internal");
@@ -1301,8 +1301,8 @@ describe("panel 7: rebuild-edges is refused for a ceilinged caller", () => {
     await new Promise<void>((r) => server.listen(0, r));
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     const post = async (t: string): Promise<number> => (await fetch(`${base}/rebuild-edges`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body: "{}" })).status;
-    assert.equal(await post(toks[1].token), 403);
-    assert.equal(await post(toks[0].token), 200);
+    assert.equal(await post(toks[1].token!), 403);
+    assert.equal(await post(toks[0].token!), 200);
     await new Promise<void>((r) => server.close(() => r()));
     const c = await mcp(f.store, "admin", "internal");
     const r: any = await c.callTool({ name: "memory_rebuild_edges", arguments: {} });

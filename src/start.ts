@@ -13,6 +13,7 @@ import "./legacy-env.js"; // second: read the old CLAUDE_BRIDGE_* variables as M
 import { Store } from "./store.js";
 import { createApiServer } from "./api.js";
 import { createMcpHttpServer } from "./mcp-http.js";
+import { hardenTokensFile } from "./tokens-admin.js";
 import { exitOnListenError } from "./http-common.js";
 import {
   DB_PATH,
@@ -35,6 +36,7 @@ import { pruneStaleHeartbeats } from "./liveness.js";
 
 prepareDataDir();
 assertSafeExposure();
+hardenTokensFile(); // 1.5.0: plain-text keys in tokens.json become hashes on the first start
 const tokens = resolveTokens();
 const store = openStoreOrExit(DB_PATH);
 warnUnlabelledExposure(store, tokens);

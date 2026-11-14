@@ -10,6 +10,13 @@ Applies to Monomem 1.3.x (and to a development build that already made the store
   at the upgrade is marked with the upgrade time, so nothing that showed before the upgrade is hidden after it.
 - **A verified backup is made first**, at `<database>.pre-v21-backup`. The upgrade does not run if that copy cannot be made.
   Remove it when you are happy: `monomem backup --prune-premigration`.
+- **Your app keys are hashed on the first start of 1.5.0 (automatic).** Each plain-text key in `tokens.json` is replaced by its
+  one-way hash; the rewrite is atomic, `tokens.json.bak` (which held the plain text) is deleted, and starting again changes nothing.
+  Your apps keep working: they still send the key in their own config. The main key in `.token` stays in plain text (the CLI
+  and the dashboard sign-in need it). **Going back is the catch:** Monomem 1.4.x and older cannot read a hashed entry, so after
+  a downgrade those apps are refused until you run `monomem connect <app>` again to make each a new key. (Restoring the
+  `.pre-v21-backup` database does not bring back the old `tokens.json`.) `monomem token harden` hashes by hand; `monomem doctor`
+  warns if a key is still in plain text.
 - **One way only.** Monomem 1.3.x and older refuse a v21 database instead of opening it. If several machines share one database,
   upgrade all of them.
 - **To go back to 1.3.x:** close every app that uses Monomem and stop the server, then `monomem restore <database>.pre-v21-backup --yes`
