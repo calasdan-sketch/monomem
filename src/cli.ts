@@ -2682,11 +2682,11 @@ async function quarantineCmd(): Promise<void> {
         console.error("--by takes a note id");
         process.exit(1);
       }
-      if (!store.getQuarantine(id)) {
+      await requireOperator(`quarantine keep-history ${id}`, () => {
+        if (store.getQuarantine(id)) return;
         console.error(`no quarantined write with id ${id}`);
         process.exit(1);
-      }
-      await requireOperator(`quarantine keep-history ${id}`);
+      });
       const kept = store.keepQuarantineAsHistory(id, by);
       await maybeEmbed(store, kept.note);
       console.log(`Kept #${id} as history -> note #${kept.note.id} "${printable(kept.note.title)}", replaced by note #${kept.superseded_by}.`);
@@ -2700,11 +2700,11 @@ async function quarantineCmd(): Promise<void> {
       console.log(`Rejected quarantined write #${id}.`);
       return;
     }
-    if (!store.getQuarantine(id)) {
+    await requireOperator(`quarantine approve ${id}`, () => {
+      if (store.getQuarantine(id)) return;
       console.error(`no quarantined write with id ${id}`);
       process.exit(1);
-    }
-    await requireOperator(`quarantine approve ${id}`);
+    });
     const note = store.approveQuarantine(id);
     await maybeEmbed(store, note);
     console.log(`Approved #${id} -> note #${note.id} "${printable(note.title)}"`);

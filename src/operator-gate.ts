@@ -32,7 +32,7 @@ export async function gateOutside(store: import("./store.js").Store, ids: number
  * agent running the CLI through a non-interactive shell tool. It is not a guarantee: a tool that allocates
  * a pseudo-terminal can pass it (SECURITY.md).
  */
-export async function requireOperator(what: string): Promise<void> {
+export async function requireOperator(what: string, precheck?: () => void): Promise<void> {
   if (!(process.stdin.isTTY && process.stdout.isTTY)) {
     console.error(
       `Refused: ${what} lowers this store's protection, so a person must run it in a terminal and type a confirmation. ` +
@@ -40,6 +40,9 @@ export async function requireOperator(what: string): Promise<void> {
     );
     process.exit(1);
   }
+  // Runs only for a person at a terminal, before the typed yes: nobody is asked to confirm something that cannot happen,
+  // and a script (refused above) learns nothing from it.
+  precheck?.();
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   const answer = await new Promise<string>((resolve) => rl.question(`${what} lowers protection. Type "yes" to continue: `, resolve));
   rl.close();
