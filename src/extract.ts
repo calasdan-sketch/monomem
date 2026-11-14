@@ -344,11 +344,16 @@ export function summarize(events: readonly EventRow[], cwd: string, observationT
   let editsSinceCommit = new Set<string>();
   for (const e of tools) {
     const p = field(e.input, "file_path") || field(e.input, "notebook_path") || (READ_TOOLS.has(e.tool) ? field(e.input, "path") : "");
+    // R1-07: a path is one printable line, capped; tool OUTPUT never enters the summary (it can be attacker text).
+    const clean = (x: string): string => one(normPath(x, cwd), 120);
     if (p && EDIT_TOOLS.has(e.tool) && e.ok) {
-      changed.add(normPath(p, cwd));
-      editsSinceCommit.add(normPath(p, cwd));
-    } else if (p && READ_TOOLS.has(e.tool)) read.add(normPath(p, cwd));
-    if (!e.ok) errors.push(`${e.tool}: ${one(e.output.split("\n").find((l) => l.trim()) ?? "", 160)}`);
+      changed.add(clean(p));
+      editsSinceCommit.add(clean(p));
+    } else if (p && READ_TOOLS.has(e.tool)) read.add(clean(p));
+    if (!e.ok) {
+      const code = /\bexit(?:ed with)?(?: code)?[: ]+(\d{1,3})\b/i.exec(e.output)?.[1];
+      errors.push(`${one(e.tool, 40)} failed${code ? ` (exit ${code})` : ""}`);
+    }
     if (e.tool !== "Bash") continue;
     const cmd = field(e.input, "command");
     if (!cmd) continue;
