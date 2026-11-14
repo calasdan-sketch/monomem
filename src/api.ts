@@ -103,7 +103,7 @@ import {
 import { ackChanges, resolveSince } from "./changes.js";
 import { qualityReport } from "./quality.js";
 import { rollbackPreview, rollbackConfirm, embedRestored } from "./rollback.js";
-import { redeemLoginCode } from "./login-code.js";
+import { redeemLogin } from "./login-code.js";
 import { randomBytes } from "node:crypto";
 
 // The quality and health scans read every note. The dashboard asks on every load, so answers are reused for a minute
@@ -135,6 +135,9 @@ import { meterStats } from "./meter.js";
 import { TokenAdminError, addApp, removeApp, listApps, describeAccess, connectionSnippet } from "./tokens-admin.js";
 
 /** When each app (by label) last made a request, since the server started. Shown in the dashboard's Apps panel. */
+/** How long a dashboard session (monomem open, at a terminal) keeps its read-rule exemption for confirms. */
+export const DASHBOARD_SESSION_TTL_MS = 8 * 3_600_000;
+
 const lastUsed = new Map<string, string>();
 
 // Minimum scope a request needs: deletes, imports and full /export are admin,
@@ -385,11 +388,12 @@ export function createApiServer(
   const perToken = new RateLimiter();
   // 1.4.0: unconfirmed notes each token has read, kept across its requests and shared with MCP over HTTP (taint.ts).
   const taintedReadsFor = taintRegistryFor(store);
-  // 1.4.0: dashboard sessions opened with `monomem open` (POST /login with its one-time code). The dashboard sends one back
-  // in X-Monomem-Dashboard; only then is an admin confirm treated as the person looking at the note (Store.confirm
-  // `dashboard`). Any other admin key, the primary one included, is an agent as far as the read rule goes.
+  // 1.4.0: dashboard sessions opened with `monomem open` AT A TERMINAL (POST /login with its one-time code; login-code.ts
+  // records where it was minted). The dashboard sends one back in X-Monomem-Dashboard; only then is an admin confirm treated
+  // as the person looking at the note (Store.confirm `dashboard`). Each is bound to the key it signed in as and lasts
+  // DASHBOARD_SESSION_TTL_MS. Any other admin key, the primary one included, is an agent as far as the read rule goes.
   // ponytail: in memory, newest 100; a restart signs the dashboard's confirm out of that exemption until monomem open again.
-  const dashboardSessions = new Set<string>();
+  const dashboardSessions = new Map<string, { label: string; exp: number }>();
   const anon = new RateLimiter();
 
   // Server-side namespace resolution, active only when the entry point
@@ -563,14 +567,21 @@ export function createApiServer(
           sendJson(res, 400, { error: "invalid JSON body" });
           return;
         }
-        if (!redeemLoginCode(code)) {
+        const redeemed = redeemLogin(code);
+        if (!redeemed) {
           sendJson(res, 401, { error: "that sign-in link has expired or was already used. Run monomem open again." });
           return;
         }
+        const key = resolveToken();
+        if (!redeemed.terminal) {
+          sendJson(res, 200, { token: key, notice: "Signed in. Confirms here count as the key's, because this link wasn't opened from a terminal." });
+          return;
+        }
         const session = randomBytes(24).toString("hex");
-        dashboardSessions.add(session);
-        if (dashboardSessions.size > 100) dashboardSessions.delete(dashboardSessions.values().next().value as string);
-        sendJson(res, 200, { token: resolveToken(), dashboard_session: session });
+        const label = tokens.find((t) => t.token === key)?.label ?? "";
+        dashboardSessions.set(session, { label, exp: Date.now() + DASHBOARD_SESSION_TTL_MS });
+        if (dashboardSessions.size > 100) dashboardSessions.delete(dashboardSessions.keys().next().value as string);
+        sendJson(res, 200, { token: key, dashboard_session: session });
         return;
       }
       // Phone command signer. No data in it; the secret never leaves the phone,
@@ -968,7 +979,9 @@ export function createApiServer(
           const probe = store.read(id); // gate-ok: namespace check; confirm() re-reads through readVisible
           if (nsCtx.active && !denyUnreadable(nsCtx, res, probe)) return;
           const ds = req.headers["x-monomem-dashboard"];
-          const dashboard = isAdmin && typeof ds === "string" && dashboardSessions.has(ds);
+          const sess = typeof ds === "string" ? dashboardSessions.get(ds) : undefined;
+          if (sess && sess.exp <= Date.now()) dashboardSessions.delete(ds as string);
+          const dashboard = isAdmin && sess !== undefined && sess.exp > Date.now() && sess.label === principal.label;
           const r = store.confirm(id, { source: body.source, admin: isAdmin, dashboard });
           if (!r) {
             sendJson(res, 404, { error: "not found" });

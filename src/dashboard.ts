@@ -1044,7 +1044,7 @@ if(LOGIN_CODE){
   fetch("/login", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ code: LOGIN_CODE }) })
     .then(function(r){ return r.json().then(function(j){ return { ok: r.ok, j: j }; }); })
     .then(function(x){
-      if(x.ok && x.j.token){ try { sessionStorage.setItem(TOKKEY, x.j.token); if(x.j.dashboard_session){ sessionStorage.setItem(TOKKEY + ":ds", x.j.dashboard_session); } } catch(e){} start(); }
+      if(x.ok && x.j.token){ try { sessionStorage.setItem(TOKKEY, x.j.token); if(x.j.dashboard_session){ sessionStorage.setItem(TOKKEY + ":ds", x.j.dashboard_session); } } catch(e){} start(); if(x.j.notice){ say(x.j.notice); } }
       else { show(false); $("gate_err").textContent = (x.j && x.j.error) || "That sign-in link did not work. Run monomem open again."; }
     })
     .catch(function(){ show(false); });

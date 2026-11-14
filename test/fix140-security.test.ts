@@ -22,6 +22,7 @@ import { normalizeHookInput, recordEvent } from "../src/capture.js";
 import { runHook } from "../src/hook.js";
 import { supersedePreview } from "../src/supersede.js";
 import { mintLoginCode } from "../src/login-code.js";
+import { resolveToken } from "../src/config.js";
 
 const as = <T>(label: string, f: () => T, extra: Record<string, unknown> = {}): T => actorStore.run({ label, authed: true, ...extra }, f);
 const json = (r: any) => {
@@ -195,7 +196,8 @@ describe("M4: the dashboard's Confirm counts after the dashboard listed the note
   test("dashboard session (monomem open): GET /notes then POST confirm is kind admin, counted", async () => {
     const store = new Store(":memory:");
     const n = as("research-bot", () => store.create({ title: "Acme pricing", body: "40", outside: true }));
-    const tok = "admin-token-dddddddddddddddddddddddd";
+    const tok = resolveToken(); // the key monomem open signs the dashboard in as
+    TT.setTtyCheck(() => true); // monomem open run at a terminal
     const http = createApiServer(store, [{ token: tok, scope: "admin", label: "boss" }]);
     const base = await listen(http);
     try {

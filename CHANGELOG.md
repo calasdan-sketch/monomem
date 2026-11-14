@@ -35,8 +35,10 @@ turn on `enforce`). Upgrade notes: docs/upgrading.md (schema v19 to v20, one way
   and against what: `Confirmed "Acme pricing" by cli at 2026-11-13 14:02. Checked against: vendor site. Next check due
   2026-12-13.` Also REST `POST /notes/:id/confirm` (write scope), a **Confirm** button in the dashboard, and the MCP tool
   `memory_confirm` (not in the default tool set; turn it on with `MONOMEM_TOOLS`). A person's confirm always counts. An
-  admin key (dashboard, REST) releases the session-start hold. The dashboard opened with `monomem open` may confirm a note
-  it has listed; any other key that was handed the note while unconfirmed (the primary admin key included) is refused.
+  admin key (dashboard, REST) releases the session-start hold. The dashboard opened with `monomem open` at a terminal
+  (a sign-in session of 8 hours, bound to the key it signed in as) may confirm a note it has listed; any other key that
+  was handed the note while unconfirmed (the primary admin key included) is refused. `monomem open` run without a
+  terminal still signs in, with "Confirms here count as the key's, because this link wasn't opened from a terminal."
   Another agent counts only with its own key, a different
   writer from the note's, a stated source different from the note's own and from earlier confirms, and only if its
   connection has not read the note while unconfirmed and has not written a note built from it. That is corroboration,
@@ -115,6 +117,9 @@ turn on `enforce`). Upgrade notes: docs/upgrading.md (schema v19 to v20, one way
   (exempt from the session-start hold) again. That is by design: the notes really are that old.
 - `monomem import` (admin) and the foreign, rules and `--claude` imports bring notes in unmarked: the file says nothing
   about where its text came from. Review an imported file before importing it.
+- Whoever holds the primary key can make more keys, so one holder can forge the corroboration rule (SECURITY.md).
+- `monomem open` hands its one-time sign-in code (60 seconds, single use) to the system's "open" command in the address,
+  so it is briefly visible in the list of running programs.
 - A shell that looks like a terminal counts as a person: the terminal check (stdin and stdout are terminals) is the same
   as for typed-yes commands, and an agent tool that opens a pseudo-terminal passes it.
 

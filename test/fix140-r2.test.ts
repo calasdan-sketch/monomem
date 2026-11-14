@@ -15,6 +15,7 @@ import { setTtyCheck, sourceKey } from "../src/taint.js";
 import { supersedePreview } from "../src/supersede.js";
 import { parseArgs, supersedeCli, historyCli } from "../src/supersede-cli.js";
 import { mintLoginCode } from "../src/login-code.js";
+import { resolveToken } from "../src/config.js";
 import { spoolEvent, drainSpool, normalizeHookInput } from "../src/capture.js";
 
 const as = <T>(label: string, f: () => T, extra: Record<string, unknown> = {}): T => actorStore.run({ label, authed: true, ...extra }, f);
@@ -108,7 +109,8 @@ describe("N2: only a dashboard session signed in with monomem open skips read_it
     const store = new Store(":memory:");
     const a = as("research-bot", () => store.create({ title: "Acme pricing", outside: true }));
     const b = as("research-bot", () => store.create({ title: "Beta pricing", outside: true }));
-    const tok = "admin-token-dddddddddddddddddddddddd";
+    const tok = resolveToken(); // the key monomem open signs the dashboard in as
+    setTtyCheck(() => true); // monomem open run at a terminal
     const { base, close } = await api(store, [{ token: tok, scope: "admin", label: "boss" }]);
     try {
       const h = { authorization: `Bearer ${tok}`, "content-type": "application/json" };

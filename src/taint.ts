@@ -35,6 +35,11 @@ export function setTtyCheck(f: (() => boolean) | undefined): void {
  * (stdin and stdout both TTYs): `monomem remember` run by an agent's shell tool is just another writer.
  * ponytail: a pseudo-terminal passes, as for requireOperator (SECURITY.md says so).
  */
+/** Stdin and stdout are both terminals (setTtyCheck stands in for tests). A pseudo-terminal passes too. */
+export function atTerminal(): boolean {
+  return ttyCheck();
+}
+
 export function sessionTaintExempt(writer: string): boolean {
   if (writer === "cli") return ttyCheck();
   return SESSION_TAINT_EXEMPT.has(writer);

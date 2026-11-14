@@ -163,7 +163,9 @@ refuses to make them pinned notes until a person confirms them. Read what it can
 - **`derived_from` only works if agents fill it in**, and it looks one hop back. A copy without it is not linked.
 - **An admin key can release the session-start hold.** REST cannot tell a person from an agent holding an admin key; only
   the pin block needs a person at the terminal. An admin key that was handed the note while unconfirmed is refused like
-  any agent; only the dashboard opened with `monomem open` (its sign-in session) is treated as a person looking at it.
+  any agent; only the dashboard opened with `monomem open` **at a terminal** (its sign-in session: 8 hours, bound to the
+  key it signed in as) is treated as a person looking at it. `monomem open` from an agent's shell or a script signs in
+  without that session and says so. Whoever holds the primary key can make more keys, and so can forge corroboration.
 - **A shell that looks like a terminal counts as a person.** "At a terminal" means stdin and stdout are terminals; an
   agent tool that opens a pseudo-terminal passes that check, for the typed-yes commands and for the CLI's exemption from
   the session signal below alike. Monomem cannot tell that apart.
@@ -240,7 +242,7 @@ international names as punycode; other
 text as lowercased text). With expiry on, a confirm older than the expiry period no longer blocks the same writer or the
 same source. One counted confirm per writer per version. Confirms by agents count toward the flood guard.
 
-The dashboard's **Confirm** button, in a dashboard opened with `monomem open`, is not refused because the dashboard listed
+The dashboard's **Confirm** button, in a dashboard opened with `monomem open` at a terminal, is not refused because the dashboard listed
 the note: a person is looking at it, and an admin confirm only releases the session-start hold. Any other key (the primary
 admin key included) that was handed the note while unconfirmed is refused with `read_it`. A dashboard signed in by pasting
 a key has no sign-in session, so it is treated like that key. The reply to an agent or a key names the note by id, not by its title (the title
