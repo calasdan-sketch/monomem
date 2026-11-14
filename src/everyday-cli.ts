@@ -148,9 +148,12 @@ export async function lsCmd(args: string[]): Promise<void> {
 }
 
 export async function editCmd(args: string[]): Promise<void> {
-  const id = Number(args.find((a) => !a.startsWith("--") && a !== "-"));
+  // R1-20: --title T (or --title=T) with a pipe: the whole pipe is the body and T the title.
+  const ti = args.findIndex((a) => a === "--title" || a.startsWith("--title="));
+  const titleFlag = ti < 0 ? undefined : args[ti].startsWith("--title=") ? args[ti].slice(8) : args[ti + 1];
+  const id = Number(args.find((a, i) => !a.startsWith("--") && a !== "-" && !(i === ti + 1 && args[ti] === "--title")));
   if (!Number.isInteger(id) || id < 1) {
-    fail("Usage: monomem edit <id>     (opens the note in $VISUAL or $EDITOR)\n       monomem edit <id> -   (reads the new text from a pipe: first line the title, the rest the body)");
+    fail("Usage: monomem edit <id>     (opens the note in $VISUAL or $EDITOR)\n       monomem edit <id> -   (reads the new text from a pipe: first line the title, the rest the body)\n       monomem edit <id> - --title \"T\"   (the whole pipe is the body, T the title)");
   }
   const piped = args.includes("-");
   // VISUAL, then EDITOR, then the editor every system has (notepad on Windows, vi elsewhere).
@@ -187,10 +190,14 @@ export async function editCmd(args: string[]): Promise<void> {
       }
       text = readFileSync(file, "utf8").replace(/\r\n/g, "\n");
     }
+    if (titleFlag !== undefined && !piped) return stop(`--title works with a pipe: monomem edit ${id} - --title "<title>"`);
     const cut = text.indexOf("\n");
-    const title = (cut < 0 ? text : text.slice(0, cut)).trim();
-    const body = cut < 0 ? "" : text.slice(cut).replace(/^\n+/, "").replace(/\s+$/, "");
+    const title = (titleFlag !== undefined ? titleFlag : cut < 0 ? text : text.slice(0, cut)).trim();
+    const body = titleFlag !== undefined ? text.replace(/\s+$/, "") : cut < 0 ? "" : text.slice(cut).replace(/^\n+/, "").replace(/\s+$/, "");
     if (!title) return stop("The first line is the title and it cannot be empty; nothing was changed.");
+    if (piped && titleFlag === undefined && !body && n.body.trim()) {
+      return stop(`edit - takes the first line as the title and the rest as the body; this text has one line, so the body would be empty. Nothing was changed. To replace only the body: monomem edit ${id} - --title "<title>"`);
+    }
     if (title === n.title && body === n.body.replace(/\s+$/, "")) return void console.log("No changes.");
     try {
       const next = store.update(id, { title, body }, { ifRev: n.rev }); // if_rev: refuses if someone else changed it meanwhile
