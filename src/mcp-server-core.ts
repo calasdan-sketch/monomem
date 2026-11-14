@@ -2229,7 +2229,7 @@ export function createMcpServer(
         "(a distrusted command task is NEVER run) unless a read passes include_distrusted:true. `undistrust` removes the entry. " +
         "`add_attester` / `remove_attester` manage the public keys whose signed export attestations an import will believe " +
         "(a verified note keeps its original writer in `attested_writer`); `revoke_attester` / `unrevoke_attester` stop trusting a key at once. " +
-        "Signed attestations and cross-server writer ids are EXPERIMENTAL in 1.4.x and may change. `list` shows the policy, the recent trust log and this " +
+        "Signed attestations and cross-server writer ids are EXPERIMENTAL and may change in a minor release. `list` shows the policy, the recent trust log and this " +
         "server's identity (server_id and public key to give another server's admin). Changes are audit-logged. " +
         "The list lives in the database and cannot be set by a write token or by note content. See docs/trust.md." +
         (nsActive ? " This server is pinned to its own namespace: it can manage only that namespace's rules and cannot change the attester list." : ""),

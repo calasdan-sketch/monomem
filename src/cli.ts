@@ -2353,7 +2353,7 @@ function trustHelp(): void {
       "        recognises its earlier exports; the old private key is deleted unless --keep-old-private.",
       "        Running servers switch to the new key at their next signed export, no restart needed.",
       "",
-      "Attestations (signed exports), cross-server writer ids, `rotate` and `--any-server` are EXPERIMENTAL in 1.4.x:",
+      "Attestations (signed exports), cross-server writer ids, `rotate` and `--any-server` are EXPERIMENTAL:",
       "their wire format and commands may change. See docs/trust.md.",
     ].join("\n")
   );

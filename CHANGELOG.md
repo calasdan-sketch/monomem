@@ -4,16 +4,114 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.4.0] - 2026-11-13
+
+**What this release can't do.** Monomem marks a note as from outside content only when it can see the outside read: a
+hook-equipped session (Claude Code) that ran `WebFetch`, `WebSearch` or another MCP server's tool, a connection that read
+an unconfirmed note, or a writer that declares it. It does not see `Read`, `Bash` (`curl`, `git pull`), or apps without
+Monomem's hooks, so an unmarked note is not thereby safe. It never judges whether text is true. A stated confirm source is a
+claim Monomem does not fetch or check, and a second agent's confirm is corroboration, not verification. A local (stdio)
+app's confirm never counts, because its name is a config claim. `derived_from` only helps when agents fill it in, and it
+looks one hop back. The read signal is per connection and resets when the server restarts. Upgrading hides nothing; about
+30 days after the upgrade, notes nobody has touched or confirmed get a `[expired - ...]` label (labels only, unless you
+turn on `enforce`). Upgrade notes: docs/upgrading.md (schema v19 to v20, one way, verified backup first).
 
 ### Added
 
+- **Notes written after an agent read outside content land unconfirmed.** A note gets a reserved `obs.origin:*` mark
+  when Monomem can see one of three things: a hook-equipped session in the same namespace read outside content within
+  the last 12 hours and has not ended (`MONOMEM_TAINT_WINDOW_HOURS`, `0` = off); the connection writing it had read an
+  unconfirmed note; or the writer declared it (`outside: true` on MCP `state_write`, REST `POST`/`PUT /notes`,
+  `monomem add --outside`, or `"reads_outside": true` on a token). The mark only grows: no update path, import or agent
+  write removes it. An unconfirmed note is kept out of session start (text and title; one count line says
+  `Monomem: N notes from outside content wait for confirmation (not shown). Review: monomem review`), labelled
+  `[unconfirmed - from outside content]` in search and reads, ranked slightly lower (x0.9), and still returned. It is
+  never hidden or deleted. The window is per namespace, so a browsing session can mark a sibling session's notes; a
+  person's confirm clears that. Notes that existed before the upgrade are exempt. See docs/trust.md.
+- **Confirming notes.** `monomem confirm <id> [--source "what you checked"]` (asks you to type yes) records who, when
+  and against what: `Confirmed "Acme pricing" by cli at 2026-11-13 14:02. Checked against: vendor site. Next check due
+  2026-12-13.` Also REST `POST /notes/:id/confirm` (write scope), a **Confirm** button in the dashboard, and the MCP tool
+  `memory_confirm` (not in the default tool set; turn it on with `MONOMEM_TOOLS`). A person's confirm always counts. An
+  admin key (dashboard, REST) releases the session-start hold. Another agent counts only with its own key, a different
+  writer from the note's, a stated source different from the note's own and from earlier confirms, and only if its
+  connection has not read the note while unconfirmed and has not written a note built from it. That is corroboration,
+  not verification: a lying agent can still claim a different source. A local (stdio) app's confirm is recorded but
+  never counts. A refused confirm names the rule (`Not counted: research-bot wrote this note, so it can't confirm it. A
+  person or a different agent must confirm.`). A confirm is bound to the note's version: an edit makes a marked note
+  unconfirmed again. See docs/trust.md, "Confirming notes".
+- **No promotion without a person.** A marked note that no person has confirmed cannot be pinned (CLI, REST
+  `PUT /pinned`, dashboard), used as the replacement in a replace, or kept as history over another note. The refusal
+  reads `Can't pin: this note came from outside content. A person must confirm it first: monomem confirm <id>`. In a
+  terminal, `monomem pin` and `monomem supersede` ask you to type yes and record that as your confirm. An admin key's
+  or another agent's confirm does not lift this block. See docs/trust.md.
+- **Re-confirmation expiry, label only by default.** A note nobody has changed or confirmed in 30 days gets
+  `[expired - not re-confirmed in 30 days]` on reads, search and session-start index lines. It is still shown, ranked as
+  before, never archived or deleted. `monomem config set confirm-mode enforce` also keeps expired notes out of session
+  start (one count line) and ranks them slightly lower; `confirm-mode off` turns it off (asks you to type yes);
+  `monomem config set confirm-days <n>` changes the period (1 to 3650). The clock starts at the latest of the last edit,
+  a confirm of the current version, the upgrade, and the last mode change. Pinned, replaced, archived and captured rows
+  are exempt. No per-tag or per-writer periods yet. See docs/search.md, "Re-confirmation expiry".
+- **`monomem review`** lists notes waiting for a person (unconfirmed and expired: id, namespace, title, writer, why).
+  `--confirm-all` confirms every listed note as you after one typed yes; `--json` for scripts. Titles go only to your
+  terminal, never to session start or an MCP reply.
+- **`derived_from`: say what a note was built from.** Optional list of up to 20 note ids on MCP `state_write`, REST
+  `POST`/`PUT /notes` and `monomem add --derived-from 3,7`. Links are only ever added. A note built from an unconfirmed
+  note is marked as well. A note built from a note a distrusted writer touched is labelled
+  `[built on a distrusted writer]` and kept out of session start, but still listed and searchable. It only works when
+  agents fill it in, and it looks one hop back. A held write keeps the mark but not its links. See docs/provenance.md.
+- **Held-write approval context.** Before you approve a held write, `monomem quarantine show <id>`, the dashboard's Held
+  tab, MCP `memory_quarantine action:"context"` and REST `GET /quarantine/:id/context` list the other notes in the same
+  namespace saved since it was held that share a title or tag word with it (ids, titles, times, writers; never the held
+  text over MCP). It is a simple word match, so it can miss a differently worded correction. A new third choice, **Keep
+  as history**, stores the held write with its written time and marks it replaced by the newer note (`supersede undo`
+  brings it back); it is offered only when such a note exists. Held edits stay compare-and-swap: if the note changed
+  since, approval fails and the write stays queued. See docs/memory-linter.md.
 - **Benchmark E21 and E22: laundering outside content into a pinned note.** A trusted writer that rewrites a web page in
   its own words (E21), or an agent that summarises an unconfirmed note it read (E22), gets a note marked as from outside
-  content; pinning it is refused until a person confirms it, and its text stays out of session start. Monomem can only see
-  outside reads its hooks, its own connections or a declaration show it. `monomem drill` now replays 25 attacks (the same
-  2 known misses).
+  content; pinning it is refused until a person confirms it, and its text stays out of session start. Held in our drill:
+  `monomem drill` now replays 25 attacks (the same 2 known misses).
 - **131 deterministic scenarios** (was 129): A 32, B 31, C 27, D 19, E 22.
+- **`monomem doctor` and `monomem health`** print one line per new rule: unconfirmed notes, the expiry mode and how many
+  are past due, the outside-content window, and that the read signal is per connection.
+
+### Changed
+
+- **Schema v20.** New columns on notes (`grandfathered_at`, `approved_at`/`approved_by`, `confirmed_*`), on held
+  writes (forget date, confidence) and on capture sessions, plus two add-only tables (confirms, derived-from links). A
+  verified backup `<database>.pre-v20-backup` is made first; older builds refuse a v20 file. No note text is rewritten,
+  and list, search and session start show the same notes right after the upgrade. Records gain the new fields only when
+  they are set. See docs/upgrading.md.
+- **The 1.3.5 outside-content stamp now applies to every marked note**, not only captured session summaries; summaries
+  stamped before the upgrade keep their 1.3.5 treatment (title only at session start). See docs/trust.md.
+
+### Fixed
+
+- **Approving a held write no longer makes it look newer than it is.** Approval used to stamp the approval time, so an
+  old claim approved late could outrank a correction saved while it waited. The note now keeps the time the write was
+  made; `approved_at` and `approved_by` record the approval. A held edit's time never moves a note backwards. See
+  docs/memory-linter.md.
+- **A held write no longer drops its forget date and confidence.** Both are kept and applied on approval; the forget date
+  counts from the time the write was made. Limit: a held edit that clears confidence (`null`) is not carried.
+- **docs/memory-linter.md** said approval kept a held note's creation time. It did not; it does now, and the page says
+  exactly what approval keeps.
+
+### Not in this release (planned for 1.4.1)
+
+- Per-tag and per-writer expiry periods, per-namespace `enforce`, and a warning 7 days before notes expire.
+- Following `derived_from` more than one hop back, and a session-start count line for notes built on a distrusted writer.
+- Any proof that a confirm's stated source differs from the note's (today it is compared as stated, URL by host).
+- Per-agent scratchpad namespaces, and `monomem session new` to reset a session's outside-content mark.
+- Carrying `derived_from` links through a held write, and `--derived-from` on `monomem edit`.
+
+### Ideas from
+
+- Re-confirmation expiry, and outside content landing unconfirmed: suggested by u/theagenticenterprise on Reddit
+  ("Provenance tells you where a note came from. Expiry tells you whether anyone still stands behind it.").
+- Held-write approval context, separate written and approved times, and keeping a held write as history: suggested by
+  u/AlexWorkGuru.
+- `derived_from`: suggested by u/Ctbhatia.
+- Session taint and no promotion to rules: from discussion by KolmoPDF, Raju Dandigam and Sammi De Blas in the comments
+  on the dev.to drill article.
 
 ## [1.3.5] - 2026-11-11
 

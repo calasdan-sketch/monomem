@@ -120,6 +120,60 @@ Invalid values fall back to the defaults. Staleness is per-note and
 namespace-agnostic — it never crosses (or needs to know about) namespace
 isolation boundaries.
 
+## Labels on notes (1.4.0)
+
+Search results, reads, session-start index lines, recall summaries and the dashboard can carry three labels. Each is also
+a field on the record (only when set), so a program can check it:
+
+| Label | Field | Meaning | In search | At session start |
+|---|---|---|---|---|
+| `[unconfirmed - from outside content]` | `unconfirmed`, `unconfirmed_label` | Written after an outside read Monomem could see; nobody has confirmed this version ([trust.md](./trust.md#outside-content-and-taint-140)) | returned, score x0.9 | left out; one count line |
+| `[expired - not re-confirmed in 30 days]` | `expired`, `expired_label` | Nobody changed or confirmed it within the re-confirmation period (the number follows `confirm-days`) | returned; x0.9 only in `enforce` | shown with the label; left out only in `enforce` |
+| `[built on a distrusted writer]` | `built_on_distrusted`, `built_on_distrusted_label` | Its `derived_from` names a note a distrusted writer touched (one hop) | returned | left out |
+
+None of them hides, archives or deletes a note. An unconfirmed note that is also expired in `enforce` mode is ranked at
+most x0.81.
+
+## Re-confirmation expiry
+
+A fact can stop being true without anyone noticing. Expiry asks a person (or a second agent) to stand behind a note again
+every so often.
+
+**When a note is due.** Due = the latest of these, plus `confirm-days` (default 30):
+
+- its last edit (`updated_at`);
+- the last confirm of its current version;
+- the 1.4.0 upgrade (`grandfathered_at`, on notes that existed then);
+- the last time the mode was changed.
+
+It is computed on every read, never stored. Pinned, archived and replaced notes and captured rows (observations, session
+summaries) never expire. A confirm by another agent after a stronger confirm (a person's, or an admin key's) is recorded
+but does not restart the clock.
+
+**Modes.** Set with `monomem config set confirm-mode <mode>` ([configuration.md](./configuration.md#settings-kept-in-the-store-monomem-config)):
+
+| Mode | What an expired note gets |
+|---|---|
+| `off` | nothing |
+| `label` (default) | the `[expired - ...]` label on reads, search and index lines. Ranked as before, still at session start |
+| `enforce` | the label, left out of session start (one line: `Monomem: N notes not re-confirmed in 30 days (not shown). Review: monomem review`), and score x0.9 in search |
+
+No mode ever archives or deletes a note for being expired.
+
+**What this means after an upgrade.** Nothing changes on day 1. About 30 days after upgrading, notes that nobody edited
+or confirmed since start showing `[expired - not re-confirmed in 30 days]`. They are still shown and ranked as before. To
+turn the label off: `monomem config set confirm-mode off` (asks you to type yes). To make expiry hide notes from session
+start: `monomem config set confirm-mode enforce`. The clock then restarts for every note.
+
+**Re-confirming.** `monomem confirm <id> --source "what you checked"` (a person; see [trust.md](./trust.md#confirming-notes)),
+or `monomem review` to see every expired and unconfirmed note with the reason, and `monomem review --confirm-all` to
+confirm them all as you after one typed yes. A confirm's reply ends with `Next check due YYYY-MM-DD.` while expiry is on.
+The same writer can confirm the same version again once its last confirm is older than the period.
+
+`monomem doctor` and `monomem health` print the mode, the period and how many notes are past due.
+
+Not yet: per-tag or per-writer periods, per-namespace `enforce`, and a warning before notes expire (planned for 1.4.1).
+
 ## Consolidation (dedup)
 
 Agents re-storing the same fact ("our API base URL is …" saved three times

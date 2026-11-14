@@ -16,6 +16,24 @@ Applies to Monomem 1.3.x. A fresh install needs none of this.
   and install the older version (`npm i -g monomem@1.3.5`). Anything written after the upgrade is not in the backup; the copy-aside keeps it.
 - Afterwards run `monomem doctor`, then `monomem health`. What is new: [CHANGELOG.md](../CHANGELOG.md).
 
+**Day 1.** Session start, search and lists show the same notes as before. Notes that existed at the upgrade are exempt from the
+outside-content hold (unless a later edit marks them). What is new: notes written from now on after an agent read a web page or another MCP server's output
+(when Monomem can see it) land **unconfirmed**. They are labelled, kept out of session start, and one line says how many:
+`Monomem: N notes from outside content wait for confirmation (not shown). Review: monomem review`. See
+[trust.md](./trust.md#outside-content-and-taint-140).
+
+**About day 31.** Re-confirmation expiry is on in **label** mode by default. Notes nobody edited or confirmed in the 30
+days since the upgrade start showing `[expired - not re-confirmed in 30 days]` in search and in session-start index lines.
+Nothing is hidden or deleted, and their ranking does not change. You can:
+
+- leave it, and confirm notes as you check them: `monomem review`, then `monomem confirm <id> --source "..."` (or
+  `monomem review --confirm-all` after reading the list);
+- turn the label off: `monomem config set confirm-mode off` (asks you to type yes);
+- make expired notes stay out of session start: `monomem config set confirm-mode enforce`. Changing the mode restarts
+  every note's clock, so nothing expires for another 30 days.
+
+Details: [search.md](./search.md#re-confirmation-expiry).
+
 ## Monomem 1.3.0 (database schema v18 to v19)
 
 Applies to Monomem 1.2.x. A fresh install needs none of this.

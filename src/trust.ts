@@ -1,4 +1,4 @@
-// Trust policy primitives (1.4.0): stable writer ids, the per-namespace
+// Trust policy primitives (from OneMemory 1.4.x): stable writer ids, the per-namespace
 // `distrust_writers` list, and the one place that turns the list into a
 // predicate (in JS) and a SQL fragment, so every read path asks the same
 // question the same way.

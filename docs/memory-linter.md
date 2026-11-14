@@ -178,6 +178,17 @@ with `monomem quarantine`.
   note, and `supersede undo` brings it back. It is refused, and the write
   stays queued, when nothing newer on the same topic was saved since the
   hold. For a held edit, the edited note is the one marked replaced.
+- **Keep as history and outside content.** Keeping a held write as history
+  makes the newer note the one that stands, so it counts as promoting that
+  note. If the held write is marked as from outside content, only
+  `monomem quarantine keep-history <id>` in a terminal may do it (MCP, REST
+  and the dashboard are refused). If the newer note is marked and no person
+  has confirmed it, everyone except the CLI is refused, and the CLI asks you
+  to type yes first and records that as your confirm. See
+  [trust.md](./trust.md#no-promotion-without-a-person).
+- **Approve and outside content.** Approving stores the write; it does not
+  promote it. A held write that was marked keeps its mark when approved and
+  lands unconfirmed, like any other marked note.
 - Under server-side namespace resolution an admin only sees and acts on its
   own namespace's queue (foreign ids answer "no quarantined write", no
   existence oracle).
