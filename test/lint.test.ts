@@ -378,7 +378,7 @@ describe("store write path under each policy", () => {
     assert.equal(q.target_id, n.id);
     // The note moved on: the held update is now stale and stays queued.
     s.update(n.id, { body: "ship friday" });
-    assert.throws(() => s.approveQuarantine(q.id), /stale write/);
+    assert.throws(() => s.approveQuarantine(q.id), /note changed since this edit was held/);
     assert.equal(s.listQuarantine().length, 1);
     assert.equal(s.rejectQuarantine(q.id), true);
     assert.equal(s.rejectQuarantine(q.id), false);

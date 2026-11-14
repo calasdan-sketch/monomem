@@ -77,7 +77,7 @@ describe("approve keeps the written time", () => {
     const q2 = hold(() => s.update(x.id, { body: "7070 " + INJECT }));
     setProcessWriter("cli");
     s.update(x.id, { body: "6060" });
-    assert.throws(() => s.approveQuarantine(q2), /stale write/);
+    assert.throws(() => s.approveQuarantine(q2), /note changed since this edit was held/);
     assert.ok(s.getQuarantine(q2));
     s.close();
   });
