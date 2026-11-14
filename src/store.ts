@@ -2978,6 +2978,9 @@ export class Store {
       //    off after the insert cannot store (and count) an event twice (R1-13). Live hook events have NULL.
       //  - notes_links_ad: deleting a note removes its note_links rows (either column) and its confirmations, so no row names an id
       //    that no longer exists (and a later note that reuses the id cannot inherit them). Orphans already there are removed.
+      //  - idx_notes_origin: a partial index over the notes the unconfirmed scan looks at (stamped, live, not grandfathered), so
+      //    session start does not read the whole table (R1-16). Its WHERE terms are repeated verbatim in Store.unconfirmedSql.
+      this.db.exec("CREATE INDEX IF NOT EXISTS idx_notes_origin ON notes(namespace) WHERE tags LIKE '%obs.origin:%' AND archived_at IS NULL AND grandfathered_at IS NULL");
       this.addColumn("capture_events", "spool_id", "TEXT");
       this.db.exec(`
         DELETE FROM note_links WHERE note_id NOT IN (SELECT id FROM notes) OR derived_from NOT IN (SELECT id FROM notes);
@@ -3510,7 +3513,7 @@ export class Store {
                   last_accessed = CASE WHEN last_accessed IS NULL OR last_accessed < ? THEN ? ELSE last_accessed END
             WHERE id = ?`
         );
-        for (const [id, p] of batch) up.run(p.n, p.at, p.at, id);
+        for (const [id, p] of batch) this.bookkeepingChanges += Number(up.run(p.n, p.at, p.at, id).changes);
         this.commitTx();
         ok = true;
       } catch (e) {
@@ -7976,6 +7979,7 @@ export class Store {
             key ? encrypt(preview, key, ACCESS_AAD) : preview,
             Math.max(0, Math.floor(results) || 0)
           );
+        this.bookkeepingChanges += 1;
         wrote = true;
       });
       if (!wrote && !Store.accessSkipReported) {
@@ -8104,6 +8108,7 @@ export class Store {
       throw this.pausedError(w);
     }
     this.db.prepare("INSERT INTO write_rate (writer, at) VALUES (?, ?)").run(w, new Date(now).toISOString());
+    this.bookkeepingChanges += 1;
   }
 
   /** Audit lines written inside a transaction wait here until it commits; a rollback drops them. */
@@ -8450,12 +8455,15 @@ export class Store {
    * writes, PRAGMA data_version on another process's commit. Session start asks once per prompt; the scan is the cost.
    */
   private unconfirmedCache: { key: string; rows: ReviewRow[] } | null = null;
+  /** Rows this connection wrote that are not notes (access counts, access log, write_rate): subtracted from total_changes() in the cache key. */
+  private bookkeepingChanges = 0;
 
   private unconfirmedRows(namespaces?: string[]): ReviewRow[] {
     if (namespaces && namespaces.length === 0) return [];
     const ver = this.db.prepare("SELECT total_changes() AS t").get() as { t: number };
     const dv = this.db.prepare("PRAGMA data_version").get() as { data_version: number };
-    const key = JSON.stringify([namespaces ?? null, ver.t, dv.data_version, currentCeiling() ?? null]);
+    // Read bookkeeping (access counts, the access log, the flood counter) moves total_changes() but no note: not counted.
+    const key = JSON.stringify([namespaces ?? null, ver.t - this.bookkeepingChanges, dv.data_version, currentCeiling() ?? null]);
     if (this.unconfirmedCache?.key === key) return this.unconfirmedCache.rows;
     const rows = this.scanUnconfirmed(namespaces);
     this.unconfirmedCache = { key, rows };
@@ -8467,7 +8475,8 @@ export class Store {
     const ns = namespaces ? ` AND namespace IN (${namespaces.map(() => "?").join(",")})` : "";
     const dis = this.distrustFragment(NOTE_COLUMNS, namespaces);
     return {
-      sql: `SELECT id, namespace, title, written_by, tags, updated_at FROM notes WHERE archived_at IS NULL AND grandfathered_at IS NULL AND tags LIKE '%obs.origin:%'
+      // INDEXED BY: left to itself the planner prefers idx_notes_archived (every live note); the partial index holds only the stamped ones.
+      sql: `SELECT id, namespace, title, written_by, tags, updated_at FROM notes INDEXED BY idx_notes_origin WHERE archived_at IS NULL AND grandfathered_at IS NULL AND tags LIKE '%obs.origin:%'
            AND NOT (confirmed_kind IS NOT NULL AND confirmed_rev = rev)${ns}${this.ceilingSql()}${dis.sql} ORDER BY id`,
       params: [...(namespaces ?? []), ...dis.params] as Array<string | number>,
     };
@@ -8531,16 +8540,22 @@ export class Store {
     const ns = namespaces ? ` AND namespace IN (${namespaces.map(() => "?").join(",")})` : "";
     const dis = this.distrustFragment(NOTE_COLUMNS, namespaces);
     const cutoff = Date.now() - c.days * 86_400_000;
-    // A note changed since the cutoff is not due, so SQL drops those first. Times are compared as text, which is only safe
-    // with a day of slack (ISO "T" vs " ", offsets up to 14 h); dueBase() then decides exactly in JS.
+    // 1.5.0: the clock's start (the same formula as dueBase) is computed in SQL, so only notes that are probably due come back, not
+    // every old note. A day of slack because SQLite and Date.parse may read an odd timestamp a little differently; dueBase()
+    // then decides exactly in JS.
     const loose = new Date(cutoff + 86_400_000).toISOString();
+    const setAtMs = c.set_at ? Date.parse(c.set_at) : NaN;
+    const setAtDay = Number.isNaN(setAtMs) ? 0 : 2440587.5 + setAtMs / 86_400_000;
     const rows = this.db
       .prepare(
         `SELECT id, namespace, title, written_by, tags, updated_at, content_at, confirmed_at, confirmed_kind, confirmed_rev, rev, grandfathered_at FROM notes
           WHERE archived_at IS NULL AND superseded_by IS NULL AND COALESCE(pinned, 0) = 0 AND COALESCE(kind, 'note') = 'note'
-            AND tags NOT LIKE '%"task"%' AND tags NOT LIKE '%"handoff"%' AND COALESCE(content_at, updated_at) <= ?${ns}${this.ceilingSql()}${dis.sql} ORDER BY id`
+            AND tags NOT LIKE '%"task"%' AND tags NOT LIKE '%"handoff"%'
+            AND MAX(COALESCE(julianday(COALESCE(content_at, updated_at)), 0),
+                    CASE WHEN confirmed_kind IN ('human', 'admin') AND confirmed_rev = rev THEN COALESCE(julianday(confirmed_at), 0) ELSE 0 END,
+                    COALESCE(julianday(grandfathered_at), 0), ?) <= julianday(?)${ns}${this.ceilingSql()}${dis.sql} ORDER BY id`
       )
-      .all(loose, ...(namespaces ?? []), ...dis.params) as unknown as Array<ReviewRow & DueRow>;
+      .all(setAtDay, loose, ...(namespaces ?? []), ...dis.params) as unknown as Array<ReviewRow & DueRow>;
     return rows.filter((r) => {
       const base = dueBase(r, c);
       return base > 0 && base <= cutoff;
