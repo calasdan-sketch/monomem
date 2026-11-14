@@ -193,7 +193,7 @@ CLI itself, so none of them stops an agent that can run commands.**
 
 - **Operator gate on the CLI.** These commands lower protection, so they refuse to run unless both standard input and
   output are a terminal, and then ask for a typed `yes`; there is no `--yes` for them: `unpin`, `approve-first <ns> off`, `approve-first --all off`,
-  `resume`, `quarantine approve`, `trust undistrust`, `trust attester-add`, `trust attester-unrevoke` and `token add`. The same gate applies to a **pinned** note: `archive`, `restore`, `delete` (with or
+  `resume`, `quarantine approve`, `trust undistrust`, `trust attester-add`, `trust attester-unrevoke`, `token add`, `connect <app> --restricted`, `connect <app> --max <level>` and `connect <app> --print` (each makes a new write key; `--dry-run` makes none and is not gated) and `taint clear` (ends an open outside-content window). The same gate applies to a **pinned** note: `archive`, `restore`, `delete` (with or
   without `--yes`), `supersede` (its `--old` notes and `supersede undo`) and `history restore` / `history purge` on a note you
   pinned need the terminal and the typed `yes`. Also gated: `merge --yes` when any note in a group is pinned. Not gated, even on pinned notes: `rollback`, `decay --purge`, `import`,
   and anything that calls the library directly (the gate is in the CLI, not the store).

@@ -873,6 +873,8 @@ async function connectCmd(): Promise<void> {
   }
   for (let n = 2; t.listApps().some((a) => a.label.toLowerCase() === label.toLowerCase()); n++) label = `${app}-${n}`;
   let made: { app: ReturnType<typeof t.listApps>[number]; token: string; ceilingWasDefault: boolean } | undefined;
+  // R1-08: a new write key is a credential: a person at a terminal types yes first (an agent's shell cannot mint one). A dry run makes none.
+  if (!dry) await requireOperator(`connect ${app} (a new write key "${label}")`);
   try {
     // A dry run must not create anything: no key is made, a placeholder stands in for it.
     made = dry
