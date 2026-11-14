@@ -801,6 +801,8 @@ export interface NoteRecord {
    * replacing note. A superseded note is kept whole (nothing is deleted) and is left out of search and lists unless asked for.
    */
   status?: "superseded";
+  /** R1-02: set only on the reply to a write that changed nothing (no rev bump, nothing stored). */
+  unchanged?: true;
   superseded_by?: number;
   superseded_at?: string;
   /** The writer who confirmed the replacement. */
