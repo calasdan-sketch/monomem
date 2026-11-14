@@ -391,7 +391,7 @@ const READ_TOOLS = new Set([
  * reply is looked up, and an unconfirmed one marks the connection like a read of it (taint.ts). memory_quarantine counts
  * only for action=context (list shows no notes; approve/reject are decisions, not reads).
  */
-const ID_PROBE_TOOLS = new Set(["memory_why", "memory_receipt", "memory_supersede_preview", "memory_quarantine", "memory_history"]);
+const ID_PROBE_TOOLS = new Set(["memory_why", "memory_receipt", "memory_supersede_preview", "memory_quarantine", "memory_history", "memory_since"]);
 /** Tools that CREATE a note when called without an id: the note in their reply is the caller's own, not something it read. */
 const CREATING_TOOLS = new Set(["state_write", "task_put", "session_handoff"]);
 const ID_KEYS = new Set(["id", "ids", "new_id", "old_ids", "note_id", "target_id", "by"]);
