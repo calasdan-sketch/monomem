@@ -2972,6 +2972,10 @@ export class Store {
         );
       }
       this.addColumn("notes", "writer_cwd", "TEXT");
+      //  - capture_events.spool_id: the id a spooled hook event carries; a second insert of the same id is ignored, so a drain cut
+      //    off after the insert cannot store (and count) an event twice (R1-13). Live hook events have NULL.
+      this.addColumn("capture_events", "spool_id", "TEXT");
+      this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_capture_spool ON capture_events(spool_id) WHERE spool_id IS NOT NULL");
     }
   }
 
