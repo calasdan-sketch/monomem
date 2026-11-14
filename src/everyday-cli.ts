@@ -43,8 +43,8 @@ function readStdin(): string {
 }
 
 export async function addCmd(args: string[]): Promise<void> {
-  const usage = 'Usage: monomem add "text" [--title T] [--ns work] [--tag a,b] [--private | --sens public|internal|private]   ("-" reads the text from the keyboard or a pipe)';
-  const { flags, words, bad } = parseArgs(args, ["title", "ns", "namespace", "tag", "tags", "sens", "sensitivity"], ["private", "help"]);
+  const usage = 'Usage: monomem add "text" [--title T] [--ns work] [--tag a,b] [--private | --sens public|internal|private] [--outside] [--derived-from <id,id>]   ("-" reads the text from the keyboard or a pipe; --outside: the text came from a web page or other outside source; --derived-from: the notes it was built from)';
+  const { flags, words, bad } = parseArgs(args, ["title", "ns", "namespace", "tag", "tags", "sens", "sensitivity", "derived-from"], ["private", "help", "outside"]);
   if (bad) fail(`${bad}\n${usage}`);
   if (flags.help) return void console.log(usage);
   let text = words.join(" ");
@@ -57,12 +57,15 @@ export async function addCmd(args: string[]): Promise<void> {
   const namespace = (flags.ns ?? flags.namespace) as string | undefined;
   const tagRaw = (flags.tag ?? flags.tags) as string | undefined;
   const tags = tagRaw ? tagRaw.split(",").map((t) => t.trim()).filter(Boolean) : undefined;
+  const derivedRaw = flags["derived-from"] as string | undefined;
+  const derived = derivedRaw !== undefined ? derivedRaw.split(",").map((t) => t.trim().replace(/^#/, "")).filter(Boolean) : undefined;
   const { DB_PATH } = await import("./config.js");
   const { Store, ValidationError, QuarantinedError } = await import("./store.js");
   const store = new Store(DB_PATH);
   try {
-    const n = store.create({ title, body: text, ...(namespace ? { namespace } : {}), ...(tags ? { tags } : {}), ...(sens ? { sensitivity: sens } : {}), source: "cli" });
+    const n = store.create({ title, body: text, ...(namespace ? { namespace } : {}), ...(tags ? { tags } : {}), ...(sens ? { sensitivity: sens } : {}), ...(flags.outside ? { outside: true } : {}), ...(derived ? { derived_from: derived } : {}), source: "cli" });
     console.log(`Saved #${n.id} "${n.title}" in ${n.namespace}${n.sensitivity === "private" ? " (private)" : ""}.`);
+    if (n.unconfirmed) console.log(`Marked as from outside content: it stays out of session start until you confirm it: monomem confirm ${n.id}`);
     const sim = store.similarNote(n.id);
     if (sim) console.log(`Note: this looks similar to #${sim.id} "${sim.title}". If it is the same thing, update that one instead: monomem edit ${sim.id}`);
     if (n.sensitivity === "private") console.log("Limited apps cannot see this; apps with no limit (including your main Claude connection) still can.\nNext step: monomem connect <app> --max internal   (for the session hook: set MONOMEM_RECALL_MAX_SENSITIVITY=internal)");

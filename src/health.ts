@@ -245,6 +245,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
   let notes = 0, held = 0, distrust = 0, marked = 0, dbOk = false;
   let meterText = "meter unavailable";
   let piiNotes = 0, privateNotes = 0, labelledNotes = 0;
+  let confirmLines: string[] = [];
   let audit: Result | undefined;
   if (existsSync(dbPath)) {
     try {
@@ -266,6 +267,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
           notes = s.countAll();
           step("held", "Held writes", () => void (held = s.listQuarantine({ limit: 500 }).length));
           step("distrust", "Distrusted writers", () => void (distrust = s.distrustRules().length));
+          step("confirm", "Confirm rules", () => void (confirmLines = s.confirmRuleLines()));
           step("redacted", "Note scan", () => {
             // ponytail: loads every live note to count markers; use SQL if a store gets big enough for this to show up in the runtime
             const live = s.exportAll({ live: true }); // gate-ok: operator CLI, counts redaction markers only; no note content is returned or printed
@@ -390,6 +392,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
   if (dbOk) {
     add("held", "Held writes", "info", held ? `${held >= 500 ? "500 or more writes" : plural(held, "write")} held for review: the defence working, nothing was stored without you (monomem quarantine list)` : "no writes waiting for review");
     add("distrust", "Distrusted writers", "info", `${plural(distrust, "distrust rule")}${distrust ? " (their notes are hidden from agents)" : ""}`);
+    if (confirmLines.length) add("confirm", "Confirm rules", "info", confirmLines.join("; "));
     add("redacted", "Redacted notes", "info", `notes with a [REDACTED:...] marker (secret redaction replaced a credential): ${marked}`);
     add("memory", "Memory size", "ok", meterText);
   }

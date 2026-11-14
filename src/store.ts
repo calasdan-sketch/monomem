@@ -42,6 +42,28 @@ import { isStale, stalenessConfig, annotateStaleness } from "./staleness.js";
 import { encrypt, decryptIfEncrypted, isEncrypted, loadKey, keyPath, noteAad, captureAad } from "./crypto.js";
 import { currentActor, currentWriter, cleanWriter, currentCeiling, actorStore } from "./actor.js";
 import { redact } from "./redact.js";
+import {
+  ORIGIN_PREFIX,
+  ORIGIN_TOOL_PREFIX,
+  ORIGIN_DECLARED,
+  SESSION_TAINT_EXEMPT,
+  sessionTaintExempt,
+  isOutsideTool,
+  isTainted,
+  toolTag,
+  sourceKey,
+  promotionRefusal,
+  UNCONFIRMED_LABEL,
+  ORIGIN_VIA_MEMORY,
+  CONFIRM_MODES,
+  DEFAULT_CONFIRM_DAYS,
+  MAX_CONFIRM_DAYS,
+  MAX_DERIVED_FROM,
+  DISTRUSTED_BASE_LABEL,
+  expiredLabel,
+  type ConfirmMode,
+} from "./taint.js";
+import { taintWindowHours } from "./config.js";
 import { contentHash as syncContentHash } from "./sync-hash.js";
 import {
   type Sensitivity,
@@ -409,6 +431,16 @@ export interface NoteInput {
    * Anything else is rejected. See docs/sensitivity-labels.md.
    */
   sensitivity?: string;
+  /**
+   * 1.4.0: the writer says this note's content came from outside (a web page, another server). Adds `obs.origin:declared`;
+   * false or absent never removes taint.
+   */
+  outside?: boolean;
+  /**
+   * 1.4.0: ids of the notes this one was built from (at most 20, each must exist). Stored as add-only links; a note built
+   * from an unconfirmed note is marked `obs.origin:via:memory`. Numeric strings are accepted (MCP/REST clients send them).
+   */
+  derived_from?: Array<number | string>;
 }
 
 /**
@@ -583,6 +615,44 @@ export interface QuarantineEntry {
   created_at: string;
 }
 
+/** The quarantine columns approval needs beyond QuarantineEntry (Store.applyHeld). */
+interface HeldRow {
+  if_rev: number | null;
+  set_namespace: number;
+  created_at: string;
+  created_at_override: string | null;
+  written_by: string | null;
+  sensitivity: string;
+  imported_unverified: number;
+  sync_origin: string | null;
+  sync_origin_id: number | null;
+  forget_after: number | null;
+  confidence: number | null;
+  /** JSON list of fields a held edit cleared ("forget_after", "confidence"). */
+  clears: string | null;
+}
+
+/** Shown with every approval view (CLI, MCP, REST, dashboard). */
+export const QUARANTINE_CAS_NOTE =
+  "Approving keeps the time the write was made. A held edit is applied only to the exact version of the note it was written " +
+  "against: if the note changed since (compare-and-swap), approval fails and the edit stays held so you can reject it.";
+
+/** What was saved while a held write waited (Store.quarantineContext). Never the held text. */
+export interface QuarantineContext {
+  id: number;
+  op: "create" | "update";
+  target_id: number | null;
+  namespace: string;
+  /** When the write was held (= when it was written). */
+  held_at: string;
+  /** op=update only: the target note changed since the hold, so approving the edit will fail (compare-and-swap). */
+  target_changed?: boolean;
+  /** op=update only: fields the held edit CLEARS on approval ("confidence", "forget_after"); absent when none. */
+  clears?: string[];
+  /** Other notes in the namespace, same topic, saved since held_at; newest first. */
+  notes: Array<{ id: number; title: string; updated_at: string; written_by: string }>;
+}
+
 /** How long change-log rows (incl. deletes) are kept for the change feed. */
 export const CHANGE_LOG_RETENTION_DAYS = 90;
 
@@ -590,7 +660,7 @@ export const CHANGE_LOG_RETENTION_DAYS = 90;
 const FTS_PREFIX_OPT = "prefix='1'";
 
 /** Current schema version (PRAGMA user_version). See Store.migrate. */
-export const SCHEMA_VERSION = 19;
+export const SCHEMA_VERSION = 20;
 
 /**
  * Notes fetched per page by exportBatch(), which both streaming export
@@ -639,6 +709,10 @@ export interface NotePatch {
   confidence?: number | null;
   /** Relabel the note ("public" | "internal" | "private"). Never above the caller's ceiling; lowering a label needs an admin. */
   sensitivity?: string;
+  /** 1.4.0: see NoteInput.outside (add-only). */
+  outside?: boolean;
+  /** 1.4.0: see NoteInput.derived_from. Adds links; never removes one. */
+  derived_from?: Array<number | string>;
 }
 
 export interface NoteRecord {
@@ -767,6 +841,52 @@ export interface NoteRecord {
    * Not the `pinned` tag (which only keeps captured rows from decay).
    */
   pinned?: true;
+  /** v20: present only on notes that existed when the store was upgraded to 1.4.0 (the upgrade time). */
+  grandfathered_at?: string;
+  /** v20: present only on a held write that was approved: when, and by whom. created_at/updated_at keep the written time. */
+  approved_at?: string;
+  approved_by?: string;
+  /** v20: the latest qualifying confirm (kind human | admin | corroborated); it counts only while confirmed_rev equals rev. */
+  confirmed_at?: string;
+  confirmed_by?: string;
+  confirmed_kind?: string;
+  confirmed_rev?: number;
+  /** 1.4.0: present (true) on a note from outside content that nobody confirmed for its current rev (taint.ts). */
+  unconfirmed?: true;
+  /** ... and the label shown with it. */
+  unconfirmed_label?: string;
+  /** 1.4.0 (1a): present (true) when re-confirmation expiry is on and the note is past its due date; with its label. */
+  expired?: true;
+  expired_label?: string;
+  /** 1.4.0 (1d): the notes this one says it was built from (add-only links); present only when there are any. */
+  derived_from?: number[];
+  /** 1.4.0 (1d): one of those notes was written or touched by a distrusted writer (one hop); with its label. */
+  built_on_distrusted?: true;
+  built_on_distrusted_label?: string;
+}
+
+/** The re-confirmation expiry settings (_meta; Store.confirmSettings). `set_at`: when the mode was last changed. */
+export interface ConfirmSettings {
+  mode: ConfirmMode;
+  days: number;
+  set_at?: string;
+}
+
+/** One row of `monomem review` (Store.reviewList). */
+export interface ReviewItem {
+  id: number;
+  namespace: string;
+  title: string;
+  writer: string;
+  why: string;
+}
+interface ReviewRow {
+  id: number;
+  namespace: string;
+  title: string;
+  written_by: string | null;
+  tags: string;
+  updated_at: string;
 }
 
 interface NoteRow {
@@ -804,11 +924,19 @@ interface NoteRow {
   pinned?: number | null;
   /** v19. NOT NULL in the table; optional here only because a few narrow projections do not select it. */
   sensitivity?: string | null;
+  /** v20 (absent from narrow projections). */
+  grandfathered_at?: string | null;
+  approved_at?: string | null;
+  approved_by?: string | null;
+  confirmed_at?: string | null;
+  confirmed_by?: string | null;
+  confirmed_kind?: string | null;
+  confirmed_rev?: number | null;
 }
 
 export const DEFAULT_NAMESPACE = "default";
-/** The capture's outside-content stamp (reserved-tags.ts re-exports it; defined here so update() can keep it without an import cycle). */
-export const ORIGIN_TOOL_PREFIX = "obs.origin:tool:";
+/** The capture's outside-content stamp (reserved-tags.ts re-exports it; taint.ts imports nothing, so no import cycle). */
+export { ORIGIN_TOOL_PREFIX };
 
 /** A pre-upgrade copy (`-backup`, a dated `-backup-YYYYMMDD-HHMMSS` kept copy) or an unfinished/killed one (`.<id>.partial` and its sidecars). */
 const PREMIGRATION_FILE_RE = /-backup(-\d{8}-\d{6}(-\d+)?)?(\.[0-9a-f]+\.partial(-journal|-wal|-shm)?)?$/;
@@ -881,7 +1009,70 @@ function annotateRetention(row: NoteRow, rec: NoteRecord): NoteRecord {
     if (row.session_id) out.session_id = row.session_id;
     if (row.obs_type) out.obs_type = row.obs_type;
   }
+  // v20: only when set, so a note written after the upgrade keeps its exact old shape.
+  if (row.grandfathered_at) out.grandfathered_at = row.grandfathered_at;
+  if (row.approved_at) {
+    out.approved_at = row.approved_at;
+    out.approved_by = row.approved_by ?? "";
+  }
+  if (row.confirmed_at) {
+    out.confirmed_at = row.confirmed_at;
+    out.confirmed_by = row.confirmed_by ?? "";
+    out.confirmed_kind = row.confirmed_kind ?? "";
+    out.confirmed_rev = Number(row.confirmed_rev ?? 0);
+  }
+  // 1.4.0: tainted, not grandfathered (=== null: a narrow projection without the column is never flagged), no confirm for this rev.
+  if (row.grandfathered_at === null && isTainted(out.tags) && !(row.confirmed_kind && Number(row.confirmed_rev) === Number(row.rev))) {
+    out.unconfirmed = true;
+    out.unconfirmed_label = UNCONFIRMED_LABEL;
+  }
   return out;
+}
+
+/** Strength of a confirm kind: a weaker confirm never overwrites a stronger one for the same rev. */
+const CONFIRM_RANK: Record<string, number> = { corroborated: 1, admin: 2, human: 3 };
+/** CONFIRM_RANK as SQL, for the kind stored in column `col`. */
+const rankSql = (col: string): string => `CASE ${col} WHEN 'human' THEN 3 WHEN 'admin' THEN 2 WHEN 'corroborated' THEN 1 ELSE 0 END`;
+
+/** The times a note's re-confirmation clock may start from (the v20 columns). */
+interface DueRow {
+  updated_at: string;
+  confirmed_at?: string | null;
+  confirmed_rev?: number | null;
+  rev: number;
+  grandfathered_at?: string | null;
+}
+/**
+ * When a note's re-confirmation clock started (ms): the latest of its last change, a confirm of its current rev, the
+ * upgrade (grandfathered) and the mode switch. Due = this + days. The ONE formula for labels and counts.
+ */
+export function dueBase(r: DueRow, c: { set_at?: string }): number {
+  const confirmed = r.confirmed_at && Number(r.confirmed_rev) === Number(r.rev) ? r.confirmed_at : null;
+  return Math.max(...[r.updated_at, confirmed, r.grandfathered_at, c.set_at ?? null].map((t) => (t ? Date.parse(t) : 0)).filter((t) => !Number.isNaN(t)));
+}
+
+/**
+ * A tainted note whose current rev has no HUMAN confirm: it may not be pinned or used as a replacement. Grandfathered notes
+ * (from before the 1.4.0 upgrade) are included: they are exempt from the session-start hold only, so a 1.3.5 summary that
+ * read the web shows as before but is not promoted without a person.
+ */
+export function needsHumanConfirm(n: Pick<NoteRecord, "tags" | "rev" | "confirmed_kind" | "confirmed_rev">): boolean {
+  return isTainted(n.tags) && !(n.confirmed_kind === "human" && n.confirmed_rev === n.rev);
+}
+
+/** What a confirm did (Store.confirm). `counted` false = recorded (when `recorded`) but releases nothing; `message` says why. */
+export interface ConfirmResult {
+  counted: boolean;
+  recorded: boolean;
+  kind: "human" | "admin" | "corroborated" | "not_counted";
+  reason?: string;
+  message: string;
+  id: number;
+  title: string;
+  rev: number;
+  by: string;
+  at: string;
+  source: string;
 }
 
 function tagsToStorage(tags: string[] | undefined): string {
@@ -2669,6 +2860,54 @@ export class Store {
       this.db.exec("CREATE INDEX IF NOT EXISTS idx_notes_live_updated ON notes(archived_at, updated_at DESC, id DESC)");
       this.createDeleteTrigger();
     }
+    if (v < 20) {
+      // v20 (1.4.0): trust. Everything the release needs lands in this one step (one backup, one transaction).
+      //  - notes.grandfathered_at: when the upgrade ran, for every note that existed then (new notes leave it NULL). Notes
+      //    from before the upgrade are exempt from the new holds, and any re-confirmation clock starts here, so upgrading
+      //    hides nothing.
+      //  - notes.approved_at / approved_by: a held write that was approved (its created_at/updated_at keep the WRITTEN time).
+      //  - notes.confirmed_*: the latest qualifying confirm (kind human|admin|corroborated), valid only while confirmed_rev = rev.
+      //  - quarantine.forget_after / confidence: a held write keeps them, so approving it applies them.
+      //  - sessions.outside_at: when a captured session last read outside content (web, other MCP servers).
+      //  - confirmations: every confirm, counted or not (who, whether authenticated, what source they named; kind
+      //    'not_counted' with the rule in `reason`).
+      //  - note_links: add-only "derived from" links between notes.
+      for (const c of ["grandfathered_at", "approved_at", "approved_by", "confirmed_at", "confirmed_by", "confirmed_kind"]) this.addColumn("notes", c, "TEXT");
+      this.addColumn("notes", "confirmed_rev", "INTEGER");
+      // 1 = the last content write by the local CLI ran at a terminal (stdin and stdout); see retroTaint.
+      this.addColumn("notes", "cli_tty", "INTEGER");
+      this.addColumn("quarantine", "forget_after", "INTEGER");
+      this.addColumn("quarantine", "confidence", "REAL");
+      // A held edit that CLEARS its confidence or forget date (null): a JSON list of those field names, applied on approval.
+      this.addColumn("quarantine", "clears", "TEXT");
+      this.addColumn("sessions", "outside_at", "TEXT");
+      // The taint window asks "open sessions of this namespace" on every agent write.
+      this.db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_ns_open ON sessions(namespace, ended_at)");
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS confirmations (
+          id INTEGER PRIMARY KEY,
+          note_id INTEGER NOT NULL,
+          note_rev INTEGER NOT NULL,
+          at TEXT NOT NULL,
+          by TEXT NOT NULL,
+          by_authed INTEGER NOT NULL,
+          kind TEXT NOT NULL,
+          source TEXT NOT NULL,
+          source_key TEXT NOT NULL,
+          reason TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_confirm_note ON confirmations(note_id, at);
+        CREATE TABLE IF NOT EXISTS note_links (
+          note_id INTEGER NOT NULL,
+          derived_from INTEGER NOT NULL,
+          added_at TEXT NOT NULL,
+          added_by TEXT NOT NULL,
+          PRIMARY KEY (note_id, derived_from)
+        );
+        CREATE INDEX IF NOT EXISTS idx_links_parent ON note_links(derived_from);
+      `);
+      this.db.prepare("UPDATE notes SET grandfathered_at = ? WHERE grandfathered_at IS NULL").run(new Date().toISOString());
+    }
   }
 
   /** The delete log row also remembers the deleted note's writers (v14). Caller holds the write lock. */
@@ -2836,6 +3075,17 @@ export class Store {
     validateNames(input);
     validateForgetAfter(input.forget_after);
     validateConfidence(input.confidence);
+    // 1.4.0 taint, before the hold so a held write keeps it. Internal writes for someone else (writtenBy: an approval, a
+    // sync) and restores carry only what their own tags or `outside` say.
+    // ponytail: a held create (quarantine) keeps the inherited taint but not the links themselves; carry them in the hold if asked.
+    const derived = this.derivedIds(input.derived_from);
+    const taint = [
+      ...new Set([
+        ...this.taintFor(input.namespace?.trim() || DEFAULT_NAMESPACE, input.outside, opts.bulkImport || opts.writtenBy !== undefined ? null : currentWriter()),
+        ...this.inheritedTaint(derived),
+      ]),
+    ];
+    if (taint.some((t) => !(input.tags ?? []).includes(t))) input = { ...input, tags: [...(input.tags ?? []), ...taint.filter((t) => !(input.tags ?? []).includes(t))] };
     const backdate = isoOrNull(input.created_at);
     if (backdate && Date.parse(backdate) > Date.now() + 5 * 60_000) {
       throw new ValidationError(`created_at ${input.created_at} is more than 5 minutes in the future`);
@@ -2854,6 +3104,8 @@ export class Store {
         tags: input.tags,
         source: input.source,
         createdAt: input.created_at,
+        forgetAfter: input.forget_after,
+        confidence: input.confidence,
         findings,
         writtenBy: opts.writtenBy,
         importedUnverified: opts.importedUnverified,
@@ -2951,6 +3203,8 @@ export class Store {
         const sealed = this.sealBody(body, noteAad(id, namespace));
         this.db.prepare("UPDATE notes SET body = ?, body_enc = ? WHERE id = ?").run(sealed.body, sealed.bodyEnc, id);
       }
+      this.addLinks(id, derived, writer, now);
+      this.stampCliTerminal(id, writer);
       // An archived (restored-as-forgotten) note stays out of the edge graph.
       if (!archivedAt) this.noteWritten(namespace, id, { rev: startRev, title: input.title, body });
       // Link the new note into the similarity graph (same namespace only).
@@ -3226,7 +3480,47 @@ export class Store {
       r.access_count += p.n;
       if (!r.last_accessed || p.at > r.last_accessed) r.last_accessed = p.at;
     }
-    return annotateRetention(row, r);
+    return this.annotateConfirmRules(row, annotateRetention(row, r));
+  }
+
+  /**
+   * 1.4.0: re-confirmation expiry (1a) and derived_from (1d) on a record. Fields appear only when set, so other notes keep
+   * their exact shape. A narrow projection without the v20 columns gets neither.
+   */
+  private linksStmt: ReturnType<DatabaseSync["prepare"]> | null = null;
+  /** note_links is add-only: once it has a row it always will. An empty answer is re-asked at most once a second. */
+  private linksSeen: { any: boolean; at: number } | null = null;
+  private anyLinks(): boolean {
+    if (this.linksSeen?.any || (this.linksSeen && Date.now() - this.linksSeen.at < 1000)) return this.linksSeen.any;
+    this.linksSeen = { any: this.db.prepare("SELECT 1 FROM note_links LIMIT 1").get() !== undefined, at: Date.now() };
+    return this.linksSeen.any;
+  }
+
+  private annotateConfirmRules(row: NoteRow, out: NoteRecord): NoteRecord {
+    if (row.grandfathered_at === undefined) return out;
+    // Tasks and handoffs are the board's own records (claimed, finished, handed on): re-confirmation expiry is for notes.
+    const live = !row.archived_at && row.superseded_by == null && !out.pinned && !out.kind && !out.tags.includes("task") && !out.tags.includes("handoff");
+    const c = live ? this.confirmSettings() : null;
+    if (c && c.mode !== "off" && dueBase(row, c) + c.days * 86_400_000 <= Date.now()) {
+      out.expired = true;
+      out.expired_label = expiredLabel(c.days);
+    }
+    if (!this.anyLinks()) return out;
+    this.linksStmt ??= this.db.prepare("SELECT derived_from FROM note_links WHERE note_id = ? ORDER BY rowid");
+    const links = (this.linksStmt.all(row.id) as Array<{ derived_from: number }>).map((l) => Number(l.derived_from));
+    if (!links.length) return out;
+    out.derived_from = links;
+    const rules = this.distrustRules();
+    if (rules.length) {
+      // ponytail: one hop only (the parents' own writers); a recursive walk up the chain is 1.4.1.
+      const sid = this.serverId();
+      const parents = this.db.prepare(`SELECT * FROM notes WHERE id IN (${links.map(() => "?").join(",")})`).all(...links) as unknown as NoteRow[];
+      if (parents.some((p) => matchesDistrust(rules, rowToRecord(p, sid), sid))) {
+        out.built_on_distrusted = true;
+        out.built_on_distrusted_label = DISTRUSTED_BASE_LABEL;
+      }
+    }
+    return out;
   }
 
   /**
@@ -3511,6 +3805,8 @@ export class Store {
       importedUnverified?: boolean;
       /** Sync of another machine's file: its (origin, id), so approving the held update records the sync merge base. */
       syncIdentity?: { origin: string; id: number };
+      /** internal (approving a held edit): the time the edit was written; never earlier than the note's own updated_at. */
+      writtenAt?: string;
     } & LintOpts = {}
   ): NoteRecord | null {
     this.floodGate(opts.lint ?? "full", opts.noFloodCount !== true);
@@ -3520,11 +3816,25 @@ export class Store {
     const existing = this.read(id);
     if (!existing) return null;
     this.refuseAgentOnPinned(id, "changing it");
-    // The outside-content stamp only grows, on every path (REST, MCP, file sync, import): no write can strip it.
-    const stamps = existing.tags.filter((t) => t.startsWith(ORIGIN_TOOL_PREFIX));
-    if (patch.tags !== undefined && stamps.some((t) => !patch.tags!.includes(t))) {
-      const given = patch.tags;
-      patch = { ...patch, tags: [...given, ...stamps.filter((t) => !given.includes(t))] };
+    // The outside-content stamps (obs.origin:*) only grow, on every path (REST, MCP, file sync, import): no write can strip
+    // one, and a content edit by a connection that reads outside content adds its own (taintFor).
+    const stamps = existing.tags.filter((t) => t.startsWith(ORIGIN_PREFIX));
+    const contentEdit = (patch.title !== undefined && patch.title !== existing.title) || (patch.body !== undefined && patch.body !== existing.body);
+    // 1.4.0 (1d): links only grow; a new link to an unconfirmed note marks this one via:memory.
+    const derived = this.derivedIds(patch.derived_from, id);
+    const added = [
+      ...new Set([
+        ...(contentEdit || patch.outside === true
+          ? this.taintFor(patch.namespace?.trim() || existing.namespace, patch.outside, opts.writtenBy !== undefined || opts.keepWriter ? null : currentWriter())
+          : []),
+        ...this.inheritedTaint(derived),
+      ]),
+    ];
+    const newTaint = added.some((t) => !stamps.includes(t));
+    const keep = [...stamps, ...added.filter((t) => !stamps.includes(t))];
+    const given = patch.tags ?? existing.tags;
+    if ((patch.tags !== undefined || newTaint) && keep.some((t) => !given.includes(t))) {
+      patch = { ...patch, tags: [...given, ...keep.filter((t) => !given.includes(t))] };
     }
     const newLabel = patch.sensitivity !== undefined ? this.labelForRelabel(patch.sensitivity, existing.sensitivity) : undefined;
     if (existing.status === "superseded") {
@@ -3552,7 +3862,8 @@ export class Store {
     // Approve-first: an agent's content change (what the linter looks at) or a move, into or out of such a namespace, is held.
     // Metadata-only patches (confidence, re-sent unchanged fields) are not. Setting forget_after is a delayed forget, and
     // forgetting there is the operator's alone, so an agent is refused (0 = keep forever, harmless, stays allowed).
-    if (patch.forget_after !== undefined && patch.forget_after !== 0) {
+    // null clears the date like 0 (keep forever), so it is not a delayed forget either.
+    if (patch.forget_after !== undefined && patch.forget_after !== null && patch.forget_after !== 0) {
       refuseAgentInApproveFirst(this, existing.namespace, "setting a forget date on a note");
       // A delayed forget of someone else's note is removal: admin only (a non-admin key may set one on notes it created;
       // created_by, not written_by, so editing someone's body does not make the note yours).
@@ -3586,6 +3897,8 @@ export class Store {
         body: patch.body,
         tags: patch.tags,
         source: patch.source,
+        forgetAfter: patch.forget_after,
+        confidence: patch.confidence,
         sensitivity: newLabel ?? existing.sensitivity ?? DEFAULT_SENSITIVITY,
         findings,
         writtenBy: opts.writtenBy,
@@ -3641,6 +3954,10 @@ export class Store {
         : existing.written_by;
     validateSizes({ title, body, tags: patch.tags ?? existing.tags });
     const now = new Date().toISOString();
+    // When the edit was written: now, or (approving a held edit) the hold time. Never before the note's own updated_at, so
+    // a note's time cannot move backwards (the approval's compare-and-swap means nothing changed in between anyway).
+    const held = isoOrNull(opts.writtenAt);
+    const writtenAt = held ? (held > existing.updated_at ? held : existing.updated_at) : now;
     // Re-seal: existing.body is already decrypted plaintext, so an update
     // that leaves the body alone still produces fresh ciphertext (new IV).
     // Retention: an explicit forget_after resets the deadline relative to
@@ -3648,7 +3965,7 @@ export class Store {
     // note's existing deadline instead of silently dropping it.
     const expiresAt =
       patch.forget_after !== undefined
-        ? retentionDeadline(patch.forget_after, now)
+        ? retentionDeadline(patch.forget_after, writtenAt)
         : existing.expires_at ?? null;
 
     const touched = [...new Set([existing.namespace, namespace])];
@@ -3726,7 +4043,7 @@ export class Store {
            WHERE id = ? AND (? IS NULL OR rev = ?) AND sensitivity = ?${this.ceilingSql()}`
         )
         .run(
-          namespace, title, sealed.body, tags, source, rev, now, sealed.bodyEnc, expiresAt, writer,
+          namespace, title, sealed.body, tags, source, rev, writtenAt, sealed.bodyEnc, expiresAt, writer,
           restamp ? 1 : 0, restamp ? 1 : 0, mergedAfter,
           confidenceSet ? 1 : 0, confidenceSet && typeof patch.confidence === "number" ? patch.confidence : null,
           confidenceSet ? 1 : 0, confidenceSet && typeof patch.confidence === "number" ? writerNow(opts) : "",
@@ -3744,6 +4061,11 @@ export class Store {
         );
       }
       if (opts.importedUnverified) this.db.prepare("UPDATE notes SET imported_unverified = 1 WHERE id = ?").run(id);
+      // Outside content in this edit (a new stamp or one the note already had): the 1.4.0 exemption of a pre-upgrade note covered
+      // what it said then, not this.
+      if (added.length) this.db.prepare("UPDATE notes SET grandfathered_at = NULL WHERE id = ?").run(id);
+      this.addLinks(id, derived, writerNow(opts), now);
+      if (restamp) this.stampCliTerminal(id, writer);
 
       // Invalidate the embedding: the note's text just changed, so the stored
       // vector is now stale. Drop it rather than keep a vector that no longer
@@ -4341,6 +4663,8 @@ export class Store {
         | undefined;
       if (!target || target.archived_at !== null || target.superseded_by !== null || this.idHidden(input.newId)) throw new ValidationError("the replacing note is no longer a live note; nothing was changed");
       if (input.newRev !== undefined && target.rev !== input.newRev) throw new StaleWriteError("the replacing note was edited after the preview; nothing was changed");
+      // 1.4.0: the replacement takes the old notes' place, so outside content no person confirmed cannot be it.
+      this.requireHumanConfirm(input.newId, "use it as a replacement");
       const upd = this.db.prepare(
         `UPDATE notes SET archived_at = ?, superseded_by = ?, superseded_at = ?, superseded_by_writer = ?, rev = rev + 1
          WHERE id = ? AND rev = ? AND archived_at IS NULL AND superseded_by IS NULL AND namespace = ?`
@@ -7763,11 +8087,381 @@ export class Store {
   /** Pin or unpin a note. False when there is no such note. Not a content change: rev, written_by and the change feed are untouched. */
   setPinned(id: number, on: boolean, namespaces?: string[]): boolean {
     if (namespaces && namespaces.length === 0) return false;
-    const where = namespaces ? ` AND namespace IN (${namespaces.map(() => "?").join(",")})` : "";
-    const res = this.db.prepare(`UPDATE notes SET pinned = ? WHERE id = ?${where}`).run(on ? 1 : 0, id, ...(namespaces ?? []));
-    const ok = Number(res.changes) > 0;
+    // One transaction: the operator's pass recorded as the human confirm and the pin land together or not at all.
+    const ok = this.transaction(() => {
+      if (on) {
+        const ns = (this.db.prepare("SELECT namespace FROM notes WHERE id = ?").get(id) as { namespace: string } | undefined)?.namespace;
+        if (ns === undefined || (namespaces && !namespaces.includes(ns))) return false; // a note outside the caller's namespaces reads as missing
+        this.requireHumanConfirm(id, "pin");
+      }
+      const where = namespaces ? ` AND namespace IN (${namespaces.map(() => "?").join(",")})` : "";
+      const res = this.db.prepare(`UPDATE notes SET pinned = ? WHERE id = ?${where}`).run(on ? 1 : 0, id, ...(namespaces ?? []));
+      return Number(res.changes) > 0;
+    });
     if (ok) this.audit({ op: on ? "pin" : "unpin", id });
     return ok;
+  }
+
+  // --- Outside-content taint and confirms (1.4.0, taint.ts) -------------------------------------------
+
+  /**
+   * The `obs.origin:*` tags a write gets: `outside: true` (declared), the connection's own (ActorRef.taint: via:memory,
+   * a reads_outside token), and the hook session signal. `writer` null = an internal write for someone else (only `declared`).
+   */
+  private taintFor(namespace: string, declared: boolean | undefined, writer: string | null): string[] {
+    const out = new Set<string>(declared === true ? [ORIGIN_DECLARED] : []);
+    if (writer === null) return [...out];
+    for (const t of actorStore.getStore()?.taint ?? []) if (t.startsWith(ORIGIN_PREFIX)) out.add(t);
+    if (!sessionTaintExempt(writer)) for (const t of this.sessionOutsideTags(namespace)) out.add(t);
+    return [...out];
+  }
+
+  /**
+   * 1.4.0 (1d): a write's `derived_from`, checked: a list of at most MAX_DERIVED_FROM note ids (numbers or digit strings),
+   * each an existing note the caller may see, never the note itself. Duplicates collapse. Absent = [].
+   * "May see" = the caller's read rules: its namespaces (ActorRef.readable, when its server confines it), the distrust list
+   * and its sensitivity ceiling. Anything else answers exactly like a missing id, so a link is no probe.
+   */
+  private derivedIds(list: unknown, self?: number): number[] {
+    if (list === undefined || list === null) return [];
+    if (!Array.isArray(list)) throw new ValidationError("derived_from must be a list of note ids");
+    if (list.length > MAX_DERIVED_FROM) throw new ValidationError(`derived_from: at most ${MAX_DERIVED_FROM} notes`);
+    const ids = list.map((v) => {
+      const n = typeof v === "number" ? v : typeof v === "string" && /^\s*\d{1,15}\s*$/.test(v) ? Number(v) : NaN;
+      if (!Number.isSafeInteger(n) || n < 1) throw new ValidationError(`derived_from: ${JSON.stringify(String(v).slice(0, 40))} is not a note id`);
+      return n;
+    });
+    const uniq = [...new Set(ids)];
+    const readable = actorStore.getStore()?.readable;
+    for (const id of uniq) {
+      if (id === self) throw new ValidationError("derived_from: a note cannot be built from itself");
+      const n = this.readVisible(id); // gate-ok: existence check only, nothing of the parent is returned
+      if (!n || (readable && !readable.includes(n.namespace))) throw new ValidationError(`derived_from: no note with id ${id}`);
+    }
+    return uniq;
+  }
+
+  /** A note built from an unconfirmed note is marked as written after reading unconfirmed memory. `parents` passed derivedIds (readable only). */
+  private inheritedTaint(parents: number[]): string[] {
+    return parents.some((p) => this.read(p)?.unconfirmed === true) ? [ORIGIN_VIA_MEMORY] : [];
+  }
+
+  /** Add-only: links are inserted, never deleted or replaced. Runs inside the caller's write transaction. */
+  /**
+   * A content write by the local CLI records whether it ran at a terminal (notes.cli_tty), so a spooled outside read marked
+   * later (retroTaint) can tell the person's write from the same command run by an agent's shell.
+   */
+  private stampCliTerminal(id: number, writer: string): void {
+    if (writer === "cli") this.db.prepare("UPDATE notes SET cli_tty = ? WHERE id = ?").run(sessionTaintExempt("cli") ? 1 : 0, id);
+  }
+
+  private addLinks(id: number, parents: number[], by: string, at: string): void {
+    const ins = this.db.prepare("INSERT OR IGNORE INTO note_links (note_id, derived_from, added_at, added_by) VALUES (?, ?, ?, ?)");
+    for (const p of parents) ins.run(id, p, at, by);
+    if (parents.length) this.linksSeen = { any: true, at: Date.now() };
+  }
+
+  /**
+   * The hook signal: a session in this namespace that has not ended read outside content within the taint window.
+   * Namespace-coarse on purpose (the MCP server never learns the host's session id), so a browsing session can taint a
+   * sibling session's writes; a person's confirm clears that. Returns the tools' stamps (at most 3), or `...:other`.
+   */
+  private sessionOutsideTags(namespace: string): string[] {
+    const hours = taintWindowHours();
+    if (hours <= 0) return [];
+    const cutoff = new Date(Date.now() - hours * 3_600_000).toISOString();
+    const ids = (this.db.prepare("SELECT id FROM sessions WHERE namespace = ? AND ended_at IS NULL AND outside_at >= ?").all(namespace, cutoff) as Array<{ id: string }>).map((r) => r.id);
+    if (!ids.length) return [];
+    const tools = this.db
+      .prepare(`SELECT DISTINCT tool FROM capture_events WHERE session_id IN (${ids.map(() => "?").join(",")}) AND event IN ('post-tool', 'post-tool-failure') AND at >= ?`)
+      .all(...ids, cutoff) as Array<{ tool: string }>;
+    const tags = [...new Set(tools.map((r) => r.tool).filter((t) => isOutsideTool(t)).map(toolTag))].sort().slice(0, 3);
+    return tags.length ? tags : [toolTag("other")];
+  }
+
+  /**
+   * A spooled outside-content event stored late (capture.ts drainSpool): notes written in its namespace after it, within the
+   * taint window, get its stamp now. Add-only, no rev bump (the content did not change). Returns how many notes it marked.
+   */
+  retroTaint(namespace: string, atIso: string, tool: string): number {
+    const hours = taintWindowHours();
+    if (hours <= 0 || !isOutsideTool(tool)) return 0;
+    const until = new Date(Date.parse(atIso) + hours * 3_600_000).toISOString();
+    const tag = toolTag(tool);
+    const rows = this.db
+      .prepare("SELECT id, tags, written_by, cli_tty FROM notes WHERE namespace = ? AND updated_at >= ? AND updated_at <= ? AND archived_at IS NULL AND COALESCE(kind, 'note') = 'note'")
+      .all(namespace, atIso, until) as Array<{ id: number; tags: string; written_by: string | null; cli_tty: number | null }>;
+    // The CLI is exempt only for a write it made at a terminal (cli_tty, stamped at write time).
+    const exempt = (r: { written_by: string | null; cli_tty: number | null }): boolean =>
+      r.written_by === "cli" ? Number(r.cli_tty) === 1 : SESSION_TAINT_EXEMPT.has(r.written_by ?? "");
+    const marks = rows.filter((r) => !exempt(r) && !parseTags(r.tags).includes(tag));
+    if (!marks.length) return 0;
+    // One transaction; a note it marks is new outside content, so a pre-upgrade (grandfathered) note loses its exemption.
+    this.transaction(() => {
+      const up = this.db.prepare("UPDATE notes SET tags = ?, grandfathered_at = NULL WHERE id = ?");
+      for (const r of marks) up.run(tagsToStorage([...parseTags(r.tags), tag]), r.id);
+    });
+    this.audit({ op: "retro-taint", namespace, detail: `${marks.length} note(s) marked ${tag}` });
+    return marks.length;
+  }
+
+  /** Live unconfirmed notes (tainted, not grandfathered, no confirm for the current rev), in `namespaces` or everywhere. */
+  unconfirmedCount(namespaces?: string[]): number {
+    return this.unconfirmedRows(namespaces).length;
+  }
+
+  /**
+   * unconfirmedRows' last answer, reused while nothing in the database changed: total_changes() moves on this connection's
+   * writes, PRAGMA data_version on another process's commit. Session start asks once per prompt; the scan is the cost.
+   */
+  private unconfirmedCache: { key: string; rows: ReviewRow[] } | null = null;
+
+  private unconfirmedRows(namespaces?: string[]): ReviewRow[] {
+    if (namespaces && namespaces.length === 0) return [];
+    const ver = this.db.prepare("SELECT total_changes() AS t").get() as { t: number };
+    const dv = this.db.prepare("PRAGMA data_version").get() as { data_version: number };
+    const key = JSON.stringify([namespaces ?? null, ver.t, dv.data_version, currentCeiling() ?? null]);
+    if (this.unconfirmedCache?.key === key) return this.unconfirmedCache.rows;
+    const rows = this.scanUnconfirmed(namespaces);
+    this.unconfirmedCache = { key, rows };
+    return rows;
+  }
+
+  private scanUnconfirmed(namespaces?: string[]): ReviewRow[] {
+    const ns = namespaces ? ` AND namespace IN (${namespaces.map(() => "?").join(",")})` : "";
+    const dis = this.distrustFragment(NOTE_COLUMNS, namespaces);
+    const rows = this.db
+      .prepare(
+        `SELECT id, namespace, title, written_by, tags, updated_at FROM notes WHERE archived_at IS NULL AND grandfathered_at IS NULL AND tags LIKE '%obs.origin:%'
+           AND NOT (confirmed_kind IS NOT NULL AND confirmed_rev = rev)${ns}${this.ceilingSql()}${dis.sql} ORDER BY id`
+      )
+      .all(...(namespaces ?? []), ...dis.params) as unknown as ReviewRow[];
+    return rows.filter((r) => isTainted(parseTags(r.tags)));
+  }
+
+  // --- Re-confirmation expiry (1.4.0, 1a) ---------------------------------------------------------------------------
+  // Settings in _meta (confirm_mode, confirm_days, confirm_mode_set_at), like approve_first. Read at most once a second
+  // per Store (every record read consults them), so a change made by another process shows within a second.
+  private confirmCache: { at: number; v: ConfirmSettings } | null = null;
+
+  confirmSettings(): ConfirmSettings {
+    const now = Date.now();
+    if (this.confirmCache && now - this.confirmCache.at < 1000) return this.confirmCache.v;
+    const m = this.getMeta("confirm_mode");
+    const d = Number(this.getMeta("confirm_days"));
+    const setAt = this.getMeta("confirm_mode_set_at");
+    const v: ConfirmSettings = {
+      mode: (CONFIRM_MODES as readonly string[]).includes(m ?? "") ? (m as ConfirmMode) : "label",
+      days: Number.isInteger(d) && d >= 1 && d <= MAX_CONFIRM_DAYS ? d : DEFAULT_CONFIRM_DAYS,
+      ...(setAt ? { set_at: setAt } : {}),
+    };
+    this.confirmCache = { at: now, v };
+    return v;
+  }
+
+  /**
+   * Change the expiry settings (operator: the CLI gates lowering protection). A mode change records when, so turning
+   * expiry on starts every note's clock then, not at its last edit.
+   */
+  setConfirmSettings(s: { mode?: ConfirmMode; days?: number }): ConfirmSettings {
+    if (s.mode !== undefined && !CONFIRM_MODES.includes(s.mode)) throw new ValidationError(`confirm-mode must be one of: ${CONFIRM_MODES.join(", ")}`);
+    if (s.days !== undefined && !(Number.isInteger(s.days) && s.days >= 1 && s.days <= MAX_CONFIRM_DAYS)) {
+      throw new ValidationError(`confirm-days must be a whole number from 1 to ${MAX_CONFIRM_DAYS}`);
+    }
+    const before = this.confirmSettings();
+    // Shortening the period while enforce is on would hide notes at once; like turning expiry on, it restarts the clock.
+    const shrinksUnderEnforce = s.days !== undefined && s.days < before.days && (s.mode ?? before.mode) === "enforce";
+    this.transaction(() => {
+      if (s.days !== undefined) this.setMeta("confirm_days", String(s.days));
+      if (s.mode !== undefined && s.mode !== before.mode) this.setMeta("confirm_mode", s.mode);
+      if ((s.mode !== undefined && s.mode !== before.mode) || shrinksUnderEnforce) this.setMeta("confirm_mode_set_at", new Date().toISOString());
+    });
+    this.confirmCache = null;
+    const after = this.confirmSettings();
+    this.audit({ op: "confirm-settings", detail: `mode ${after.mode}, days ${after.days}` });
+    return after;
+  }
+
+  /** Live ordinary notes past their re-confirmation date (none when the mode is off). Pinned notes are exempt. */
+  private expiredRows(namespaces?: string[]): ReviewRow[] {
+    const c = this.confirmSettings();
+    if (c.mode === "off" || (namespaces && namespaces.length === 0)) return [];
+    const ns = namespaces ? ` AND namespace IN (${namespaces.map(() => "?").join(",")})` : "";
+    const dis = this.distrustFragment(NOTE_COLUMNS, namespaces);
+    const cutoff = Date.now() - c.days * 86_400_000;
+    // A note changed since the cutoff is not due, so SQL drops those first. Times are compared as text, which is only safe
+    // with a day of slack (ISO "T" vs " ", offsets up to 14 h); dueBase() then decides exactly in JS.
+    const loose = new Date(cutoff + 86_400_000).toISOString();
+    const rows = this.db
+      .prepare(
+        `SELECT id, namespace, title, written_by, tags, updated_at, confirmed_at, confirmed_rev, rev, grandfathered_at FROM notes
+          WHERE archived_at IS NULL AND superseded_by IS NULL AND COALESCE(pinned, 0) = 0 AND COALESCE(kind, 'note') = 'note'
+            AND tags NOT LIKE '%"task"%' AND tags NOT LIKE '%"handoff"%' AND updated_at <= ?${ns}${this.ceilingSql()}${dis.sql} ORDER BY id`
+      )
+      .all(loose, ...(namespaces ?? []), ...dis.params) as unknown as Array<ReviewRow & DueRow>;
+    return rows.filter((r) => dueBase(r, c) <= cutoff);
+  }
+
+  /** How many notes are past their re-confirmation date, in `namespaces` or everywhere (0 when the mode is off). */
+  expiredCount(namespaces?: string[]): number {
+    return this.expiredRows(namespaces).length;
+  }
+
+  /** `monomem review`: unconfirmed and expired notes, with why and who wrote them. For a person at a terminal only. */
+  reviewList(namespaces?: string[]): ReviewItem[] {
+    const days = this.confirmSettings().days;
+    const out = new Map<number, ReviewItem>();
+    const add = (r: ReviewRow, why: string): void => {
+      const cur = out.get(r.id);
+      if (cur) out.set(r.id, { ...cur, why: `${cur.why}; ${why}` });
+      else out.set(r.id, { id: Number(r.id), namespace: r.namespace, title: r.title, writer: r.written_by ?? "", why });
+    };
+    for (const r of this.unconfirmedRows(namespaces)) {
+      const origins = parseTags(r.tags).filter((t) => t.startsWith(ORIGIN_PREFIX)).map((t) => t.slice(ORIGIN_PREFIX.length));
+      add(r, `unconfirmed: from outside content (${origins.join(", ")}), nobody confirmed this version`);
+    }
+    for (const r of this.expiredRows(namespaces)) add(r, `expired: not re-confirmed in ${days} days (last changed ${r.updated_at.slice(0, 10)})`);
+    return [...out.values()].sort((a, b) => a.id - b.id);
+  }
+
+  /** Plain-English lines for `monomem doctor` and `monomem health`: one per 1.4.0 confirm rule, with counts. */
+  confirmRuleLines(): string[] {
+    const c = this.confirmSettings();
+    const unconfirmed = this.unconfirmedCount();
+    const expired = this.expiredCount();
+    const hours = taintWindowHours();
+    const plural = (n: number): string => `${n} note${n === 1 ? "" : "s"}`;
+    return [
+      `Unconfirmed notes (from outside content, kept out of session start until confirmed): ${unconfirmed}${unconfirmed ? " (monomem review)" : ""}`,
+      c.mode === "off"
+        ? "Re-confirmation expiry: off (no note expires; turn on: monomem config set confirm-mode label)"
+        : `Re-confirmation expiry: ${c.mode}, every ${c.days} days; ${plural(expired)} past due (${c.mode === "enforce" ? "kept out of session start" : "labelled in search, still shown"})`,
+      hours > 0
+        ? `Outside-content window: notes written within ${hours} hours of a hooked session reading outside content in the same namespace are marked (MONOMEM_TAINT_WINDOW_HOURS)`
+        : "Outside-content window: off (MONOMEM_TAINT_WINDOW_HOURS=0), so hooked sessions' outside reads mark nothing",
+      "Read-taint: a connection that reads an unconfirmed note marks what it writes next. This is per connection; it resets when the server restarts.",
+    ];
+  }
+
+  /**
+   * Promotion guard (pin, replace-with, keep-as-history): a tainted note needs a HUMAN confirm for its current rev. The
+   * local CLI (writer `cli`) gets through and its pass is recorded as the human confirm: the CLI command asks for the
+   * operator gate (terminal + typed yes) before it calls this. Everyone else, admin tokens included, is refused.
+   */
+  requireHumanConfirm(id: number, verb: string): void {
+    const n = this.read(id);
+    if (!n || !needsHumanConfirm(n)) return;
+    if (currentWriter() === "cli") {
+      this.confirm(id, { source: `operator: ${verb}` });
+      return;
+    }
+    throw new ValidationError(promotionRefusal(verb, id));
+  }
+
+  /**
+   * Confirm a note (bound to its current rev). Who counts (SPEC 1c):
+   *   human        the local CLI (writer `cli`; the command runs the operator gate first). Always counts.
+   *   admin        `opts.admin` (the dashboard / an admin REST token). Releases the session-start hold, not the promotion block.
+   *   corroborated a different AUTHENTICATED token writer naming a source whose key differs from the note's own source and
+   *                every earlier qualifying confirm of this rev. Releases the session-start hold only.
+   * Recorded but not counted: the note's own writers (written_by, created_by, attested_writer, merged_from_writers), any
+   * stdio / unauthenticated writer, a distrusted writer, a connection that read this note while unconfirmed, a writer with a
+   * note derived from this one, and a second confirm by the same writer for the same rev. Confirms count in the flood guard.
+   */
+  confirm(id: number, opts: { source?: string; admin?: boolean; dashboard?: boolean } = {}): ConfirmResult | null {
+    const n = this.readVisible(id, { hideArchived: true }); // gate-ok: a hidden note answers like a missing one (null)
+    if (!n) return null;
+    const w = currentWriter();
+    const human = w === "cli";
+    if (!human) this.floodGate("full");
+    const source = (opts.source ?? "").replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 200);
+    const key = source ? sourceKey(source) : "";
+    const at = new Date().toISOString();
+    const base = { id, title: n.title, rev: n.rev, by: w, at, source };
+    const refusal = this.confirmRefusal(n, w, human, opts.admin === true, key, opts.admin === true && opts.dashboard === true);
+    if (refusal?.code === "already") return { ...base, counted: false, recorded: false, kind: "not_counted", reason: refusal.code, message: refusal.message };
+    const kind: ConfirmResult["kind"] = refusal ? "not_counted" : human ? "human" : opts.admin ? "admin" : "corroborated";
+    // stored: this confirm became the note's confirm. kept: a stronger confirm of this version stays (this one is recorded).
+    let stored = false;
+    let kept: { at: string; kind: string } | null = null;
+    const write = (): void => {
+      this.db
+        .prepare("INSERT INTO confirmations (note_id, note_rev, at, by, by_authed, kind, source, source_key, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(id, n.rev, at, w, actorStore.getStore()?.authed ? 1 : 0, kind, source, key, refusal?.code ?? "");
+      if (refusal) return;
+      // Only a confirm at least as strong as the note's current one (for this rev) replaces it and restarts the
+      // re-confirmation clock: an agent's corroboration never refreshes a person's or an admin's confirm. Decided inside
+      // the UPDATE, so two processes cannot let a weaker kind overwrite a stronger one. `rev = ?`: the version read.
+      const res = this.db
+        .prepare(
+          `UPDATE notes SET confirmed_at = ?, confirmed_rev = rev, confirmed_kind = ?, confirmed_by = ?
+           WHERE id = ? AND rev = ? AND NOT (confirmed_rev = rev AND ${rankSql("confirmed_kind")} > ?)`
+        )
+        .run(at, kind, w, id, n.rev, CONFIRM_RANK[kind]);
+      stored = Number(res.changes) > 0;
+      if (!stored) {
+        const cur = this.db.prepare("SELECT rev, confirmed_at, confirmed_kind FROM notes WHERE id = ?").get(id) as { rev: number; confirmed_at: string; confirmed_kind: string } | undefined;
+        if (cur && Number(cur.rev) === n.rev) kept = { at: cur.confirmed_at, kind: cur.confirmed_kind };
+      }
+    };
+    // Inside a caller's transaction (a CLI supersede's commit) the rows ride on it.
+    if (this.db.isTransaction) write();
+    else this.transaction(write);
+    this.audit({ op: refusal ? "confirm-not-counted" : "confirm", id, namespace: n.namespace, detail: refusal ? refusal.code : kind });
+    if (!refusal && !stored && !kept) {
+      const message = `Not counted: note ${id} changed while it was being confirmed. Read it again and confirm the new version.`;
+      return { ...base, counted: false, recorded: true, kind: "not_counted", reason: "changed", message };
+    }
+    const checked = source ? ` Checked against: ${source}.` : "";
+    const cs = this.confirmSettings();
+    // The due date is the one stored: this confirm's, or the stronger one the note keeps.
+    const dueAt = kept ? Date.parse((kept as { at: string }).at) + cs.days * 86_400_000 : Date.parse(at) + cs.days * 86_400_000;
+    const dueDay = new Date(dueAt).toISOString().slice(0, 10);
+    const due =
+      cs.mode === "off" ? "" : dueAt <= Date.now() ? ` It is past its re-confirmation date (${dueDay}): a person or an admin must confirm it again.` : ` Next check due ${dueDay}.`;
+    // Only the person at the terminal sees the title echoed: to an agent a title is outside text it did not ask to read.
+    const what = human ? `"${n.title.slice(0, 80)}"` : `note #${id}`;
+    const keptNote = kept ? ` The note keeps its stronger ${(kept as { kind: string }).kind} confirm; this one is recorded but does not restart its clock.` : "";
+    const message = refusal ? refusal.message : `Confirmed ${what} by ${w || "(unknown)"} at ${at.slice(0, 16).replace("T", " ")}.${checked}${keptNote}${due}`;
+    return { ...base, counted: !refusal, recorded: true, kind, ...(refusal ? { reason: refusal.code } : {}), message };
+  }
+
+  /** Why a confirm does not count (null = it counts). Plain words, naming the rule. */
+  private confirmRefusal(n: NoteRecord, w: string, human: boolean, admin: boolean, key: string, dashboard = false): { code: string; message: string } | null {
+    const who = w || "an unidentified writer";
+    // With expiry on, a confirm older than the expiry period no longer blocks a new one: re-confirming is the point.
+    const c = this.confirmSettings();
+    const since = c.mode === "off" ? "" : new Date(Date.now() - c.days * 86_400_000).toISOString();
+    const again = this.db
+      .prepare("SELECT 1 FROM confirmations WHERE note_id = ? AND note_rev = ? AND by = ? AND reason = '' AND at > ? LIMIT 1")
+      .get(n.id, n.rev, w, since);
+    if (again) return { code: "already", message: `Not counted again: ${who} already confirmed this version of the note. One confirm per writer per version.` };
+    if (human) return null;
+    const own = [n.written_by, n.created_by, n.attested_writer ?? "", ...(n.merged_from_writers ?? [])].filter(Boolean);
+    if (w && own.includes(w)) return { code: "same_writer", message: `Not counted: ${who} wrote this note, so it can't confirm it. A person or a different agent must confirm.` };
+    const actor = actorStore.getStore();
+    if (!actor?.authed || w === "" || w === "stdio" || w.startsWith("stdio:")) {
+      return { code: "unauthenticated", message: `Not counted: ${who} is a local connection without its own key, so its name is a claim, not an identity. The confirm is recorded but does not count. A person (monomem confirm ${n.id}) or an agent with its own key must confirm.` };
+    }
+    if (this.isDistrusted({ namespace: n.namespace, written_by: w })) return { code: "distrusted", message: `Not counted: ${who} is on the distrust list for this namespace.` };
+    // The dashboard (a session opened with monomem open; it lists the note to show the button) skips this rule: a person
+    // is looking at the note, and an admin confirm only releases the session-start hold, never promotion. Any other key,
+    // admin or not, that was handed the note while unconfirmed is refused: REST cannot tell a person from an agent.
+    if (!dashboard && actor.taintedReads?.has(n.id)) {
+      return { code: "read_it", message: `Not counted: ${who} read this note's text while it was unconfirmed, so the confirm could be the note talking. A person or an agent that has not read it must confirm.` };
+    }
+    const derived = this.db
+      .prepare("SELECT 1 FROM note_links l JOIN notes c ON c.id = l.note_id WHERE l.derived_from = ? AND (c.written_by = ? OR c.created_by = ?) LIMIT 1")
+      .get(n.id, w, w);
+    if (derived) return { code: "derived", message: `Not counted: ${who} wrote a note built from this one, so it can't confirm it.` };
+    if (admin) return null;
+    if (!key) return { code: "no_source", message: "Not counted: an agent's confirm must name the source it checked the note against (source)." };
+    // Bounded like "already": after the expiry period an earlier confirm's source may be named again.
+    const used = this.db.prepare("SELECT source_key FROM confirmations WHERE note_id = ? AND note_rev = ? AND reason = '' AND at > ?").all(n.id, n.rev, since) as Array<{ source_key: string }>;
+    if ((n.source && sourceKey(n.source) === key) || used.some((u) => u.source_key === key)) {
+      return { code: "same_source", message: "Not counted: that source is the note's own, or one an earlier confirm already named. Name a different source." };
+    }
+    return null;
   }
 
   /** Pinned notes (id, namespace, title), oldest first; `namespaces` limits it to those. */
@@ -7823,6 +8517,10 @@ export class Store {
     tags?: string[];
     source?: string;
     createdAt?: string;
+    /** The write's forget_after days and confidence claim, applied on approval (v20; before, a hold dropped them). */
+    forgetAfter?: number | null;
+    /** A patch's `confidence: null` (clear) is carried too (the `clears` column), so approval clears it. */
+    confidence?: number | null;
     /** op=update: the original patch moved the note to `namespace`. */
     setNamespace?: boolean;
     /** The label the held write carries (create: the new note's; update: the note's label after the write). */
@@ -7849,8 +8547,9 @@ export class Store {
       const res = this.db
         .prepare(
           `INSERT INTO quarantine (op, target_id, if_rev, namespace, title, body, tags, source,
-                                   created_at_override, reasons, created_at, set_namespace, sealed, written_by, sensitivity)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                                   created_at_override, reasons, created_at, set_namespace, sealed, written_by, sensitivity,
+                                   forget_after, confidence)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           q.op,
@@ -7867,9 +8566,13 @@ export class Store {
           q.setNamespace ? 1 : 0,
           key ? 1 : 0,
           q.writtenBy !== undefined ? cleanWriter(q.writtenBy) : currentWriter(),
-          q.sensitivity ?? DEFAULT_SENSITIVITY
+          q.sensitivity ?? DEFAULT_SENSITIVITY,
+          q.forgetAfter ?? null,
+          typeof q.confidence === "number" ? q.confidence : null
         );
       id = Number(res.lastInsertRowid);
+      const clears = q.op === "update" ? (["forget_after", "confidence"] as const).filter((f) => (f === "confidence" ? q.confidence : q.forgetAfter) === null) : [];
+      if (clears.length) this.db.prepare("UPDATE quarantine SET clears = ? WHERE id = ?").run(JSON.stringify(clears), id);
       if (q.importedUnverified || q.syncIdentity) {
         this.db
           .prepare("UPDATE quarantine SET imported_unverified = ?, sync_origin = ?, sync_origin_id = ? WHERE id = ?")
@@ -7953,80 +8656,198 @@ export class Store {
   approveQuarantine(id: number): NoteRecord {
     const q = this.getQuarantine(id);
     if (!q) throw new ValidationError(`no quarantined write with id ${id}`);
-    const drop = this.db.prepare("DELETE FROM quarantine WHERE id = ?");
-    let note: NoteRecord;
-    if (q.op === "create") {
-      const row = this.db
-        .prepare("SELECT created_at_override, written_by, sensitivity, imported_unverified, sync_origin, sync_origin_id FROM quarantine WHERE id = ?")
-        .get(id) as {
-        created_at_override: string | null;
-        written_by: string | null;
-        sensitivity: string;
-        imported_unverified: number;
-        sync_origin: string | null;
-        sync_origin_id: number | null;
-      };
-      note = this.transaction(() => {
-        const n = this.create(
-          {
-            namespace: q.namespace,
-            title: q.title ?? "",
-            body: q.body ?? "",
-            tags: q.tags ?? undefined,
-            source: q.source ?? undefined,
-            created_at: row.created_at_override ?? undefined,
-            sensitivity: row.sensitivity,
-          },
-          { lint: "none", writtenBy: row.written_by ?? "", importedUnverified: Number(row.imported_unverified) === 1 }
-        );
-        if (row.sync_origin !== null && row.sync_origin_id !== null) {
-          this.syncLink(row.sync_origin, Number(row.sync_origin_id), n.id);
-          // What this store has now synced for the note, so an origin edit before the next sync merges as an update.
-          this.setSyncBase(n.id, syncContentHash(n));
-        }
-        drop.run(id);
-        return n;
-      });
-    } else {
-      const held = this.db
-        .prepare("SELECT if_rev, set_namespace, written_by, sensitivity, imported_unverified, sync_origin FROM quarantine WHERE id = ?")
-        .get(id) as { if_rev: number | null; set_namespace: number; written_by: string | null; sensitivity: string; imported_unverified: number; sync_origin: string | null };
-      const ifRev = held.if_rev;
-      // Rows from before 1.1.0 may lack the rev the update was based on;
-      // applying them unguarded could overwrite later edits.
-      if (ifRev === null) {
-        throw new ValidationError(
-          `quarantined update #${id} predates rev tracking, so it can't be applied safely; reject it and re-submit the change`
-        );
-      }
-      // A stale if_rev makes update() throw "stale write" -- a conflict the
-      // admin resolves (reject, or re-submit), never a silent overwrite.
-      const updated = this.update(
-        q.target_id ?? -1,
-        {
-          ...(held.set_namespace ? { namespace: q.namespace } : {}),
-          ...(q.title !== null ? { title: q.title } : {}),
-          ...(q.body !== null ? { body: q.body } : {}),
-          ...(q.tags !== null ? { tags: q.tags } : {}),
-          ...(q.source !== null ? { source: q.source } : {}),
-          // The rev pin above means the note is exactly as it was when the write was held, so re-applying its label is a no-op
-          // unless the write itself relabelled the note.
-          sensitivity: held.sensitivity,
-        },
-        { ifRev, lint: "none", writtenBy: held.written_by ?? "", importedUnverified: Number(held.imported_unverified) === 1 }
-      );
-      if (!updated) {
-        throw new ValidationError(
-          `quarantined update #${id} targets note ${q.target_id}, which no longer exists; reject it instead`
-        );
-      }
-      // A held sync update: record the synced content as the merge base (else the next origin edit looks like a conflict).
-      if (held.sync_origin !== null) this.setSyncBase(updated.id, syncContentHash(updated));
-      drop.run(id);
-      note = updated;
-    }
+    const note = this.transaction(() => this.applyHeld(id, q));
     this.audit({ op: "quarantine-approve", id, namespace: q.namespace });
     return note;
+  }
+
+  /**
+   * Apply held write `id` (caller holds a transaction) and drop it from the queue.
+   *
+   * Times (1.4.0): the note keeps the time the write was WRITTEN (the hold time), not the approval time, so a late approval
+   * cannot make an old claim outrank a correction saved while it waited. approved_at/approved_by record the approval.
+   *  - create: created_at = the write's own created_at if it sent one, else the hold time; updated_at = the hold time.
+   *  - update: updated_at = the hold time, but never earlier than the note's current updated_at. The rev pin
+   *    (compare-and-swap) already guarantees the note did not change since the hold, so this only guards clock skew and
+   *    paths that touch updated_at without a rev bump; the note's time never moves backwards.
+   * forget_after counts from that written time; confidence is the writer's claim, as if the write had gone straight in.
+   */
+  private applyHeld(id: number, q: QuarantineEntry): NoteRecord {
+    const held = this.db
+      .prepare(
+        `SELECT op, if_rev, set_namespace, created_at, created_at_override, written_by, sensitivity, imported_unverified,
+                sync_origin, sync_origin_id, forget_after, confidence, clears FROM quarantine WHERE id = ?`
+      )
+      .get(id) as unknown as HeldRow;
+    const note = q.op === "create" ? this.applyHeldCreate(q, held) : this.applyHeldUpdate(id, q, held);
+    this.db.prepare("UPDATE notes SET approved_at = ?, approved_by = ? WHERE id = ?").run(new Date().toISOString(), currentWriter(), note.id);
+    this.db.prepare("DELETE FROM quarantine WHERE id = ?").run(id);
+    return this.read(note.id)!;
+  }
+
+  /** The held write's forget_after and confidence as a patch; a held EDIT that cleared one (null) clears it again. */
+  private heldExtras(held: HeldRow): { forget_after?: number; confidence?: number | null } {
+    let clears: string[] = [];
+    try {
+      clears = held.clears ? (JSON.parse(held.clears) as string[]) : [];
+    } catch {
+      /* a damaged list clears nothing */
+    }
+    return {
+      ...(held.forget_after !== null ? { forget_after: Number(held.forget_after) } : clears.includes("forget_after") ? { forget_after: null as unknown as number } : {}),
+      ...(held.confidence !== null ? { confidence: Number(held.confidence) } : clears.includes("confidence") ? { confidence: null } : {}),
+    };
+  }
+
+  private applyHeldCreate(q: QuarantineEntry, held: HeldRow): NoteRecord {
+    const note = this.create(
+      {
+        namespace: q.namespace,
+        title: q.title ?? "",
+        body: q.body ?? "",
+        tags: q.tags ?? undefined,
+        source: q.source ?? undefined,
+        created_at: held.created_at_override ?? held.created_at,
+        sensitivity: held.sensitivity,
+        // A create has nothing to clear (heldExtras clears only for an edit), so no null reaches here.
+        ...(this.heldExtras(held) as { forget_after?: number; confidence?: number }),
+      },
+      { lint: "none", writtenBy: held.written_by ?? "", importedUnverified: Number(held.imported_unverified) === 1, updatedAt: held.created_at }
+    );
+    if (held.sync_origin !== null && held.sync_origin_id !== null) {
+      this.syncLink(held.sync_origin, Number(held.sync_origin_id), note.id);
+      // What this store has now synced for the note, so an origin edit before the next sync merges as an update.
+      this.setSyncBase(note.id, syncContentHash(note));
+    }
+    return note;
+  }
+
+  private applyHeldUpdate(id: number, q: QuarantineEntry, held: HeldRow): NoteRecord {
+    // Rows from before 1.1.0 may lack the rev the update was based on;
+    // applying them unguarded could overwrite later edits.
+    if (held.if_rev === null) {
+      throw new ValidationError(
+        `quarantined update #${id} predates rev tracking, so it can't be applied safely; reject it and re-submit the change`
+      );
+    }
+    // A stale if_rev makes update() throw "stale write" -- a conflict the
+    // admin resolves (reject, or re-submit), never a silent overwrite.
+    const updated = this.update(
+      q.target_id ?? -1,
+      {
+        ...(held.set_namespace ? { namespace: q.namespace } : {}),
+        ...(q.title !== null ? { title: q.title } : {}),
+        ...(q.body !== null ? { body: q.body } : {}),
+        ...(q.tags !== null ? { tags: q.tags } : {}),
+        ...(q.source !== null ? { source: q.source } : {}),
+        // The rev pin above means the note is exactly as it was when the write was held, so re-applying its label is a no-op
+        // unless the write itself relabelled the note.
+        sensitivity: held.sensitivity,
+        ...this.heldExtras(held),
+      },
+      { ifRev: held.if_rev, lint: "none", writtenBy: held.written_by ?? "", importedUnverified: Number(held.imported_unverified) === 1, writtenAt: held.created_at }
+    );
+    if (!updated) {
+      throw new ValidationError(
+        `quarantined update #${id} targets note ${q.target_id}, which no longer exists; reject it instead`
+      );
+    }
+    // A held sync update: record the synced content as the merge base (else the next origin edit looks like a conflict).
+    if (held.sync_origin !== null) this.setSyncBase(updated.id, syncContentHash(updated));
+    return updated;
+  }
+
+  /**
+   * What changed while held write `id` waited (1.4.0): live notes in its namespace saved (created or edited) since it was
+   * held that share its topic, newest first. Ids, titles, times and writers only, never the held text. For a held edit
+   * the target note is left out of the list; `target_changed` says whether it changed since (then approval will fail,
+   * because a held edit is applied only to the exact version it was written against). The caller's own read rules apply
+   * (distrusted writers, sensitivity ceiling). null when there is no such held write.
+   */
+  quarantineContext(id: number): QuarantineContext | null {
+    const q = this.getQuarantine(id);
+    if (!q) return null;
+    const target = q.op === "update" && q.target_id !== null ? this.read(q.target_id) : null;
+    // A held edit that leaves the title alone is about its target's topic.
+    const topic = tokenize(`${q.title ?? target?.title ?? ""} ${(q.tags ?? []).join(" ")}`);
+    const words = new Set(topic);
+    // ponytail: newest 500 notes of the namespace, title-word overlap; a ranked search if the queue ever needs fuzzier matching.
+    const notes = this.list({ namespace: q.namespace, limit: 500 })
+      .notes.filter((n) => n.updated_at >= q.created_at && n.id !== q.target_id)
+      .filter((n) => tokenize(`${n.title} ${n.tags.join(" ")}`).some((w) => words.has(w)))
+      .map((n) => ({ id: n.id, title: n.title, updated_at: n.updated_at, written_by: n.written_by }));
+    return {
+      id: q.id,
+      op: q.op,
+      target_id: q.target_id,
+      namespace: q.namespace,
+      held_at: q.created_at,
+      ...(q.op === "update" ? { target_changed: !target || target.rev !== this.heldRev(id) } : {}),
+      ...this.heldClears(id),
+      notes,
+    };
+  }
+
+  /** { clears } for a held edit that clears confidence or the forget date ({} when it clears nothing). */
+  private heldClears(id: number): { clears?: string[] } {
+    const row = this.db.prepare("SELECT clears FROM quarantine WHERE id = ?").get(id) as { clears: string | null } | undefined;
+    try {
+      const list = row?.clears ? (JSON.parse(row.clears) as unknown) : null;
+      return Array.isArray(list) && list.length ? { clears: list.filter((x): x is string => typeof x === "string") } : {};
+    } catch {
+      return {};
+    }
+  }
+
+  /** The rev a held edit was written against (its compare-and-swap pin); null for a create or a pre-1.1.0 row. */
+  private heldRev(id: number): number | null {
+    const row = this.db.prepare("SELECT if_rev FROM quarantine WHERE id = ?").get(id) as { if_rev: number | null } | undefined;
+    return row?.if_rev ?? null;
+  }
+
+  /**
+   * "Keep as history" (1.4.0): approve held write `id` with its written time, then mark the note replaced by a newer related
+   * note (by default the newest one quarantineContext lists; `byId` must be one of them). The note is kept whole and
+   * retired exactly like a confirmed replacement (archived, superseded_by set, undo with supersede undo). Refused, with the
+   * write left queued, when nothing newer and related was saved since it was held.
+   */
+  keepQuarantineAsHistory(id: number, byId?: number): { note: NoteRecord; superseded_by: number } {
+    const ctx = this.quarantineContext(id);
+    if (!ctx) throw new ValidationError(`no quarantined write with id ${id}`);
+    if (!ctx.notes.length) {
+      throw new ValidationError(
+        `held write #${id}: nothing newer on the same topic was saved in "${ctx.namespace}" since it was held, so there is nothing to keep it as history of. Approve or reject it instead.`
+      );
+    }
+    const by = byId === undefined ? ctx.notes[0] : ctx.notes.find((n) => n.id === byId);
+    if (!by) throw new ValidationError(`note ${byId} is not one of the newer related notes saved since held write #${id} was held`);
+    // 1.4.0: retiring one note in favour of another is a promotion of the other; neither side may be outside content no person
+    // has confirmed. The CLI (behind its operator gate) decides that itself.
+    if (currentWriter() !== "cli" && isTainted(this.getQuarantine(id)?.tags ?? [])) {
+      throw new ValidationError(`Can't keep as history: held write #${id} came from outside content. A person must decide it in a terminal: monomem quarantine keep-history ${id}`);
+    }
+    const note = this.transaction(() => {
+      // Inside the transaction: if applying the held write fails, the operator's pass is not left behind as a confirm.
+      this.requireHumanConfirm(by.id, "use it as a replacement");
+      const n = this.applyHeld(id, this.getQuarantine(id)!);
+      if (n.id === by.id) throw new ValidationError("a note cannot replace itself");
+      const now = new Date().toISOString();
+      const actor = currentWriter();
+      const res = this.db
+        .prepare(
+          `UPDATE notes SET archived_at = ?, superseded_by = ?, superseded_at = ?, superseded_by_writer = ?, rev = rev + 1
+           WHERE id = ? AND archived_at IS NULL AND superseded_by IS NULL`
+        )
+        .run(now, by.id, now, actor, n.id);
+      if (Number(res.changes) === 0) throw new StaleWriteError(`note ${n.id} is no longer live; nothing was changed`);
+      this.db
+        .prepare("INSERT INTO supersede_log (at, actor, action, namespace, old_id, new_id, flags) VALUES (?, ?, 'supersede', ?, ?, ?, 'keep-history')")
+        .run(now, actor, n.namespace, n.id, by.id);
+      return n;
+    });
+    this.edgeIndexes.clear();
+    this.audit({ op: "quarantine-keep-history", id, namespace: ctx.namespace });
+    return { note: this.read(note.id)!, superseded_by: by.id };
   }
 
   /** Discard a quarantined write. Returns false when no such entry. */

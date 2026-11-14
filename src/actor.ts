@@ -26,6 +26,18 @@ export interface ActorRef {
   maxSensitivity?: Sensitivity;
   /** False for a non-admin token: it may raise a note's label but not lower it. Undefined = may (operator, CLI, stdio). */
   canDeclassify?: boolean;
+  /**
+   * 1.4.0: `obs.origin:*` tags this connection adds to every note it writes (taint.ts): `via:memory` once it has read an
+   * unconfirmed note, `declared` for a token marked reads_outside. Set by the entry point, never from a request body.
+   */
+  taint?: readonly string[];
+  /** 1.4.0: ids of unconfirmed notes this connection has read (its confirm of one of them does not count). */
+  taintedReads?: ReadonlySet<number>;
+  /**
+   * 1.4.0: the namespaces this connection may read, when its server confines it (a namespace-pinned token or server).
+   * Undefined = no boundary. The store checks a write's derived_from against it, so a link cannot probe other namespaces.
+   */
+  readable?: readonly string[];
 }
 
 export const actorStore = new AsyncLocalStorage<ActorRef>();

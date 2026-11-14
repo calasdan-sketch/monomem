@@ -13,6 +13,7 @@ import type { Store } from "./store.js";
 import { redact } from "./redact.js";
 import { captureAad } from "./crypto.js";
 import { currentWriter } from "./actor.js";
+import { isOutsideTool } from "./taint.js";
 
 export const HOOK_EVENTS = ["session-start", "user-prompt", "post-tool", "post-tool-failure", "stop", "subagent-stop", "session-end"] as const;
 export type HookEvent = (typeof HOOK_EVENTS)[number];
@@ -139,6 +140,9 @@ export function normalizeHookInput(event: HookEvent, raw: unknown, now: Date = n
   return { session_id: sid, cwd, event, tool, input: cleanField(input), output: cleanField(output), ok, bytes, at: now.toISOString(), ...(model ? { model } : {}) };
 }
 
+/** A tool result from outside content (the web, another MCP server): what marks a session as having read outside content. */
+const isOutsideEvent = (ev: CaptureEvent): boolean => (ev.event === "post-tool" || ev.event === "post-tool-failure") && Boolean(ev.output) && isOutsideTool(ev.tool);
+
 /**
  * Store one event (caller holds no transaction). Creates the session row on first sight. Returns whether the session is
  * new, so the caller can run its once-per-session housekeeping (drain the spool, distill crashed sessions).
@@ -171,6 +175,8 @@ export function recordEvent(store: Store, ev: CaptureEvent, namespace: string): 
     ).run(...(ev.event === "session-end" ? [ev.at] : []), ev.session_id);
     // Only when reported: a later session-start without it (after /clear) keeps the stored value.
     if (ev.model) db.prepare("UPDATE sessions SET model = ? WHERE id = ?").run(ev.model, ev.session_id);
+    // 1.4.0: this session read outside content; notes written in its namespace while it lasts are marked (Store.taintFor).
+    if (isOutsideEvent(ev)) db.prepare("UPDATE sessions SET outside_at = MAX(COALESCE(outside_at, ''), ?) WHERE id = ?").run(ev.at, ev.session_id);
     db.exec("COMMIT");
     return { newSession: created === 1, seq };
   } catch (e) {
@@ -263,7 +269,10 @@ export function drainSpool(store: Store, dataDir: string, now = Date.now()): num
         }
         if (!ev || typeof ev.session_id !== "string" || !(HOOK_EVENTS as readonly string[]).includes(ev.event)) continue;
         try {
-          recordEvent(store, ev, typeof ev.namespace === "string" ? ev.namespace : "");
+          const ns = typeof ev.namespace === "string" ? ev.namespace : "";
+          recordEvent(store, ev, ns);
+          // Stored late: notes written since that outside read got no mark at the time, so they get it now.
+          if (isOutsideEvent(ev)) store.retroTaint(ns, ev.at, ev.tool);
           stored++;
         } catch {
           const tries = (Number(ev.tries) || 0) + 1;

@@ -62,7 +62,7 @@ describe("tool-surface claims match the registered tools", () => {
 
   test("the docs' tool count is the real tool count", () => {
     assert.ok(registered.length >= 20, "sanity: the regex should find the tools");
-    const words: Record<number, string> = { 28: "twenty-eight", 30: "thirty", 32: "thirty-two", 33: "thirty-three", 34: "thirty-four", 35: "thirty-five" };
+    const words: Record<number, string> = { 28: "twenty-eight", 30: "thirty", 32: "thirty-two", 33: "thirty-three", 34: "thirty-four", 35: "thirty-five", 36: "thirty-six" };
     const arch = read("docs/architecture.md");
     const claimed = Object.entries(words).find(([, w]) => arch.includes(`with ${w} tools`));
     assert.ok(claimed, "docs/architecture.md should state the tool count in words");

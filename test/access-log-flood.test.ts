@@ -228,8 +228,8 @@ describe("schema v17", () => {
       } finally {
         console.error = quiet;
       }
-      assert.equal(Store.peekSchemaVersion(path), 19);
-      assert.equal(Store.peekSchemaVersion(path + ".pre-v19-backup"), 16);
+      assert.equal(Store.peekSchemaVersion(path), 20);
+      assert.equal(Store.peekSchemaVersion(path + ".pre-v20-backup"), 16);
       assert.deepEqual(s.list({}).notes.map((n) => n.title), ["kept"]);
       s.logAccess({ tool: "state_list", results: 1 });
       assert.equal(s.accessLog().length, 1);
@@ -310,7 +310,7 @@ describe("flood guard", () => {
       });
       s.close();
       s = new Store(db);
-      assert.equal(SCHEMA_VERSION, 19);
+      assert.equal(SCHEMA_VERSION, 20);
       assert.deepEqual(s.pausedWriters(), ["stdio"]);
       setProcessWriter("stdio");
       assert.throws(() => s.create({ title: "three" }), WriterPausedError, "still paused at the default threshold");

@@ -52,7 +52,7 @@ All environment variables are optional. This table lists **every** `MONOMEM_*` v
 | `MONOMEM_IMPORT_REQUIRE_ATTESTATION` | unset (off) | `1` = an import (`monomem import --file`, `POST /import`) rejects every note that does not come with an attestation that verifies against a trusted key. Off by default: notes imported without one are accepted and flagged `imported_unverified`. Per import: `--require-attestation`, `?require_attestation=1`. See [trust.md](./trust.md) |
 | `MONOMEM_NO_CHMOD` | unset | `1` = never tighten data-dir permissions to 0700/0600 (for deliberately shared dirs) |
 | `MONOMEM_TOKEN` | auto-generated → `<data dir>/.token` | Primary bearer token; required to bind a public interface. **It is always an admin token**, so an agent holding it can switch the distrust policy off (`include_distrusted`): give agents a `write` or `read` token from `MONOMEM_TOKENS` and keep the primary one off them (`monomem doctor` warns when distrust rules exist and no other token does) |
-| `MONOMEM_TOKENS` | unset | Optional JSON array of extra scoped tokens: `[{"token":"…","scope":"read\|write\|admin","label":"…","namespace":"…","max_sensitivity":"…"}]` (also readable from `<data dir>/tokens.json`). `namespace` optionally pins a token to one namespace — per-token isolation on a shared server, so several agents can share one bridge without seeing each other's notes. See [token-namespaces.md](./token-namespaces.md). `max_sensitivity` (`public`, `internal` or `private`) is a ceiling on which notes the token can see or write, whatever namespace it is in. See [sensitivity-labels.md](./sensitivity-labels.md) |
+| `MONOMEM_TOKENS` | unset | Optional JSON array of extra scoped tokens: `[{"token":"…","scope":"read\|write\|admin","label":"…","namespace":"…","max_sensitivity":"…"}]` (also readable from `<data dir>/tokens.json`). `namespace` optionally pins a token to one namespace — per-token isolation on a shared server, so several agents can share one bridge without seeing each other's notes. See [token-namespaces.md](./token-namespaces.md). `max_sensitivity` (`public`, `internal` or `private`) is a ceiling on which notes the token can see or write, whatever namespace it is in. See [sensitivity-labels.md](./sensitivity-labels.md). `"reads_outside": true` (1.4.0) says the agent behind this token reads outside content (web pages, documents): every note it writes is marked `obs.origin:declared` and stays unconfirmed until confirmed. Only `true` counts; when a token is listed twice, either listing marking it is enough. See [trust.md](./trust.md#outside-content-and-taint-140) |
 | `MONOMEM_BIND` | `127.0.0.1` | Interface to bind (`0.0.0.0` inside Docker) |
 | `MONOMEM_PORT` | `8790` | HTTP API + dashboard port |
 | `MONOMEM_MCP_PORT` | `8791` | MCP-over-HTTP port (for apps that connect over HTTP with a key) |
@@ -97,7 +97,8 @@ All environment variables are optional. This table lists **every** `MONOMEM_*` v
 | `MONOMEM_CAPTURE` | on (once the hooks are installed) | `off` = the capture hooks record nothing (the session-start context still works). Also readable from `<data dir>/capture.json` as `{"capture":"off"}`; the variable wins |
 | `MONOMEM_CAPTURE_EXCLUDE` | unset | Comma-separated globs (`*`, `**`) on the working directory; sessions in a matching folder are not recorded (e.g. `**/secret-*,C:/clients/**`) |
 | `MONOMEM_CAPTURE_SKIP_TOOLS` | unset | Comma-separated tool names the capture hooks ignore (e.g. `TodoWrite,WebFetch`). Monomem's own `mcp__monomem__*` tools are always skipped |
-| `MONOMEM_LOCAL_MCP_SERVERS` | unset | Comma-separated MCP server names (the `<server>` in `mcp__<server>__tool`) that return only local content, such as a code index. Their output does not earn a session summary the "read outside content" stamp ([trust.md](./trust.md#the-outside-content-stamp)). Unset = every MCP server except Monomem counts as outside |
+| `MONOMEM_LOCAL_MCP_SERVERS` | unset | Comma-separated MCP server names (the `<server>` in `mcp__<server>__tool`) that return only local content, such as a code index. Their output does not count as outside content: it neither stamps a session summary nor marks notes through `MONOMEM_TAINT_WINDOW_HOURS` ([trust.md](./trust.md#outside-content-and-taint-140)). Unset = every MCP server except Monomem counts as outside |
+| `MONOMEM_TAINT_WINDOW_HOURS` | `12` | A note written by an agent (not the `monomem` CLI) is marked as from outside content, and stays unconfirmed until confirmed, when a hook-equipped session in the same namespace read outside content within this many hours and has not ended. Only what the hooks can see counts. `0` turns this signal off; the other two (an agent that read unconfirmed memory, a declared write or token) stay. See [trust.md](./trust.md#outside-content-and-taint-140) |
 | `MONOMEM_CAPTURE_RETENTION_DAYS` | `7` | Raw captured events are deleted after this many days (the observations distilled from them are kept like notes) |
 | `MONOMEM_DECAY_DAYS` | `30` | Captured observations nobody updated or read for this many days are **archived** (never deleted; `monomem restore <id>` brings one back) by the expiry sweep and at session end. Never decayed: your own notes, decisions, rows tagged `pinned`. `0` = decay off. Preview with `monomem decay --dry-run` |
 | `MONOMEM_DECAY_SUMMARY_DAYS` | `180` | The same for session summaries. `0` = summaries never decay |
@@ -117,6 +118,26 @@ All environment variables are optional. This table lists **every** `MONOMEM_*` v
 | `MONOMEM_HOOK_TOKEN` | unset | A write-scope token for `MONOMEM_HOOK_URL` |
 | `MONOMEM_SPACES` | unset (feature off) | Optional JSON namespace config: `{"spaces":{"/home/you/work":"work"},"default_namespace":"default","reads_from":{"work":["shared"]}}` (or `<data dir>/spaces.json`; env wins). Enables server-side namespace resolution |
 | `MONOMEM_SPACE` | unset | Explicit namespace override: when set, the server uses this namespace directly instead of resolving from the working directory (only meaningful with a spaces config present) |
+
+## Settings kept in the store (`monomem config`)
+
+A few settings live in the database itself, not in the environment, so every process that opens it agrees (a change
+shows in other processes within a second). They have no environment variable on purpose: an environment switch has no
+recorded switch time, so turning `enforce` on that way would hide old notes at once.
+
+```
+monomem config                              # show them (same as: monomem config get)
+monomem config set confirm-mode label       # off | label | enforce
+monomem config set confirm-days 30          # 1 to 3650
+```
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `confirm-mode` | `label` | Re-confirmation expiry. `off`: no note expires. `label`: a note nobody changed or confirmed in `confirm-days` is labelled `[expired - ...]` on reads and search, nothing else. `enforce`: also kept out of session start and ranked slightly lower. Changing the mode restarts every note's clock from that moment. See [search.md](./search.md#re-confirmation-expiry) |
+| `confirm-days` | `30` | The re-confirmation period in days |
+
+Lowering protection (a lower mode, or more days while expiry is on) asks you to type yes in a terminal. Raising it works
+from a script. Each change is written to the audit log.
 
 ## Server-side namespace resolution (optional)
 

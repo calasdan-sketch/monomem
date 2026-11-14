@@ -8,6 +8,7 @@ import type { Store, NoteRecord } from "./store.js";
 import { ValidationError } from "./store.js";
 import { printable } from "./security.js";
 import { actorStore } from "./actor.js";
+import { heldFromSessionStart } from "./taint.js";
 import { gatePinned } from "./operator-gate.js";
 import { factMismatchWarnings, scanForInjection, scanForDirective } from "./lint.js";
 
@@ -243,7 +244,10 @@ function disputes(notes: readonly NoteRecord[]): Dispute[] {
  */
 export function disputedLines(store: Store, opts: DisputeOpts | string = {}): string {
   const o: DisputeOpts = typeof opts === "string" ? { namespace: opts } : opts;
-  const found = disputes(store.liveFactNotesIn(o.namespace, { writtenBy: o.writtenBy, notWrittenBy: o.notWrittenBy }));
+  // 1.4.0: a note held out of session start (unconfirmed outside content ...) must not reach it through its fact value either.
+  const enforce = store.confirmSettings().mode === "enforce";
+  const live = store.liveFactNotesIn(o.namespace, { writtenBy: o.writtenBy, notWrittenBy: o.notWrittenBy }).filter((n) => !heldFromSessionStart(n, enforce));
+  const found = disputes(live);
   const lines = found.slice(0, MAX_DISPUTE_LINES).map(({ namespace, key, sides }) => {
     const text = sides.slice(0, MAX_SIDES).map((s) => {
       const ws = [...s.writers.values()].sort((a, b) => a.id - b.id);

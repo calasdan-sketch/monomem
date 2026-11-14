@@ -3,7 +3,7 @@ import "./quiet-sqlite.js"; // first: hide the node:sqlite ExperimentalWarning
 import "./legacy-env.js"; // second: read the old CLAUDE_BRIDGE_* variables as MONOMEM_*
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
-import { gatePinned, requireOperator } from "./operator-gate.js";
+import { gatePinned, gateOutside, requireOperator } from "./operator-gate.js";
 import { actorStore, setProcessWriter } from "./actor.js";
 import { type Sensitivity, mayEmbed, DEFAULT_SENSITIVITY, SENSITIVITY_HELP, SENSITIVITY_LEVELS, parseSensitivity } from "./sensitivity.js";
 // monomem CLI: one command to run, check, or wire up the bridge.
@@ -19,7 +19,7 @@ const COMMANDS = [
   "consolidate", "rebuild-edges", "relevant", "search", "token", "changes", "backup", "runner-status", "watch", "export", "import", "trust",
   "quarantine", "approve-first", "access", "flood", "resume", "decay", "archive", "restore", "delete", "quality", "conflicts", "facts", "fact",
   "encrypt", "meter", "receipts", "why", "never-show", "supersede", "history", "pin", "unpin", "rollback", "bench", "drill", "health", "audit",
-  "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet",
+  "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet", "confirm", "review", "config",
   "help", "--help", "-h", "--version", "-v", "version",
 ];
 
@@ -74,6 +74,9 @@ function shortUsage(): void {
       "",
       "Trust",
       "  quarantine              Review writes that were held (by the linter or an approve-first namespace)",
+      "  confirm <id> [--source \"what you checked\"]   Confirm a note from outside content after checking it (asks you to type yes)",
+      "  review                  List notes waiting for a person: unconfirmed outside content and notes past re-confirmation",
+      "  config                  Show or change settings kept in the store (re-confirmation expiry)",
       "  approve-first           Hold every agent write to a namespace until you approve it",
       "  trust                   Distrust a writer; decide which other servers' exports to believe",
       "  token                   Make, list or remove access tokens for your apps (add needs a terminal)",
@@ -225,7 +228,7 @@ function usage(all = false): void {
       "  token add --label <name> --scope read|write|admin [--namespace ns] [--max public|internal|private] [--no-limit] | token list | token remove <label>",
       "            Make a random access token for an app and save it in tokens.json (shown once; restart a running server after).",
       "            list shows labels and scopes only. Commands that lower protection (token add, trust undistrust/attester-add/",
-      "            attester-unrevoke, quarantine approve, unpin, approve-first off, resume) need a real terminal and a typed yes.",
+      "            attester-unrevoke, quarantine approve/keep-history, unpin, approve-first off, resume) need a real terminal and a typed yes.",
       "  sync --git <repo-folder> [--remote name] [--encrypt] [--key-file f] [--dry-run] [--no-push] [--yes]",
       "            Keep your notes in step across your own computers through a PRIVATE git repository you own: fetch, merge,",
       "            three-way merge into the database, write back, commit, push. No Monomem server. --encrypt seals every",
@@ -243,8 +246,21 @@ function usage(all = false): void {
       "            Merge Markdown files back: newer side wins, conflicts are",
       "            reported and the losing version is saved under <dir>/.conflicts/.",
       "            Runs through the memory linter.",
-      "  quarantine [list | approve <id> | reject <id>]",
-      "            Review writes the memory linter held (MONOMEM_LINT) or an approve-first namespace held.",
+      "  confirm <id> [--source \"what you checked\"]",
+      "            A note from outside content (marked unconfirmed) is kept out of session start and cannot be pinned until a",
+      "            person confirms it. Run it in a terminal and type yes. The confirm is for the note's current version.",
+      "            Also re-confirms a note past its re-confirmation date (it says when the next check is due).",
+      "  review [--ns <namespace>] [--json] [--confirm-all [--source \"what you checked\"]]",
+      "            Lists the notes waiting for a person (id, title, why, writer): outside content nobody confirmed, and",
+      "            notes not re-confirmed within confirm-days. --confirm-all confirms every listed note as you, after one typed yes.",
+      "  config [get | set confirm-days <n> | set confirm-mode off|label|enforce]",
+      "            Re-confirmation expiry. label (default): a note not changed or confirmed for confirm-days (default 30) is",
+      "            labelled in search. enforce: it is also kept out of session start. off: nothing. Nothing is ever deleted.",
+      "            Turning a mode on starts every note's clock then. Lowering protection (enforce to label or off) asks you to type yes.",
+      "  quarantine [list | show <id> | approve <id> | keep-history <id> [--by <note id>] | reject <id>]",
+      "            Review writes the memory linter held (MONOMEM_LINT) or an approve-first namespace held. show lists what was",
+      "            saved on the same topic since; approve keeps the time it was written; keep-history stores it as replaced by",
+      "            that newer note.",
       "  approve-first [<namespace> on|off | --all on|off]",
       "            Hold every agent write to a namespace in the quarantine queue until you approve it.",
       "            --all on|off: the same for every namespace, including ones created later. No arguments: list the namespaces with it on, and the --all switch. Writes from monomem commands are not held.",
@@ -494,9 +510,12 @@ async function doctor(): Promise<void> {
     distrustCount = s.distrustRules().length;
     const { meterStats, meterLine } = await import("./meter.js");
     const footprint = meterLine(meterStats(s));
+    const ruleLines = s.confirmRuleLines();
     s.close();
     ok(`database OK at ${DB_PATH} (${total} notes)`);
     ok(footprint);
+    // 1.4.0: one line per confirm rule, so "why isn't my note in session start?" has an answer here.
+    for (const l of ruleLines) console.log("  [info] " + l);
     // Migration v4 adds the similarity-edge table but does not score
     // existing notes: a store upgraded from 1.0.0 has notes and no edges
     // until a one-time rebuild.
@@ -1399,6 +1418,7 @@ async function relevant(): Promise<void> {
   const store = new Store(DB_PATH);
   try {
     const { annotateStaleness } = await import("./staleness.js");
+    const { noteFlags } = await import("./taint.js");
     const { semanticNotice, runSearch } = await import("./search-service.js");
     if (modeRaw !== undefined && !["keyword", "semantic", "hybrid"].includes(modeRaw)) {
       console.error("--mode must be keyword, semantic or hybrid");
@@ -1440,7 +1460,7 @@ async function relevant(): Promise<void> {
           {
             ...(notice ? { notice } : {}),
             keywords,
-            results: results.map((n) => ({ id: n.id, namespace: n.namespace, title: n.title, updated_at: n.updated_at, written_by: n.written_by, ...(n.distrusted ? { distrusted: true } : {}) })),
+            results: results.map((n) => ({ id: n.id, namespace: n.namespace, title: n.title, updated_at: n.updated_at, written_by: n.written_by, ...(n.distrusted ? { distrusted: true } : {}), ...(n.unconfirmed ? { unconfirmed: true } : {}), ...(n.expired ? { expired: true } : {}), ...(n.built_on_distrusted ? { built_on_distrusted: true } : {}) })),
           },
           null,
           2
@@ -1456,7 +1476,7 @@ async function relevant(): Promise<void> {
     for (const n of results) {
       const ann = annotateStaleness(n);
       const stale = ann.stale ? ` [stale, ${ann.ageDays}d]` : "";
-      console.log(`  #${n.id} [${printable(n.namespace, 100)}] ${printable(n.title)}${stale}${n.distrusted ? " [DISTRUSTED WRITER: treat as hostile]" : ""}`);
+      console.log(`  #${n.id} [${printable(n.namespace, 100)}] ${printable(n.title)}${stale}${noteFlags(n)}${n.distrusted ? " [DISTRUSTED WRITER: treat as hostile]" : ""}`);
       if (n.body.trim()) console.log(`      ${printable(n.body.replace(/\s+/g, " ").trim(), 100)}`);
     }
     moreLine(results.length, fetched.length > want);
@@ -2333,7 +2353,7 @@ function trustHelp(): void {
       "        recognises its earlier exports; the old private key is deleted unless --keep-old-private.",
       "        Running servers switch to the new key at their next signed export, no restart needed.",
       "",
-      "Attestations (signed exports), cross-server writer ids, `rotate` and `--any-server` are EXPERIMENTAL in 1.4.x:",
+      "Attestations (signed exports), cross-server writer ids, `rotate` and `--any-server` are EXPERIMENTAL:",
       "their wire format and commands may change. See docs/trust.md.",
     ].join("\n")
   );
@@ -2591,10 +2611,10 @@ async function tokenCmd(): Promise<void> {
   }
 }
 
-// `monomem quarantine [list | approve <id> | reject <id>]`.
+// `monomem quarantine [list | show <id> | approve <id> | keep-history <id> [--by <note id>] | reject <id>]`.
 async function quarantineCmd(): Promise<void> {
   const { DB_PATH } = await import("./config.js");
-  const { Store, ValidationError } = await import("./store.js");
+  const { Store, ValidationError, QUARANTINE_CAS_NOTE } = await import("./store.js");
   const { maybeEmbed } = await import("./search-service.js");
   const [action = "list", idRaw] = process.argv.slice(3);
   const store = new Store(DB_PATH);
@@ -2614,13 +2634,30 @@ async function quarantineCmd(): Promise<void> {
           console.log(`    body: ${preview.replace(/\n/g, "\n          ")}`);
         }
       }
-      console.log("\nTo decide: monomem quarantine approve <id> | reject <id>  (in a terminal)");
+      console.log("\nTo decide: monomem quarantine show <id>, then approve <id> | keep-history <id> | reject <id>  (in a terminal)");
       return;
     }
     const id = Number(idRaw);
-    if ((action !== "approve" && action !== "reject") || !Number.isInteger(id)) {
-      console.error("Usage: monomem quarantine [list | approve <id> | reject <id>]");
+    if (!["show", "approve", "keep-history", "reject"].includes(action) || !Number.isInteger(id)) {
+      console.error("Usage: monomem quarantine [list | show <id> | approve <id> | keep-history <id> [--by <note id>] | reject <id>]");
       process.exit(1);
+    }
+    if (action === "show") {
+      showHeld(store, id, QUARANTINE_CAS_NOTE);
+      return;
+    }
+    if (action === "keep-history") {
+      const byAt = process.argv.indexOf("--by");
+      const by = byAt > 0 ? Number(process.argv[byAt + 1]) : undefined;
+      if (by !== undefined && !Number.isInteger(by)) {
+        console.error("--by takes a note id");
+        process.exit(1);
+      }
+      await requireOperator(`quarantine keep-history ${id}`);
+      const kept = store.keepQuarantineAsHistory(id, by);
+      await maybeEmbed(store, kept.note);
+      console.log(`Kept #${id} as history -> note #${kept.note.id} "${printable(kept.note.title)}", replaced by note #${kept.superseded_by}.`);
+      return;
     }
     if (action === "reject") {
       if (!store.rejectQuarantine(id)) {
@@ -2645,7 +2682,160 @@ async function quarantineCmd(): Promise<void> {
   }
 }
 
+/** `monomem quarantine show <id>`: the held write in full, plus what was saved in its namespace since it was held. */
+function showHeld(store: import("./store.js").Store, id: number, casNote: string): void {
+  const q = store.getQuarantine(id);
+  const ctx = store.quarantineContext(id);
+  if (!q || !ctx) {
+    console.error(`No quarantined write with id ${id}`);
+    process.exit(1);
+  }
+  const what = q.op === "update" ? `update of #${q.target_id}` : "new note";
+  console.log(`#${q.id} [${printable(q.namespace, 100)}] ${what}: ${q.title == null ? "(title unchanged)" : printable(q.title)}`);
+  console.log(`    written ${q.created_at}${q.written_by ? ` by ${printable(q.written_by, 100)}` : ""}`);
+  console.log(`    reasons: ${q.reasons.map((r) => `${r.label} in ${r.field}`).join("; ")}`);
+  if (q.body) console.log(`    body: ${q.body.replace(/\n/g, "\n          ")}`);
+  if (ctx.target_changed) console.log(`    Note #${q.target_id} has changed since this edit was held, so approving it will fail.`);
+  if (ctx.clears) console.log(`    Approving it also clears the note's ${ctx.clears.map((c) => (c === "forget_after" ? "forget date" : c)).join(" and ")}.`);
+  const n = ctx.notes.length;
+  if (n === 0) {
+    console.log(`\nNothing on the same topic was saved in ${printable(q.namespace, 100)} since this was held.`);
+  } else {
+    console.log(`\nSince this was held, ${n} newer note${n === 1 ? "" : "s"} in ${printable(q.namespace, 100)}:`);
+    for (const c of ctx.notes) console.log(`    #${c.id} "${printable(c.title)}" (${c.written_by ? `agent ${printable(c.written_by, 100)}, ` : ""}${c.updated_at.slice(0, 10)})`);
+  }
+  console.log(`\n${casNote}`);
+  console.log(`Decide: monomem quarantine approve ${id}${n ? ` | keep-history ${id}` : ""} | reject ${id}`);
+}
+
 // `monomem approve-first [<namespace> on|off]`: operator-only switch (no MCP tool sets it).
+/** `monomem confirm <id> [--source <s>]`: a person's confirm (kind human), behind the operator gate. */
+async function confirmCmd(args: string[]): Promise<void> {
+  const usage = 'Usage: monomem confirm <id> [--source "what you checked it against"]';
+  const si = args.indexOf("--source");
+  const source = si >= 0 ? args[si + 1] : undefined;
+  const rest = args.filter((_, i) => si < 0 || (i !== si && i !== si + 1));
+  const id = Number(rest[0]);
+  if (rest.length !== 1 || !Number.isInteger(id) || id < 1 || (si >= 0 && (source === undefined || source.startsWith("--")))) {
+    console.error(usage);
+    process.exit(1);
+  }
+  const { DB_PATH } = await import("./config.js");
+  const { Store } = await import("./store.js");
+  const store = new Store(DB_PATH);
+  try {
+    const n = store.read(id); // gate-ok: the CLI is the operator
+    if (!n) {
+      console.error(`Error: no note with id ${id}`);
+      process.exit(1);
+    }
+    await requireOperator(`confirm note #${id} ("${printable(n.title, 60)}")`);
+    const r = store.confirm(id, { source });
+    if (!r) {
+      console.error(`Error: no note with id ${id}`);
+      process.exit(1);
+    }
+    console.log(printable(r.message, 400));
+    if (!r.counted) process.exitCode = 1;
+  } finally {
+    store.close();
+  }
+}
+
+/**
+ * `monomem review [--ns <ns>] [--json] [--confirm-all [--source <s>]]`: the notes waiting for a person. Titles are shown
+ * here because the reader is the operator at a terminal; they never go into session start or an MCP reply.
+ */
+async function reviewCmd(args: string[]): Promise<void> {
+  const { flags, rest } = parseFlags(args, { values: ["ns", "namespace", "source"], bools: ["json", "confirm-all"] });
+  if (rest.length) {
+    console.error('Usage: monomem review [--ns <namespace>] [--json] [--confirm-all [--source "what you checked"]]');
+    process.exit(1);
+  }
+  const ns = typeof flags.ns === "string" ? flags.ns : typeof flags.namespace === "string" ? flags.namespace : undefined;
+  const { DB_PATH } = await import("./config.js");
+  const { Store } = await import("./store.js");
+  const store = new Store(DB_PATH);
+  try {
+    const items = store.reviewList(ns !== undefined ? [ns] : undefined);
+    if (flags.json === true) {
+      console.log(JSON.stringify({ notes: items }, null, 2));
+      if (flags["confirm-all"] !== true) return;
+    } else if (!items.length) {
+      console.log("Nothing waits for review.");
+      return;
+    } else {
+      console.log(`${items.length} note${items.length === 1 ? "" : "s"} wait for a person:`);
+      for (const r of items) {
+        console.log(`  #${r.id} [${printable(r.namespace, 100)}] ${printable(r.title, 120)} (by ${printable(r.writer || "unknown", 100)})`);
+        console.log(`      ${printable(r.why, 300)}`);
+      }
+      if (flags["confirm-all"] !== true) {
+        console.log("\nConfirm one after checking it: monomem confirm <id> --source \"what you checked\"");
+        return;
+      }
+    }
+    if (!items.length) return;
+    const source = typeof flags.source === "string" ? flags.source : "reviewed with monomem review";
+    await requireOperator(`confirm all ${items.length} notes listed above as checked ("${printable(source, 60)}")`);
+    let counted = 0;
+    for (const r of items) {
+      const res = store.confirm(r.id, { source });
+      if (res?.counted) counted++;
+      else if (res) console.log(`  #${r.id}: ${printable(res.message, 300)}`);
+    }
+    console.log(`Confirmed ${counted} of ${items.length} notes.`);
+    if (counted < items.length) process.exitCode = 1;
+  } finally {
+    store.close();
+  }
+}
+
+/** `monomem config [get | set confirm-days <n> | set confirm-mode off|label|enforce]`: settings kept in the store. */
+async function configCmd(args: string[]): Promise<void> {
+  const usage = "Usage: monomem config [get | set confirm-days <n> | set confirm-mode off|label|enforce]";
+  const [verb = "get", key, value, ...extra] = args;
+  if (extra.length || (verb !== "get" && verb !== "set") || (verb === "get" && key !== undefined) || (verb === "set" && (value === undefined || (key !== "confirm-days" && key !== "confirm-mode")))) {
+    console.error(usage);
+    process.exit(1);
+  }
+  const { DB_PATH } = await import("./config.js");
+  const { Store, ValidationError } = await import("./store.js");
+  const store = new Store(DB_PATH);
+  try {
+    const show = (): void => {
+      const c = store.confirmSettings();
+      console.log(`confirm-mode: ${c.mode}${c.set_at ? ` (since ${c.set_at.slice(0, 16).replace("T", " ")})` : " (default)"}`);
+      console.log(`confirm-days: ${c.days}`);
+    };
+    if (verb === "get") return show();
+    const before = store.confirmSettings();
+    const RANK: Record<string, number> = { off: 0, label: 1, enforce: 2 };
+    try {
+      if (key === "confirm-mode") {
+        if (!(value in RANK)) throw new ValidationError("confirm-mode must be one of: off, label, enforce");
+        if (RANK[value] < RANK[before.mode]) await requireOperator(`lower re-confirmation expiry from ${before.mode} to ${value}`);
+        store.setConfirmSettings({ mode: value as "off" | "label" | "enforce" });
+      } else {
+        const days = /^\d{1,5}$/.test(value) ? Number(value) : NaN;
+        if (days > before.days && before.mode !== "off") await requireOperator(`lengthen re-confirmation from ${before.days} to ${value} days`);
+        // Under enforce, shortening the period takes notes out of session start; the store restarts the clock, and a person decides.
+        if (days < before.days && before.mode === "enforce") await requireOperator(`shorten re-confirmation under enforce from ${before.days} to ${value} days`);
+        store.setConfirmSettings({ days });
+      }
+    } catch (e) {
+      if (e instanceof ValidationError) {
+        console.error(`Error: ${e.message}`);
+        process.exit(1);
+      }
+      throw e;
+    }
+    show();
+  } finally {
+    store.close();
+  }
+}
+
 async function approveFirstCmd(): Promise<void> {
   const { DB_PATH } = await import("./config.js");
   const { Store } = await import("./store.js");
@@ -3055,12 +3245,15 @@ async function supersedeCmd(kind: "supersede" | "history" | "pin" | "unpin" | "r
         });
       }),
     interactive,
+    // The gates run inside the command, on the ids its own parser chose (a pinned note it would change; outside content
+    // it would promote: pin, or replace with it, which records your yes as a human confirm). See CliIO.gate.
+    gate: async (g: "pinned" | "outside", ids: number[], what: string): Promise<void> =>
+      g === "pinned" ? gatePinned(store, ids, what) : gateOutside(store, ids, what),
   };
   const store = new Store(DB_PATH);
   try {
     const args = process.argv.slice(3);
     if (kind === "unpin") await requireOperator(`unpin ${args[0] ?? ""}`.trim());
-    if (kind === "supersede" || kind === "history") await gatePinned(store, pinnedTargets(kind, args), kind === "supersede" ? "supersede" : `history ${args[0]}`);
     process.exitCode =
       kind === "supersede"
         ? await supersedeCli(store, args, io)
@@ -3072,19 +3265,6 @@ async function supersedeCmd(kind: "supersede" | "history" | "pin" | "unpin" | "r
   } finally {
     store.close();
   }
-}
-
-/** Note ids a supersede / history command would change or retire (empty for reads and for arguments it cannot parse). */
-function pinnedTargets(kind: "supersede" | "history", args: string[]): number[] {
-  const first = args.find((a) => !a.startsWith("--"));
-  if (kind === "history") {
-    if (first !== "restore" && first !== "purge") return [];
-    return [Number(args.filter((a) => !a.startsWith("--"))[1])].filter(Number.isInteger);
-  }
-  if (first === "undo") return [Number(args.filter((a) => !a.startsWith("--"))[1])].filter(Number.isInteger);
-  const i = args.findIndex((a) => a === "--old" || a.startsWith("--old="));
-  const v = i < 0 ? "" : args[i].includes("=") ? args[i].slice(args[i].indexOf("=") + 1) : (args[i + 1] ?? "");
-  return v.split(",").map(Number).filter(Number.isInteger);
 }
 
 /** TTY yes/no prompt; anything but y/yes aborts. */
@@ -3352,6 +3532,15 @@ async function main(): Promise<void> {
       break;
     case "approve-first":
       await approveFirstCmd();
+      break;
+    case "confirm":
+      await confirmCmd(process.argv.slice(3));
+      break;
+    case "review":
+      await reviewCmd(process.argv.slice(3));
+      break;
+    case "config":
+      await configCmd(process.argv.slice(3));
       break;
     case "access":
       await accessCmd();

@@ -36,8 +36,11 @@ const EXPECTED_SITES: Record<string, string[]> = {
     "tag-guard lookup only (no content returned)",
     "archive/restore: denyUnwritable probe, hidden note is 404",
     "GET /export is admin-only (a full backup)",
+    "namespace check; confirm() re-reads through readVisible",
   ],
+  "operator-gate.ts": ["the CLI is the operator"],
   "cli.ts": [
+    "the CLI is the operator",
     "local shell command (reindex): the operator owns the database file",
     "local shell command (permanent delete): the operator owns the database file",
     "local shell command (show): the operator owns the database file",
@@ -55,12 +58,14 @@ const EXPECTED_SITES: Record<string, string[]> = {
   ],
   "mcp-server-core.ts": [
     "tag-guard lookup only (no content returned)",
+    "read-taint probe, a flag check, nothing returned",
     "access probe: readVisible decides before anything is returned",
     "admin delete: namespace check only",
     "admin forget: existence + archived check only, nothing returned",
     "consolidation candidates (admin): filtered with filterVisible",
     "consolidation candidates (admin): filtered with filterVisible",
     "admin consolidate: namespace check only",
+    "namespace check only; confirm() re-reads through readVisible",
   ],
   "setup.ts": ["setup reads back the test note it wrote a moment ago"],
   "sync.ts": [
@@ -157,7 +162,8 @@ describe("B: one gate for reading a note", () => {
     if (/req\.method === "GET" && getId/.test(api)) routes.add("/tasks/:id");
     if (/req\.method === "GET" && SIGN_PAGES\[path\]/.test(api)) routes.add("(sign pages)");
     if (/req\.method === "GET" && sessMatch/.test(api)) routes.add("/sessions/:id");
-    const NOTE_ROUTES = ["/notes", "/notes/:id", "/search", "/stats", "/changes", "/tasks", "/tasks/:id", "/handoffs", "/catch-up", "/export", "/index", "/timeline", "/sessions", "/sessions/:id", "/files/timeline", "/quality", "/quarantine"];
+    if (/req\.method === "GET" && qCtxMatch/.test(api)) routes.add("/quarantine/:id/context");
+    const NOTE_ROUTES = ["/notes", "/notes/:id", "/search", "/stats", "/changes", "/tasks", "/tasks/:id", "/handoffs", "/catch-up", "/export", "/index", "/timeline", "/sessions", "/sessions/:id", "/files/timeline", "/quality", "/quarantine", "/quarantine/:id/context"];
     // /access: the read access log holds writer labels and redacted query previews, never note text.
     const NO_NOTE_CONTENT = ["/health", "/ready", "/", "/dashboard.js", "/favicon.ico", "(sign pages)", "/runner/status", "/trust", "/access", "/whoami", "/audit", "/insights", "/tokens"];
     assert.deepEqual([...routes].sort(), [...NOTE_ROUTES, ...NO_NOTE_CONTENT].sort(), "a GET route was added: add it to NOTE_ROUTES (and to the canary test below) or NO_NOTE_CONTENT");
@@ -165,7 +171,7 @@ describe("B: one gate for reading a note", () => {
     const mcp = read("mcp-server-core.ts");
     const tools = new Set<string>([...mcp.matchAll(/server\.registerTool\(\s*"([a-z_]+)"/g)].map((m) => m[1]));
     const NOTE_TOOLS = ["state_read", "state_search", "state_relevant", "state_list", "memory_stats", "memory_receipt", "memory_why", "memory_consolidation_candidates", "memory_since", "task_get", "task_list", "catch_up", "memory_ack", "memory_history", "memory_index", "memory_timeline", "memory_get", "session_list"];
-    const OTHER_TOOLS = ["state_write", "state_delete", "memory_consolidate", "memory_rebuild_edges", "task_put", "task_claim", "task_approve", "session_handoff", "memory_quarantine", "runner_status", "trust_policy", "memory_supersede_preview", "memory_supersede_confirm", "memory_supersede_undo", "memory_restore_version", "memory_history_purge", "memory_rollback"];
+    const OTHER_TOOLS = ["state_write", "state_delete", "memory_consolidate", "memory_rebuild_edges", "task_put", "task_claim", "task_approve", "session_handoff", "memory_quarantine", "runner_status", "trust_policy", "memory_supersede_preview", "memory_supersede_confirm", "memory_supersede_undo", "memory_restore_version", "memory_history_purge", "memory_rollback", "memory_confirm"];
     assert.deepEqual([...tools].sort(), [...NOTE_TOOLS, ...OTHER_TOOLS].sort(), "an MCP tool was added: classify it here (and canary-test it below if it returns note content)");
   });
 });
@@ -220,6 +226,7 @@ describe("B: the canary never reaches a non-admin reader through any classified 
         ["/files/timeline?path=src/x.ts", 200, "rows"],
         ["/quality", 403, ""], // admin only: it lists every writer's titles
         ["/quarantine", 403, ""], // admin only: held writes carry their full text
+        ["/quarantine/1/context", 403, ""], // admin only: lists other writers' titles next to a held write
       ];
       for (const [p, status, must] of routes) {
         const r = await fetch(base + p, { headers: { Authorization: `Bearer ${TOKEN}` } });

@@ -53,7 +53,7 @@ git clone https://github.com/calasdan-sketch/monomem && cd monomem && cp .env.ex
 
 ```bash
 npx monomem setup
-npx monomem drill   # replays 23 known poisoning attacks on a copy of your store
+npx monomem drill   # replays 25 known poisoning attacks on a copy of your store
 ```
 
 `setup` finds Claude Code, Claude Desktop, Cursor, Codex, Gemini CLI, Muse, VS Code and Zed on this computer, shows you in plain words what it will do and the exact
@@ -479,6 +479,15 @@ distrusted command task is never run. A JSON export made with `--attest` (`?atte
 otherwise it marks the note `imported_unverified`. (Attestations are **experimental**.) What that proves and what it
 does not: [docs/trust.md](./docs/trust.md).
 
+**Outside content (1.4.0).** A note written after an agent read a web page or another MCP server's output, **when
+Monomem can see it** (Claude Code's hooks, a connection that read an unconfirmed note, or `outside: true`), lands
+**unconfirmed**: labelled, kept out of session start, and never pinned until a person runs `monomem confirm <id>`. Another
+agent's confirm, with its own key and a different stated source, is corroboration, not verification. Not seen: `Read`,
+`Bash`, and apps without the hooks. Notes can also say what they were built from (`derived_from`), and notes nobody
+re-confirmed in 30 days are labelled `[expired - ...]` (labels only by default; `monomem config`). `monomem review` lists
+what waits for you. Details and limits: [docs/trust.md](./docs/trust.md#outside-content-limits-first-140),
+[docs/search.md](./docs/search.md#re-confirmation-expiry).
+
 ## Benchmark
 
 `monomem bench` checks the provenance behaviour a shared agent memory needs: that one agent cannot silently turn a weak
@@ -492,7 +501,7 @@ It has five suites, as plain JSON scenario files you can extend in [`bench/scena
 | B  Contradiction recovery | 31 | writer A vs writer B, then a trusted correction; distrusting the bad writer; weak overwrite of a trusted note; restoring the trusted text from history; the trust guard on replacing | resolved to the correction, loser stays visible, overwrite protected |
 | C  Permission isolation | 27 | cross-tenant read/write/search/export/import/merge/sweep, token scopes, admin-only flags, signed imports, and that one tenant cannot read another's history, preview, undo or reuse a confirmation code | `leakage-count` (must be 0), `unexpected-denials` |
 | D  Provenance retention | 19 | source, writer, creator, timestamps, deletion deadline, confidence after export, import, merge, update | `fields-lost` |
-| E  Memory poisoning | 20 | injected or malicious memories never reach an agent as trusted content: prompt-injection (plain, forged tags, zero-width-obfuscated, hidden in invisible Unicode tag characters, a booking-policy override) is quarantined; a sleeper trigger or curl-pipe-to-shell note is stored with a warning; a reworded override that passes the gate leaves all four booking answers once its writer is distrusted; a distrusted/low-trust writer cannot outrank or silently overwrite a trusted fact; secrets are redacted (capture) or blocked (write); a forged writer/namespace is stamped with the real one; an unsigned import cannot pose as verified; a captured web fetch is not trusted memory; a trusted writer claiming its note is its own is still checked; SessionStart injection carries the untrusted-data banner and leaves distrusted notes out; mass near-duplicate flooding cannot bury the answer | `poison-reach-count` (must be 0) |
+| E  Memory poisoning | 22 | injected or malicious memories never reach an agent as trusted content: prompt-injection (plain, forged tags, zero-width-obfuscated, hidden in invisible Unicode tag characters, a booking-policy override) is quarantined; a sleeper trigger or curl-pipe-to-shell note is stored with a warning; a reworded override that passes the gate leaves all four booking answers once its writer is distrusted; a distrusted/low-trust writer cannot outrank or silently overwrite a trusted fact; secrets are redacted (capture) or blocked (write); a forged writer/namespace is stamped with the real one; an unsigned import cannot pose as verified; a captured web fetch is not trusted memory; a trusted writer claiming its note is its own is still checked; a trusted writer's paraphrase of a web page, or an agent's summary of an unconfirmed note, is marked and cannot be pinned; SessionStart injection carries the untrusted-data banner and leaves distrusted notes out; mass near-duplicate flooding cannot bury the answer | `poison-reach-count` (must be 0) |
 
 **Retrieval quality.** `monomem bench --longmemeval` and `--locomo` score retrieval on the public datasets, with no model
 and no judge (does the right conversation come back?). On one Windows PC, 2026-11-09, keyword search (the default, no model):
@@ -532,6 +541,8 @@ Limits no scenario can show (what the benchmark cannot see) are listed next, und
 - Local apps connected over stdio have no key, so a limit on other apps does not apply to them. A note marked `private` is hidden from
   apps given a limit; apps with no limit (including your main Claude connection) still see it.
 - The writer name of a local app comes from its config file: it tells your apps apart, but it is not proof.
+- Notes are marked as from outside content only when Monomem sees the outside read. `Read`, `Bash` (`curl`) and apps
+  without the hooks are not seen, and a confirm's stated source is a claim Monomem does not check.
 - Keyword search finds words, not meaning. Semantic search needs a local embedding service (Ollama); without one you get keyword results.
 - Upgrading the database is one way (older versions refuse a newer file). A backup copy is made first and `monomem restore` goes back.
 - Needs Node 22.16 or newer, because it uses Node's built-in SQLite (Node 20 does not have it; checked). Docker is the way around that.

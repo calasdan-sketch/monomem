@@ -270,6 +270,15 @@ None of the controls above stops an agent that can run commands as you. These do
   still be triggered with a harmless-looking value. Distrusting the writer
   (`monomem trust distrust <writer>`) removes it from the notice.
 - Encryption limits are listed above.
+- **Whoever holds the primary key is the owner.** It is an admin key: it can make new keys (each a separate writer), so
+  one holder can play several agents and forge the corroboration rule (a second key's confirm of an outside-content
+  note). Corroboration is not verification (docs/trust.md). Only a person at a terminal lifts the pin block.
+- **The dashboard's confirm exemption needs a terminal, and a terminal check can be fooled.** A dashboard opened with
+  `monomem open` run at a terminal gets a sign-in session (8 hours, bound to the key it signed in as) whose Confirm button
+  may confirm a note the dashboard listed. `monomem open` run without a terminal (an agent's shell, a script) still
+  signs in, but its confirms count as the key's. A tool that opens a pseudo-terminal passes that check, as it does for
+  every typed-yes command. The one-time sign-in code (60 seconds, single use) is in the browser address that
+  `monomem open` passes to the system's "open" command, so for a moment it is visible in the list of running programs.
 
 ## Your data
 

@@ -62,9 +62,17 @@ const V14_DELETE_TRIGGER = `
 `;
 
 /** Rewrite the database file at `path` (closed by the caller) as it looked at `version`. */
-export function downgradeTo(path: string, version: 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18): void {
+export function downgradeTo(path: string, version: 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19): void {
   const raw = new DatabaseSync(path);
   try {
+    // v20 additions (1.4.0 trust: approval/confirm columns, confirmations, note_links), removed for every older shape.
+    raw.exec("DROP TABLE IF EXISTS confirmations; DROP TABLE IF EXISTS note_links;");
+    for (const c of ["grandfathered_at", "approved_at", "approved_by", "confirmed_at", "confirmed_by", "confirmed_kind", "confirmed_rev", "cli_tty"]) raw.exec(`ALTER TABLE notes DROP COLUMN ${c}`);
+    raw.exec("DROP INDEX IF EXISTS idx_sessions_ns_open; ALTER TABLE quarantine DROP COLUMN forget_after; ALTER TABLE quarantine DROP COLUMN confidence; ALTER TABLE quarantine DROP COLUMN clears; ALTER TABLE sessions DROP COLUMN outside_at;");
+    if (version === 19) {
+      raw.exec("PRAGMA user_version = 19");
+      return;
+    }
     // v19 additions (per-memory sensitivity labels), removed for every older shape. The delete trigger names the new
     // columns, so it goes first; the v14-style one is put back for the shapes that keep it.
     raw.exec("DROP TRIGGER IF EXISTS notes_log_ad; DROP INDEX IF EXISTS idx_notes_ns_sensitivity; DROP INDEX IF EXISTS idx_notes_ns_updated; DROP INDEX IF EXISTS idx_notes_live_updated;");

@@ -186,7 +186,7 @@ test("quarantine list ends with the next step", () => {
   }
   st.close();
   const r = spawnSync(process.execPath, [join(process.cwd(), "dist", "src", "cli.js"), "quarantine"], { env: { ...process.env, MONOMEM_HOME: dir, MONOMEM_DB_PATH: db }, encoding: "utf8" });
-  assert.match(r.stdout, /To decide: monomem quarantine approve <id> \| reject <id>/, r.stdout + r.stderr);
+  assert.match(r.stdout, /To decide: monomem quarantine show <id>, then approve <id> \| keep-history <id> \| reject <id>/, r.stdout + r.stderr);
 });
 
 describe("remote /mcp with an Authorization header (what INSTALL.md tells teammates to configure)", () => {

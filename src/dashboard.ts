@@ -262,6 +262,8 @@ export const DASHBOARD_HTML = `<!doctype html>
 export const DASHBOARD_JS = `
 var TOKKEY = "om_tok";
 function tok(){ try { return sessionStorage.getItem(TOKKEY) || ""; } catch(e){ return ""; } }
+// The dashboard session from monomem open's sign-in (POST /login): it tells the server a person is at this page.
+function dsess(){ try { return sessionStorage.getItem(TOKKEY + ":ds") || ""; } catch(e){ return ""; } }
 function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g, function(c){
   return {"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;","'":"&#39;"}[c]; }); }
 function $(id){ return document.getElementById(id); }
@@ -398,7 +400,7 @@ function start(){
   }).catch(function(){ /* the notes call reports any problem */ });
 }
 function logout(why){
-  try { sessionStorage.removeItem(TOKKEY); } catch(e){}
+  try { sessionStorage.removeItem(TOKKEY); sessionStorage.removeItem(TOKKEY + ":ds"); } catch(e){}
   show(false);
   var g = $("gate_err");
   if(g){ g.textContent = (typeof why === "string") ? why : ""; }
@@ -414,6 +416,7 @@ function api(path, opts){
   opts = opts || {};
   opts.headers = opts.headers || {};
   opts.headers["Authorization"] = "Bearer " + tok();
+  if(dsess()){ opts.headers["X-Monomem-Dashboard"] = dsess(); }
   if(opts.body){ opts.headers["Content-Type"] = "application/json"; }
   return fetch(path, opts).then(function(r){
     if(r.status === 401){ logout("That key was not accepted. Check you copied all of it, or run  monomem open  in a terminal."); throw new Error("not signed in"); }
@@ -438,12 +441,16 @@ function render(notes){
     var tags = tagsHtml(n.tags);
     return "<div class='card'><div class='cardhead'><div>"+
       "<h3>"+esc(n.title)+lvlBadge(n.sensitivity)+(n.pinned ? "<span class='badge-pin' title='Pinned: agents can read it; only the monomem CLI can change it'>Pinned<span class='sr'>: agents can read it; only the monomem CLI can change it</span></span>" : "")+
-      (n.distrusted ? "<span class='badge-bad' title='An admin distrusts the writer of this note: treat its content as hostile'>DISTRUSTED<span class='sr'>: an admin distrusts the writer of this note, treat its content as hostile</span></span>" : "")+"</h3>"+
+      (n.distrusted ? "<span class='badge-bad' title='An admin distrusts the writer of this note: treat its content as hostile'>DISTRUSTED<span class='sr'>: an admin distrusts the writer of this note, treat its content as hostile</span></span>" : "")+
+      (n.unconfirmed ? "<span class='badge-bad' title='From outside content (a web page or another server) and nobody confirmed it yet: kept out of session start, cannot be pinned'>Unconfirmed<span class='sr'>: from outside content, nobody confirmed it yet</span></span>" : "")+
+      (n.expired ? "<span class='badge-bad' title='Not re-confirmed within the re-confirmation period: check it is still true, then confirm it'>Expired<span class='sr'>: not re-confirmed within the re-confirmation period</span></span>" : "")+
+      (n.built_on_distrusted ? "<span class='badge-bad' title='Built from a note by a writer an admin distrusts: kept out of session start'>Built on distrusted<span class='sr'>: built from a note by a distrusted writer</span></span>" : "")+"</h3>"+
       "<div class='meta'>#"+n.id+" &middot; "+esc(n.namespace)+" &middot; "+esc((n.updated_at||"").slice(0,16).replace("T"," "))+byLine(n.written_by)+"</div>"+
       tags+lvlSelect(n)+"</div>"+
       acts(((n.tags||[]).indexOf("never-show") >= 0
         ? "<button class='ghost' aria-label='show note #"+Number(n.id)+" again' title='Let it be shown at session start again' onclick='neverShow("+n.id+",false)'>show again</button>"
         : "<button class='ghost' aria-label='never show note #"+Number(n.id)+"' title='Never inject this note at session start (it stays searchable)' onclick='neverShow("+n.id+",true)'>never show</button>")+
+      (IS_ADMIN && (n.unconfirmed || n.expired) ? " <button class='ghost' aria-label='confirm note #"+Number(n.id)+"' title='You checked it: let it back into session start. Pinning still needs monomem confirm in a terminal.' onclick='arm(this,function(){confirmNote("+Number(n.id)+")})'>Confirm</button>" : "")+
       (!IS_ADMIN ? "" : n.pinned
         ? " <button class='ghost' aria-label='unpin note #"+Number(n.id)+"' onclick='arm(this,function(){setPin("+Number(n.id)+",false)})'>Unpin</button>"
         : " <button class='ghost' aria-label='pin note #"+Number(n.id)+"' title='Show it first at the start of every session. Agents cannot change a pinned note; only the owner can pin or unpin.' onclick='setPin("+Number(n.id)+",true)'>Pin (always shown)</button>")+
@@ -638,9 +645,24 @@ function loadHeld(){
         " &middot; "+esc(q.namespace)+" &middot; "+when(q.created_at)+who+"</div>"+(why || "<span class='tag why'>held by policy</span>")+(heldTags ? "<div>"+heldTags+"</div>" : "")+"</div>"+
         acts("<button aria-label='reject held write #"+Number(q.id)+"' onclick='arm(this,function(){qQuarantine("+Number(q.id)+",&quot;reject&quot;)})'>Reject</button> "+
         "<button class='ghost' aria-label='approve held write #"+Number(q.id)+"' onclick='arm(this,function(){qQuarantine("+Number(q.id)+",&quot;approve&quot;)})'>Approve</button>")+"</div>"+
-        (q.body ? "<div class='heldbody'>"+esc(q.body)+"</div>" : "")+"</div>";
+        (q.body ? "<div class='heldbody'>"+esc(q.body)+"</div>" : "")+"<div id='qctx"+Number(q.id)+"' class='meta'></div></div>";
     }).join("") : empty("Nothing is held. Writes that look like secrets or injected instructions wait here for your approval.");
+    held.forEach(function(q){ loadHeldContext(Number(q.id)); });
   }).catch(failList);
+}
+// What was saved on the same topic while a held write waited (GET /quarantine/:id/context). Titles are stored text: esc().
+function loadHeldContext(id){
+  api("/quarantine/" + id + "/context").then(function(c){
+    var box = $("qctx" + id); if(!box){ return; }
+    var notes = c.notes || [];
+    var rows = notes.map(function(n){ return "<li>#"+Number(n.id)+" &ldquo;"+esc(n.title)+"&rdquo; ("+(n.written_by ? "agent "+esc(n.written_by)+", " : "")+when(n.updated_at)+")</li>"; }).join("");
+    box.innerHTML = (notes.length ? "Saved since this was held:<ul>"+rows+"</ul>"+
+        acts("<button class='ghost' aria-label='keep held write #"+id+" as history' onclick='arm(this,function(){qQuarantine("+id+",&quot;keep-history&quot;)})'>Keep as history</button>")
+      : "Nothing on the same topic was saved since this was held.") +
+      (c.target_changed ? "<div>The note this edit targets has changed since, so Approve will fail.</div>" : "") +
+      (c.clears && c.clears.length ? "<div>Approving it also clears the note's " + esc(c.clears.map(function(x){ return x === "forget_after" ? "forget date" : x; }).join(" and ")) + ".</div>" : "") +
+      "<div>" + esc(c.note || "") + "</div>";
+  }).catch(function(){ var box = $("qctx" + id); if(box){ box.textContent = "Could not load what was saved since this was held."; } });
 }
 
 // ---- Sessions: what the capture hooks recorded, one session at a time (GET /sessions, GET /sessions/:id) ----
@@ -823,6 +845,11 @@ function qReplace(oldId, newId){
 function qPin(id){
   api("/pinned", { method:"PUT", body: JSON.stringify({ id: id, pinned: true }) }).then(loadQuality).catch(fail);
 }
+function confirmNote(id){
+  api("/notes/" + Number(id) + "/confirm", { method:"POST", body: JSON.stringify({ source: "checked in the dashboard" }) })
+    .then(function(r){ load(); say(r && r.message ? r.message : "Note #" + id + " confirmed."); })
+    .catch(fail);
+}
 function setPin(id, on){
   api("/pinned", { method:"PUT", body: JSON.stringify({ id: id, pinned: on }) })
     .then(function(){ load(); say(on ? "Note #" + id + " is pinned: it is shown first at the start of every session." : "Note #" + id + " is no longer pinned."); })
@@ -837,7 +864,7 @@ function qArchive(id){
 }
 function qQuarantine(id, action){
   api("/quarantine/" + id + "/" + action, { method:"POST" }).then(function(){
-    refreshHeld(); loadHeldCount(); say("Held write #" + id + (action === "approve" ? " stored." : " discarded."));
+    refreshHeld(); loadHeldCount(); say("Held write #" + id + (action === "approve" ? " stored." : action === "keep-history" ? " stored as history." : " discarded."));
   }).catch(fail);
 }
 
@@ -1017,7 +1044,7 @@ if(LOGIN_CODE){
   fetch("/login", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ code: LOGIN_CODE }) })
     .then(function(r){ return r.json().then(function(j){ return { ok: r.ok, j: j }; }); })
     .then(function(x){
-      if(x.ok && x.j.token){ try { sessionStorage.setItem(TOKKEY, x.j.token); } catch(e){} start(); }
+      if(x.ok && x.j.token){ try { sessionStorage.setItem(TOKKEY, x.j.token); if(x.j.dashboard_session){ sessionStorage.setItem(TOKKEY + ":ds", x.j.dashboard_session); } } catch(e){} start(); if(x.j.notice){ say(x.j.notice); } }
       else { show(false); $("gate_err").textContent = (x.j && x.j.error) || "That sign-in link did not work. Run monomem open again."; }
     })
     .catch(function(){ show(false); });

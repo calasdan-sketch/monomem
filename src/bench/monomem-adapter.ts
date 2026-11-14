@@ -35,7 +35,7 @@ interface ActorHandle {
   namespace?: string;
 }
 
-const CAPS: Capability[] = ["read", "list", "restore", "retire", "trust", "export_import", "attestation", "merge", "recall", "changes", "tenants", "cas", "supersede", "history", "capture", "session_start"];
+const CAPS: Capability[] = ["read", "list", "restore", "retire", "trust", "export_import", "attestation", "merge", "recall", "changes", "tenants", "cas", "supersede", "history", "capture", "session_start", "pin"];
 
 function toOutcome(status: number): Outcome {
   if (status === 200 || status === 201) return "ok";
@@ -263,6 +263,7 @@ export class MonomemAdapter implements MemoryAdapter {
     if (input.confidence !== undefined) body.confidence = input.confidence;
     if (input.forget_after !== undefined) body.forget_after = input.forget_after;
     if (input.namespace !== undefined) body.namespace = input.namespace;
+    if (input.outside) body.outside = true;
     const r = await this.http(actor, "POST", "/notes", body);
     if (r.status !== 201) return this.fail(r.status, r.json);
     // Stored, but the linter may have warned (category + label only, never the matched text).
@@ -370,6 +371,12 @@ export class MonomemAdapter implements MemoryAdapter {
 
   async unarchive(actor: string, id: string): Promise<OpResult> {
     const r = await this.http(actor, "POST", `/notes/${encodeURIComponent(id)}/restore`);
+    return r.status === 200 ? { outcome: "ok" } : this.fail(r.status, r.json);
+  }
+
+  /** The operator pin over REST (PUT /pinned, admin): a note from outside content no person confirmed is refused (400). */
+  async pin(actor: string, id: string): Promise<OpResult> {
+    const r = await this.http(actor, "PUT", "/pinned", { id: Number(id), pinned: true });
     return r.status === 200 ? { outcome: "ok" } : this.fail(r.status, r.json);
   }
 
