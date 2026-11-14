@@ -149,3 +149,27 @@ describe("quarantine context", () => {
     assert.ok(!box.includes("<b>"), "titles are escaped");
   });
 });
+
+describe("R1-17 the context is one indexed query, not the newest 500 notes", () => {
+  test("a note edited after the hold is found even when 600 later-created notes sit in the namespace", () => {
+    const s = new Store(":memory:");
+    setProcessWriter("stdio:agent-a");
+    const old = s.create({ namespace: "pricing", title: "Acme price list" });
+    raw(s).prepare("UPDATE notes SET created_at = ?, updated_at = ? WHERE id = ?").run(ago(9), ago(9), old.id);
+    const qid = hold(() => s.create({ namespace: "pricing", title: "Acme price is $50", body: INJECT }));
+    raw(s).prepare("UPDATE quarantine SET created_at = ? WHERE id = ?").run(ago(2), qid);
+    // 600 unrelated notes saved after the hold, all newer than the related note's edit: it ranks 601st by recency
+    const db = raw(s);
+    db.exec("BEGIN");
+    const ins = db.prepare("INSERT INTO notes (namespace, title, body, tags, created_at, updated_at, content_at, written_by, rev) VALUES ('pricing', ?, 'b', '[]', ?, ?, ?, 'stdio:x', 1)");
+    for (let i = 0; i < 600; i++) ins.run(`filler ${i}`, ago(1), ago(1), ago(1));
+    db.exec("COMMIT");
+    setProcessWriter("stdio:quoting-bot");
+    s.update(old.id, { body: "corrected: $40" });
+    raw(s).prepare("UPDATE notes SET updated_at = ? WHERE id = ?").run(ago(1.5), old.id); // after the hold (2 days ago), before every filler
+    setProcessWriter("");
+    const ctx = s.quarantineContext(qid)!;
+    assert.deepEqual(ctx.notes.map((n) => n.id), [old.id]);
+    s.close();
+  });
+});
