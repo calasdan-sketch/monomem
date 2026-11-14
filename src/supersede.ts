@@ -184,7 +184,7 @@ export function supersedePreview(
     if (target.tags.some(isManagedTag)) throw new SupersedeError(`note ${nid} is a task or handoff, or captured work, and cannot replace a note`);
     if (store.isDistrusted(target)) throw new SupersedeError("a note from a writer on the distrust list cannot replace another note", 403);
     // 1.4.0: the confirm would be refused (Store.supersedeCommit), so say so now.
-    if (currentWriter() !== "cli" && needsHumanConfirm(target)) throw new SupersedeError(promotionRefusal("use it as a replacement", nid), 403);
+    if (currentWriter() !== "cli" && needsHumanConfirm(target)) throw new SupersedeError(promotionRefusal("use it as a replacement", nid, target.confirmed_kind === "admin" && target.confirmed_rev === target.rev), 403);
     newId = nid;
     newRev = target.rev;
     content = { title: target.title, body: target.body, tags: target.tags, confidence: target.confidence ?? null };

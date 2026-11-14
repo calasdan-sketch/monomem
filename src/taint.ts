@@ -100,8 +100,11 @@ export function sourceKey(s: string): string {
   return t.toLowerCase().replace(/\.+$/, "");
 }
 
-export const promotionRefusal = (verb: string, id: number): string =>
-  `Can't ${verb}: this note came from outside content. A person must confirm it first: monomem confirm ${id}`;
+/** 1.5.0 (R1-19): with `adminConfirmed` (an admin/dashboard confirm for this version) the text says why that is not enough. */
+export const promotionRefusal = (verb: string, id: number, adminConfirmed = false): string =>
+  adminConfirmed
+    ? `Can't ${verb}: this note came from outside content. It has an admin (dashboard) confirm, which lets it into session start but not into pins or replacements. A person must confirm it at a terminal: monomem confirm ${id}`
+    : `Can't ${verb}: this note came from outside content. A person must confirm it first: monomem confirm ${id}`;
 
 /** The one session-start line for held-back notes ("" when none). No titles: a title can carry injected text too. */
 export function unconfirmedCountLine(c: { tool: number; via: number; declared: number }): string {

@@ -8621,7 +8621,7 @@ export class Store {
       this.confirm(id, { source: `operator: ${verb}` });
       return;
     }
-    throw new ValidationError(promotionRefusal(verb, id));
+    throw new ValidationError(promotionRefusal(verb, id, n.confirmed_kind === "admin" && n.confirmed_rev === n.rev));
   }
 
   /**

@@ -293,6 +293,8 @@ function failList(e){ $("list").innerHTML = "<p class='err'>"+esc(e.message)+"</
 function empty(text){ return "<p class='muted empty'>"+text+"</p>"; }
 
 // Inline confirm: the first click turns the button into "Confirm <label>?" for a few seconds; a second click runs fn.
+// R1-19: a note from outside content without a person's confirm for this version can't be pinned (mirrors needsHumanConfirm).
+function needsPerson(n){ return (n.tags||[]).some(function(t){ return String(t).indexOf("obs.origin:") === 0; }) && !(n.confirmed_kind === "human" && n.confirmed_rev === n.rev); }
 function arm(btn, fn){
   var al = btn.getAttribute("aria-label");
   if(btn.getAttribute("data-armed")){ clearTimeout(btn._t); btn.removeAttribute("data-armed"); if(al){ btn.setAttribute("aria-label", al.replace(/^confirm /, "")); } fn(); return; }
@@ -453,6 +455,8 @@ function render(notes){
       (IS_ADMIN && (n.unconfirmed || n.expired) ? " <button class='ghost' aria-label='confirm note #"+Number(n.id)+"' title='You checked it: let it back into session start. Pinning still needs monomem confirm in a terminal.' onclick='arm(this,function(){confirmNote("+Number(n.id)+")})'>Confirm</button>" : "")+
       (!IS_ADMIN ? "" : n.pinned
         ? " <button class='ghost' aria-label='unpin note #"+Number(n.id)+"' onclick='arm(this,function(){setPin("+Number(n.id)+",false)})'>Unpin</button>"
+        : needsPerson(n)
+        ? " <span class='muted' title='Notes from outside content need a person to confirm them at a terminal before they can be pinned.'>To pin: monomem confirm "+Number(n.id)+" in a terminal</span>"
         : " <button class='ghost' aria-label='pin note #"+Number(n.id)+"' title='Show it first at the start of every session. Agents cannot change a pinned note; only the owner can pin or unpin.' onclick='setPin("+Number(n.id)+",true)'>Pin (always shown)</button>")+
       " <button class='danger' aria-label='delete note #"+Number(n.id)+"' data-confirm='Confirm permanent delete?' onclick='arm(this,function(){del("+Number(n.id)+")})'>delete</button>")+"</div>"+
       (n.body ? "<div class='body'>"+esc(n.body)+"</div>" : "")+"</div>";
