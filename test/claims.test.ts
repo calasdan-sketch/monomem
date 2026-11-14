@@ -133,3 +133,21 @@ describe("the package ships what the docs point at", () => {
     }
   });
 });
+
+const BS = String.fromCharCode(92);
+describe("1.5.0 R1-09: every place an app key can sit is named in SECURITY.md", () => {
+  test("every setup target that can hold an Authorization header, and the other key files, are listed", async () => {
+    const { detectClients, HTTP_CAPABLE } = await import("../src/setup.js");
+    const home = join(ROOT, "fake-home");
+    const targets = detectClients({ home, platform: "linux", env: {}, cwd: join(home, "proj") } as any).filter((t) => HTTP_CAPABLE.includes(t.id));
+    assert.ok(targets.length >= 4, "claude-code, cursor, vscode and project can hold a key");
+    const sec = read("SECURITY.md").split(BS).join("/");
+    for (const t of targets) {
+      const rel = t.file.split(BS).join("/").replace((home + "/proj/").split(BS).join("/"), "./").replace(home.split(BS).join("/") + "/", "~/");
+      const needle = rel.startsWith("~/.config/") ? rel.slice("~/.config/".length) : rel; // XDG base differs per machine
+      assert.ok(sec.includes(needle), `SECURITY.md does not name ${needle} (a place ${t.label} can keep the key)`);
+    }
+    for (const f of [".token", "tokens.json", ".key", ".attest-key", "login-code", "sessionStorage"]) assert.ok(sec.includes(f), `SECURITY.md does not name ${f}`);
+    assert.match(sec, /not which agent/, "the consequence is stated plainly");
+  });
+});
