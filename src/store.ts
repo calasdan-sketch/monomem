@@ -3885,6 +3885,14 @@ export class Store {
     if (isNoopPatch(existing, patch, opts)) return { ...existing, unchanged: true };
     this.floodGate(opts.lint ?? "full", opts.noFloodCount !== true);
     this.refuseAgentOnPinned(id, "changing it");
+    // R1-06: a captured row (session summary, observation) is written by capture; an agent editing its text could forge what
+    // session start prints. The writers that are not agents (capture, the server's jobs, a person at a terminal) may.
+    if (existing.kind && existing.kind !== "note" && ((patch.title !== undefined && patch.title !== existing.title) || (patch.body !== undefined && patch.body !== existing.body))) {
+      const w = currentWriter();
+      if (actorStore.getStore()?.authed === true || w === "stdio" || w.startsWith("stdio:") || (w === "cli" && !sessionTaintExempt("cli"))) {
+        throw new ValidationError("Session summaries are written by capture; add a note instead.");
+      }
+    }
     // The outside-content stamps (obs.origin:*) only grow, on every path (REST, MCP, file sync, import): no write can strip
     // one, and a content edit by a connection that reads outside content adds its own (taintFor).
     const stamps = existing.tags.filter((t) => t.startsWith(ORIGIN_PREFIX));

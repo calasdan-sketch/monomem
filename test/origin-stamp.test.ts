@@ -1,6 +1,6 @@
 // The origin stamp: a captured session summary is labelled with the outside-content tools Monomem saw that session run.
 import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
-import { test, describe } from "node:test";
+import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { Store } from "../src/store.js";
 import { normalizeHookInput, recordEvent, type HookEvent } from "../src/capture.js";
@@ -11,6 +11,9 @@ import { provenanceBanner } from "../src/security.js";
 import { setProcessWriter } from "../src/actor.js";
 
 const CWD = "C:/work/app";
+// Summaries are written by the capture hooks (R1-06: only those are framed as a summary block at session start).
+beforeEach(() => setProcessWriter("capture"));
+afterEach(() => setProcessWriter(""));
 type Step = [HookEvent, Record<string, unknown>];
 const tool = (name: string, out = "page text"): Step => ["post-tool", { tool_name: name, tool_input: { url: "https://x.example" }, tool_response: out }];
 const prompt = (p: string): Step => ["user-prompt", { prompt: p }];

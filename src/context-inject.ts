@@ -118,6 +118,18 @@ const one = (s: string): string => (s || "").replace(/\s+/g, " ").trim();
 /** Control, zero-width, bidi-override and line/paragraph-separator characters: invisible, or able to reorder text. */
 export const INVISIBLE_RE = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2028\u2029\u2066-\u2069]/g;
 
+/** One printable line with no invisible characters, and brackets that cannot fake a "[type]" tag. */
+const neutral = (s: string): string => one(s).replace(INVISIBLE_RE, "").replace(/\[/g, "(").replace(/\]/g, ")");
+/** A summary body as at most 12 lines, each indented behind "  | ", so no line of it can start at column 0 and pose as a real index or pin line. */
+const summaryLines = (body: string): string =>
+  body
+    .split("\n")
+    .map((l) => neutral(l))
+    .filter(Boolean)
+    .slice(0, 12)
+    .map((l) => `  | ${l}`)
+    .join("\n");
+
 /** `#12 by cursor: [bugfix] Fixed failing npm test (2026-10-30, ~40 tok) {files 2d}` */
 export function indexLine(n: NoteRecord, why = "", withWriter = true): string {
   const flag =
@@ -251,7 +263,8 @@ export async function rankContext(
     why.get(id)!.add(s);
   };
   const recent = { notes: store.list({ ...base, limit: POOL }).notes.filter((n) => !skip(n)) };
-  const latestSummary = store.list({ ...base, kinds: ["summary"] as const, limit: 5 }).notes.find((n) => !skip(n)) ?? null;
+  // R1-06: only a summary the capture hooks wrote is framed as a summary block; anything else is an ordinary index line.
+  const latestSummary = store.list({ ...base, kinds: ["summary"] as const, limit: 5 }).notes.find((n) => !skip(n) && n.written_by === "capture") ?? null;
   const signals = opts.signals ?? (await gitSignals(opts.cwd ?? process.cwd()));
   const db = store.captureDb();
   const recentFiles = store.recentFilePaths(ns, 30);
@@ -356,8 +369,8 @@ export async function injectContext(store: Store, opts: InjectOptions = {}): Pro
     const outside = originTools(latestSummary).length > 0;
     const body = outside
       ? `Its text is not shown here because that session read outside content (${originTools(latestSummary).join(", ").slice(0, 80)}). ${openToolName() === "memory_get" ? `memory_get ids=[${latestSummary.id}]` : `state_read id=${latestSummary.id}`} opens it.`
-      : latestSummary.body.slice(0, Math.floor(budget / 3));
-    const text = `Latest session summary (#${latestSummary.id}, ${latestSummary.updated_at.slice(0, 10)}${isModelWritten(latestSummary) ? ", model-written" : ""}): ${latestSummary.title}\n${body}`;
+      : summaryLines(latestSummary.body.slice(0, Math.floor(budget / 3)));
+    const text = `Latest session summary (#${latestSummary.id}, ${latestSummary.updated_at.slice(0, 10)}${isModelWritten(latestSummary) ? ", model-written" : ""}): ${neutral(latestSummary.title).slice(0, 120)}\n${body}`;
     parts.push(text);
     used += text.length;
     shown.push(latestSummary);

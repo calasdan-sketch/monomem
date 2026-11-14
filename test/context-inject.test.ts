@@ -45,7 +45,7 @@ describe("session-start context", () => {
     const s = new Store(":memory:");
     for (let i = 0; i < 80; i++) s.create({ title: `Observation number ${i}`, body: "x".repeat(400) }, { kind: "observation", sessionId: "s", obsType: "change" });
     s.create({ title: "A plain note", body: "remember this" });
-    const sum = s.create({ title: "Session: refactor", body: "Request: refactor the store\nOutcome: tests passing" }, { kind: "summary", sessionId: "s" });
+    const sum = s.create({ title: "Session: refactor", body: "Request: refactor the store\nOutcome: tests passing" }, { kind: "summary", sessionId: "s", writtenBy: "capture" });
     const text = await injectContext(s, { signals: noGit, tokens: 300 });
     assert.ok(text.length <= 300 * 4 + 400, `too long: ${text.length}`);
     assert.ok(text.startsWith(`What I know about this project:\nLast session: Session: refactor\n\nLatest session summary (#${sum.id}`), text.slice(0, 120));
@@ -54,14 +54,14 @@ describe("session-start context", () => {
     assert.match(text, /Showing \d+ of 82 memories in ~\d+ tokens \(estimate\)(?:, condensed from ~\d+ tokens of notes and captured events|\. The notes themselves are only ~\d+ tokens; the rest is headers and index lines)\. Open any with memory_get ids=\[N\]$/);
     const big = await injectContext(s, { signals: noGit, tokens: 3000 });
     assert.ok(big.length > text.length, "a bigger budget shows more");
-    assert.equal(indexLine(sum).startsWith(`#${sum.id} [summary] Session: refactor`), true);
+    assert.equal(indexLine(sum).startsWith(`#${sum.id} by capture: [summary] Session: refactor`), true);
     s.close();
   });
 
   test("the latest summary is not listed again in the index or counted twice in the footer", async () => {
     const s = new Store(":memory:");
     s.create({ title: "Fixed failing npm test", body: "tests pass now" }, { kind: "observation", sessionId: "s", obsType: "bugfix" });
-    const sum = s.create({ title: "Session: fix tax rounding", body: "Request: fix tax rounding" }, { kind: "summary", sessionId: "s" });
+    const sum = s.create({ title: "Session: fix tax rounding", body: "Request: fix tax rounding" }, { kind: "summary", sessionId: "s", writtenBy: "capture" });
     const text = await injectContext(s, { signals: noGit });
     assert.doesNotMatch(text, new RegExp(`\\n#${sum.id} \\[summary\\]`));
     assert.match(text, /Showing 2 of 2 memories/);

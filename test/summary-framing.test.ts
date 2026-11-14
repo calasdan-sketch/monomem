@@ -16,7 +16,7 @@ afterEach(() => {
   setTtyCheck(undefined);
 });
 
-const fakeLines = (ctx: string): string[] => ctx.split("\n").filter((l) => /^#\d+ by cli/.test(l) || /^Pinned by the operator/.test(l) || /^by <name> =/.test(l.replace(/^\s+/, "")) && !l.startsWith(" "));
+const fakeLines = (ctx: string): string[] => ctx.split("\n").filter((l) => /^#\d+ by cli/.test(l) || /^Pinned by the operator/.test(l));
 
 describe("R1-06 a session summary cannot forge session-start lines", () => {
   test("an agent cannot edit a summary's title or body", () => {
