@@ -22,7 +22,7 @@ describe("unconfirmed notes at session start", () => {
     assert.match(ctx, /deploy guide/);
     assert.ok(!ctx.includes("ZZ-TITLE-MARKER"), "no title");
     assert.ok(!ctx.includes("zz-poison"), "no body");
-    assert.match(ctx, /Monomem: 2 notes from outside content wait for confirmation \(not shown\)\. Review: monomem review/);
+    assert.match(ctx, /Monomem: 2 notes from outside content wait for confirmation \(not shown\): 2 declared as outside content by the writer\. Review: monomem review/);
     const pool = await rankContext(s, { signals: noGit });
     assert.ok(!pool.ranked.some((n) => n.id === a.id));
     setProcessWriter("cli");
@@ -39,7 +39,7 @@ describe("unconfirmed notes at session start", () => {
     setProcessWriter("stdio");
     assert.equal(await injectContext(s, { signals: noGit }), "");
     s.create({ title: "x", outside: true });
-    assert.equal(await injectContext(s, { signals: noGit }), "Monomem: 1 note from outside content waits for confirmation (not shown). Review: monomem review");
+    assert.equal(await injectContext(s, { signals: noGit }), "Monomem: 1 note from outside content waits for confirmation (not shown): 1 declared as outside content by the writer. Review: monomem review");
     s.close();
   });
 

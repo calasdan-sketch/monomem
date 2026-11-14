@@ -307,7 +307,7 @@ export async function injectContext(store: Store, opts: InjectOptions = {}): Pro
   const { ranked, total, latestSummary, why, pinned } = await rankContext(store, opts);
   // 1.4.0: one count line for the notes held back as unconfirmed outside content; never their titles or text.
   const nsList = opts.namespace !== undefined ? [opts.namespace] : undefined;
-  const heldLine = [unconfirmedCountLine(store.unconfirmedCount(nsList)), expiryEnforced(store) ? expiredCountLine(store.expiredCount(nsList), store.confirmSettings().days) : ""].filter(Boolean).join("\n");
+  const heldLine = [unconfirmedCountLine(store.unconfirmedBreakdown(nsList)), ...(opts.cwd !== undefined ? store.openWindowLines(opts.cwd) : []), expiryEnforced(store) ? expiredCountLine(store.expiredCount(nsList), store.confirmSettings().days) : ""].filter(Boolean).join("\n");
   if (!ranked.length && !latestSummary && !pinned.length) return heldLine;
   const budget = (opts.tokens ?? recallTokens()) * CHARS_PER_TOKEN;
   const parts: string[] = [];

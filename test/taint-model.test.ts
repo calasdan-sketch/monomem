@@ -174,7 +174,8 @@ describe("R1-04 visible, never silent", () => {
     assert.match(lines, /10 .*declared/);
     assert.match(lines, /grade is capped at B/);
     assert.equal(gradeOf([{ id: "confirm-backlog", status: "warn" }]), "B");
-    assert.equal(gradeOf([{ id: "confirm-backlog", status: "warn" }, { id: "x", status: "warn" }]), "C");
+    assert.equal(gradeOf([{ id: "confirm-backlog", status: "warn" }, { id: "x", status: "warn" }, { id: "y", status: "warn" }]), "C");
+    assert.equal(gradeOf([{ id: "x", status: "ok" }]), "A");
     s.close();
   });
 

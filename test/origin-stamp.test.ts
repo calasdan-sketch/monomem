@@ -75,7 +75,7 @@ describe("origin stamp", () => {
     const sum = summaryOf(s, "web");
     // 1.4.0: a fresh stamped summary is unconfirmed: only the count line, not even its title.
     const held = await injectContext(s, { signals: noGit });
-    assert.match(held, /Monomem: 1 note from outside content waits for confirmation \(not shown\)\. Review: monomem review/);
+    assert.match(held, /Monomem: 1 note from outside content waits for confirmation \(not shown\): 1 written during a session that read the web\. Review: monomem review/);
     assert.ok(!held.includes(sum.title), "no title of an unconfirmed note");
     // A pre-1.4.0 (grandfathered) stamped summary keeps the 1.3.5 treatment below.
     s.captureDb().prepare("UPDATE notes SET grandfathered_at = '2026-01-01T00:00:00.000Z'").run();

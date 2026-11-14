@@ -205,6 +205,7 @@ function worldFor(s: Scenario): WorldSpec {
       writer: a.writer ?? name,
       server: a.server ?? "main",
       ...(a.namespace ? { namespace: a.namespace } : {}),
+      ...(a.reads_outside ? { reads_outside: true } : {}),
     };
   }
   return { actors, grants: s.grants ?? {}, ...(s.settings ? { settings: s.settings } : {}) };

@@ -10,6 +10,8 @@
 // Monomem can only see outside reads its hooks, its own process, or a declaration show it: a shell `curl`, a downloaded file
 // opened with Read, or a host without hooks is not seen.
 
+import { resolve as resolvePath } from "node:path";
+
 export const ORIGIN_PREFIX = "obs.origin:";
 export const ORIGIN_TOOL_PREFIX = "obs.origin:tool:";
 export const ORIGIN_VIA_MEMORY = "obs.origin:via:memory";
@@ -92,9 +94,28 @@ export const promotionRefusal = (verb: string, id: number): string =>
   `Can't ${verb}: this note came from outside content. A person must confirm it first: monomem confirm ${id}`;
 
 /** The one session-start line for held-back notes ("" when none). No titles: a title can carry injected text too. */
-export function unconfirmedCountLine(n: number): string {
+export function unconfirmedCountLine(c: { tool: number; via: number; declared: number }): string {
+  const n = c.tool + c.via + c.declared;
   if (n <= 0) return "";
-  return `Monomem: ${n} ${n === 1 ? "note" : "notes"} from outside content ${n === 1 ? "waits" : "wait"} for confirmation (not shown). Review: monomem review`;
+  const parts = [
+    c.tool ? `${c.tool} written during a session that read the web` : "",
+    c.via ? `${c.via} written after reading unconfirmed notes` : "",
+    c.declared ? `${c.declared} declared as outside content by the writer` : "",
+  ].filter(Boolean);
+  return `Monomem: ${n} ${n === 1 ? "note" : "notes"} from outside content ${n === 1 ? "waits" : "wait"} for confirmation (not shown): ${parts.join(", ")}. Review: monomem review`;
+}
+
+/** A path in comparable form: absolute, one separator, no trailing separator, lowercased on Windows. */
+export function normFolder(p: string): string {
+  const r = resolvePath(p).replace(/\\/g, "/").replace(/\/+$/, "");
+  return process.platform === "win32" ? r.toLowerCase() : r;
+}
+/** Two folders are the same, or one contains the other (a session started in a subfolder still belongs to the project). "" never matches. */
+export function sameFolder(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false;
+  const x = normFolder(a);
+  const y = normFolder(b);
+  return x === y || x.startsWith(y + "/") || y.startsWith(x + "/");
 }
 
 // ---- re-confirmation expiry (1a) and derived_from (1d) ---------------------------------------------------------------
@@ -130,20 +151,28 @@ export function heldFromSessionStart(n: { unconfirmed?: true; built_on_distruste
 // ---- notes a connection read while they were unconfirmed ------------------------------------------------------------
 // Per authenticated writer, per Store (REST and MCP over HTTP make a new handler per request, so the memory has to outlive
 // one, and both front doors on one Store share it: a read over one and a write over the other is the same writer). The
-// stdio server keeps its own set (one process = one agent). Cleared only by a restart.
-// ponytail: unbounded per writer for the server's lifetime; a set of note ids is tiny next to the notes themselves.
-export function newTaintRegistry(): (writer: string) => Set<number> {
-  const byWriter = new Map<string, Set<number>>();
+// stdio server keeps its own set (one process = one agent). Cleared by a restart.
+// 1.5.0: each entry remembers WHEN the note was read (note id -> ms). A write is marked via:memory only while some entry was
+// read within the taint window AND that note is still unconfirmed (Store.taintFor), so the mark fades once a person confirms.
+// The read_it confirm rule still uses every entry, undecayed: the connection did read it.
+// ponytail: unbounded per writer for the server's lifetime; a map of note ids is tiny next to the notes themselves.
+export class ReadTaint extends Map<number, number> {
+  add(id: number): this {
+    return this.set(id, Date.now());
+  }
+}
+export function newTaintRegistry(): (writer: string) => ReadTaint {
+  const byWriter = new Map<string, ReadTaint>();
   return (writer) => {
     let s = byWriter.get(writer);
-    if (!s) byWriter.set(writer, (s = new Set()));
+    if (!s) byWriter.set(writer, (s = new ReadTaint()));
     return s;
   };
 }
 
-const registries = new WeakMap<object, (writer: string) => Set<number>>();
+const registries = new WeakMap<object, (writer: string) => ReadTaint>();
 /** The one read-taint registry for a Store, keyed by the server-stamped writer (currentWriter()). */
-export function taintRegistryFor(store: object): (writer: string) => Set<number> {
+export function taintRegistryFor(store: object): (writer: string) => ReadTaint {
   let r = registries.get(store);
   if (!r) registries.set(store, (r = newTaintRegistry()));
   return r;

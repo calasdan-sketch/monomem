@@ -155,7 +155,11 @@ refuses to make them pinned notes until a person confirms them. Read what it can
   untrusted data.
 - **It does not judge truth.** A marked note may be correct; an unmarked one may be poisoned.
 - **The read signal is per connection** (one stdio server, or one key on one server: REST and MCP over HTTP share it)
-  and **resets when the server restarts**.
+  and **resets when the server restarts**. Since 1.5.0 it also fades: a write is marked `via:memory` only while a note the
+  connection read within the taint window is still unconfirmed, so a person's confirm ends it. A reply that carries an
+  unconfirmed note counts as a read on every route and tool, not only the read ones. Session start says how many unconfirmed
+  notes wait and why (web session / read of unconfirmed notes / declared), and `monomem health` never grades A with 10 or more
+  waiting or one waiting more than 7 days (capped at B).
 - **A local (stdio) app's confirm never counts.** Its name (`stdio:<app>`) comes from its config file, so one process could
   play two writers.
 - **A stated source is a claim.** Monomem never fetches it. A second agent's confirm is corroboration, not verification:
@@ -180,7 +184,7 @@ of which only adds:
 
 | Mark | When |
 |---|---|
-| `obs.origin:tool:<name>` | A hook-equipped session in the **same namespace** recorded output from an outside tool (`WebFetch`, `WebSearch`, any MCP server except Monomem and those in `MONOMEM_LOCAL_MCP_SERVERS`) within the last `MONOMEM_TAINT_WINDOW_HOURS` (default 12; `0` = off) and has not ended. Up to 3 tool names, or `other`. Writes by capture, the server's own jobs, the runner and imports are not marked by this signal, and neither are writes by the `monomem` CLI **at a terminal** (stdin and stdout both terminals). Run from an agent's shell tool, a script or a pipe, `monomem remember` / `monomem add` are marked like any other writer. |
+| `obs.origin:tool:<name>` | A hook-equipped session recorded output from an outside tool (`WebFetch`, `WebSearch`, any MCP server except Monomem and those in `MONOMEM_LOCAL_MCP_SERVERS`) within the last `MONOMEM_TAINT_WINDOW_HOURS` (default 12; `0` = off), has not ended and had an event in the last 30 minutes (an idle or crashed session stops counting at once). Up to 3 tool names, or `other`. **1.5.0: the window follows the writer, not the namespace.** It marks only local writers that have no key of their own: a stdio server (matched by the folder it was launched in: the same folder as the session, or one containing the other) and the `monomem` command run without a terminal. The namespace a write names does not matter. A local server whose folder matches no active session is an unknown origin and gets the worst case (any open window). Apps with their own key (REST, MCP over HTTP, the admin key, the dashboard) are **not** marked by it; set `reads_outside` on such a key, or declare writes with `outside: true`. A person can close the open windows with `monomem taint clear [--all | --session <id> | --here]` (terminal and typed yes; marks already written stay). Writes by capture, the server's own jobs, the runner and imports are not marked by this signal, and neither are writes by the `monomem` CLI **at a terminal** (stdin and stdout both terminals). Run from an agent's shell tool, a script or a pipe, `monomem remember` / `monomem add` are marked like any other writer. |
 | `obs.origin:via:memory` | The connection writing the note had been handed an unconfirmed note (in a read, a search or a list), or the note names an unconfirmed note in `derived_from`. |
 | `obs.origin:declared` | The writer said so: `outside: true` on MCP `state_write` or REST `POST`/`PUT /notes`, `monomem add --outside`, or a token entry with `"reads_outside": true` ([configuration.md](./configuration.md)). `outside: false` removes nothing. |
 
@@ -339,7 +343,7 @@ until confirmed). A summary stamped before the upgrade keeps the treatment above
 
 - an agent that paraphrases outside text into an ordinary `state_write` when Monomem saw no outside read (the drill's
   `SELF` miss stays a reported miss: the write check still cannot tell). Since 1.4.0 the session window above marks such a
-  note when the outside read happened in a hooked session in the same namespace;
+  note when the outside read happened in a hooked session in the writer's folder (local apps only; an app with its own key is not covered by the session window, so set `reads_outside` on its key, and an agent can start a stdio server from a folder that has a clean hooked session; `Bash` `curl` is still not seen);
 - clients without Monomem's capture hooks (Cursor, Codex over plain MCP): nothing is stamped there;
 - local reads (`Read`, `Grep`) and `Bash` (`curl`, `git pull`), which run in nearly every session, so a downloaded README
   read with `Read` is not stamped;

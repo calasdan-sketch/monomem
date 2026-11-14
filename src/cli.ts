@@ -19,7 +19,7 @@ const COMMANDS = [
   "consolidate", "rebuild-edges", "relevant", "search", "token", "changes", "backup", "runner-status", "watch", "export", "import", "trust",
   "quarantine", "approve-first", "access", "flood", "resume", "decay", "archive", "restore", "delete", "quality", "conflicts", "facts", "fact",
   "encrypt", "meter", "receipts", "why", "never-show", "supersede", "history", "pin", "unpin", "rollback", "bench", "drill", "health", "audit",
-  "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet", "confirm", "review", "config",
+  "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet", "confirm", "review", "taint", "config",
   "help", "--help", "-h", "--version", "-v", "version",
 ];
 
@@ -253,6 +253,9 @@ function usage(all = false): void {
       "  review [--ns <namespace>] [--json] [--confirm-all [--source \"what you checked\"]]",
       "            Lists the notes waiting for a person (id, title, why, writer): outside content nobody confirmed, and",
       "            notes not re-confirmed within confirm-days. --confirm-all confirms every listed note as you, after one typed yes.",
+      "  taint clear [--all | --session <id> | --here]",
+      "            Ends the open outside-content windows (a hooked session read the web: local apps' notes written meanwhile are",
+      "            marked). Run it in a terminal and type yes. Marks already written stay; nothing is deleted.",
       "  config [get | set confirm-days <n> | set confirm-mode off|label|enforce]",
       "            Re-confirmation expiry. label (default): a note not changed or confirmed for confirm-days (default 30) is",
       "            labelled in search. enforce: it is also kept out of session start. off: nothing. Nothing is ever deleted.",
@@ -2792,6 +2795,31 @@ async function reviewCmd(args: string[]): Promise<void> {
 }
 
 /** `monomem config [get | set confirm-days <n> | set confirm-mode off|label|enforce]`: settings kept in the store. */
+/**
+ * `monomem taint clear [--all | --session <id> | --here]`: a person ends the open outside-content windows (the periods in which a
+ * hooked session read the web and local apps' notes are marked). It lowers protection, so it needs a terminal and a typed yes.
+ * Stamps already written stay; nothing is deleted.
+ */
+async function taintCmd(args: string[]): Promise<void> {
+  const usage = "Usage: monomem taint clear [--all | --session <id> | --here]";
+  const [verb, flag, val, ...extra] = args;
+  const ok = verb === "clear" && !extra.length && ((flag === "--all" || flag === "--here") && val === undefined ? true : flag === "--session" && typeof val === "string" && val.length > 0);
+  if (!ok) {
+    console.error(usage);
+    process.exit(1);
+  }
+  await requireOperator(`taint clear ${flag === "--session" ? `--session ${val}` : flag}`);
+  const { DB_PATH } = await import("./config.js");
+  const { Store } = await import("./store.js");
+  const store = new Store(DB_PATH);
+  try {
+    const n = store.taintClear(flag === "--all" ? { all: true } : flag === "--here" ? { cwd: process.cwd() } : { session: val as string });
+    console.log(n ? `Closed ${n} open outside-content window${n === 1 ? "" : "s"}. Notes already marked keep their mark.` : "No open outside-content window matched. Nothing changed.");
+  } finally {
+    store.close();
+  }
+}
+
 async function configCmd(args: string[]): Promise<void> {
   const usage = "Usage: monomem config [get | set confirm-days <n> | set confirm-mode off|label|enforce]";
   const [verb = "get", key, value, ...extra] = args;
@@ -3538,6 +3566,9 @@ async function main(): Promise<void> {
       break;
     case "review":
       await reviewCmd(process.argv.slice(3));
+      break;
+    case "taint":
+      await taintCmd(process.argv.slice(3));
       break;
     case "config":
       await configCmd(process.argv.slice(3));

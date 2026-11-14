@@ -48,6 +48,7 @@ import {
   ORIGIN_DECLARED,
   SESSION_TAINT_EXEMPT,
   sessionTaintExempt,
+  sameFolder,
   isOutsideTool,
   isTainted,
   toolTag,
@@ -661,6 +662,8 @@ const FTS_PREFIX_OPT = "prefix='1'";
 
 /** Current schema version (PRAGMA user_version). See Store.migrate. */
 export const SCHEMA_VERSION = 21;
+/** A hooked session with no event for this long no longer counts as open (same as extract.ts STALE_SESSION_MS). */
+const SESSION_IDLE_MS = 30 * 60_000;
 
 /**
  * Notes fetched per page by exportBatch(), which both streaming export
@@ -3143,7 +3146,7 @@ export class Store {
     const derived = this.derivedIds(input.derived_from);
     const taint = [
       ...new Set([
-        ...this.taintFor(input.namespace?.trim() || DEFAULT_NAMESPACE, input.outside, opts.bulkImport || opts.writtenBy !== undefined ? null : currentWriter()),
+        ...this.taintFor(input.outside, opts.bulkImport || opts.writtenBy !== undefined ? null : currentWriter()),
         ...this.inheritedTaint(derived),
       ]),
     ];
@@ -3891,7 +3894,7 @@ export class Store {
     const added = [
       ...new Set([
         ...(contentEdit || patch.outside === true
-          ? this.taintFor(patch.namespace?.trim() || existing.namespace, patch.outside, opts.writtenBy !== undefined || opts.keepWriter ? null : currentWriter())
+          ? this.taintFor(patch.outside, opts.writtenBy !== undefined || opts.keepWriter ? null : currentWriter())
           : []),
         ...this.inheritedTaint(derived),
       ]),
@@ -8175,15 +8178,34 @@ export class Store {
   // --- Outside-content taint and confirms (1.4.0, taint.ts) -------------------------------------------
 
   /**
-   * The `obs.origin:*` tags a write gets: `outside: true` (declared), the connection's own (ActorRef.taint: via:memory,
-   * a reads_outside token), and the hook session signal. `writer` null = an internal write for someone else (only `declared`).
+   * The `obs.origin:*` tags a write gets: `outside: true` (declared), the connection's own (ActorRef.taint: a reads_outside
+   * token), read-taint (via:memory, while a note this connection read is still unconfirmed and was read within the taint window)
+   * and the hook session signal. `writer` null = an internal write for someone else (only `declared`).
+   * 1.5.0: taint follows the ACTOR. The hook window stamps only local unauthenticated writers (stdio, a non-terminal cli), matched
+   * by the writer process's folder, never by the namespace the write names; a token writer gets only its own signals.
    */
-  private taintFor(namespace: string, declared: boolean | undefined, writer: string | null): string[] {
+  private taintFor(declared: boolean | undefined, writer: string | null): string[] {
     const out = new Set<string>(declared === true ? [ORIGIN_DECLARED] : []);
     if (writer === null) return [...out];
-    for (const t of actorStore.getStore()?.taint ?? []) if (t.startsWith(ORIGIN_PREFIX)) out.add(t);
-    if (!sessionTaintExempt(writer)) for (const t of this.sessionOutsideTags(namespace)) out.add(t);
+    const actor = actorStore.getStore();
+    for (const t of actor?.taint ?? []) if (t.startsWith(ORIGIN_PREFIX)) out.add(t);
+    if (this.readTaintLive(actor?.taintedReads)) out.add(ORIGIN_VIA_MEMORY);
+    if (actor?.authed !== true && !sessionTaintExempt(writer)) for (const t of this.sessionOutsideTags(actor?.cwd)) out.add(t);
     return [...out];
+  }
+
+  /** Read-taint: some note this connection read within the taint window is still unconfirmed now. */
+  private readTaintLive(reads: ReadonlyMap<number, number> | undefined): boolean {
+    if (!reads || reads.size === 0) return false;
+    const h = taintWindowHours();
+    const cutoff = Date.now() - (h > 0 ? h : 12) * 3_600_000;
+    const q = this.db.prepare("SELECT tags, grandfathered_at, confirmed_kind, confirmed_rev, rev FROM notes WHERE id = ?");
+    for (const [id, at] of reads) {
+      if (at < cutoff) continue;
+      const r = q.get(id) as { tags: string; grandfathered_at: string | null; confirmed_kind: string | null; confirmed_rev: number | null; rev: number } | undefined;
+      if (r && isTainted(parseTags(r.tags)) && r.grandfathered_at === null && !(r.confirmed_kind && Number(r.confirmed_rev) === Number(r.rev))) return true;
+    }
+    return false;
   }
 
   /**
@@ -8223,6 +8245,10 @@ export class Store {
    */
   private stampCliTerminal(id: number, writer: string): void {
     if (writer === "cli") this.db.prepare("UPDATE notes SET cli_tty = ? WHERE id = ?").run(sessionTaintExempt("cli") ? 1 : 0, id);
+    // 1.5.0: the folder of the local server that wrote this content (NULL = another kind of writer, or unknown origin).
+    const actor = actorStore.getStore();
+    const cwd = actor?.authed !== true && (writer === "stdio" || writer.startsWith("stdio:")) && actor?.cwd ? actor.cwd : null;
+    this.db.prepare("UPDATE notes SET writer_cwd = ? WHERE id = ?").run(cwd, id);
   }
 
   private addLinks(id: number, parents: number[], by: string, at: string): void {
@@ -8232,52 +8258,147 @@ export class Store {
   }
 
   /**
-   * The hook signal: a session in this namespace that has not ended read outside content within the taint window.
-   * Namespace-coarse on purpose (the MCP server never learns the host's session id), so a browsing session can taint a
-   * sibling session's writes; a person's confirm clears that. Returns the tools' stamps (at most 3), or `...:other`.
+   * Sessions a hook has seen recently: not ended, last capture event (or start) within SESSION_IDLE_MS, so a crashed or idle
+   * session stops counting at once instead of after distillStaleSessions has run.
    */
-  private sessionOutsideTags(namespace: string): string[] {
+  private activeSessions(): Array<{ id: string; cwd: string; outside_at: string | null }> {
+    const idle = new Date(Date.now() - SESSION_IDLE_MS).toISOString();
+    return this.db
+      .prepare(
+        `SELECT s.id, s.cwd, s.outside_at FROM sessions s WHERE s.ended_at IS NULL
+           AND COALESCE((SELECT MAX(at) FROM capture_events e WHERE e.session_id = s.id), s.started_at) >= ?`
+      )
+      .all(idle) as Array<{ id: string; cwd: string; outside_at: string | null }>;
+  }
+
+  /** Sessions whose outside window applies to a writer launched in `cwd` (undefined = unknown origin: every open window). */
+  private windowSessions(cwd: string | undefined): Array<{ id: string; cwd: string; outside_at: string }> {
     const hours = taintWindowHours();
     if (hours <= 0) return [];
     const cutoff = new Date(Date.now() - hours * 3_600_000).toISOString();
-    const ids = (this.db.prepare("SELECT id FROM sessions WHERE namespace = ? AND ended_at IS NULL AND outside_at >= ?").all(namespace, cutoff) as Array<{ id: string }>).map((r) => r.id);
+    const active = this.activeSessions();
+    const mine = cwd ? active.filter((x) => sameFolder(x.cwd, cwd)) : [];
+    // A folder that matches no active session is an unknown origin (Claude Desktop, a server an agent launched from a shell).
+    return (mine.length ? mine : active).filter((x): x is { id: string; cwd: string; outside_at: string } => x.outside_at !== null && x.outside_at >= cutoff);
+  }
+
+  private windowCache = new Map<string, { at: number; tags: string[] }>();
+
+  /**
+   * The hook signal (R1-04): the stamps for a local writer launched in `cwd` while a session of that folder read outside content
+   * within the taint window. Returns the tools' stamps (at most 3), or `...:other`. Cached 1 s per folder (the lookup runs on
+   * every agent write); MONOMEM_SCAN_CACHE_SECONDS=0 turns that off for tests.
+   */
+  private sessionOutsideTags(cwd: string | undefined): string[] {
+    const ttl = Math.min(1000, Math.max(0, Number(process.env.MONOMEM_SCAN_CACHE_SECONDS ?? "60") || 0) * 1000);
+    const key = cwd ?? "";
+    const hit = this.windowCache.get(key);
+    if (ttl > 0 && hit && Date.now() - hit.at < ttl) return hit.tags;
+    const tags = this.computeWindowTags(cwd);
+    this.windowCache.set(key, { at: Date.now(), tags });
+    return tags;
+  }
+
+  private windowTools(ids: string[], cutoff: string): string[] {
     if (!ids.length) return [];
     const tools = this.db
       .prepare(`SELECT DISTINCT tool FROM capture_events WHERE session_id IN (${ids.map(() => "?").join(",")}) AND event IN ('post-tool', 'post-tool-failure') AND at >= ?`)
       .all(...ids, cutoff) as Array<{ tool: string }>;
-    const tags = [...new Set(tools.map((r) => r.tool).filter((t) => isOutsideTool(t)).map(toolTag))].sort().slice(0, 3);
+    return tools.map((r) => r.tool).filter((t) => isOutsideTool(t));
+  }
+
+  private computeWindowTags(cwd: string | undefined): string[] {
+    const sessions = this.windowSessions(cwd);
+    if (!sessions.length) return [];
+    const cutoff = new Date(Date.now() - taintWindowHours() * 3_600_000).toISOString();
+    const tags = [...new Set(this.windowTools(sessions.map((x) => x.id), cutoff).map(toolTag))].sort().slice(0, 3);
     return tags.length ? tags : [toolTag("other")];
   }
 
+  /** `monomem taint clear`: a person ends the open outside windows (all, one session, or the ones of one folder). Stamps already written stay. */
+  taintClear(sel: { all?: boolean; session?: string; cwd?: string }): number {
+    const open = this.db.prepare("SELECT id, cwd FROM sessions WHERE ended_at IS NULL AND outside_at IS NOT NULL").all() as Array<{ id: string; cwd: string }>;
+    const ids = open.filter((x) => sel.all === true || (sel.session !== undefined && x.id === sel.session) || (sel.cwd !== undefined && sameFolder(x.cwd, sel.cwd))).map((x) => x.id);
+    if (ids.length) this.transaction(() => this.db.prepare(`UPDATE sessions SET outside_at = NULL WHERE id IN (${ids.map(() => "?").join(",")})`).run(...ids));
+    this.windowCache.clear();
+    this.audit({ op: "taint-clear", detail: `${ids.length} window(s) closed` });
+    return ids.length;
+  }
+
+  /** The windows open now, for doctor and session start: folder, tools, minutes since the outside read. */
+  openWindows(cwd?: string): Array<{ cwd: string; tools: string[]; minutes: number }> {
+    const hours = taintWindowHours();
+    if (hours <= 0) return [];
+    const cutoff = new Date(Date.now() - hours * 3_600_000).toISOString();
+    const rows = (cwd === undefined ? this.activeSessions() : this.activeSessions().filter((x) => sameFolder(x.cwd, cwd))).filter(
+      (x): x is { id: string; cwd: string; outside_at: string } => x.outside_at !== null && x.outside_at >= cutoff
+    );
+    return rows.map((r) => ({
+      cwd: r.cwd,
+      tools: [...new Set(this.windowTools([r.id], cutoff))].sort(),
+      minutes: Math.max(0, Math.round((Date.now() - Date.parse(r.outside_at)) / 60_000)),
+    }));
+  }
+
+  /** Session-start lines for a writer in `cwd` whose folder has an open outside window (none when no window is open). */
+  openWindowLines(cwd: string): string[] {
+    return this.openWindows(cwd).map(
+      (w) =>
+        `Monomem: a session in this folder read outside content (${w.tools.join(", ") || "other"}) ${w.minutes} min ago; notes written from here are marked until it ends. A person can stop this: monomem taint clear --here`
+    );
+  }
+
   /**
-   * A spooled outside-content event stored late (capture.ts drainSpool): notes written in its namespace after it, within the
-   * taint window, get its stamp now. Add-only, no rev bump (the content did not change). Returns how many notes it marked.
+   * A spooled outside-content event stored late (capture.ts drainSpool): notes written by LOCAL unauthenticated writers (stdio,
+   * a non-terminal cli) since that read, within the taint window, in the session's folder (or of unknown origin) get its stamp
+   * now. Add-only, no rev bump (the content did not change). Returns how many notes it marked.
    */
-  retroTaint(namespace: string, atIso: string, tool: string): number {
+  retroTaint(cwd: string, atIso: string, tool: string): number {
     const hours = taintWindowHours();
     if (hours <= 0 || !isOutsideTool(tool)) return 0;
     const until = new Date(Date.parse(atIso) + hours * 3_600_000).toISOString();
     const tag = toolTag(tool);
     const rows = this.db
-      .prepare("SELECT id, tags, written_by, cli_tty FROM notes WHERE namespace = ? AND updated_at >= ? AND updated_at <= ? AND archived_at IS NULL AND COALESCE(kind, 'note') = 'note'")
-      .all(namespace, atIso, until) as Array<{ id: number; tags: string; written_by: string | null; cli_tty: number | null }>;
-    // The CLI is exempt only for a write it made at a terminal (cli_tty, stamped at write time).
-    const exempt = (r: { written_by: string | null; cli_tty: number | null }): boolean =>
-      r.written_by === "cli" ? Number(r.cli_tty) === 1 : SESSION_TAINT_EXEMPT.has(r.written_by ?? "");
-    const marks = rows.filter((r) => !exempt(r) && !parseTags(r.tags).includes(tag));
+      .prepare("SELECT id, tags, written_by, cli_tty, writer_cwd FROM notes WHERE updated_at >= ? AND updated_at <= ? AND archived_at IS NULL AND COALESCE(kind, 'note') = 'note'")
+      .all(atIso, until) as Array<{ id: number; tags: string; written_by: string | null; cli_tty: number | null; writer_cwd: string | null }>;
+    const local = (r: { written_by: string | null; cli_tty: number | null }): boolean =>
+      r.written_by === "cli" ? Number(r.cli_tty) !== 1 : r.written_by === "stdio" || (r.written_by ?? "").startsWith("stdio:");
+    const marks = rows.filter((r) => local(r) && (r.writer_cwd === null || sameFolder(r.writer_cwd, cwd)) && !parseTags(r.tags).includes(tag));
     if (!marks.length) return 0;
     // One transaction; a note it marks is new outside content, so a pre-upgrade (grandfathered) note loses its exemption.
     this.transaction(() => {
       const up = this.db.prepare("UPDATE notes SET tags = ?, grandfathered_at = NULL WHERE id = ?");
       for (const r of marks) up.run(tagsToStorage([...parseTags(r.tags), tag]), r.id);
     });
-    this.audit({ op: "retro-taint", namespace, detail: `${marks.length} note(s) marked ${tag}` });
+    this.audit({ op: "retro-taint", detail: `${marks.length} note(s) marked ${tag}` });
     return marks.length;
   }
 
   /** Live unconfirmed notes (tainted, not grandfathered, no confirm for the current rev), in `namespaces` or everywhere. */
   unconfirmedCount(namespaces?: string[]): number {
     return this.unconfirmedRows(namespaces).length;
+  }
+
+  /** The unconfirmed notes by cause (each counted once: tool, else via memory, else declared). Counts only; no titles. */
+  unconfirmedBreakdown(namespaces?: string[]): { tool: number; via: number; declared: number } {
+    const out = { tool: 0, via: 0, declared: 0 };
+    for (const r of this.unconfirmedRows(namespaces)) {
+      const t = parseTags(r.tags);
+      if (t.some((x) => x.startsWith(ORIGIN_TOOL_PREFIX))) out.tool++;
+      else if (t.includes(ORIGIN_VIA_MEMORY)) out.via++;
+      else out.declared++;
+    }
+    return out;
+  }
+
+  /** A backlog nobody can see is not "healthy": 10 or more unconfirmed notes, or one older than 7 days, caps the grade at B. */
+  confirmBacklog(): { count: number; oldest_days: number; capped: boolean; reason: string } {
+    const rows = this.unconfirmedRows();
+    const oldest = rows.reduce((m, r) => Math.min(m, Date.parse(r.updated_at) || Date.now()), Date.now());
+    const days = Math.floor((Date.now() - oldest) / 86_400_000);
+    const many = rows.length >= 10;
+    const old = rows.length > 0 && days > 7;
+    return { count: rows.length, oldest_days: days, capped: many || old, reason: many ? `${rows.length} unconfirmed notes wait for review` : old ? `the oldest unconfirmed note has waited ${days} days` : "" };
   }
 
   /**
@@ -8406,15 +8527,21 @@ export class Store {
     const expired = this.expiredCount();
     const hours = taintWindowHours();
     const plural = (n: number): string => `${n} note${n === 1 ? "" : "s"}`;
+    const b = this.unconfirmedBreakdown();
+    const back = this.confirmBacklog();
+    const wins = this.openWindows();
     return [
       `Unconfirmed notes (from outside content, kept out of session start until confirmed): ${unconfirmed}${unconfirmed ? " (monomem review)" : ""}`,
+      ...(unconfirmed ? [`By origin: ${b.tool} written during a session that read the web, ${b.via} after reading unconfirmed notes, ${b.declared} declared by the writer`] : []),
+      ...(wins.length ? [`Open outside-content windows: ${wins.map((w) => `${w.cwd || "(unknown folder)"} (${w.tools.join(", ") || "other"}, ${w.minutes} min ago)`).join("; ")} (end them: monomem taint clear)`] : []),
+      ...(back.capped ? [`The health grade is capped at B: ${back.reason}. Review them: monomem review`] : []),
       c.mode === "off"
         ? "Re-confirmation expiry: off (no note expires; turn on: monomem config set confirm-mode label)"
         : `Re-confirmation expiry: ${c.mode}, every ${c.days} days; ${plural(expired)} past due (${c.mode === "enforce" ? "kept out of session start" : "labelled in search, still shown"})`,
       hours > 0
-        ? `Outside-content window: notes written within ${hours} hours of a hooked session reading outside content in the same namespace are marked (MONOMEM_TAINT_WINDOW_HOURS)`
+        ? `Outside-content window: notes written by a local app (no key of its own) launched in the same folder as a hooked session that read outside content, within ${hours} hours and while that session is active (idle 30 minutes ends it), are marked; apps with their own key are not (MONOMEM_TAINT_WINDOW_HOURS)`
         : "Outside-content window: off (MONOMEM_TAINT_WINDOW_HOURS=0), so hooked sessions' outside reads mark nothing",
-      "Read-taint: a connection that reads an unconfirmed note marks what it writes next. This is per connection; it resets when the server restarts.",
+      "Read-taint: a connection that reads an unconfirmed note marks what it writes next, until that note is confirmed or the taint window passes. This is per connection; it resets when the server restarts.",
     ];
   }
 

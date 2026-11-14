@@ -125,7 +125,7 @@ let scanIds = 0;
 import { SupersedeError, supersedePreview, supersedeConfirm, supersedeUndo, noteHistory, restoreVersion, purgeNoteHistory, type Caller } from "./supersede.js";
 import { withFacts, factFeedback } from "./facts.js";
 import { assertPlainWriteTags, assertReviewedTag } from "./reserved-tags.js";
-import { ORIGIN_DECLARED, ORIGIN_VIA_MEMORY, taintRegistryFor, unconfirmedIdsIn } from "./taint.js";
+import { ORIGIN_DECLARED, ReadTaint, taintRegistryFor, unconfirmedIdsIn } from "./taint.js";
 import { waitForChanges, parseWait, WaitBusyError } from "./change-wait.js";
 import type { LintFinding } from "./lint.js";
 import { memoryIndex, memoryTimeline, memoryGet, sessionList, sessionGet, fileTimeline, type ReadScope } from "./progressive.js";
@@ -629,7 +629,7 @@ export function createApiServer(
         // 1.4.0 taint: what this token read while unconfirmed (kept per token for the process), and its declared flag.
         const reads = taintedReadsFor(currentWriter());
         actorRef.taintedReads = reads;
-        actorRef.taint = [...(reads.size ? [ORIGIN_VIA_MEMORY] : []), ...(principal.reads_outside ? [ORIGIN_DECLARED] : [])];
+        actorRef.taint = principal.reads_outside ? [ORIGIN_DECLARED] : []; // via:memory is decided by the Store from taintedReads
       } else if (principal.max_sensitivity !== undefined) {
         // Cannot happen (every request runs inside actorStore.run), but a ceiling that cannot be applied must never be skipped.
         sendJson(res, 500, { error: "internal error" });
@@ -661,7 +661,7 @@ export function createApiServer(
         pendingReads.set(res, (payload) => {
           // 1.4.0: an unconfirmed note handed to this token: what it writes next is marked via:memory.
           const reads = actorRef?.taintedReads;
-          if (reads instanceof Set) for (const id of unconfirmedIdsIn(payload)) reads.add(id);
+          if (reads instanceof ReadTaint) for (const id of unconfirmedIdsIn(payload)) reads.add(id);
           store.logAccess({ tool, namespaces: nsHint ? [nsHint] : [], query: readQuery, payload });
         });
       }

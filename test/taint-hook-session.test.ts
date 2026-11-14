@@ -48,12 +48,12 @@ describe("taint from a hook session", () => {
   test("no mark: other namespace, ended session, outside the window, local-only tool, the CLI", () => {
     const s = new Store(":memory:");
     setProcessWriter("stdio");
-    recordEvent(s, fetchEv("other-ns"), "elsewhere");
-    assert.equal(s.create({ title: "a" }).unconfirmed, undefined, "other namespace");
+    // 1.5.0: the namespace a write names no longer matters (taint-model.test.ts covers the folder rules).
     recordEvent(s, fetchEv("ended"), "default");
     recordEvent(s, normalizeHookInput("session-end", { session_id: "ended", cwd: "C:/w" }), "default");
     assert.equal(s.create({ title: "b" }).unconfirmed, undefined, "ended session");
     recordEvent(s, fetchEv("old", new Date(Date.now() - 13 * 3_600_000)), "default");
+    recordEvent(s, fetchEv("old", new Date(), "Read"), "default"); // still active, but its outside read is older than the window
     assert.equal(s.create({ title: "c" }).unconfirmed, undefined, "older than 12 hours");
     recordEvent(s, fetchEv("local", new Date(), "Read"), "default");
     assert.equal(s.create({ title: "d" }).unconfirmed, undefined, "Read is not outside content");
@@ -68,6 +68,7 @@ describe("taint from a hook session", () => {
     const s = new Store(":memory:");
     setProcessWriter("stdio");
     recordEvent(s, fetchEv("old", new Date(Date.now() - 13 * 3_600_000)), "default");
+    recordEvent(s, fetchEv("old", new Date(), "Read"), "default"); // keeps the session active (idle sessions stop counting)
     process.env.MONOMEM_TAINT_WINDOW_HOURS = "24";
     assert.equal(s.create({ title: "inside 24h" }).unconfirmed, true);
     process.env.MONOMEM_TAINT_WINDOW_HOURS = "0";

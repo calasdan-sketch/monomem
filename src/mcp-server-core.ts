@@ -41,7 +41,7 @@ import { rollbackPreview, rollbackConfirm, embedRestored } from "./rollback.js";
 import { supersedePreview, supersedeConfirm, supersedeUndo, noteHistory, restoreVersion, purgeNoteHistory, SupersedeError, type Caller } from "./supersede.js";
 import { runnerStatus } from "./liveness.js";
 import { assertPlainWriteTags, assertReviewedTag } from "./reserved-tags.js";
-import { ORIGIN_DECLARED, ORIGIN_VIA_MEMORY, unconfirmedIdsIn } from "./taint.js";
+import { ORIGIN_DECLARED, ReadTaint, unconfirmedIdsIn } from "./taint.js";
 import { withFacts, factFeedback, COMMON_FACT_KEYS, type FactFeedback } from "./facts.js";
 import { waitForChanges, parseWait, WAIT_MAX_SECONDS, WAIT_RECOMMENDED_SECONDS } from "./change-wait.js";
 import { type Scope, PACKAGE_VERSION } from "./config.js";
@@ -344,7 +344,9 @@ export interface ConnectionCtx {
   /** 1.4.0: the token is marked reads_outside: every note this connection writes is marked `obs.origin:declared`. */
   readsOutside?: boolean;
   /** 1.4.0: the set of unconfirmed note ids this writer has read (kept by the HTTP front door across requests). */
-  taintedReads?: Set<number>;
+  taintedReads?: ReadTaint;
+  /** 1.5.0: the folder a local (stdio) server was launched in; hook-session taint is matched by it (ActorRef.cwd). */
+  cwd?: string;
 }
 
 /**
@@ -496,8 +498,8 @@ export function createMcpServer(
   const localGuard = conn.local === true && !stdioAdminToolsAllowed();
   // 1.4.0: unconfirmed notes this connection has read. The stdio server is one process = one agent: its own set. An
   // HTTP connection gets a new server per request, so mcp-http.ts passes the token writer's set from its registry.
-  const taintedReads: Set<number> = conn.taintedReads ?? new Set();
-  const connTaint = (): string[] => [...(taintedReads.size ? [ORIGIN_VIA_MEMORY] : []), ...(conn.readsOutside ? [ORIGIN_DECLARED] : [])];
+  const taintedReads: ReadTaint = conn.taintedReads ?? new ReadTaint();
+  const connTaint = (): string[] => (conn.readsOutside ? [ORIGIN_DECLARED] : []); // read-taint (via:memory) is decided by the Store from taintedReads
   /** Whether a tool is offered on this server: descriptions name only tools the model was actually given. */
   const has = (name: string): boolean => !enabled || enabled.has(name);
   const registerRaw = server.registerTool.bind(server) as (...a: unknown[]) => unknown;
@@ -561,6 +563,7 @@ export function createMcpServer(
           canDeclassify: scopeAllows(scope, "admin"),
           taint: connTaint(),
           taintedReads,
+          ...(conn.cwd !== undefined ? { cwd: conn.cwd } : {}),
           // 1.4.0: a write's derived_from may only name notes this connection could read.
           ...(nsActive ? { readable: readable() } : {}),
         },

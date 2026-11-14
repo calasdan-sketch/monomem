@@ -44,7 +44,9 @@ export const NOT_COVERED = "Not covered: the injection check is a pattern linter
 /** The grade, computed only from the check statuses (the drill check failing is the F case). */
 export function gradeOf(checks: Pick<HealthCheck, "id" | "status">[]): string {
   if (checks.some((c) => c.id === "drill" && c.status === "fail")) return "F";
-  let i = checks.filter((c) => c.status === "warn").length;
+  // A backlog of unconfirmed notes never grades A, but it is not a step on its own: it caps the grade at B.
+  let i = checks.filter((c) => c.status === "warn" && c.id !== "confirm-backlog").length;
+  if (checks.some((c) => c.id === "confirm-backlog" && c.status === "warn")) i = Math.max(i, 1);
   if (checks.some((c) => c.status === "fail")) i = Math.max(i, 3);
   return LETTERS[Math.min(i, LETTERS.length - 1)];
 }
@@ -246,6 +248,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
   let meterText = "meter unavailable";
   let piiNotes = 0, privateNotes = 0, labelledNotes = 0;
   let confirmLines: string[] = [];
+  let backlog = "";
   let audit: Result | undefined;
   if (existsSync(dbPath)) {
     try {
@@ -268,6 +271,10 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
           step("held", "Held writes", () => void (held = s.listQuarantine({ limit: 500 }).length));
           step("distrust", "Distrusted writers", () => void (distrust = s.distrustRules().length));
           step("confirm", "Confirm rules", () => void (confirmLines = s.confirmRuleLines()));
+          step("confirm-backlog", "Unconfirmed backlog", () => {
+            const b = s.confirmBacklog();
+            if (b.capped) backlog = b.reason;
+          });
           step("redacted", "Note scan", () => {
             // ponytail: loads every live note to count markers; use SQL if a store gets big enough for this to show up in the runtime
             const live = s.exportAll({ live: true }); // gate-ok: operator CLI, counts redaction markers only; no note content is returned or printed
@@ -393,6 +400,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
     add("held", "Held writes", "info", held ? `${held >= 500 ? "500 or more writes" : plural(held, "write")} held for review: the defence working, nothing was stored without you (monomem quarantine list)` : "no writes waiting for review");
     add("distrust", "Distrusted writers", "info", `${plural(distrust, "distrust rule")}${distrust ? " (their notes are hidden from agents)" : ""}`);
     if (confirmLines.length) add("confirm", "Confirm rules", "info", confirmLines.join("; "));
+    if (backlog) add("confirm-backlog", "Unconfirmed backlog", "warn", `${backlog}: review them with monomem review (the grade is capped at B until they are dealt with)`);
     add("redacted", "Redacted notes", "info", `notes with a [REDACTED:...] marker (secret redaction replaced a credential): ${marked}`);
     add("memory", "Memory size", "ok", meterText);
   }

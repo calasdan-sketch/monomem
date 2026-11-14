@@ -15,11 +15,13 @@ export interface ActorSpec {
   writer?: string;
   /** Which server instance in the scenario this actor talks to. Default "main". Used to move notes between two servers. */
   server?: string;
+  /** The actor's key says its holder reads outside content (Monomem `reads_outside`): everything it writes is marked. A system without the concept ignores it. */
+  reads_outside?: boolean;
 }
 
 /** What a scenario asks the adapter to set up before the first step. */
 export interface WorldSpec {
-  actors: Record<string, Required<Pick<ActorSpec, "scope" | "writer" | "server">> & { namespace?: string }>;
+  actors: Record<string, Required<Pick<ActorSpec, "scope" | "writer" | "server">> & { namespace?: string; reads_outside?: boolean }>;
   /** Operator read grants: tenant -> tenants it may additionally read (Monomem `reads_from`). */
   grants: Record<string, string[]>;
   /** Server settings a scenario needs (for example a very short confirmation window). Applied for this scenario only. */

@@ -117,7 +117,7 @@ export class MonomemAdapter implements MemoryAdapter {
     const byServer = new Map<string, TokenEntry[]>();
     for (const [name, a] of Object.entries(world.actors)) {
       const token = `bench-${name}-${randomBytes(16).toString("hex")}`;
-      const entry: TokenEntry = { token, scope: a.scope, label: a.writer, ...(a.namespace ? { namespace: a.namespace } : {}) };
+      const entry: TokenEntry = { token, scope: a.scope, label: a.writer, ...(a.namespace ? { namespace: a.namespace } : {}), ...(a.reads_outside ? { reads_outside: true } : {}) };
       this.actors.set(name, { name, server: a.server, token, scope: a.scope, writer: a.writer, namespace: a.namespace });
       const list = byServer.get(a.server) ?? [];
       list.push(entry);

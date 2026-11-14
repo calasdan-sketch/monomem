@@ -272,7 +272,7 @@ export function drainSpool(store: Store, dataDir: string, now = Date.now()): num
           const ns = typeof ev.namespace === "string" ? ev.namespace : "";
           recordEvent(store, ev, ns);
           // Stored late: notes written since that outside read got no mark at the time, so they get it now.
-          if (isOutsideEvent(ev)) store.retroTaint(ns, ev.at, ev.tool);
+          if (isOutsideEvent(ev)) store.retroTaint(ev.cwd, ev.at, ev.tool);
           stored++;
         } catch {
           const tries = (Number(ev.tries) || 0) + 1;

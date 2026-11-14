@@ -48,7 +48,7 @@ if (stdioCeiling && !stdioMax) {
   console.error(`[monomem] MONOMEM_STDIO_MAX_SENSITIVITY must be ${SENSITIVITY_HELP} (got ${JSON.stringify(stdioCeiling)}); not starting.`);
   process.exit(1);
 }
-const server = createMcpServer(store, "admin", nsOpts ?? undefined, stdioMax ? { maxSensitivity: stdioMax, local: true } : { local: true });
+const server = createMcpServer(store, "admin", nsOpts ?? undefined, stdioMax ? { maxSensitivity: stdioMax, local: true, cwd: process.cwd() } : { local: true, cwd: process.cwd() });
 const transport = new StdioServerTransport();
 // The client's own name from the initialize handshake goes to the audit log, labelled as a claim: any program can
 // send any clientInfo. It is never used for written_by or for any access decision.
