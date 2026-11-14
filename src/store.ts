@@ -9064,11 +9064,18 @@ export class Store {
     // A held edit that leaves the title alone is about its target's topic.
     const topic = tokenize(`${q.title ?? target?.title ?? ""} ${(q.tags ?? []).join(" ")}`);
     const words = new Set(topic);
-    // ponytail: newest 500 notes of the namespace, title-word overlap; a ranked search if the queue ever needs fuzzier matching.
-    const notes = this.list({ namespace: q.namespace, limit: 500 })
-      .notes.filter((n) => n.updated_at >= q.created_at && n.id !== q.target_id)
-      .filter((n) => tokenize(`${n.title} ${n.tags.join(" ")}`).some((w) => words.has(w)))
-      .map((n) => ({ id: n.id, title: n.title, updated_at: n.updated_at, written_by: n.written_by }));
+    // 1.5.0 (R1-17): every live note of the namespace saved since the hold, found by one query (the caller's ceiling and distrust
+    // rules in the SQL), then matched on title words. Before, only the newest 500 notes by recency were looked at.
+    // ponytail: title-word overlap; a ranked search if the queue ever needs fuzzier matching.
+    const range = this.rangeFor({}, [q.namespace]);
+    const rows = this.db
+      .prepare(
+        `SELECT id, title, tags, updated_at, written_by FROM notes WHERE namespace = ? AND updated_at >= ? AND id <> ? AND archived_at IS NULL${range.sql} ORDER BY updated_at DESC, id DESC LIMIT 2000`
+      )
+      .all(q.namespace, q.created_at, q.target_id ?? -1, ...range.params) as Array<{ id: number; title: string; tags: string; updated_at: string; written_by: string | null }>;
+    const notes = rows
+      .filter((n) => tokenize(`${n.title} ${parseTags(n.tags).join(" ")}`).some((w) => words.has(w)))
+      .map((n) => ({ id: Number(n.id), title: n.title, updated_at: n.updated_at, written_by: n.written_by ?? "" }));
     return {
       id: q.id,
       op: q.op,

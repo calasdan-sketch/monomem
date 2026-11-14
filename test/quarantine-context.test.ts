@@ -162,7 +162,7 @@ describe("R1-17 the context is one indexed query, not the newest 500 notes", () 
     const db = raw(s);
     db.exec("BEGIN");
     const ins = db.prepare("INSERT INTO notes (namespace, title, body, tags, created_at, updated_at, content_at, written_by, rev) VALUES ('pricing', ?, 'b', '[]', ?, ?, ?, 'stdio:x', 1)");
-    for (let i = 0; i < 600; i++) ins.run(`filler ${i}`, ago(1), ago(1), ago(1));
+    for (let i = 0; i < 600; i++) ins.run("unrelated filler", ago(1), ago(1), ago(1));
     db.exec("COMMIT");
     setProcessWriter("stdio:quoting-bot");
     s.update(old.id, { body: "corrected: $40" });
