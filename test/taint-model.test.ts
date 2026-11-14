@@ -193,3 +193,42 @@ describe("R1-04 visible, never silent", () => {
     assert.ok(needsHumanConfirm);
   });
 });
+
+describe("R1-15 retro-taint travels (change feed, sync, export)", () => {
+  const raw = (s: Store): any => (s as any).db;
+  test("the late mark bumps rev and updated_at (not the expiry clock), lands in change_log, and survives an export/import round trip", async () => {
+    const s = new Store(":memory:");
+    const at = new Date(Date.now() - 60_000).toISOString();
+    const n = stdioAt("/p/a", () => s.create({ title: "written before the read was stored", body: "b" }));
+    const before = s.read(n.id)!;
+    const contentBefore = raw(s).prepare("SELECT content_at FROM notes WHERE id = ?").get(n.id).content_at;
+    const seq = raw(s).prepare("SELECT COALESCE(MAX(seq), 0) AS m FROM change_log").get().m;
+    await new Promise((r) => setTimeout(r, 5));
+    assert.equal(s.retroTaint("/p/a", at, "WebFetch"), 1);
+    const after = s.read(n.id)!;
+    assert.equal(after.rev, before.rev + 1, "rev moved, so a compare-and-swap writer gets the stale-write answer");
+    assert.ok(after.updated_at > before.updated_at);
+    assert.equal(raw(s).prepare("SELECT content_at FROM notes WHERE id = ?").get(n.id).content_at, contentBefore, "expiry clock untouched");
+    const rows = raw(s).prepare("SELECT kind, rev FROM change_log WHERE note_id = ? AND seq > ?").all(n.id, seq) as Array<{ kind: string; rev: number }>;
+    assert.deepEqual(rows.map((r) => r.kind), ["updated"], "the change feed (and so sync) sees the stamp");
+    assert.equal(rows[0].rev, after.rev);
+    const other = new Store(":memory:");
+    setProcessWriter("cli");
+    await other.importNotes(s.exportAll());
+    setProcessWriter("");
+    assert.ok(other.list({ namespace: "default" }).notes.some((x) => x.tags.includes(WEB)), "the stamp is in the export");
+    other.close();
+    s.close();
+  });
+
+  test("a note a person had confirmed stays confirmed (the mark moves the revision, not the confirm)", () => {
+    const s = new Store(":memory:");
+    const at = new Date(Date.now() - 60_000).toISOString();
+    const n = stdioAt("/p/a", () => s.create({ title: "checked by a person", body: "b" }));
+    raw(s).prepare("UPDATE notes SET confirmed_at = ?, confirmed_by = 'cli', confirmed_kind = 'human', confirmed_rev = rev WHERE id = ?").run(new Date().toISOString(), n.id);
+    s.retroTaint("/p/a", at, "WebFetch");
+    const r = raw(s).prepare("SELECT rev, confirmed_rev FROM notes WHERE id = ?").get(n.id);
+    assert.equal(r.confirmed_rev, r.rev);
+    s.close();
+  });
+});
