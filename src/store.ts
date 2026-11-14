@@ -8453,13 +8453,20 @@ export class Store {
     const key = source ? sourceKey(source) : "";
     const at = new Date().toISOString();
     const base = { id, title: n.title, rev: n.rev, by: w, at, source };
-    const refusal = this.confirmRefusal(n, w, human, opts.admin === true, key, opts.admin === true && opts.dashboard === true);
-    if (refusal?.code === "already") return { ...base, counted: false, recorded: false, kind: "not_counted", reason: refusal.code, message: refusal.message };
-    const kind: ConfirmResult["kind"] = refusal ? "not_counted" : human ? "human" : opts.admin ? "admin" : "corroborated";
-    // stored: this confirm became the note's confirm. kept: a stronger confirm of this version stays (this one is recorded).
-    let stored = false;
-    let kept: { at: string; kind: string } | null = null;
+    // R1-03: the rules (`already`, `same_source`, ...) and the kind are decided INSIDE the write transaction (BEGIN IMMEDIATE), so
+    // two processes cannot both read "nothing yet" and both count.
+    const st: { refusal: { code: string; message: string } | null; kind: ConfirmResult["kind"]; stored: boolean; kept: { at: string; kind: string } | null } = {
+      refusal: null,
+      kind: "not_counted",
+      stored: false, // this confirm became the note's confirm
+      kept: null, // a stronger confirm of this version stays (this one is recorded)
+    };
     const write = (): void => {
+      const refusal = this.confirmRefusal(n, w, human, opts.admin === true, key, opts.admin === true && opts.dashboard === true);
+      st.refusal = refusal;
+      if (refusal?.code === "already") return;
+      const kind: ConfirmResult["kind"] = refusal ? "not_counted" : human ? "human" : opts.admin ? "admin" : "corroborated";
+      st.kind = kind;
       this.db
         .prepare("INSERT INTO confirmations (note_id, note_rev, at, by, by_authed, kind, source, source_key, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .run(id, n.rev, at, w, actorStore.getStore()?.authed ? 1 : 0, kind, source, key, refusal?.code ?? "");
@@ -8473,15 +8480,17 @@ export class Store {
            WHERE id = ? AND rev = ? AND NOT (confirmed_rev = rev AND ${rankSql("confirmed_kind")} > ?)`
         )
         .run(at, kind, w, id, n.rev, CONFIRM_RANK[kind]);
-      stored = Number(res.changes) > 0;
-      if (!stored) {
+      st.stored = Number(res.changes) > 0;
+      if (!st.stored) {
         const cur = this.db.prepare("SELECT rev, confirmed_at, confirmed_kind FROM notes WHERE id = ?").get(id) as { rev: number; confirmed_at: string; confirmed_kind: string } | undefined;
-        if (cur && Number(cur.rev) === n.rev) kept = { at: cur.confirmed_at, kind: cur.confirmed_kind };
+        if (cur && Number(cur.rev) === n.rev) st.kept = { at: cur.confirmed_at, kind: cur.confirmed_kind };
       }
     };
     // Inside a caller's transaction (a CLI supersede's commit) the rows ride on it.
     if (this.db.isTransaction) write();
     else this.transaction(write);
+    const { refusal, kind, stored, kept } = st;
+    if (refusal?.code === "already") return { ...base, counted: false, recorded: false, kind: "not_counted", reason: refusal.code, message: refusal.message };
     this.audit({ op: refusal ? "confirm-not-counted" : "confirm", id, namespace: n.namespace, detail: refusal ? refusal.code : kind });
     if (!refusal && !stored && !kept) {
       const message = `Not counted: note ${id} changed while it was being confirmed. Read it again and confirm the new version.`;
