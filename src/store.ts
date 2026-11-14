@@ -8462,15 +8462,20 @@ export class Store {
     return rows;
   }
 
-  private scanUnconfirmed(namespaces?: string[]): ReviewRow[] {
+  /** The unconfirmed scan's SQL and parameters (also read by test/query-plans.test.ts to check the plan). */
+  private unconfirmedSql(namespaces?: string[]): { sql: string; params: Array<string | number> } {
     const ns = namespaces ? ` AND namespace IN (${namespaces.map(() => "?").join(",")})` : "";
     const dis = this.distrustFragment(NOTE_COLUMNS, namespaces);
-    const rows = this.db
-      .prepare(
-        `SELECT id, namespace, title, written_by, tags, updated_at FROM notes WHERE archived_at IS NULL AND grandfathered_at IS NULL AND tags LIKE '%obs.origin:%'
-           AND NOT (confirmed_kind IS NOT NULL AND confirmed_rev = rev)${ns}${this.ceilingSql()}${dis.sql} ORDER BY id`
-      )
-      .all(...(namespaces ?? []), ...dis.params) as unknown as ReviewRow[];
+    return {
+      sql: `SELECT id, namespace, title, written_by, tags, updated_at FROM notes WHERE archived_at IS NULL AND grandfathered_at IS NULL AND tags LIKE '%obs.origin:%'
+           AND NOT (confirmed_kind IS NOT NULL AND confirmed_rev = rev)${ns}${this.ceilingSql()}${dis.sql} ORDER BY id`,
+      params: [...(namespaces ?? []), ...dis.params] as Array<string | number>,
+    };
+  }
+
+  private scanUnconfirmed(namespaces?: string[]): ReviewRow[] {
+    const { sql, params } = this.unconfirmedSql(namespaces);
+    const rows = this.db.prepare(sql).all(...params) as unknown as ReviewRow[];
     return rows.filter((r) => isTainted(parseTags(r.tags)));
   }
 
