@@ -101,7 +101,9 @@ describe("taint-spool-retro", () => {
       const after = s.read(n.id)!;
       assert.ok(after.tags.includes("obs.origin:tool:WebFetch"), after.tags.join());
       assert.equal(after.unconfirmed, true);
-      assert.equal(after.rev, n.rev, "no rev bump: the content did not change");
+      // 1.5.0 (R1-15): the retro stamp bumps rev so the change feed and sync carry it; the body is untouched.
+      assert.equal(after.rev, n.rev + 1, "retro stamp bumps rev once");
+      assert.equal(after.body, n.body);
       s.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });
