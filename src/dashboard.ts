@@ -262,6 +262,8 @@ export const DASHBOARD_HTML = `<!doctype html>
 export const DASHBOARD_JS = `
 var TOKKEY = "om_tok";
 function tok(){ try { return sessionStorage.getItem(TOKKEY) || ""; } catch(e){ return ""; } }
+// The dashboard session from monomem open's sign-in (POST /login): it tells the server a person is at this page.
+function dsess(){ try { return sessionStorage.getItem(TOKKEY + ":ds") || ""; } catch(e){ return ""; } }
 function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g, function(c){
   return {"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;","'":"&#39;"}[c]; }); }
 function $(id){ return document.getElementById(id); }
@@ -398,7 +400,7 @@ function start(){
   }).catch(function(){ /* the notes call reports any problem */ });
 }
 function logout(why){
-  try { sessionStorage.removeItem(TOKKEY); } catch(e){}
+  try { sessionStorage.removeItem(TOKKEY); sessionStorage.removeItem(TOKKEY + ":ds"); } catch(e){}
   show(false);
   var g = $("gate_err");
   if(g){ g.textContent = (typeof why === "string") ? why : ""; }
@@ -414,6 +416,7 @@ function api(path, opts){
   opts = opts || {};
   opts.headers = opts.headers || {};
   opts.headers["Authorization"] = "Bearer " + tok();
+  if(dsess()){ opts.headers["X-Monomem-Dashboard"] = dsess(); }
   if(opts.body){ opts.headers["Content-Type"] = "application/json"; }
   return fetch(path, opts).then(function(r){
     if(r.status === 401){ logout("That key was not accepted. Check you copied all of it, or run  monomem open  in a terminal."); throw new Error("not signed in"); }
@@ -657,6 +660,7 @@ function loadHeldContext(id){
         acts("<button class='ghost' aria-label='keep held write #"+id+" as history' onclick='arm(this,function(){qQuarantine("+id+",&quot;keep-history&quot;)})'>Keep as history</button>")
       : "Nothing on the same topic was saved since this was held.") +
       (c.target_changed ? "<div>The note this edit targets has changed since, so Approve will fail.</div>" : "") +
+      (c.clears && c.clears.length ? "<div>Approving it also clears the note's " + esc(c.clears.map(function(x){ return x === "forget_after" ? "forget date" : x; }).join(" and ")) + ".</div>" : "") +
       "<div>" + esc(c.note || "") + "</div>";
   }).catch(function(){ var box = $("qctx" + id); if(box){ box.textContent = "Could not load what was saved since this was held."; } });
 }
@@ -1040,7 +1044,7 @@ if(LOGIN_CODE){
   fetch("/login", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ code: LOGIN_CODE }) })
     .then(function(r){ return r.json().then(function(j){ return { ok: r.ok, j: j }; }); })
     .then(function(x){
-      if(x.ok && x.j.token){ try { sessionStorage.setItem(TOKKEY, x.j.token); } catch(e){} start(); }
+      if(x.ok && x.j.token){ try { sessionStorage.setItem(TOKKEY, x.j.token); if(x.j.dashboard_session){ sessionStorage.setItem(TOKKEY + ":ds", x.j.dashboard_session); } } catch(e){} start(); }
       else { show(false); $("gate_err").textContent = (x.j && x.j.error) || "That sign-in link did not work. Run monomem open again."; }
     })
     .catch(function(){ show(false); });

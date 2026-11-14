@@ -154,18 +154,19 @@ refuses to make them pinned notes until a person confirms them. Read what it can
   capture hooks (Cursor, Codex over plain MCP). A note **without** the mark is not thereby safe. Every note is still
   untrusted data.
 - **It does not judge truth.** A marked note may be correct; an unmarked one may be poisoned.
-- **The read signal is per connection** (one stdio server, or one token on one HTTP front door) and **resets when the
-  server restarts**. REST and MCP over HTTP keep separate memories, so reading through one and writing through the other
-  is not linked.
+- **The read signal is per connection** (one stdio server, or one key on one server: REST and MCP over HTTP share it)
+  and **resets when the server restarts**.
 - **A local (stdio) app's confirm never counts.** Its name (`stdio:<app>`) comes from its config file, so one process could
   play two writers.
 - **A stated source is a claim.** Monomem never fetches it. A second agent's confirm is corroboration, not verification:
   a lying agent can name any source.
 - **`derived_from` only works if agents fill it in**, and it looks one hop back. A copy without it is not linked.
 - **An admin key can release the session-start hold.** REST cannot tell a person from an agent holding an admin key; only
-  the pin block needs a person at the terminal.
-- **"A person at the terminal" means stdin and stdout are terminals.** A tool that opens a pseudo-terminal passes that
-  check, for the typed-yes commands and for the session-signal exemption below alike.
+  the pin block needs a person at the terminal. An admin key that was handed the note while unconfirmed is refused like
+  any agent; only the dashboard opened with `monomem open` (its sign-in session) is treated as a person looking at it.
+- **A shell that looks like a terminal counts as a person.** "At a terminal" means stdin and stdout are terminals; an
+  agent tool that opens a pseudo-terminal passes that check, for the typed-yes commands and for the CLI's exemption from
+  the session signal below alike. Monomem cannot tell that apart.
 
 The word "taint" below means this outside-content mark (reserved `obs.origin:*` tags). It is separate from the **taint set**
 of writers described above (`merged_from_writers`).
@@ -234,12 +235,15 @@ Confirmed "Acme pricing" by cli at 2026-11-13 14:02. Checked against: vendor sit
 not write the note (`written_by`, `created_by`, `attested_writer` or the taint set); it is not distrusted; its connection
 has not been handed this note while unconfirmed; it has not written a note built from this one (`derived_from`); and it
 names a source whose key differs from the note's own `source` and from every earlier counted confirm of this version (a URL
-or bare host name compares by host, lowercased, without `www.` or a trailing dot, international names as punycode; other
+or bare host name, with or without a path or port, compares by host, lowercased, without `www.` or a trailing dot,
+international names as punycode; other
 text as lowercased text). With expiry on, a confirm older than the expiry period no longer blocks the same writer or the
 same source. One counted confirm per writer per version. Confirms by agents count toward the flood guard.
 
-An **admin** confirm (the dashboard's button, an admin key on REST) is not refused because the dashboard listed the note:
-it only releases the session-start hold. The reply to an agent or a key names the note by id, not by its title (the title
+The dashboard's **Confirm** button, in a dashboard opened with `monomem open`, is not refused because the dashboard listed
+the note: a person is looking at it, and an admin confirm only releases the session-start hold. Any other key (the primary
+admin key included) that was handed the note while unconfirmed is refused with `read_it`. A dashboard signed in by pasting
+a key has no sign-in session, so it is treated like that key. The reply to an agent or a key names the note by id, not by its title (the title
 is outside text); `monomem confirm` in your terminal shows the title.
 
 Otherwise the confirm is **recorded but not counted**, and the reply names the rule:
@@ -253,8 +257,10 @@ identity.` Every confirm, counted or not, is kept in the `confirmations` table a
 that already counted is answered but not stored).
 
 **What each kind releases.** Human, admin and corroborated confirms all let the note back into session start. Only a
-**human** confirm lifts the promotion block below. A counted confirm always restarts the expiry clock; the note keeps the
-strongest kind it has for this version, so an agent's corroboration after a person's confirm leaves it a person's confirm.
+**human** confirm lifts the promotion block below. Only a confirm at least as strong as the note's current one for this
+version (human > admin > corroborated) replaces it and restarts the expiry clock. An agent's corroboration after a person's
+or an admin's confirm is recorded but changes nothing: if that confirm has expired, the reply says so, and a person or an
+admin must confirm again.
 
 ## No promotion without a person
 

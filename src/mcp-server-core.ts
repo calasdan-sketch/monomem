@@ -2226,6 +2226,7 @@ export function createMcpServer(
             namespace: ctx.namespace,
             held_at: ctx.held_at,
             ...(ctx.target_changed !== undefined ? { target_changed: ctx.target_changed } : {}),
+            ...(ctx.clears ? { clears: ctx.clears } : {}),
             since_held: ctx.notes,
             note: QUARANTINE_CAS_NOTE,
           });

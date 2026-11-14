@@ -647,6 +647,8 @@ export interface QuarantineContext {
   held_at: string;
   /** op=update only: the target note changed since the hold, so approving the edit will fail (compare-and-swap). */
   target_changed?: boolean;
+  /** op=update only: fields the held edit CLEARS on approval ("confidence", "forget_after"); absent when none. */
+  clears?: string[];
   /** Other notes in the namespace, same topic, saved since held_at; newest first. */
   notes: Array<{ id: number; title: string; updated_at: string; written_by: string }>;
 }
@@ -2872,6 +2874,8 @@ export class Store {
       //  - note_links: add-only "derived from" links between notes.
       for (const c of ["grandfathered_at", "approved_at", "approved_by", "confirmed_at", "confirmed_by", "confirmed_kind"]) this.addColumn("notes", c, "TEXT");
       this.addColumn("notes", "confirmed_rev", "INTEGER");
+      // 1 = the last content write by the local CLI ran at a terminal (stdin and stdout); see retroTaint.
+      this.addColumn("notes", "cli_tty", "INTEGER");
       this.addColumn("quarantine", "forget_after", "INTEGER");
       this.addColumn("quarantine", "confidence", "REAL");
       // A held edit that CLEARS its confidence or forget date (null): a JSON list of those field names, applied on approval.
@@ -3200,6 +3204,7 @@ export class Store {
         this.db.prepare("UPDATE notes SET body = ?, body_enc = ? WHERE id = ?").run(sealed.body, sealed.bodyEnc, id);
       }
       this.addLinks(id, derived, writer, now);
+      this.stampCliTerminal(id, writer);
       // An archived (restored-as-forgotten) note stays out of the edge graph.
       if (!archivedAt) this.noteWritten(namespace, id, { rev: startRev, title: input.title, body });
       // Link the new note into the similarity graph (same namespace only).
@@ -3493,7 +3498,8 @@ export class Store {
 
   private annotateConfirmRules(row: NoteRow, out: NoteRecord): NoteRecord {
     if (row.grandfathered_at === undefined) return out;
-    const live = !row.archived_at && row.superseded_by == null && !out.pinned && !out.kind;
+    // Tasks and handoffs are the board's own records (claimed, finished, handed on): re-confirmation expiry is for notes.
+    const live = !row.archived_at && row.superseded_by == null && !out.pinned && !out.kind && !out.tags.includes("task") && !out.tags.includes("handoff");
     const c = live ? this.confirmSettings() : null;
     if (c && c.mode !== "off" && dueBase(row, c) + c.days * 86_400_000 <= Date.now()) {
       out.expired = true;
@@ -4059,6 +4065,7 @@ export class Store {
       // what it said then, not this.
       if (added.length) this.db.prepare("UPDATE notes SET grandfathered_at = NULL WHERE id = ?").run(id);
       this.addLinks(id, derived, writerNow(opts), now);
+      if (restamp) this.stampCliTerminal(id, writer);
 
       // Invalidate the embedding: the note's text just changed, so the stored
       // vector is now stale. Drop it rather than keep a vector that no longer
@@ -8140,6 +8147,14 @@ export class Store {
   }
 
   /** Add-only: links are inserted, never deleted or replaced. Runs inside the caller's write transaction. */
+  /**
+   * A content write by the local CLI records whether it ran at a terminal (notes.cli_tty), so a spooled outside read marked
+   * later (retroTaint) can tell the person's write from the same command run by an agent's shell.
+   */
+  private stampCliTerminal(id: number, writer: string): void {
+    if (writer === "cli") this.db.prepare("UPDATE notes SET cli_tty = ? WHERE id = ?").run(sessionTaintExempt("cli") ? 1 : 0, id);
+  }
+
   private addLinks(id: number, parents: number[], by: string, at: string): void {
     const ins = this.db.prepare("INSERT OR IGNORE INTO note_links (note_id, derived_from, added_at, added_by) VALUES (?, ?, ?, ?)");
     for (const p of parents) ins.run(id, p, at, by);
@@ -8174,10 +8189,12 @@ export class Store {
     const until = new Date(Date.parse(atIso) + hours * 3_600_000).toISOString();
     const tag = toolTag(tool);
     const rows = this.db
-      .prepare("SELECT id, tags, written_by FROM notes WHERE namespace = ? AND updated_at >= ? AND updated_at <= ? AND archived_at IS NULL AND COALESCE(kind, 'note') = 'note'")
-      .all(namespace, atIso, until) as Array<{ id: number; tags: string; written_by: string | null }>;
-    // ponytail: the stored writer `cli` stays exempt here: whether that write came from a terminal is not recorded.
-    const marks = rows.filter((r) => !SESSION_TAINT_EXEMPT.has(r.written_by ?? "") && !parseTags(r.tags).includes(tag));
+      .prepare("SELECT id, tags, written_by, cli_tty FROM notes WHERE namespace = ? AND updated_at >= ? AND updated_at <= ? AND archived_at IS NULL AND COALESCE(kind, 'note') = 'note'")
+      .all(namespace, atIso, until) as Array<{ id: number; tags: string; written_by: string | null; cli_tty: number | null }>;
+    // The CLI is exempt only for a write it made at a terminal (cli_tty, stamped at write time).
+    const exempt = (r: { written_by: string | null; cli_tty: number | null }): boolean =>
+      r.written_by === "cli" ? Number(r.cli_tty) === 1 : SESSION_TAINT_EXEMPT.has(r.written_by ?? "");
+    const marks = rows.filter((r) => !exempt(r) && !parseTags(r.tags).includes(tag));
     if (!marks.length) return 0;
     // One transaction; a note it marks is new outside content, so a pre-upgrade (grandfathered) note loses its exemption.
     this.transaction(() => {
@@ -8279,7 +8296,7 @@ export class Store {
       .prepare(
         `SELECT id, namespace, title, written_by, tags, updated_at, confirmed_at, confirmed_rev, rev, grandfathered_at FROM notes
           WHERE archived_at IS NULL AND superseded_by IS NULL AND COALESCE(pinned, 0) = 0 AND COALESCE(kind, 'note') = 'note'
-            AND updated_at <= ?${ns}${this.ceilingSql()}${dis.sql} ORDER BY id`
+            AND tags NOT LIKE '%"task"%' AND tags NOT LIKE '%"handoff"%' AND updated_at <= ?${ns}${this.ceilingSql()}${dis.sql} ORDER BY id`
       )
       .all(loose, ...(namespaces ?? []), ...dis.params) as unknown as Array<ReviewRow & DueRow>;
     return rows.filter((r) => dueBase(r, c) <= cutoff);
@@ -8351,7 +8368,7 @@ export class Store {
    * stdio / unauthenticated writer, a distrusted writer, a connection that read this note while unconfirmed, a writer with a
    * note derived from this one, and a second confirm by the same writer for the same rev. Confirms count in the flood guard.
    */
-  confirm(id: number, opts: { source?: string; admin?: boolean } = {}): ConfirmResult | null {
+  confirm(id: number, opts: { source?: string; admin?: boolean; dashboard?: boolean } = {}): ConfirmResult | null {
     const n = this.readVisible(id, { hideArchived: true }); // gate-ok: a hidden note answers like a missing one (null)
     if (!n) return null;
     const w = currentWriter();
@@ -8361,48 +8378,56 @@ export class Store {
     const key = source ? sourceKey(source) : "";
     const at = new Date().toISOString();
     const base = { id, title: n.title, rev: n.rev, by: w, at, source };
-    const refusal = this.confirmRefusal(n, w, human, opts.admin === true, key);
+    const refusal = this.confirmRefusal(n, w, human, opts.admin === true, key, opts.admin === true && opts.dashboard === true);
     if (refusal?.code === "already") return { ...base, counted: false, recorded: false, kind: "not_counted", reason: refusal.code, message: refusal.message };
     const kind: ConfirmResult["kind"] = refusal ? "not_counted" : human ? "human" : opts.admin ? "admin" : "corroborated";
+    // stored: this confirm became the note's confirm. kept: a stronger confirm of this version stays (this one is recorded).
     let stored = false;
+    let kept: { at: string; kind: string } | null = null;
     const write = (): void => {
       this.db
         .prepare("INSERT INTO confirmations (note_id, note_rev, at, by, by_authed, kind, source, source_key, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .run(id, n.rev, at, w, actorStore.getStore()?.authed ? 1 : 0, kind, source, key, refusal?.code ?? "");
       if (refusal) return;
-      // A counted confirm always restarts the re-confirmation clock (confirmed_at = now), and the note keeps the STRONGEST
-      // kind it has for this rev (a corroboration after a person's confirm stays "human"). Decided inside the UPDATE, so two
-      // processes confirming at once cannot let a weaker kind overwrite a stronger one. `rev = ?`: bound to the version read.
-      const stronger = `confirmed_rev = rev AND ${rankSql("confirmed_kind")} > ?`;
+      // Only a confirm at least as strong as the note's current one (for this rev) replaces it and restarts the
+      // re-confirmation clock: an agent's corroboration never refreshes a person's or an admin's confirm. Decided inside
+      // the UPDATE, so two processes cannot let a weaker kind overwrite a stronger one. `rev = ?`: the version read.
       const res = this.db
         .prepare(
-          `UPDATE notes SET confirmed_at = ?, confirmed_rev = rev,
-             confirmed_kind = CASE WHEN ${stronger} THEN confirmed_kind ELSE ? END,
-             confirmed_by = CASE WHEN ${stronger} THEN confirmed_by ELSE ? END
-           WHERE id = ? AND rev = ?`
+          `UPDATE notes SET confirmed_at = ?, confirmed_rev = rev, confirmed_kind = ?, confirmed_by = ?
+           WHERE id = ? AND rev = ? AND NOT (confirmed_rev = rev AND ${rankSql("confirmed_kind")} > ?)`
         )
-        .run(at, CONFIRM_RANK[kind], kind, CONFIRM_RANK[kind], w, id, n.rev);
+        .run(at, kind, w, id, n.rev, CONFIRM_RANK[kind]);
       stored = Number(res.changes) > 0;
+      if (!stored) {
+        const cur = this.db.prepare("SELECT rev, confirmed_at, confirmed_kind FROM notes WHERE id = ?").get(id) as { rev: number; confirmed_at: string; confirmed_kind: string } | undefined;
+        if (cur && Number(cur.rev) === n.rev) kept = { at: cur.confirmed_at, kind: cur.confirmed_kind };
+      }
     };
     // Inside a caller's transaction (a CLI supersede's commit) the rows ride on it.
     if (this.db.isTransaction) write();
     else this.transaction(write);
     this.audit({ op: refusal ? "confirm-not-counted" : "confirm", id, namespace: n.namespace, detail: refusal ? refusal.code : kind });
-    if (!refusal && !stored) {
+    if (!refusal && !stored && !kept) {
       const message = `Not counted: note ${id} changed while it was being confirmed. Read it again and confirm the new version.`;
       return { ...base, counted: false, recorded: true, kind: "not_counted", reason: "changed", message };
     }
     const checked = source ? ` Checked against: ${source}.` : "";
     const cs = this.confirmSettings();
-    const due = cs.mode === "off" ? "" : ` Next check due ${new Date(Date.parse(at) + cs.days * 86_400_000).toISOString().slice(0, 10)}.`;
+    // The due date is the one stored: this confirm's, or the stronger one the note keeps.
+    const dueAt = kept ? Date.parse((kept as { at: string }).at) + cs.days * 86_400_000 : Date.parse(at) + cs.days * 86_400_000;
+    const dueDay = new Date(dueAt).toISOString().slice(0, 10);
+    const due =
+      cs.mode === "off" ? "" : dueAt <= Date.now() ? ` It is past its re-confirmation date (${dueDay}): a person or an admin must confirm it again.` : ` Next check due ${dueDay}.`;
     // Only the person at the terminal sees the title echoed: to an agent a title is outside text it did not ask to read.
     const what = human ? `"${n.title.slice(0, 80)}"` : `note #${id}`;
-    const message = refusal ? refusal.message : `Confirmed ${what} by ${w || "(unknown)"} at ${at.slice(0, 16).replace("T", " ")}.${checked}${due}`;
+    const keptNote = kept ? ` The note keeps its stronger ${(kept as { kind: string }).kind} confirm; this one is recorded but does not restart its clock.` : "";
+    const message = refusal ? refusal.message : `Confirmed ${what} by ${w || "(unknown)"} at ${at.slice(0, 16).replace("T", " ")}.${checked}${keptNote}${due}`;
     return { ...base, counted: !refusal, recorded: true, kind, ...(refusal ? { reason: refusal.code } : {}), message };
   }
 
   /** Why a confirm does not count (null = it counts). Plain words, naming the rule. */
-  private confirmRefusal(n: NoteRecord, w: string, human: boolean, admin: boolean, key: string): { code: string; message: string } | null {
+  private confirmRefusal(n: NoteRecord, w: string, human: boolean, admin: boolean, key: string, dashboard = false): { code: string; message: string } | null {
     const who = w || "an unidentified writer";
     // With expiry on, a confirm older than the expiry period no longer blocks a new one: re-confirming is the point.
     const c = this.confirmSettings();
@@ -8419,9 +8444,10 @@ export class Store {
       return { code: "unauthenticated", message: `Not counted: ${who} is a local connection without its own key, so its name is a claim, not an identity. The confirm is recorded but does not count. A person (monomem confirm ${n.id}) or an agent with its own key must confirm.` };
     }
     if (this.isDistrusted({ namespace: n.namespace, written_by: w })) return { code: "distrusted", message: `Not counted: ${who} is on the distrust list for this namespace.` };
-    // An admin confirm (the dashboard, which lists the note to show the button) skips this rule: it only releases the
-    // session-start hold, never promotion, and the admin is looking at the note to decide.
-    if (!admin && actor.taintedReads?.has(n.id)) {
+    // The dashboard (a session opened with monomem open; it lists the note to show the button) skips this rule: a person
+    // is looking at the note, and an admin confirm only releases the session-start hold, never promotion. Any other key,
+    // admin or not, that was handed the note while unconfirmed is refused: REST cannot tell a person from an agent.
+    if (!dashboard && actor.taintedReads?.has(n.id)) {
       return { code: "read_it", message: `Not counted: ${who} read this note's text while it was unconfirmed, so the confirm could be the note talking. A person or an agent that has not read it must confirm.` };
     }
     const derived = this.db
@@ -8757,8 +8783,20 @@ export class Store {
       namespace: q.namespace,
       held_at: q.created_at,
       ...(q.op === "update" ? { target_changed: !target || target.rev !== this.heldRev(id) } : {}),
+      ...this.heldClears(id),
       notes,
     };
+  }
+
+  /** { clears } for a held edit that clears confidence or the forget date ({} when it clears nothing). */
+  private heldClears(id: number): { clears?: string[] } {
+    const row = this.db.prepare("SELECT clears FROM quarantine WHERE id = ?").get(id) as { clears: string | null } | undefined;
+    try {
+      const list = row?.clears ? (JSON.parse(row.clears) as unknown) : null;
+      return Array.isArray(list) && list.length ? { clears: list.filter((x): x is string => typeof x === "string") } : {};
+    } catch {
+      return {};
+    }
   }
 
   /** The rev a held edit was written against (its compare-and-swap pin); null for a create or a pre-1.1.0 row. */

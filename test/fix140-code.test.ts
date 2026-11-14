@@ -12,6 +12,7 @@ import { actorStore, setProcessWriter } from "../src/actor.js";
 import { ORIGIN_LEGEND } from "../src/reserved-tags.js";
 import { spoolEvent, drainSpool, normalizeHookInput } from "../src/capture.js";
 import { downgradeTo } from "./legacy-db.js";
+import { setTtyCheck } from "../src/taint.js";
 
 const noGit = { branch: "", diffFiles: [] };
 const as = <T>(label: string, f: () => T, extra: Record<string, unknown> = {}): T => actorStore.run({ label, authed: true, ...extra }, f);
@@ -84,21 +85,19 @@ describe("code M3: expired count with the SQL pre-filter", () => {
   });
 });
 
-describe("code M4: a weaker confirm after expiry restarts the clock and keeps the strongest kind", () => {
-  test("human at day 0, agent at day 31: due date honest, not expired, still human", () => {
+describe("code M4: the confirm message gives the due date that was stored", () => {
+  test("corroborated at day 0, another agent at day 31: the clock restarts and the message says the stored date", () => {
     const s = new Store(":memory:");
     const n = as("research-bot", () => s.create({ title: "Acme pricing", body: "40", outside: true }));
-    setProcessWriter("cli");
-    s.confirm(n.id, { source: "called them" });
-    setProcessWriter("");
+    as("checker", () => s.confirm(n.id, { source: "https://one.example" }));
     s.captureDb().prepare("UPDATE notes SET confirmed_at = ?, updated_at = ?, grandfathered_at = NULL WHERE id = ?").run(ago(31), ago(31), n.id);
     s.captureDb().prepare("UPDATE confirmations SET at = ?").run(ago(31));
     assert.equal(s.read(n.id)!.expired, true);
-    const r = as("checker", () => s.confirm(n.id, { source: "https://acme.example/pricing" }))!;
+    const r = as("checker2", () => s.confirm(n.id, { source: "https://acme.example/pricing" }))!;
     assert.equal(r.counted, true, r.message);
     const after = s.read(n.id)!;
     assert.equal(after.expired, undefined, "the stored row agrees with the message");
-    assert.equal(after.confirmed_kind, "human");
+    assert.equal(after.confirmed_kind, "corroborated");
     assert.match(r.message, new RegExp(`Next check due ${new Date(Date.parse(after.confirmed_at!) + 30 * DAY).toISOString().slice(0, 10)}`));
     s.close();
   });
@@ -292,7 +291,9 @@ describe("guards the mutation run found untested", () => {
       const at = new Date(Date.now() - 60_000);
       spoolEvent(dir, { ...normalizeHookInput("post-tool", { session_id: "late", cwd: "C:/w", tool_name: "WebFetch", tool_input: { url: "https://x" }, tool_response: "p" }, at), namespace: "default" });
       setProcessWriter("cli");
+      setTtyCheck(() => true); // the person at a terminal (1.4.0: a cli write from a script is not exempt)
       const mine = s.create({ title: "the operator's note" });
+      setTtyCheck(undefined);
       setProcessWriter("");
       drainSpool(s, dir);
       assert.equal(s.read(mine.id)!.unconfirmed, undefined);

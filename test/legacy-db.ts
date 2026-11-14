@@ -67,7 +67,7 @@ export function downgradeTo(path: string, version: 11 | 12 | 13 | 14 | 15 | 16 |
   try {
     // v20 additions (1.4.0 trust: approval/confirm columns, confirmations, note_links), removed for every older shape.
     raw.exec("DROP TABLE IF EXISTS confirmations; DROP TABLE IF EXISTS note_links;");
-    for (const c of ["grandfathered_at", "approved_at", "approved_by", "confirmed_at", "confirmed_by", "confirmed_kind", "confirmed_rev"]) raw.exec(`ALTER TABLE notes DROP COLUMN ${c}`);
+    for (const c of ["grandfathered_at", "approved_at", "approved_by", "confirmed_at", "confirmed_by", "confirmed_kind", "confirmed_rev", "cli_tty"]) raw.exec(`ALTER TABLE notes DROP COLUMN ${c}`);
     raw.exec("DROP INDEX IF EXISTS idx_sessions_ns_open; ALTER TABLE quarantine DROP COLUMN forget_after; ALTER TABLE quarantine DROP COLUMN confidence; ALTER TABLE quarantine DROP COLUMN clears; ALTER TABLE sessions DROP COLUMN outside_at;");
     if (version === 19) {
       raw.exec("PRAGMA user_version = 19");

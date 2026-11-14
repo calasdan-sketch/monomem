@@ -104,6 +104,7 @@ import { ackChanges, resolveSince } from "./changes.js";
 import { qualityReport } from "./quality.js";
 import { rollbackPreview, rollbackConfirm, embedRestored } from "./rollback.js";
 import { redeemLoginCode } from "./login-code.js";
+import { randomBytes } from "node:crypto";
 
 // The quality and health scans read every note. The dashboard asks on every load, so answers are reused for a minute
 // (and a second request that arrives while one is running shares it).
@@ -384,6 +385,11 @@ export function createApiServer(
   const perToken = new RateLimiter();
   // 1.4.0: unconfirmed notes each token has read, kept across its requests and shared with MCP over HTTP (taint.ts).
   const taintedReadsFor = taintRegistryFor(store);
+  // 1.4.0: dashboard sessions opened with `monomem open` (POST /login with its one-time code). The dashboard sends one back
+  // in X-Monomem-Dashboard; only then is an admin confirm treated as the person looking at the note (Store.confirm
+  // `dashboard`). Any other admin key, the primary one included, is an agent as far as the read rule goes.
+  // ponytail: in memory, newest 100; a restart signs the dashboard's confirm out of that exemption until monomem open again.
+  const dashboardSessions = new Set<string>();
   const anon = new RateLimiter();
 
   // Server-side namespace resolution, active only when the entry point
@@ -561,7 +567,10 @@ export function createApiServer(
           sendJson(res, 401, { error: "that sign-in link has expired or was already used. Run monomem open again." });
           return;
         }
-        sendJson(res, 200, { token: resolveToken() });
+        const session = randomBytes(24).toString("hex");
+        dashboardSessions.add(session);
+        if (dashboardSessions.size > 100) dashboardSessions.delete(dashboardSessions.values().next().value as string);
+        sendJson(res, 200, { token: resolveToken(), dashboard_session: session });
         return;
       }
       // Phone command signer. No data in it; the secret never leaves the phone,
@@ -958,7 +967,9 @@ export function createApiServer(
         try {
           const probe = store.read(id); // gate-ok: namespace check; confirm() re-reads through readVisible
           if (nsCtx.active && !denyUnreadable(nsCtx, res, probe)) return;
-          const r = store.confirm(id, { source: body.source, admin: isAdmin });
+          const ds = req.headers["x-monomem-dashboard"];
+          const dashboard = isAdmin && typeof ds === "string" && dashboardSessions.has(ds);
+          const r = store.confirm(id, { source: body.source, admin: isAdmin, dashboard });
           if (!r) {
             sendJson(res, 404, { error: "not found" });
             return;

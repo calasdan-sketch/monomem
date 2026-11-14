@@ -20,7 +20,7 @@
 // under the writer name "cli". Everything goes through supersede.ts, like the REST and MCP surfaces.
 import { readFileSync } from "node:fs";
 import { Store, QuarantinedError, ValidationError } from "./store.js";
-import { SupersedeError, supersedePreview, supersedeConfirm, supersedeUndo, noteHistory, restoreVersion, purgeNoteHistory, type Caller } from "./supersede.js";
+import { SupersedeError, supersedePreview, supersedeConfirm, supersedeUndo, supersedeTokenTargets, noteHistory, restoreVersion, purgeNoteHistory, type Caller } from "./supersede.js";
 import type { SupersedeReplacementInput } from "./supersede-shared.js";
 import { safe } from "./supersede-text.js";
 import { maybeEmbed } from "./search-service.js";
@@ -33,6 +33,12 @@ export interface CliIO {
   ask: (prompt: string) => Promise<string>;
   /** True only when a person is at a terminal (stdin AND stdout are TTYs). */
   interactive: boolean;
+  /**
+   * The operator gates (cli.ts: operator-gate.ts), called HERE with the ids this command will act on, as parsed by
+   * parseArgs, so a gate and the action can never read different arguments. "pinned": ids it would change or retire;
+   * "outside": the note it would promote (the replacement). Absent (library callers, tests) = no gate.
+   */
+  gate?: (kind: "pinned" | "outside", ids: number[], what: string) => Promise<void>;
 }
 
 const VALUE_FLAGS = ["old", "new-id", "title", "body", "body-file", "tags", "confidence", "confirm-token", "if-rev", "writer", "since"];
@@ -46,6 +52,8 @@ export function parseArgs(args: string[]): { flags: Record<string, string | true
     const eq = a.indexOf("=");
     const name = a.startsWith("--") ? (eq > 0 ? a.slice(2, eq) : a.slice(2)) : null;
     if (name && VALUE_FLAGS.includes(name)) {
+      // A repeated value flag is refused: "the last one wins" let a check read one value and the action use another.
+      if (name in flags) throw new ValidationError(`--${name} was given more than once`);
       if (eq > 0) flags[name] = a.slice(eq + 1);
       else if (i + 1 < args.length) flags[name] = args[++i];
       else throw new ValidationError(`Missing value for --${name}`);
@@ -97,7 +105,12 @@ export async function supersedeCli(store: Store, args: string[], io: CliIO, call
     const json = flags.json === true;
     const emit = (v: unknown): void => io.out(JSON.stringify(v, null, 2));
 
+    const gate = async (kind: "pinned" | "outside", ids: number[], what: string): Promise<void> => {
+      const real = ids.filter((n) => Number.isInteger(n) && n > 0);
+      if (io.gate && real.length) await io.gate(kind, real, what);
+    };
     if (rest[0] === "undo") {
+      await gate("pinned", [Number(rest[1])], "supersede");
       const out = supersedeUndo(store, caller, Number(rest[1]));
       if (json) emit(out);
       else io.out(out.message);
@@ -106,6 +119,10 @@ export async function supersedeCli(store: Store, args: string[], io: CliIO, call
 
     const token = s(flags["confirm-token"]);
     if (token !== undefined) {
+      // The code names the notes: gate on those (the CLI's yes is recorded as a human confirm of the replacement).
+      const t = supersedeTokenTargets(store, token);
+      await gate("pinned", t.oldIds, "supersede");
+      await gate("outside", [t.newId], "replacing notes with");
       const out = supersedeConfirm(store, caller, { token, new_note: newNoteFromFlags(flags), acknowledge_risk: flags["acknowledge-risk"] === true });
       await maybeEmbed(store, out.replacement);
       if (json) emit(out);
@@ -119,6 +136,8 @@ export async function supersedeCli(store: Store, args: string[], io: CliIO, call
     if ((newNote === undefined) === (newIdRaw === undefined)) {
       throw new ValidationError("give exactly one of --title (with --body) for a new note, or --new-id for a note that already exists");
     }
+    await gate("pinned", oldIds, "supersede");
+    if (newIdRaw !== undefined) await gate("outside", [Number(newIdRaw)], "replacing notes with");
     const how = io.interactive
       ? "Type the number of notes you are replacing, or yes, to go ahead. Anything else cancels and nothing is changed."
       : "Nothing was changed. To go ahead from a script, run the same command again with --confirm-token {token} (and the same --title/--body).";
@@ -173,6 +192,7 @@ export async function historyCli(store: Store, args: string[], io: CliIO, caller
     const idArg = sub === "list" ? rest[0] : rest[1];
     const id = Number(idArg);
     if (!Number.isInteger(id) || id < 1) throw new ValidationError("give a note number: monomem history <id> | history restore <id> <version> | history purge <id>");
+    if (sub !== "list" && io.gate) await io.gate("pinned", [id], `history ${sub}`);
     if (sub === "list") {
       const h = noteHistory(store, caller, id, { includeDistrusted: flags["include-distrusted"] === true });
       if (json) {
@@ -235,6 +255,7 @@ export async function pinCli(store: Store, kind: "pin" | "unpin", args: string[]
     io.err(`Usage: monomem ${kind === "pin" ? "pin [<id>]" : "unpin <id>"}`);
     return 1;
   }
+  if (kind === "pin" && io.gate) await io.gate("outside", [id], "pinning");
   if (!store.setPinned(id, kind === "pin")) {
     io.err(`Error: no note with id ${id}`);
     return 1;

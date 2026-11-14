@@ -147,7 +147,7 @@ every so often.
 - the last time the mode was changed.
 
 It is computed on every read, never stored. Pinned, archived and replaced notes and captured rows (observations, session
-summaries) never expire. A confirm by another agent after a stronger confirm (a person's, or an admin key's) is recorded
+summaries), tasks and handoffs never expire. A confirm by another agent after a stronger confirm (a person's, or an admin key's) is recorded
 but does not restart the clock.
 
 **Modes.** Set with `monomem config set confirm-mode <mode>` ([configuration.md](./configuration.md#settings-kept-in-the-store-monomem-config)):

@@ -21,6 +21,7 @@ import { disputedLines } from "../src/facts.js";
 import { normalizeHookInput, recordEvent } from "../src/capture.js";
 import { runHook } from "../src/hook.js";
 import { supersedePreview } from "../src/supersede.js";
+import { mintLoginCode } from "../src/login-code.js";
 
 const as = <T>(label: string, f: () => T, extra: Record<string, unknown> = {}): T => actorStore.run({ label, authed: true, ...extra }, f);
 const json = (r: any) => {
@@ -191,14 +192,15 @@ describe("M3: derived_from is checked against what the caller may read", () => {
 });
 
 describe("M4: the dashboard's Confirm counts after the dashboard listed the note", () => {
-  test("admin token: GET /notes then POST confirm is kind admin, counted", async () => {
+  test("dashboard session (monomem open): GET /notes then POST confirm is kind admin, counted", async () => {
     const store = new Store(":memory:");
     const n = as("research-bot", () => store.create({ title: "Acme pricing", body: "40", outside: true }));
     const tok = "admin-token-dddddddddddddddddddddddd";
     const http = createApiServer(store, [{ token: tok, scope: "admin", label: "boss" }]);
     const base = await listen(http);
     try {
-      const h = { authorization: `Bearer ${tok}`, "content-type": "application/json" };
+      const login = (await (await fetch(`${base}/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code: mintLoginCode() }) })).json()) as any;
+      const h = { authorization: `Bearer ${tok}`, "content-type": "application/json", "x-monomem-dashboard": String(login.dashboard_session) };
       const l = (await (await fetch(`${base}/notes`, { headers: h })).json()) as any;
       assert.ok(l.notes.some((x: any) => x.id === n.id && x.unconfirmed === true));
       const c = (await (await fetch(`${base}/notes/${n.id}/confirm`, { method: "POST", headers: h, body: JSON.stringify({ source: "dashboard" }) })).json()) as any;

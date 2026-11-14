@@ -2696,6 +2696,7 @@ function showHeld(store: import("./store.js").Store, id: number, casNote: string
   console.log(`    reasons: ${q.reasons.map((r) => `${r.label} in ${r.field}`).join("; ")}`);
   if (q.body) console.log(`    body: ${q.body.replace(/\n/g, "\n          ")}`);
   if (ctx.target_changed) console.log(`    Note #${q.target_id} has changed since this edit was held, so approving it will fail.`);
+  if (ctx.clears) console.log(`    Approving it also clears the note's ${ctx.clears.map((c) => (c === "forget_after" ? "forget date" : c)).join(" and ")}.`);
   const n = ctx.notes.length;
   if (n === 0) {
     console.log(`\nNothing on the same topic was saved in ${printable(q.namespace, 100)} since this was held.`);
@@ -3244,24 +3245,15 @@ async function supersedeCmd(kind: "supersede" | "history" | "pin" | "unpin" | "r
         });
       }),
     interactive,
+    // The gates run inside the command, on the ids its own parser chose (a pinned note it would change; outside content
+    // it would promote: pin, or replace with it, which records your yes as a human confirm). See CliIO.gate.
+    gate: async (g: "pinned" | "outside", ids: number[], what: string): Promise<void> =>
+      g === "pinned" ? gatePinned(store, ids, what) : gateOutside(store, ids, what),
   };
   const store = new Store(DB_PATH);
   try {
     const args = process.argv.slice(3);
     if (kind === "unpin") await requireOperator(`unpin ${args[0] ?? ""}`.trim());
-    if (kind === "supersede" || kind === "history") await gatePinned(store, pinnedTargets(kind, args), kind === "supersede" ? "supersede" : `history ${args[0]}`);
-    // 1.4.0: promoting outside content no person confirmed (pin, or replace with it) needs the person at the terminal.
-    if (kind === "pin" && args.length === 1) await gateOutside(store, [Number(args[0])].filter(Number.isInteger), "pinning");
-    if (kind === "supersede") await gateOutside(store, newIdTarget(args), "replacing notes with");
-    // --confirm-token: the code names the replacement (made by a preview, maybe over MCP while the note was not yet marked).
-    // Confirming it from the CLI would record the operator's human confirm, so the person must be at the terminal.
-    if (kind === "supersede") {
-      const code = confirmTokenArg(args);
-      if (code) {
-        const { supersedeTokenNewId } = await import("./supersede.js");
-        await gateOutside(store, [supersedeTokenNewId(store, code)].filter((n) => n > 0), "replacing notes with");
-      }
-    }
     process.exitCode =
       kind === "supersede"
         ? await supersedeCli(store, args, io)
@@ -3273,32 +3265,6 @@ async function supersedeCmd(kind: "supersede" | "history" | "pin" | "unpin" | "r
   } finally {
     store.close();
   }
-}
-
-/** The --confirm-token value of a supersede command, or "". */
-function confirmTokenArg(args: string[]): string {
-  const i = args.findIndex((a) => a === "--confirm-token" || a.startsWith("--confirm-token="));
-  return i < 0 ? "" : args[i].includes("=") ? args[i].slice(args[i].indexOf("=") + 1) : (args[i + 1] ?? "");
-}
-
-/** The --new-id of a supersede command (the note that would take the others' place), or none. */
-function newIdTarget(args: string[]): number[] {
-  const i = args.findIndex((a) => a === "--new-id" || a.startsWith("--new-id="));
-  const v = i < 0 ? "" : args[i].includes("=") ? args[i].slice(args[i].indexOf("=") + 1) : (args[i + 1] ?? "");
-  return [Number(v)].filter((n) => Number.isInteger(n) && n > 0);
-}
-
-/** Note ids a supersede / history command would change or retire (empty for reads and for arguments it cannot parse). */
-function pinnedTargets(kind: "supersede" | "history", args: string[]): number[] {
-  const first = args.find((a) => !a.startsWith("--"));
-  if (kind === "history") {
-    if (first !== "restore" && first !== "purge") return [];
-    return [Number(args.filter((a) => !a.startsWith("--"))[1])].filter(Number.isInteger);
-  }
-  if (first === "undo") return [Number(args.filter((a) => !a.startsWith("--"))[1])].filter(Number.isInteger);
-  const i = args.findIndex((a) => a === "--old" || a.startsWith("--old="));
-  const v = i < 0 ? "" : args[i].includes("=") ? args[i].slice(args[i].indexOf("=") + 1) : (args[i + 1] ?? "");
-  return v.split(",").map(Number).filter(Number.isInteger);
 }
 
 /** TTY yes/no prompt; anything but y/yes aborts. */

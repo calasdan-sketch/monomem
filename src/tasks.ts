@@ -725,6 +725,8 @@ export interface TaskListOpts {
   notWrittenBy?: string;
   /** Also list tasks whose writer is on the distrust list (marked `distrusted`). Default: they are left out. */
   includeDistrusted?: boolean;
+  /** Skip this many (newest first), for paging. */
+  offset?: number;
 }
 
 export function listTasks(store: Store, opts: TaskListOpts = {}): { tasks: Task[]; total: number } {
@@ -740,6 +742,7 @@ export function listTasks(store: Store, opts: TaskListOpts = {}): { tasks: Task[
   const { notes, total } = store.list({
     namespaces: opts.namespaces,
     limit,
+    ...(opts.offset ? { offset: opts.offset } : {}),
     withTags,
     withoutTags,
     writtenBy: opts.writtenBy,
@@ -1170,6 +1173,8 @@ export function listHandoffs(
     notWrittenBy?: string;
     /** Also list handoffs from distrusted writers (marked `distrusted`). Default: left out. */
     includeDistrusted?: boolean;
+    /** Skip this many (newest first), for paging. */
+    offset?: number;
   } = {}
 ): Handoff[] {
   const withTags = [HANDOFF_TAG];
@@ -1179,6 +1184,7 @@ export function listHandoffs(
   const { notes } = store.list({
     namespaces: opts.namespaces,
     limit,
+    ...(opts.offset ? { offset: opts.offset } : {}),
     withTags,
     writtenBy: opts.writtenBy,
     notWrittenBy: opts.notWrittenBy,
@@ -1320,11 +1326,26 @@ export function sessionBoard(
   opts: { namespaces?: string[]; writtenBy?: string; notWrittenBy?: string; includeDistrusted?: boolean } = {}
 ): string {
   const enforce = store.confirmSettings().mode === "enforce";
-  // ponytail: scans up to 200 open tasks so an old overdue one is not lost behind the 10 newest; add a due-date index if boards get bigger.
-  const open = listTasks(store, { ...opts, limit: 200 });
-  const shown = open.tasks.filter((t) => !heldFromSessionStart(t, enforce));
-  const handoff = listHandoffs(store, { ...opts, limit: 5 }).find((h) => !heldFromSessionStart(h, enforce)) ?? null;
-  return buildBoardSummary(overdueFirst(shown).slice(0, 10), handoff, undefined, open.total - (open.tasks.length - shown.length));
+  const keep = <T extends { unconfirmed?: true; built_on_distrusted?: true; expired?: true }>(x: T): boolean => !heldFromSessionStart(x, enforce);
+  // Held items are dropped BEFORE the limit, a page at a time, so a flood of held ones cannot push the real ones off.
+  // ponytail: up to 200 shown open tasks (so an old overdue one is not lost behind the 10 newest) and 2,000 scanned; a
+  // due-date index and a stored hold column if boards get bigger.
+  const shown: Task[] = [];
+  let held = 0;
+  let total = 0;
+  for (let offset = 0; offset < 2000 && shown.length < 200; offset += 200) {
+    const page = listTasks(store, { ...opts, limit: 200, offset });
+    total = page.total;
+    for (const t of page.tasks) keep(t) ? shown.push(t) : held++;
+    if (page.tasks.length < 200) break;
+  }
+  let handoff: Handoff | null = null;
+  for (let offset = 0; offset < 500 && !handoff; offset += 50) {
+    const page = listHandoffs(store, { ...opts, limit: 50, offset });
+    handoff = page.find(keep) ?? null;
+    if (page.length < 50) break;
+  }
+  return buildBoardSummary(overdueFirst(shown.slice(0, 200)).slice(0, 10), handoff, undefined, total - held);
 }
 
 export function buildBoardSummary(

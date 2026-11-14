@@ -70,7 +70,9 @@ export const toolTag = (tool: string): string => ORIGIN_TOOL_PREFIX + (SAFE_TOOL
 export function sourceKey(s: string): string {
   const t = s.trim();
   // A URL, or a bare host ("www.Vendor.com."): the host, IDN as punycode (URL does that), no trailing dot, no www.
-  const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(t) ? t : /^[^\s/:@]+\.[^\s/:@]+\.?$/.test(t) ? `http://${t}` : "";
+  // A bare host is a dotted name or a name with a port, optionally followed by a path ("vendor.com/page", "host:8080").
+  const bare = /^[^\s/:@?#]+\.?(?::\d{1,5})?(?:[/?#]\S*)?$/.test(t) && /^[^\s/:@?#]*(?:\.[^\s/:@?#.]|:\d)/.test(t);
+  const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(t) ? t : bare ? `http://${t}` : "";
   if (url) {
     try {
       return new URL(url).hostname.toLowerCase().replace(/\.+$/, "").replace(/^www\./, "");

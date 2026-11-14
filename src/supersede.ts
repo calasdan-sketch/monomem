@@ -267,12 +267,14 @@ export interface SupersedeResult {
 }
 
 /**
- * The existing note a confirmation code would make the replacement (0 = none: a new note, or not a readable code). The CLI
- * asks it before confirming so it can put the operator gate in front of a replacement from outside content (cli.ts).
+ * The notes a confirmation code names: the ones it retires and the existing replacement (newId 0 = a new note; both empty
+ * for a code that does not open). The CLI gates on these before confirming (supersede-cli.ts).
  */
-export function supersedeTokenNewId(store: Store, token: string): number {
+export function supersedeTokenTargets(store: Store, token: string): { oldIds: number[]; newId: number } {
   const t = store.openToken(TOKEN_DOMAIN, token);
-  return t ? Number(t.ni) || 0 : 0;
+  if (!t) return { oldIds: [], newId: 0 };
+  const olds = Array.isArray(t.o) ? (t.o as unknown[]).map((p) => (Array.isArray(p) ? Number(p[0]) : NaN)).filter(Number.isInteger) : [];
+  return { oldIds: olds, newId: Number(t.ni) || 0 };
 }
 
 /** Step 2. The ONLY path that retires a note. Needs a valid, unexpired, unused code made for this caller. */
