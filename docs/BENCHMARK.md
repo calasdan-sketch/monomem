@@ -289,8 +289,11 @@ keyword by how rare it is in the store (idf from the FTS vocabulary; on an encry
 note holding the one rare word of a question beats one holding two common ones. Coverage still matches the keywords as typed.
 
 Tuned on half the questions only. `monomem bench ... --split a|b` splits by `sha256(question id)`; every candidate was tried on
-half **a**, and kept only if half **b** (never looked at while tuning) also went up. Six other candidates were dropped that way
-(stem length 5 and 6, a coverage re-rank, pseudo-relevance feedback at three weights, idf on stems). Held-out half **b**, keyword: R@5 and
+half **a**; half **b** never set a parameter, but each candidate that passed **a** was checked on **b** to decide keep or drop
+(about 8 checks). So **b** is a validation half, not an untouched test set. Dropped on half a: stem length 5 and 6,
+pseudo-relevance feedback at two of three weights. A coverage re-rank changed nothing on either half. Dropped on half b: stems alone (LoCoMo-10 session R@5 -0.4, over the
+0.3-point drop guard), pseudo-relevance feedback at the third weight, and idf counted on stems. The kept change sits exactly on
+that guard (-0.3, below). Held-out half **b**, keyword: R@5 and
 Rall@5 as before / after, the other columns as the change in points:
 
 | Half b | R@5 | **Rall@5** | R@10 | Rall@10 | nDCG@10 | MRR |
@@ -314,7 +317,9 @@ Full set, measured one run at a time on an otherwise idle PC (2026-11-15, same h
 | LoCoMo-10 session (1,982) | relevant | 91.1 | **82.5** | 96.0 | 88.9 | 81.1 | 79.4 | 1.3 / 1.8 ms |
 
 The honest headline for LongMemEval-S is now **85.7 strict / 97.2 any-hit at k = 5**, keyword-only, no embeddings. That is 1.0
-above agentmemory 0.9.31's reported 84.7 (its own figure, not re-run here). LoCoMo-10 by turn is still our weakest number.
+above agentmemory 0.9.31's reported 84.7 (its own figure, not re-run here; we score 470 of the 500 questions, dropping the 30
+abstention ones, by session, and did not check that agentmemory's setup matches; 1.0 point is about 5 questions, near the 0.1-0.2
+a re-run can move from ties). LoCoMo-10 by turn is still our weakest number.
 
 **Speed at 10,000 notes (`monomem bench --scale 10k`), new in this round.** A synthetic store in a temp folder: 10,000 notes
 (10,200 after the timed writes) in 5 namespaces, made-up Zipf-distributed words, bodies 80 % 200-600 characters, 15 % 1.5-3k,

@@ -68,8 +68,8 @@ upgrading from 1.3.x takes one step (docs/upgrading.md).
   finds "camped"; plural s/es, ed and ing only), and a note's keyword-coverage share now weighs each keyword by how rare it is in
   the store, so the note holding a question's one rare word beats one holding two common ones. Full runs, keyword-only,
   before / after: LongMemEval-S strict recall-all@5 84.0 to 85.7 (R@5 96.8 to 97.2), LoCoMo-10 by turn R@5 57.8 to 60.8, by
-  session 90.4 to 90.9. Tuned on half the questions; on the held-out half every metric rose except LoCoMo-10 session R@5, which
-  fell 0.3 (about 3 questions). Identical with encryption on. docs/BENCHMARK.md has both halves.
+  session 90.4 to 90.9. Tuned on half the questions; on the held-out half every metric rose or held (LoCoMo-10 session R@10 unchanged), except LoCoMo-10
+  session R@5, which fell 0.3 (about 3 questions). Identical with encryption on. docs/BENCHMARK.md has both halves.
 
 - **`monomem setup --yes` adds the start-of-session hook for Claude Code** (it is what makes remembered notes reach a new
   session). It says what it added; leave it out with `--no-hook`, take it back with `setup --undo`. When the hook is not
