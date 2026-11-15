@@ -228,6 +228,10 @@ monomem setup --capture        # or answer y to "Also record what <agent> does i
   `--capture`) tells the agent which memories are linked to that file, once per session per file. It is advisory
   only: it never blocks, allows or changes the Read. Same namespace, trust and UNTRUSTED-banner rules as the
   start-of-session context.
+- **Before the context is compacted (Claude Code only):** a `PreCompact` hook (`monomem hook pre-compact`, installed
+  with `--capture`) saves the session so far as its summary note before `/compact` or an automatic compaction, so the
+  work is not only in the context being shortened. Same redaction, stamps and spool as the other capture hooks; a later
+  stop or session end updates the same summary.
 - **In the dashboard:** the **Sessions** tab lists recorded sessions; open one for its timeline (summary, prompts,
   observations, oldest first).
 - **Optional local model:** set `MONOMEM_LLM_URL` (an OpenAI-compatible server such as Ollama,

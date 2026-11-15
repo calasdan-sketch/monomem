@@ -17,7 +17,7 @@ import { currentWriter } from "./actor.js";
 import { isOutsideTool } from "./taint.js";
 import { audit } from "./security.js";
 
-export const HOOK_EVENTS = ["session-start", "user-prompt", "post-tool", "post-tool-failure", "stop", "subagent-stop", "session-end"] as const;
+export const HOOK_EVENTS = ["session-start", "user-prompt", "post-tool", "post-tool-failure", "stop", "subagent-stop", "session-end", "pre-compact"] as const;
 export type HookEvent = (typeof HOOK_EVENTS)[number];
 
 /** Longest stored field (input / output), after redaction. */

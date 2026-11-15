@@ -66,6 +66,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   accepted, held or refused write: the audit-log line that recorded the decision. `monomem verify-receipt <seq> <hash>`
   checks that line is still in an unbroken audit chain and names the first broken line if not. It is not signed: it shows
   the line was not changed later, not who wrote the log (SECURITY.md). Audit lines now carry a `seq` number.
+- **Claude Code `PreCompact` hook.** `monomem hook pre-compact` saves the session so far as its summary note before the
+  context is compacted (same redaction, stamps and spool as the other capture hooks). `setup --capture` adds it for
+  Claude Code only; `setup --undo` removes it. Run `setup --capture` again to add it to an existing install.
 - `monomem show`, `ls` and `why` print the trust state: unconfirmed, expired and built-on-distrusted labels, a plain origin
   line, confirmations (counted or not, and why) and who approved a held write. `ls --archived` includes notes kept as history.
 - `monomem review --step`: one typed yes, then y / n / q per note.
