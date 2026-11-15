@@ -7220,15 +7220,34 @@ export class Store {
         LEFT JOIN notes n ON n.id = e.note_id
        WHERE 1 = 1${noteSql}${dis.sql}${ceilFeed}`;
     const eventParams = [c.f, c.t, ...nsParams, ...srcParams, ...wbParams, ...exParams, ...noteParams, ...dis.params];
+    // F-04: the rows of one page, streamed in seq order so a page costs O(limit), not O(window). Same answer as eventsSql:
+    // an event is its note's LAST in the window (nothing later passes the event filters), and the note was born in the
+    // window when ANY filtered 'created' event sits in (f, t], also one at or before the cursor.
+    const evSql = `${nsSql}${srcSql}${wbSql}${exSql}`;
+    const evParams = [...nsParams, ...srcParams, ...wbParams, ...exParams];
+    const pagedSql = `
+      SELECT e.seq AS seq,
+             CASE WHEN e.kind = 'deleted' THEN 'deleted'
+                  WHEN EXISTS (SELECT 1 FROM change_log b WHERE b.note_id = e.note_id AND b.kind = 'created' AND b.seq > ? AND b.seq <= ?${evSql}) THEN 'created'
+                  ELSE 'updated' END AS kind,
+             e.note_id AS id, e.namespace AS namespace, e.title AS title, e.source AS source,
+             e.changed_at AS at, e.rev AS rev, e.written_by AS written_by,
+             ${cur.writer} AS cur_writer, (n.id IS NOT NULL) AS live,
+             (n.archived_at IS NOT NULL AND n.superseded_by IS NULL) AS forgotten,
+             ${cur.attWriter} AS cur_att_writer, ${cur.attBy} AS cur_att_by, ${cur.merged} AS cur_merged
+        FROM (SELECT * FROM change_log WHERE seq > ? AND seq <= ?${evSql}) e
+        LEFT JOIN notes n ON n.id = e.note_id
+       WHERE NOT EXISTS (SELECT 1 FROM change_log x WHERE x.note_id = e.note_id AND x.seq > e.seq AND x.seq <= ?${evSql})${noteSql}${dis.sql}${ceilFeed}`;
+    const pagedParams = [c.f, c.t, ...evParams, c.a, c.t, ...evParams, c.t, ...evParams, ...noteParams, ...dis.params];
 
     const tail = opts.tail !== undefined ? clampInt(opts.tail, 30, 1, CHANGES_MAX_LIMIT) : 0;
     const rowsRaw = this.db
       .prepare(
         tail
-          ? `SELECT * FROM (${eventsSql}) WHERE seq > ? ORDER BY seq DESC LIMIT ?`
-          : `SELECT * FROM (${eventsSql}) WHERE seq > ? ORDER BY seq ASC LIMIT ?`
+          ? `SELECT * FROM (${pagedSql}) ORDER BY seq DESC LIMIT ?`
+          : `SELECT * FROM (${pagedSql}) ORDER BY seq ASC LIMIT ?`
       )
-      .all(...eventParams, c.a, (tail || limit) + 1) as Array<{
+      .all(...pagedParams, (tail || limit) + 1) as Array<{
       seq: number;
       kind: ChangeEntry["kind"];
       id: number;
