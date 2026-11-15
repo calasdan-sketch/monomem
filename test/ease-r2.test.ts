@@ -226,6 +226,24 @@ describe("U-04 changes groups by the stamped writer; the claimed source is shown
       assert.match(r.stdout, /#2 .*by stdio:cursor, claims "claude-code"/);
       assert.match(r.stdout, /#1 .*by stdio:cursor\)/);
     }));
+
+  test("a person's note an agent edited later is not shown as the agent creating it and claiming to be the person", () =>
+    withDir((dir) => {
+      const s = new Store(join(dir, "t.db"));
+      try {
+        setProcessWriter("cli");
+        const n = s.create({ namespace: "work", title: "Mine", body: "a", source: "cli" });
+        setProcessWriter("stdio:cursor");
+        s.update(n.id, { body: "b" });
+      } finally {
+        s.close();
+        setProcessWriter("");
+      }
+      const r = run(dir, ["changes", "--since", "1h"]);
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stdout, /#1 .*new in this window and changed since; last by stdio:cursor, source "cli"/);
+      assert.doesNotMatch(r.stdout, /claims "cli"/);
+    }));
 });
 
 describe("U-05 a held write that looks like an injection is reported as one, even under approve-first", () => {

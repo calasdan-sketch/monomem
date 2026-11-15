@@ -2092,7 +2092,12 @@ async function changes(): Promise<void> {
     for (;;) {
       for (const e of page.changes) {
         const mark = e.kind === "created" ? "+" : e.kind === "updated" ? "~" : "-";
-        const by = `${e.written_by ? `, by ${printable(e.written_by, 100)}` : ""}${e.source ? `, claims "${printable(e.source, 100)}"` : ""}`;
+        // A note born in the window and changed since is reported once, as created, with its LAST writer: say so, or a person's
+        // note an agent edited reads as the agent creating it and claiming the person's source.
+        const later = e.kind === "created" && (e.rev ?? 1) > 1;
+        const by = later
+          ? `, new in this window and changed since; last by ${printable(e.written_by || "unknown", 100)}${e.source ? `, source "${printable(e.source, 100)}"` : ""}`
+          : `${e.written_by ? `, by ${printable(e.written_by, 100)}` : ""}${e.source ? `, claims "${printable(e.source, 100)}"` : ""}`;
         console.log(`${mark} #${e.id} [${printable(e.namespace, 100)}] ${printable(e.title)}  (${e.at}${by})${e.distrusted ? " [DISTRUSTED WRITER]" : ""}`);
       }
       if (!page.nextCursor) break;
