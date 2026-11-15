@@ -1,7 +1,11 @@
 import { Store } from "./store.js";
+import { missingKeyFile } from "./errors.js";
 // A database that will not open: say which file, what likely happened, and what to do, in plain words.
 export function describeDbFailure(path: string, err: unknown): { problem: string; fix: string } {
   const msg = err instanceof Error ? err.message : String(err);
+  const key = missingKeyFile(err);
+  // A database backup is no help here: it is sealed with the same key. Only the key file brings the bodies back.
+  if (key) return { problem: `the key file ${key} is missing, so the encrypted note bodies cannot be read`, fix: `Restore the key file ${key} from your backup (a database backup alone will not help: it is sealed with the same key).` };
   if (/newer|schema/i.test(msg) && /v\d+|version/i.test(msg)) {
     return {
       problem: `database problem at ${path}: ${msg}`,

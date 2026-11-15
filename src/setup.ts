@@ -1812,6 +1812,9 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   io.out("What I will do:");
   let n = 1;
   for (const c of plan.changes) for (const l of c.lines) io.out(`  ${l.startsWith("note:") ? "   " : `${n++}. ${c.label}: `}${l}`);
+  // --yes asks nothing, so the hook it adds is a step like any other (Claude Code only, unless --hook: see the else branch below).
+  if (opts.yes && opts.hook !== "no")
+    for (const [h, c] of hookPlans) if (opts.hook === "yes" || h.client === "claude-code") for (const l of c.lines) io.out(`  ${n++}. ${c.label}: ${l}`);
   if (capture === "ask") for (const h of upgradeHosts) io.out(`  ${n++}. ${h.label.replace(/ hook$/, "")}: upgrade your existing automatic memory hooks from the old onememory-mcp package (or another npx version) to this Monomem, same place and settings. They are already installed; this is not a new hook`);
   for (const d of dbs) io.out(`  ${n++}. Database ${d}: ${describeSchema(Store.peekSchemaVersion(d), SCHEMA_VERSION)}`);
   if (!opts.noTestNote) io.out(`  ${n++}. Write a test note, read it back and delete it, so you know writing, reading and deleting all work (only that one note is deleted; no other note is touched)`);

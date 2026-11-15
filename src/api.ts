@@ -33,7 +33,7 @@ import {
   DEFAULT_NAMESPACE,
   quarantineCasNote,
 } from "./store.js";
-import type { WriteReceipt } from "./store/write-receipt.js";
+import { RECEIPT_CHECK, type WriteReceipt } from "./store/write-receipt.js";
 import { truthyParam, distrustedOptInRefusal } from "./trust.js";
 import { originAllowed, hostAllowed, hostRefusal, RateLimiter, AuthTarpit, clientKey, tokenKey, authenticateEntry, scopeAllows, LIMITS, audit, auditFailureCount, printable } from "./security.js";
 import { checkFilesInput } from "./code-anchor.js";
@@ -216,7 +216,7 @@ export function unknownNoteFields(body: unknown, allowed: readonly string[], ign
 
 /** `receipt` (R2-06): the audit line of a note write's held / refused decision, from Store.refusedWriteReceipt. */
 function sendError(res: ServerResponse, e: unknown, receipt?: WriteReceipt): void {
-  const r = receipt ? { receipt } : {};
+  const r = receipt ? { receipt, receipt_check: RECEIPT_CHECK } : {};
   // A linter-held write was accepted for admin review, not rejected: 202.
   if (e instanceof QuarantinedError) {
     sendJson(res, 202, {
@@ -895,7 +895,7 @@ export function createApiServer(
           const note = once.note;
           await maybeEmbed(store, note);
           const sim = store.similarNote(note.id);
-          sendJson(res, 201, { note, ...(receipt ? { receipt } : {}), ...(sim ? { similar_note: { id: sim.id, title: sim.title, hint: `looks similar to #${sim.id} - consider updating it (PUT /notes/${sim.id}) if this is the same thing` } } : {}), ...(warnings.length ? { warnings } : {}), ...(facts === undefined ? {} : factFeedback(store, note)) });
+          sendJson(res, 201, { note, ...(receipt ? { receipt, receipt_check: RECEIPT_CHECK } : {}), ...(sim ? { similar_note: { id: sim.id, title: sim.title, hint: `looks similar to #${sim.id} - consider updating it (PUT /notes/${sim.id}) if this is the same thing` } } : {}), ...(warnings.length ? { warnings } : {}), ...(facts === undefined ? {} : factFeedback(store, note)) });
         } catch (e) {
           sendError(res, e, store.refusedWriteReceipt(e));
         }
@@ -1010,7 +1010,7 @@ export function createApiServer(
             return;
           }
           if (!unchanged) await maybeEmbed(store, note);
-          sendJson(res, 200, { note, ...(unchanged ? { unchanged: true } : {}), ...(receipt ? { receipt } : {}), ...(warnings.length ? { warnings } : {}), ...(putFacts === undefined ? {} : factFeedback(store, note)) });
+          sendJson(res, 200, { note, ...(unchanged ? { unchanged: true } : {}), ...(receipt ? { receipt, receipt_check: RECEIPT_CHECK } : {}), ...(warnings.length ? { warnings } : {}), ...(putFacts === undefined ? {} : factFeedback(store, note)) });
         } catch (e) {
           sendError(res, e, store.refusedWriteReceipt(e, id));
         }

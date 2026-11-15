@@ -97,6 +97,7 @@ import {
 import {
   ValidationError,
   NoteUnreadableError,
+  MissingKeyError,
   StaleWriteError,
   RebuildBusyError,
   CandidateScanError,
@@ -312,6 +313,8 @@ function lintFor(
 /** The quarantine reason of a write held only because its namespace is approve-first. */
 /** bm25 column weights for notes_fts(title, body, tags). */
 const FTS_WEIGHTS = "5, 1, 2";
+/** change_log.actor on the rows `encrypt enable` / `disable` rewrite (a body re-stored, its content unchanged). */
+export const ENCRYPT_ACTOR = { enable: "monomem encrypt enable", disable: "monomem encrypt disable" } as const;
 const APPROVAL_FINDING: LintFinding = { category: "approval", label: "namespace requires approval", field: "namespace" };
 
 /**
@@ -3518,7 +3521,7 @@ export class Store {
       try {
         r.body = decryptIfEncrypted(row.body_enc, this.readKey(), noteAad(row.id, row.namespace));
       } catch (e) {
-        throw new NoteUnreadableError(row.id, (e as Error).message);
+        throw new NoteUnreadableError(row.id, (e as Error).message, e);
       }
     }
     // A visible note that was replaced by a note the caller may not see must not name that note (id, time, writer).
@@ -3725,11 +3728,9 @@ export class Store {
           }
           if (r !== "live") {
             const aside = this.asideKeys().map((a) => a.path).join(", ");
-            throw new Error(
-              `this database holds encrypted notes but the key file ${keyPath(this.keyDir)} is missing; ` +
-                `refusing to write plaintext next to ciphertext.` +
-                (aside ? ` A key copy exists at ${aside} -- rename it back to ${keyPath(this.keyDir)}.` : ` Restore the key from a backup.`)
-            );
+            const kp = keyPath(this.keyDir);
+            const fix = aside ? `A key copy exists at ${aside} -- rename it back to ${kp}.` : `Restore the key file ${kp} from your backup.`;
+            throw new MissingKeyError(kp, fix, `this database holds encrypted notes but the key file ${kp} is missing; refusing to write plaintext next to ciphertext. ${fix}`);
           }
         }
       }
@@ -4548,7 +4549,7 @@ export class Store {
       try {
         body = decryptIfEncrypted(r.body_enc, this.readKey(), historyAad(Number(r.hid)));
       } catch (e) {
-        throw new NoteUnreadableError(Number(r.note_id), `its saved version ${r.version}: ${(e as Error).message}`);
+        throw new NoteUnreadableError(Number(r.note_id), `its saved version ${r.version}: ${(e as Error).message}`, e);
       }
     }
     return {
@@ -5014,6 +5015,7 @@ export class Store {
     const updEnc = this.db.prepare("UPDATE notes SET body_enc = ? WHERE id = ?");
     let count = 0;
     this.beginWrite();
+    const logFrom = this.lastChangeSeq();
     try {
       let after = 0;
       for (;;) {
@@ -5036,6 +5038,7 @@ export class Store {
         }
         after = rows[rows.length - 1].id;
       }
+      this.stampRewrite(ENCRYPT_ACTOR.enable, logFrom);
       this.sealQuarantine(key);
       this.sealHistory(key);
       this.sealCaptureEvents(key);
@@ -5051,6 +5054,20 @@ export class Store {
     }
     this.scrubPlaintext();
     return count;
+  }
+
+  /**
+   * Name the change-log rows `encrypt enable` / `disable` just caused (the body column moved, the content did not), so
+   * `why` can say "encrypted" instead of "metadata changed by unknown". Caller holds the write lock; the rows are this
+   * transaction's own, the only 'updated' rows with no actor and an unchanged rev written after it began.
+   */
+  private stampRewrite(label: string, from: number): void {
+    this.db.prepare("UPDATE change_log SET actor = ? WHERE kind = 'updated' AND actor = '' AND seq > ?").run(label, from);
+  }
+
+  /** The newest change-log seq (0 when empty). */
+  private lastChangeSeq(): number {
+    return Number((this.db.prepare("SELECT COALESCE(MAX(seq), 0) AS m FROM change_log").get() as { m: number }).m);
   }
 
   /** Seal every still-plaintext quarantine row (caller holds the write lock). */
@@ -5191,6 +5208,7 @@ export class Store {
     const upd = this.db.prepare("UPDATE notes SET body = ?, body_enc = NULL WHERE id = ?");
     let count = 0;
     this.beginWrite();
+    const logFrom = this.lastChangeSeq();
     try {
       let after = 0;
       for (;;) {
@@ -5202,6 +5220,7 @@ export class Store {
         }
         after = rows[rows.length - 1].id;
       }
+      this.stampRewrite(ENCRYPT_ACTOR.disable, logFrom);
       this.unsealQuarantine(key);
       this.unsealHistory(key);
       this.unsealCaptureEvents(key);
@@ -7267,10 +7286,11 @@ export class Store {
     // A change to a note above the caller's ceiling is not in its feed (a deleted note answers with the label it had).
     const ceilFeed = this.ceilingSql("COALESCE(n.sensitivity, e.note_sensitivity)");
     const eventsSql = `
-      WITH ev AS (SELECT seq, note_id, kind FROM change_log
+      WITH ev AS (SELECT seq, note_id, kind, written_by FROM change_log
                    WHERE seq > ? AND seq <= ?${nsSql}${srcSql}${wbSql}${exSql}),
-           g AS (SELECT note_id, MAX(seq) AS last, MAX(kind = 'created') AS born FROM ev GROUP BY note_id)
-      SELECT e.seq AS seq,
+           g AS (SELECT note_id, MAX(seq) AS last, MAX(kind = 'created') AS born,
+                        MAX(CASE WHEN kind = 'created' THEN COALESCE(written_by, '') END) AS born_by FROM ev GROUP BY note_id)
+      SELECT e.seq AS seq, g.born_by AS born_by,
              CASE WHEN e.kind = 'deleted' THEN 'deleted' WHEN g.born THEN 'created' ELSE 'updated' END AS kind,
              e.note_id AS id, e.namespace AS namespace, e.title AS title, e.source AS source,
              e.changed_at AS at, e.rev AS rev, e.written_by AS written_by,
@@ -7364,7 +7384,8 @@ export class Store {
     let totals = c.n;
     if (!totals) {
       const grouped = this.db
-        .prepare(`SELECT source, written_by, kind, COUNT(*) AS n FROM (${eventsSql}) GROUP BY source, written_by, kind`)
+        // A note born in the window counts as "+" under the writer who CREATED it, not whoever touched it last (1.5.0 final panel).
+        .prepare(`SELECT source, CASE WHEN kind = 'created' AND born_by IS NOT NULL THEN born_by ELSE written_by END AS written_by, kind, COUNT(*) AS n FROM (${eventsSql}) GROUP BY 1, 2, 3`)
         .all(...eventParams) as Array<{ source: string; written_by: string | null; kind: ChangeEntry["kind"]; n: number }>;
       const counts = { created: 0, updated: 0, deleted: 0, total: 0 };
       const bySource: Record<string, ChangeCounts> = {};
@@ -7519,6 +7540,11 @@ export class Store {
   }
 
   /** How many stored notes the rule `(namespace, writer)` hides right now (0 usually means a misspelt label). */
+  /** The stamped writers of stored notes (at most 500), for a "Did you mean" on a mistyped writer name. Names only. */
+  writerNames(): string[] {
+    return (this.db.prepare("SELECT DISTINCT written_by AS w FROM notes WHERE written_by <> '' LIMIT 500").all() as Array<{ w: string }>).map((r) => r.w);
+  }
+
   distrustMatchCount(namespace: string, writer: string): number {
     return trustOps.distrustMatchCount(this, namespace, writer);
   }

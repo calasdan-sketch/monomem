@@ -3,7 +3,7 @@
 import "./setup-env.js";
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,6 +51,7 @@ describe("version handshake (U-10)", () => {
       res.end(JSON.stringify(answer));
     });
     await new Promise<void>((r) => fake.listen(0, "127.0.0.1", r));
+    mkdirSync(join(dir, "data")); // set up: doctor no longer creates a missing data folder (1.5.0 final panel)
     const env = { ...process.env, HOME: dir, USERPROFILE: dir, MONOMEM_HOME: join(dir, "data"), MONOMEM_PORT: String((fake.address() as AddressInfo).port), MONOMEM_NO_SERVER_PROBE: "" };
     try {
       let out = await runDoctor(env);
