@@ -24,7 +24,8 @@
 // the exact tags `observation` and `summary`, and every tag starting with
 // `obs.` (obs.type:, obs.concept:). Only extract.ts writes them, so a note
 // cannot pass itself off as captured work.
-import { ValidationError, ORIGIN_TOOL_PREFIX } from "./store.js";
+import { ValidationError } from "./errors.js";
+import { ORIGIN_TOOL_PREFIX } from "./taint.js";
 export { ORIGIN_TOOL_PREFIX };
 import { flaggedFactValue } from "./facts.js";
 import { ORIGIN_DECLARED, ORIGIN_PREFIX, ORIGIN_VIA_MEMORY } from "./taint.js";

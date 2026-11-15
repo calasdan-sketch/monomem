@@ -123,13 +123,17 @@ import {
   type VerifyContext,
   type VerifyReason,
 } from "./attest.js";
-
-/**
- * A caller-input error (bad/oversized/secret-bearing data, empty title, stale
- * write). The HTTP layer maps these to 400 with the message shown; anything
- * else is an unexpected fault mapped to a generic 500, so internals never leak.
- */
-export class ValidationError extends Error {}
+import {
+  ValidationError,
+  NoteUnreadableError,
+  StaleWriteError,
+  RebuildBusyError,
+  CandidateScanError,
+  QuarantinedError,
+  WriterPausedError,
+  heldHandled,
+} from "./errors.js";
+export { ValidationError, NoteUnreadableError, StaleWriteError, RebuildBusyError, CandidateScanError, QuarantinedError, WriterPausedError };
 
 /**
  * 1.5.0 (round 2, S-04): this process opened the database before a newer Monomem upgraded it. Writing now would store rows in
@@ -145,21 +149,6 @@ export class SchemaNewerError extends ValidationError {
 export class SchemaMismatchError extends Error {
   constructor(readonly found: number) {
     super(`monomem: the database is at schema v${found}, this build uses v${SCHEMA_VERSION}; not opening it without a migration`);
-  }
-}
-
-/**
- * A stored note body could not be decrypted (wrong key file, or the row was
- * tampered with / moved). NOT a ValidationError: it is the operator's problem,
- * so the REST layer answers 500 -- but with this clear, id-bearing message
- * instead of a bare "internal error", and never hangs a stream.
- */
-export class NoteUnreadableError extends Error {
-  constructor(
-    public readonly noteId: number,
-    detail: string
-  ) {
-    super(`note ${noteId} cannot be decrypted (wrong key file, or the stored data was altered): ${detail}`);
   }
 }
 
@@ -243,52 +232,6 @@ export interface HistoryEntry {
 function historyAad(hid: number): string {
   return `history|${hid}`;
 }
-
-/**
- * A compare-and-swap update was refused because the note moved on since the caller read it
- * (`ifRev` no longer matches). A ValidationError subclass so every surface keeps its message;
- * the REST layer answers 409 so a client can tell "re-read and retry" from "bad request".
- */
-export class StaleWriteError extends ValidationError {}
-/** A held write another process (or an earlier click) already approved, kept as history or rejected: REST answers 409. */
-const heldHandled = (id: number): StaleWriteError => new StaleWriteError(`held write ${id} was already handled (approved, kept as history or rejected); refresh the list`);
-
-/**
- * A rebuild was requested while another one is already running in this
- * process (single-flight). A ValidationError subclass so every surface maps
- * it to a clean caller-facing error; the REST layer answers 409.
- */
-export class RebuildBusyError extends ValidationError {
-  constructor() {
-    super("a similarity-edge rebuild is already running; retry when it finishes");
-  }
-}
-
-/**
- * A guarded duplicate-candidate scan (consolidate.ts findCandidatesGuarded)
- * was refused (one already running), cancelled, or ran out of time.
- */
-export class CandidateScanError extends ValidationError {}
-
-/**
- * A write held for admin review by the write-time linter (MONOMEM_LINT
- * quarantine policy). A ValidationError subclass so an unaware caller still
- * maps it to a clean caller-facing error; the REST and MCP write paths catch
- * it and report `{ quarantined: { id, reasons } }` instead.
- */
-export class QuarantinedError extends ValidationError {
-  constructor(
-    readonly quarantineId: number,
-    readonly findings: LintFinding[]
-  ) {
-    super(
-      `held in quarantine #${quarantineId} pending admin review (${describeFindings(findings)})`
-    );
-  }
-}
-
-/** A write from a writer the flood guard paused (Store.floodGate). Cleared by an operator: `monomem resume <label>`. */
-export class WriterPausedError extends ValidationError {}
 
 /** Env knob: a non-negative number, or `dflt` when unset, empty or unusable. */
 function envCount(name: string, dflt: number): number {
