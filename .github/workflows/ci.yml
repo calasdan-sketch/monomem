@@ -48,3 +48,47 @@ jobs:
           node-version: "24"
       - run: npm ci
       - run: npm audit --audit-level=high
+
+  # 1.5.0 release gate item 12. (a) The whole suite and the benchmark run in a container with no network at all
+  # (`--network none`: only loopback), so "Monomem makes no outbound call by default" is run, not only grepped for.
+  # (b) The remote guide (docs/two-developers-one-server.md) is run as written: build the image, `docker compose up -d`
+  # with MONOMEM_ALLOWED_HOSTS, `token add` for a developer, then /health and an authenticated /notes under that name.
+  offline-and-docker-guide:
+    name: no network + Docker remote guide
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+      - run: npm ci
+      - name: npm test + bench with networking disabled
+        # node_modules is installed above (the network is needed for that only; the deps are plain JavaScript). Runs as
+        # the runner user, not root, so the permission tests mean what they say.
+        run: |
+          docker run --rm --network none --user "$(id -u):$(id -g)" -e HOME=/tmp -e CI=1 -v "$PWD:/w" -w /w node:24 \
+            sh -c 'npm test && node dist/src/cli.js bench'
+      - name: build the image and start it as the remote guide says
+        run: |
+          sed "s/^MONOMEM_TOKEN=.*/MONOMEM_TOKEN=$(openssl rand -hex 32)/" .env.example > .env
+          echo "MONOMEM_ALLOWED_HOSTS=x.ts.net" >> .env
+          docker compose up -d --build
+          for i in $(seq 1 60); do curl -fsS -H 'Host: x.ts.net' http://127.0.0.1:8790/health && break; sleep 2; done
+      - name: token add (the guide's command; it asks for a typed yes at a terminal, so script(1) gives it one)
+        run: |
+          echo yes | script -qec "docker compose exec monomem monomem token add alice --max internal" /dev/null | tee token-add.txt
+          grep -oE '^[[:space:]]+[0-9a-f]{64}[[:space:]]*$' token-add.txt | tr -d ' \r\t' | head -1 > alice.key
+          test -s alice.key
+      - name: /health and an authenticated /notes answer 200 under the tunnel name
+        run: |
+          code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
+          sleep 3 # the running server picks up a new key within a couple of seconds
+          h=$(code -H 'Host: x.ts.net' http://127.0.0.1:8790/health)
+          n=$(code -H 'Host: x.ts.net' -H "Authorization: Bearer $(cat alice.key)" http://127.0.0.1:8790/notes)
+          bad=$(code -H 'Host: other.example' -H "Authorization: Bearer $(cat alice.key)" http://127.0.0.1:8790/notes)
+          echo "health=$h notes=$n other-host=$bad"
+          test "$h" = 200 && test "$n" = 200 && test "$bad" = 403
+      - if: failure()
+        run: docker compose logs
+      - if: always()
+        run: docker compose down -v
