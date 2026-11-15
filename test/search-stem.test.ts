@@ -37,3 +37,33 @@ describe("anyKeywordHits with stems", () => {
     }
   });
 });
+
+describe("rarity-weighted coverage", () => {
+  test("a note with the question's rare word outranks one with only its common words", () => {
+    const store = new Store(":memory:");
+    try {
+      for (let i = 0; i < 8; i++) store.create({ title: `day ${i}`, body: "a walk in the park today" }, { skipEdges: true, lint: "none" });
+      const common = store.create({ title: "notes", body: "walk park walk park" }, { skipEdges: true, lint: "none" });
+      const rare = store.create({ title: "notes", body: "the saxophone lesson" }, { skipEdges: true, lint: "none" });
+      const ids = anyKeywordHits(store, ["walk", "park", "saxophone"], 20, {}).map((h) => h.note.id);
+      assert.ok(ids.indexOf(rare.id) < ids.indexOf(common.id), `rare ${ids.indexOf(rare.id)} vs common ${ids.indexOf(common.id)}`);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("prefixDocFreqs counts live notes per prefix, capped at the note count", () => {
+    const store = new Store(":memory:");
+    try {
+      store.create({ title: "a", body: "camp camping" }, { skipEdges: true, lint: "none" });
+      store.create({ title: "b", body: "camped once" }, { skipEdges: true, lint: "none" });
+      store.create({ title: "c", body: "nothing here" }, { skipEdges: true, lint: "none" });
+      const { n, df } = store.prefixDocFreqs(["camp", "zebra"]);
+      assert.equal(n, 3);
+      assert.equal(df.get("camp"), 3); // 2 notes, "camp"+"camping" counted twice in one: capped at n
+      assert.equal(df.get("zebra"), 0);
+    } finally {
+      store.close();
+    }
+  });
+});

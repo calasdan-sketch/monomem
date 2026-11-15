@@ -941,14 +941,28 @@ export function anyKeywordHits(
   opts: Parameters<Store["searchRanked"]>[1]
 ): Array<{ note: NoteRecord; score: number }> {
   if (keywords.length === 0) return [];
-  // The FTS query uses suffix-trimmed stems ("camping" -> camp*), so other forms of a word match too. Coverage still
-  // counts the keywords as typed, so a note with the exact form outranks one with only another form of it.
+  // The FTS query uses suffix-trimmed stems ("camping" -> camp*), so other forms of a word match too.
   const stems = [...new Set(keywords.map(searchStem))];
-  return store
-    .searchRanked(stems.join(" "), { ...opts, limit, anyTerm: true })
+  const hits = store.searchRanked(stems.join(" "), { ...opts, limit, anyTerm: true });
+  const cover = rarityCoverage(store, stems);
+  return hits
     // Floor the coverage: an FTS match the text scan misses (an odd tokenisation) still counts as one keyword.
-    .map((h) => ({ note: h.note, score: h.score * Math.max(keywordCoverage(h.note, keywords), 1 / keywords.length) }))
+    .map((h) => ({ note: h.note, score: h.score * Math.max(cover(h.note), 1 / keywords.length) }))
     .sort((a, b) => b.score - a.score);
+}
+
+/**
+ * Coverage weighted by rarity: the share of the query's keyword weight a note contains, where a keyword found in few
+ * notes weighs more (idf, log(1 + (N+1)/(df+0.5))). A note holding the one rare word of a question beats a note holding
+ * two common ones. With no vocabulary to read, every keyword weighs the same (plain keywordCoverage).
+ */
+function rarityCoverage(store: Store, keywords: string[]): (note: NoteRecord) => number {
+  const terms = [...new Set(keywords.map((k) => fold(k.replace(/^#/, ""))).filter(Boolean))];
+  const { n, df } = store.prefixDocFreqs(terms);
+  if (terms.length === 0 || df.size === 0) return (note) => keywordCoverage(note, keywords);
+  const weight = new Map(terms.map((t) => [t, Math.log(1 + (n + 1) / ((df.get(t) ?? 0) + 0.5))]));
+  const total = [...weight.values()].reduce((a, b) => a + b, 0) || 1;
+  return (note) => [...coveredTerms(note, terms)].reduce((a, t) => a + (weight.get(t) ?? 0), 0) / total;
 }
 
 /**
@@ -995,17 +1009,22 @@ const fold = (s: string): string => s.normalize("NFD").replace(/\p{M}+/gu, "").t
 export function keywordCoverage(note: NoteRecord, keywords: string[]): number {
   const bare = [...new Set(keywords.map((k) => fold(k.replace(/^#/, ""))).filter(Boolean))];
   if (bare.length === 0) return 0;
+  return coveredTerms(note, bare).size / bare.length;
+}
+
+/** The already-folded `terms` a note contains, each as a prefix at a word start (keywordCoverage's match). */
+function coveredTerms(note: NoteRecord, terms: string[]): Set<string> {
   const text = fold(`${note.title} ${note.body} ${note.tags.join(" ")}`);
-  let hit = 0;
-  for (const k of bare) {
+  const hit = new Set<string>();
+  for (const k of terms) {
     for (let i = text.indexOf(k); i !== -1; i = text.indexOf(k, i + 1)) {
       if (i === 0 || !WORD_CHAR.test(text[i - 1])) {
-        hit++;
+        hit.add(k);
         break;
       }
     }
   }
-  return hit / bare.length;
+  return hit;
 }
 
 /** `fold` per character, so offsets in the result line up with the original text (a character whose fold changes length is kept as is). */

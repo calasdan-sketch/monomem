@@ -84,6 +84,26 @@ describe("C-06 encrypted body search (in-memory index)", () => {
       }
     }));
 
+  test("rarity weights (prefixDocFreqs) read the in-memory index and equal the plain store's", () =>
+    withDirs((pd, ed) => {
+      const p = new Store(join(pd, "state.db"));
+      const e = encStore(ed);
+      try {
+        fill(p);
+        fill(e);
+        e.searchRanked("warm"); // a search brings the body index up, as anyKeywordHits does before reading the weights
+        const terms = ["body7", "kilo", "alpha", "zzznothing"];
+        const a = e.prefixDocFreqs(terms);
+        const b = p.prefixDocFreqs(terms);
+        assert.equal(a.n, b.n);
+        assert.deepEqual([...a.df], [...b.df]);
+        assert.ok((a.df.get("body7") ?? 0) > 0, "a body-only word is counted on the encrypted store");
+      } finally {
+        p.close();
+        e.close();
+      }
+    }));
+
   test("every write path keeps the index in step with what a plain store finds", () =>
     withDirs((pd, ed) => {
       const p = new Store(join(pd, "state.db"));
