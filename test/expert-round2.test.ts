@@ -411,6 +411,13 @@ describe("10. audit lines only for committed writes", () => {
 
   test("during a large import, a write from another process finishes within a few seconds", async () => {
     const home = tmp("om-r2-import-");
+    // The same `add` into an idle store, timed under the same machine load: what is left over is the wait for the lock,
+    // not process start-up (which a busy full-suite run can stretch past a fixed budget on its own).
+    const idle = tmp("om-r2-idle-");
+    const idleStarted = Date.now();
+    const idleChild = spawn(process.execPath, [CLI, "add", "baseline"], { env: { ...process.env, MONOMEM_HOME: idle, ONEMEMORY_HOME: idle }, stdio: "ignore" });
+    assert.equal(await new Promise<number | null>((r) => idleChild.on("exit", r)), 0);
+    const baseline = Date.now() - idleStarted;
     const s = new Store(join(home, "state.db"));
     try {
       const notes = Array.from({ length: 3000 }, (_, i) => ({ title: `imported ${i}`, body: "some text to import ".repeat(10) }));
@@ -422,7 +429,7 @@ describe("10. audit lines only for committed writes", () => {
       const took = Date.now() - started;
       await importing;
       assert.equal(code, 0);
-      assert.ok(took < 4000, `the other writer waited ${took} ms`);
+      assert.ok(took - baseline < 3000, `the other writer waited ${took - baseline} ms beyond its ${baseline} ms start-up`);
     } finally {
       s.close();
     }
