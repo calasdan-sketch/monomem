@@ -99,6 +99,11 @@ export class BodyIndex {
     }
   }
 
+  /** The table the last table() call chose, with no build, catch-up or fallback count (a read beside a search). */
+  currentTable(): string {
+    return this.enabled && this.ready && this.attached ? TABLE : "notes_fts";
+  }
+
   info(): BodyIndexInfo {
     const state = !this.enabled ? "off" : this.tooLarge ? "too large" : this.ready ? "ready" : "not built";
     const notes = this.ready ? Number((this.s.db.prepare(`SELECT COUNT(*) AS c FROM ${TABLE}`).get() as { c: number }).c) : 0;

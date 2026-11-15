@@ -5536,6 +5536,40 @@ export class Store {
     }
   }
 
+  /**
+   * How many live notes contain a word starting with each prefix (`n` = live notes), read from the FTS vocabulary of the
+   * table search uses right now. A prefix sums the counts of its words, capped at n, so "camp" counts a note with both
+   * "camp" and "camping" twice: close enough for a rarity weight. Returns an empty map when no vocabulary can be read,
+   * and the caller then weighs every keyword the same (the plain coverage share).
+   */
+  prefixDocFreqs(prefixes: string[]): { n: number; df: Map<string, number> } {
+    const df = new Map<string, number>();
+    try {
+      // Called right after searchRanked, which already brought the body index up to date: read its choice, don't redo it.
+      const table = this.bodyIndex.currentTable();
+      const schema = table === "notes_fts" ? "main" : "bodyidx";
+      this.db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS temp.om_vocab_${schema} USING fts5vocab(${schema}, ${table}, 'row')`);
+      const n = this.liveNoteTotal();
+      const st = this.db.prepare(`SELECT COALESCE(SUM(doc), 0) AS d FROM temp.om_vocab_${schema} WHERE term >= ? AND term < ?`);
+      for (const p of prefixes) df.set(p, Math.min(n, Number((st.get(p, p + "￿") as { d: number }).d)));
+      return { n, df };
+    } catch {
+      // No readable vocabulary (an old SQLite without fts5vocab, a closed store): every keyword weighs the same.
+      return { n: 0, df: new Map() };
+    }
+  }
+
+  /** Live notes in the whole store, reused while nothing changed (same key as unconfirmedRows): a search must not add a scan. */
+  private liveTotalCache: { key: string; n: number } | null = null;
+  private liveNoteTotal(): number {
+    const t = (this.db.prepare("SELECT total_changes() AS t").get() as { t: number }).t - this.bookkeepingChanges;
+    const key = `${t}:${this.dataVersion()}`;
+    if (this.liveTotalCache?.key === key) return this.liveTotalCache.n;
+    const n = Number((this.db.prepare("SELECT COUNT(*) AS c FROM notes WHERE archived_at IS NULL").get() as { c: number }).c);
+    this.liveTotalCache = { key, n };
+    return n;
+  }
+
   /** C-06: the in-memory body index's state in this process (encrypt status, the CLI search notice, tests). */
   bodyIndexInfo(): BodyIndexInfo {
     return this.bodyIndex.info();

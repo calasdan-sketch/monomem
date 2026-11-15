@@ -2,6 +2,7 @@
 // No LLM, no judge: each conversation is loaded into a fresh throwaway Store, the question is searched, and the
 // retrieved sessions/turns are scored against the dataset's gold evidence (recall@k, strict recall-all@k, nDCG@10, MRR).
 import { BENCH_HOME } from "./retrieval-env.js"; // first: isolate MONOMEM_HOME before config.js loads
+import { createHash } from "node:crypto";
 import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
@@ -128,6 +129,20 @@ export function locomoHaystacks(data: unknown, g: Granularity): Haystack[] {
   return out;
 }
 
+export type Split = "a" | "b";
+
+/**
+ * Tuning / held-out halves, so a ranking change is tuned on one half and judged on the other. LongMemEval-S: one question per
+ * haystack, split on the parity of sha256(question id). LoCoMo: whole conversations, the first five (a) and the rest (b), so a
+ * held-out question never shares a haystack with a tuning one. No split: everything.
+ */
+export function splitHaystacks<T extends { questions: Array<{ id: string }> }>(stacks: T[], dataset: Dataset, split: Split | undefined): T[] {
+  if (!split) return stacks;
+  if (dataset === "locomo") return split === "a" ? stacks.slice(0, 5) : stacks.slice(5);
+  const half = (id: string): Split => ((createHash("sha256").update(id).digest()[31] & 1) === 0 ? "a" : "b");
+  return stacks.filter((h) => half(h.questions[0]?.id ?? "") === split);
+}
+
 /** Download `url` to `dest` once (streamed, progress on stderr). Returns dest. */
 async function fetchOnce(url: string, dest: string): Promise<string> {
   if (existsSync(dest)) return dest;
@@ -162,6 +177,8 @@ export interface RetrievalOptions {
   granularity: Granularity;
   /** C-06: write every haystack into an encrypted store (a key file beside the database) to measure what encryption costs. */
   encrypted?: boolean;
+  /** Only the tuning (a) or held-out (b) half: see splitHaystacks. */
+  split?: Split;
 }
 
 interface ModeResult {
@@ -173,6 +190,7 @@ export interface RetrievalReport {
   dataset: string;
   granularity: Granularity;
   encrypted: boolean;
+  split?: Split;
   questions: number;
   haystacks: number;
   notes: number;
@@ -198,6 +216,7 @@ export async function runRetrieval(o: RetrievalOptions): Promise<RetrievalReport
   const file = o.data ?? (await fetchOnce(SOURCES[o.dataset].url, join(CACHE_DIR, SOURCES[o.dataset].file)));
   const parsed: unknown = JSON.parse(readFileSync(file, "utf8")); // untrusted: parsed as data only
   let stacks = o.dataset === "longmemeval" ? longMemEvalHaystacks(parsed, o.granularity) : locomoHaystacks(parsed, o.granularity);
+  stacks = splitHaystacks(stacks, o.dataset, o.split);
   if (o.limit) stacks = stacks.slice(0, o.limit);
 
   let hybridSkip = "";
@@ -268,6 +287,7 @@ export async function runRetrieval(o: RetrievalOptions): Promise<RetrievalReport
     dataset: o.dataset === "longmemeval" ? "LongMemEval-S (cleaned)" : "LoCoMo-10",
     granularity: o.granularity,
     encrypted: o.encrypted === true,
+    ...(o.split ? { split: o.split } : {}),
     questions: nq,
     haystacks: stacks.length,
     notes,
@@ -285,7 +305,7 @@ const pct = (x: number): string => (x * 100).toFixed(1).padStart(6);
 
 export function renderRetrieval(r: RetrievalReport): string {
   const lines = [
-    `${r.dataset}, ${r.granularity} granularity${r.encrypted ? ", ENCRYPTED store (key file on)" : ""}: ${r.questions} questions over ${r.haystacks} haystacks, ${r.notes} notes` +
+    `${r.dataset}, ${r.granularity} granularity${r.encrypted ? ", ENCRYPTED store (key file on)" : ""}${r.split ? `, split ${r.split} only` : ""}: ${r.questions} questions over ${r.haystacks} haystacks, ${r.notes} notes` +
       (r.truncatedBodies ? ` (${r.truncatedBodies} bodies cut to ${LIMITS.body} chars)` : ""),
     `indexing: ${(r.indexMs.total / 1000).toFixed(1)} s total, p50 ${r.indexMs.p50PerHaystack.toFixed(1)} ms per haystack`,
   ];
@@ -321,7 +341,11 @@ export async function retrievalMain(argv: string[], out: (s: string) => void = c
       if (a === "--longmemeval" || a === "--locomo" || a === "--") continue;
       else if (a === "--json") json = true;
       else if (a === "--encrypted") o.encrypted = true;
-      else if (a === "--data") o.data = resolve(take(i++, a));
+      else if (a === "--split") {
+        const v = take(i++, a);
+        if (v !== "a" && v !== "b") throw new Error("--split must be a or b");
+        o.split = v;
+      } else if (a === "--data") o.data = resolve(take(i++, a));
       else if (a === "--limit") {
         const n = Number(take(i++, a));
         if (!Number.isInteger(n) || n < 1) throw new Error("--limit must be a whole number above 0");

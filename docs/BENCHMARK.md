@@ -224,8 +224,8 @@ reads anything and no judge grades anything: each conversation is written into a
 question is searched, and the returned sessions (or turns) are compared with the dataset's own gold evidence.
 
 ```
-monomem bench --longmemeval [--data file] [--limit N] [--mode keyword|hybrid] [--granularity session|turn] [--encrypted] [--json]
-monomem bench --locomo      [--data file] [--limit N] [--mode keyword|hybrid] [--granularity turn|session] [--encrypted] [--json]
+monomem bench --longmemeval [--data file] [--limit N] [--mode keyword|hybrid] [--granularity session|turn] [--encrypted] [--split a|b] [--json]
+monomem bench --locomo      [--data file] [--limit N] [--mode keyword|hybrid] [--granularity turn|session] [--encrypted] [--split a|b] [--json]
 ```
 
 - **Data.** LongMemEval-S, cleaned release ([`xiaowu0162/longmemeval-cleaned`](https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned),
@@ -279,9 +279,42 @@ multi-session questions.
 | LoCoMo-10 session (1,982) | keyword | 90.4 | **81.5** | 95.5 | 87.7 | 80.3 | 78.6 | 2.1 / 5.6 ms |
 | LoCoMo-10 session (1,982) | relevant | 90.5 | **81.6** | 95.5 | 87.7 | 80.5 | 78.8 | 1.6 / 5.6 ms |
 
-The honest headline for LongMemEval-S is therefore **84.0 strict / 96.8 any-hit at k = 5**. agentmemory 0.9.31 reports 84.7
-strict recall-all@5 with BM25 (its own figure, not re-run here), so on the strict metric Monomem is 0.7 lower, not 12 points ahead as
-the any-hit number suggests.
+On that run the strict LongMemEval-S figure was 84.0, 0.7 below agentmemory 0.9.31's reported 84.7 (BM25, its own figure, not
+re-run here). The next block is the change that closed the gap.
+
+**Search stems and rarity-weighted coverage, 2026-11-15 (round 3, item 4).** Two ranking changes in the any-keyword search,
+nothing else: (1) the FTS query uses suffix-trimmed stems, so "camping" also finds "camped" (plural s/es, ed, ing only, at
+least 4 letters left, letters-only words); (2) the "share of the question's keywords a note contains" multiplier now weighs each
+keyword by how rare it is in the store (idf from the FTS vocabulary; on an encrypted store, from the in-memory body index), so a
+note holding the one rare word of a question beats one holding two common ones. Coverage still matches the keywords as typed.
+
+Tuned on half the questions only. `monomem bench ... --split a|b` splits by `sha256(question id)`; every candidate was tried on
+half **a**, and kept only if half **b** (never looked at while tuning) also went up. Six other candidates were dropped that way
+(stem length 5 and 6, a coverage re-rank, pseudo-relevance feedback at three weights, idf on stems). Held-out half **b**, keyword: R@5 and
+Rall@5 as before / after, the other columns as the change in points:
+
+| Half b | R@5 | **Rall@5** | R@10 | Rall@10 | nDCG@10 | MRR |
+|---|---|---|---|---|---|---|
+| LongMemEval-S session | 97.1 / 97.5 | **84.9 / 87.0** | +0.4 | +0.8 | +1.6 | +1.4 |
+| LoCoMo-10 turn | 56.0 / 58.7 | **47.3 / 49.6** | +1.3 | +1.5 | +1.1 | +1.0 |
+| LoCoMo-10 session | 90.2 / 89.9 | **80.9 / 81.3** | 0.0 | +1.1 | +0.7 | +0.6 |
+
+One number went down on the held-out half: LoCoMo-10 session R@5, -0.3 (about 3 of 985 questions). It is reported, not hidden;
+on the full set the same metric goes up (90.4 to 90.9).
+
+Full set, measured one run at a time on an otherwise idle PC (2026-11-15, same hardware as above), keyword and relevant:
+
+| Run | search | R@5 | **Rall@5** | R@10 | Rall@10 | nDCG@10 | MRR | search p50 / p95 |
+|---|---|---|---|---|---|---|---|---|
+| LongMemEval-S session (470) | keyword | 97.2 | **85.7** | 98.7 | 92.1 | 91.0 | 91.8 | 3.9 / 7.7 ms |
+| LongMemEval-S session (470) | relevant | 97.2 | **85.7** | 98.7 | 92.1 | 91.0 | 91.7 | 3.1 / 6.0 ms |
+| LoCoMo-10 turn (1,982) | keyword | 60.8 | **52.2** | 67.7 | 58.3 | 49.6 | 48.0 | 2.2 / 3.6 ms |
+| LoCoMo-10 turn (1,982) | relevant | 60.9 | **52.3** | 67.7 | 58.3 | 49.6 | 48.1 | 2.3 / 3.5 ms |
+| LoCoMo-10 session (1,982) | keyword | 90.9 | **82.4** | 96.0 | 89.0 | 81.0 | 79.1 | 1.6 / 2.2 ms |
+| LoCoMo-10 session (1,982) | relevant | 91.1 | **82.5** | 96.0 | 88.9 | 81.1 | 79.4 | 1.3 / 1.8 ms |
+
+The honest headline for LongMemEval-S is now **85.7 strict / 97.2 any-hit at k = 5**, keyword-only, no embeddings. That is 1.0
+above agentmemory 0.9.31's reported 84.7 (its own figure, not re-run here). LoCoMo-10 by turn is still our weakest number.
 
 **Speed at 10,000 notes (`monomem bench --scale 10k`), new in this round.** A synthetic store in a temp folder: 10,000 notes
 (10,200 after the timed writes) in 5 namespaces, made-up Zipf-distributed words, bodies 80 % 200-600 characters, 15 % 1.5-3k,
@@ -312,10 +345,13 @@ in-memory body index (C-06, below) was built, 2026-11-15:
 
 | Run | plain R@5 / Rall@5 / R@10 / MRR | encrypted R@5 / Rall@5 / R@10 / MRR | search p50 plain / encrypted |
 |---|---|---|---|
-| LongMemEval-S session (470), keyword | 96.8 / 84.0 / 98.3 / 91.0 | **96.8 / 84.0 / 98.3 / 91.0** | 3.8 / 18.1 ms (each haystack has one question, so every encrypted search includes the first-search build) |
-| LongMemEval-S session (470), relevant | 96.8 / 84.0 / 98.3 / 90.9 | **96.8 / 84.0 / 98.3 / 90.9** | |
-| LoCoMo-10 turn (1,982), keyword | 57.8 / 49.8 / 65.2 / 46.6 | **57.8 / 49.8 / 65.2 / 46.6** | 1.7 / 4.0 ms |
-| LoCoMo-10 session (1,982), keyword | 90.4 / 81.5 / 95.5 / 78.6 | **90.4 / 81.5 / 95.5 / 78.6** | 1.5 / 3.3 ms |
+| LongMemEval-S session (470), keyword | 97.2 / 85.7 / 98.7 / 91.8 | **97.2 / 85.7 / 98.7 / 91.8** | 3.9 / 13.6 ms (each haystack has one question, so every encrypted search includes the first-search build) |
+| LongMemEval-S session (470), relevant | 97.2 / 85.7 / 98.7 / 91.7 | **97.2 / 85.7 / 98.7 / 91.7** | 3.1 / 4.1 ms |
+| LoCoMo-10 turn (1,982), keyword | 60.8 / 52.2 / 67.7 / 48.0 | **60.8 / 52.2 / 67.7 / 48.0** | 2.2 / 3.3 ms |
+| LoCoMo-10 session (1,982), keyword | 90.9 / 82.4 / 96.0 / 79.1 | **90.9 / 82.4 / 96.0 / 79.1** | 1.6 / 2.3 ms |
+
+(Re-run 2026-11-15 after the stems and rarity-weighted coverage above; the first C-06 run, before them, was likewise identical
+between plain and encrypted at 96.8 / 84.0 / 98.3 / 91.0 on LongMemEval-S.)
 
 Every metric (keyword and relevant, all of R@5, Rall@5, R@10, Rall@10, nDCG@10, MRR, per question type) is **byte-identical**
 between the plain and the encrypted run: the index covers every note with its decrypted body, so the bm25 statistics are the

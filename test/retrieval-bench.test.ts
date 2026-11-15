@@ -122,3 +122,19 @@ test("encrypted retrieval run (C-06): same corpus with a key file; recall equals
   assert.deepEqual(enc.keyword.metrics, plain.keyword.metrics);
   assert.deepEqual(enc.relevant.metrics, plain.relevant.metrics);
 });
+
+test("--split a|b: LongMemEval halves by question-id hash, LoCoMo by conversation (1-5 / 6-10); disjoint, union is all", async () => {
+  const { splitHaystacks } = await import("../src/bench/retrieval.js");
+  const lme = Array.from({ length: 40 }, (_, i) => ({ docs: [], questions: [{ id: `q${i}`, type: "t", query: "x", gold: new Set(["s"]) }] }));
+  const a = splitHaystacks(lme, "longmemeval", "a");
+  const b = splitHaystacks(lme, "longmemeval", "b");
+  assert.ok(a.length > 5 && b.length > 5, `both halves non-trivial: ${a.length} / ${b.length}`);
+  assert.equal(a.length + b.length, lme.length);
+  assert.equal(new Set([...a, ...b]).size, lme.length);
+  // Deterministic: the same ids land in the same half every run.
+  assert.deepEqual(splitHaystacks(lme, "longmemeval", "a"), a);
+  const loc = Array.from({ length: 10 }, (_, i) => ({ docs: [], questions: [{ id: `conv-${i}#0`, type: "t", query: "x", gold: new Set(["D1:1"]) }] }));
+  assert.deepEqual(splitHaystacks(loc, "locomo", "a"), loc.slice(0, 5));
+  assert.deepEqual(splitHaystacks(loc, "locomo", "b"), loc.slice(5));
+  assert.equal(splitHaystacks(loc, "locomo", undefined), loc);
+});

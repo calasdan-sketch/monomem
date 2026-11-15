@@ -63,7 +63,7 @@ Since 1.5.0, body search still works on an encrypted store, from a second index 
 
 - **Who has it.** Any Monomem process that runs a keyword search while a key is present: the REST, MCP HTTP and stdio MCP
   servers build it just after they start, and a one-off CLI `search` builds it on its first search. It indexes every
-  note's title, decrypted body and tags, so ranking is the same as on a plain store (LongMemEval-S keyword R@5 96.8
+  note's title, decrypted body and tags, so ranking is the same as on a plain store (LongMemEval-S keyword R@5 97.2
   encrypted and plain; see [BENCHMARK.md](./BENCHMARK.md)). It is kept current as notes change, including changes made by
   other Monomem processes.
 - **Who does not.** The hooks (session start, per-prompt recall, capture, file context) never build it, to keep session
