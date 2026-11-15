@@ -44,10 +44,12 @@ export function flagNote(s: Store, id: number, reason: unknown): { note_id: numb
   const w = currentWriter();
   if (w !== "" && n.written_by === w) throw new ValidationError("this is your own note: change it (state_write with its id) instead of flagging it");
   const at = new Date().toISOString();
+  const today = Number((s.db.prepare("SELECT COUNT(*) AS c FROM note_flags WHERE flagged_by = ? AND at >= ?").get(w, new Date(Date.now() - DAY_MS).toISOString()) as { c: number }).c);
+  if (today >= MAX_FLAGS_PER_DAY) throw new ValidationError(`at most ${MAX_FLAGS_PER_DAY} flags per writer per day; ask the user instead`);
+  // SF-4: a flag is a write, so it counts toward the flood guard. The gate runs BEFORE the transaction: when it pauses the
+  // writer it throws, and inside the transaction that throw rolled the pause back too (the writer was never paused).
+  s.floodGate("full");
   return s.transaction(() => {
-    const today = Number((s.db.prepare("SELECT COUNT(*) AS c FROM note_flags WHERE flagged_by = ? AND at >= ?").get(w, new Date(Date.now() - DAY_MS).toISOString()) as { c: number }).c);
-    if (today >= MAX_FLAGS_PER_DAY) throw new ValidationError(`at most ${MAX_FLAGS_PER_DAY} flags per writer per day; ask the user instead`);
-    s.floodGate("full"); // a flag is a write: it counts toward the flood guard
     const fid = Number(s.db.prepare("INSERT INTO note_flags (note_id, note_rev, flagged_by, reason, at) VALUES (?, ?, ?, '', ?)").run(n.id, n.rev, w, at).lastInsertRowid);
     const key = s.writeKey();
     s.db.prepare("UPDATE note_flags SET reason = ? WHERE id = ?").run(key ? encryptV3(why, key, flagAad(n.id, fid)) : printable(why, MAX_FLAG_REASON), fid);
