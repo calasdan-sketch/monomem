@@ -6,7 +6,7 @@
 // Free functions over the Store; Store keeps a one-line delegate for each. Imports `type { Store }` only.
 
 import type { Store } from "../store.js";
-import { QuarantinedError, ValidationError } from "../errors.js";
+import { QuarantinedError, ValidationError, WriterPausedError } from "../errors.js";
 import { RECEIPT_DOMAIN, contentHash, keyIdOf, signBytes, verifyBytes, type SigningKey } from "../attest.js";
 
 /** "checkpoint": a signed head of the log (`monomem audit checkpoint`), same shape and same check as a write receipt. */
@@ -41,7 +41,7 @@ export function receiptContent(n: { id: number; rev: number; title: string; body
 }
 
 /** The audit ops that answer a note write. */
-const DECISION: Record<string, WriteDecision> = { create: "accepted", update: "accepted", quarantine: "held", "write-refused": "refused" };
+const DECISION: Record<string, WriteDecision> = { create: "accepted", update: "accepted", quarantine: "held", "write-refused": "refused", "flood-pause": "refused" };
 
 /** The bytes a receipt signature covers (docs/verify-receipt.mjs builds the same array). */
 export function receiptBytes(r: Omit<WriteReceipt, "v" | "key_id" | "sig">): string {
@@ -87,6 +87,8 @@ export function takeWriteReceipt(s: Store): WriteReceipt | undefined {
  */
 export function refusedWriteReceipt(s: Store, e: unknown, id?: number): WriteReceipt | undefined {
   if (e instanceof QuarantinedError) return takeWriteReceipt(s);
+  // SF-6: the write that tripped the flood guard already wrote its own "flood-pause" line (a refusal): that is its one line.
+  if (e instanceof WriterPausedError && s.lastWriteReceipt?.decision === "refused") return takeWriteReceipt(s);
   s.lastWriteReceipt = undefined;
   if (!(e instanceof ValidationError)) return undefined;
   s.audit({ op: "write-refused", ...(id !== undefined ? { id } : {}), detail: e.constructor.name }, id !== undefined ? { note_id: id } : {});

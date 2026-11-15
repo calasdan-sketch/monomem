@@ -46,6 +46,8 @@ const REST_EXEMPT: Record<string, string> = {
   "GET /changes": "titles and ids only; the payload has no unconfirmed flag, so nothing registers (MCP memory_since probes the ids itself). Known gap, not a content leak",
   "GET /notes/:id/history": "admin only",
   "GET /health": "no note content",
+  "GET /proof": "returns an HMAC of a nonce, no note content",
+  "GET /status": "admin; build and body-index counters, no note content",
   "GET /ready": "no note content",
   "GET /": "dashboard page",
   "GET /favicon.ico": "static",

@@ -293,7 +293,8 @@ function ignoredRefusal(tool: string, raw: Record<string, unknown>, args: Record
 }
 
 /** Adds ignored_arguments (and what each probably meant) to a tool's JSON result. */
-function withIgnored(r: unknown, tool: string, ignored: string[], shape: z.ZodRawShape): unknown {
+/** Extra top-level fields on a tool's JSON reply (after the untrusted banner, when there is one); other replies unchanged. */
+function withFields(r: unknown, extra: Record<string, unknown>): unknown {
   const res = r as { content?: Array<{ type: string; text?: string }> } | undefined;
   const text = res?.content?.[0]?.text;
   if (typeof text !== "string") return r;
@@ -305,13 +306,16 @@ function withIgnored(r: unknown, tool: string, ignored: string[], shape: z.ZodRa
     return r;
   }
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return r;
+  return { ...res, content: [{ ...res!.content![0], text: banner + JSON.stringify({ ...payload, ...extra }) }, ...res!.content!.slice(1)] };
+}
+
+function withIgnored(r: unknown, tool: string, ignored: string[], shape: z.ZodRawShape): unknown {
   const hint = ignored.map((k) => `\`${k}\` is not an argument of ${tool} and was ignored${didYouMean(k, shape)}`).join("; ");
   const unscoped = tool === "state_search" && ignored.some((k) => ARG_ALIASES[k.toLowerCase()] === "namespace");
-  const extra = {
+  return withFields(r, {
     ignored_arguments: ignored,
     ignored_hint: hint + (unscoped ? ". The search was NOT limited to a namespace: pass `namespace` (one name) to scope it." : ""),
-  };
-  return { ...res, content: [{ ...res!.content![0], text: banner + JSON.stringify({ ...payload, ...extra }) }, ...res!.content!.slice(1)] };
+  });
 }
 
 const BUSY_TOOL_MESSAGE = "The database is busy (another program is writing to it); nothing was saved. Try again in a few seconds.";
@@ -592,10 +596,18 @@ export function createMcpServer(
           ...(nsActive ? { readable: readable() } : {}),
         },
         () => {
+          const fb0 = store.bodyIndexFallbacks();
           const out = (handler as (...x: unknown[]) => unknown)(...args);
           // R1-05: EVERY reply that hands this connection an unconfirmed note marks it, not only the read tools (a metadata edit,
           // a task claim and a history call echo the text too). The access log stays for read tools only.
-          return READ_TOOLS.has(name as string) ? logRead(name as string, args[0] as Record<string, unknown> | undefined, out) : markReads(name as string, args[0] as Record<string, unknown> | undefined, out);
+          const marked = READ_TOOLS.has(name as string) ? logRead(name as string, args[0] as Record<string, unknown> | undefined, out) : markReads(name as string, args[0] as Record<string, unknown> | undefined, out);
+          // C-06: a search that could not read sealed bodies says so in the reply (body_search), never silently.
+          // ponytail: the fallback counter is per process; a concurrent call's fallback can add the notice here too (never drop it).
+          const note = (r: unknown): unknown => {
+            const n = store.bodySearchNotice(fb0);
+            return n ? withFields(r, { body_search: n }) : r;
+          };
+          return marked instanceof Promise ? marked.then(note) : note(marked);
       });
     }
   };

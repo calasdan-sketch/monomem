@@ -67,11 +67,17 @@ Since 1.5.0, body search still works on an encrypted store, from a second index 
   encrypted and plain; see [BENCHMARK.md](./BENCHMARK.md)). It is kept current as notes change, including changes made by
   other Monomem processes.
 - **Who does not.** The hooks (session start, per-prompt recall, capture, file context) never build it, to keep session
-  start fast: on an encrypted store the context they add is chosen by titles, tags, files and recency, not body words.
-  Give notes titles and tags that say what they are about.
+  start fast: on an encrypted store the context they add is chosen by titles, tags, files and recency. Session start also
+  asks a Monomem server for the same store, when one runs on this computer, which notes' bodies match (127.0.0.1 only, at
+  most 0.3 s; the hook sends its key only after the server proves it holds the same key and store, and takes back only
+  note ids). With no server running, body words do not reach session start: give notes titles and tags that say what
+  they are about.
 - **Cost.** About 0.6-0.8 s to build per 10,000 notes, and about 30 MB of memory per 10,000 notes, in **each** process
   that has it (five apps each running their own stdio server hold five copies). Above 100,000 notes it is not built:
-  search there covers titles and tags only, and the CLI search says so.
+  search there covers titles and tags only, and the CLI search says so. Any search that runs on titles and tags only
+  while bodies are sealed (over the cap, a search inside a write before the index is built, or a failed build) says so in
+  its reply: a `body_search` field on REST `/search` and `/relevant` and on MCP replies. Each is counted; `GET /status`
+  (admin) and `monomem doctor` show the count and the last reason.
 - **What it changes for security.** Nothing new is written to disk by Monomem: someone who copies the database file, its
   WAL or a database-only backup still gets no body text. But while a server runs, **every body's words are in its
   memory**, with their positions (enough to rebuild much of the text). The operating system can write that memory to disk:

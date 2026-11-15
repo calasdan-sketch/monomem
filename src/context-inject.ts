@@ -76,6 +76,11 @@ export interface InjectOptions {
   sessionId?: string;
   /** Leave out notes with any of these tags (Claude Code's own CLAUDE.md imports, which it already loads). */
   skipTags?: string[];
+  /**
+   * 1.5.0: note ids whose BODIES match these keywords, best first, from a source that can read sealed bodies (recall.ts asks a
+   * local server for the same store). Every id is re-read and re-filtered here; null = not available.
+   */
+  bodyHits?: (keywords: string[]) => Promise<number[] | null>;
 }
 
 /** "Open any with ..." naming only a tool this install registers. Every line already starts with its #id. */
@@ -284,6 +289,20 @@ export async function rankContext(
   // Equal keyword scores keep id order here, not newest first: recency is its own list below, and counting it twice would
   // let the newest of many common-word notes outrank a rare-word match.
   const bm25 = [...hits].sort((a, b) => b.score - a.score || a.note.id - b.note.id).map((h) => h.note.id);
+  // 1.5.0: an encrypted store's own index has titles and tags only; body matches from a server that can read the bodies
+  // come first (they rank the whole text), each re-read here through the same filters as every other row.
+  const remote = keywords.length && opts.bodyHits ? await opts.bodyHits(keywords) : null;
+  if (remote?.length) {
+    const first: number[] = [];
+    for (const id of remote) {
+      const n = pool.get(id) ?? store.readVisible(id, { includeDistrusted: opts.includeDistrusted === true }); // gate-ok: namespace, archive and writer filters re-applied by fits
+      if (!fits(n) || first.includes(id)) continue;
+      pool.set(id, n);
+      first.push(id);
+      mark(id, "kw");
+    }
+    bm25.splice(0, bm25.length, ...first, ...bm25.filter((id) => !first.includes(id)));
+  }
   const overlap: number[] = [];
   const diff = (signals.diffFiles ?? []).slice(0, 50);
   if (diff.length) {

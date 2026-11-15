@@ -12,10 +12,10 @@
 // app-level "remember to reindex" step to forget.
 
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, statSync, statfsSync, readdirSync, renameSync, linkSync, existsSync, unlinkSync } from "node:fs";
+import { mkdirSync, statSync, statfsSync, readdirSync, renameSync, linkSync, existsSync, unlinkSync, copyFileSync } from "node:fs";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { dirname, basename, join, resolve } from "node:path";
-import { checkSizes, checkNames, audit, auditHead, auditPath, ADMIN_SCOPE_NEEDED } from "./security.js";
+import { checkSizes, checkNames, audit, auditHead, auditPath, beginKeyRotation, ADMIN_SCOPE_NEEDED } from "./security.js";
 import { chmodQuiet } from "./config.js";
 import { SECRET_ASSIGN_LABEL } from "./security.js";
 import { lintContent, lintPolicy, describeFindings, type LintFinding, type LintAction, type LintCategory } from "./lint.js";
@@ -1619,10 +1619,10 @@ export class Store {
    * is refused with a SchemaMismatchError instead (the hook then spools the event). `opts.busyTimeoutMs` shortens the lock
    * wait for callers that would rather give up fast than block an agent.
    */
-  constructor(dbPath: string, opts: { noMigrate?: boolean; busyTimeoutMs?: number; bodyIndex?: "lazy" | "off" } = {}) {
+  constructor(dbPath: string, opts: { noMigrate?: boolean; busyTimeoutMs?: number; bodyIndex?: "lazy" | "off"; /** Test hook: the body index's note cap. */ bodyIndexMaxNotes?: number } = {}) {
     this.dbPath = dbPath;
     // C-06: hooks pass "off" (one prompt's life is too short to build it); MONOMEM_BODY_INDEX=off turns it off everywhere.
-    this.bodyIndex = new BodyIndex(this, opts.bodyIndex !== "off" && (process.env.MONOMEM_BODY_INDEX ?? "").trim().toLowerCase() !== "off");
+    this.bodyIndex = new BodyIndex(this, opts.bodyIndex !== "off" && (process.env.MONOMEM_BODY_INDEX ?? "").trim().toLowerCase() !== "off", opts.bodyIndexMaxNotes);
     this.noMigrate = opts.noMigrate === true;
     this.busyTimeoutMs = Math.floor(opts.busyTimeoutMs ?? Store.BUSY_TIMEOUT_MS);
     if (dbPath !== ":memory:") {
@@ -1677,6 +1677,8 @@ export class Store {
     }
     // Notes are private: owner-only db + WAL/SHM (POSIX; no-op on Windows).
     if (dbPath !== ":memory:") for (const ext of ["", "-wal", "-shm"]) chmodQuiet(dbPath + ext, 0o600);
+    // 1.5.0: the store key exists from the moment the store is opened, not from its first write.
+    this.ensureAuditKey();
   }
 
   private static isReadOnlyError(e: unknown): boolean {
@@ -1723,9 +1725,11 @@ export class Store {
         /* nothing to close */
       }
       throw new Error(
-        `monomem: this database is at schema version ${found}, newer than this build supports ` +
+        `this database is at schema version ${found}, newer than this build supports ` +
           `(${SCHEMA_VERSION}). Upgrade monomem (npm i -g monomem@latest) instead of opening it with an older version. ` +
-          `To go back to the older version on purpose, restore the copy the upgrade left beside the database (${this.dbPath}.pre-v${found}-backup) with a build that supports it: monomem restore <that file> (docs/upgrading.md).`
+          `To go back to the older version on purpose: close every app that uses Monomem and stop the server, run ` +
+          `monomem restore ${this.dbPath}.pre-v${found}-backup --yes, then install the older version (docs/upgrading.md, "To go back"). ` +
+          `Anything written after the upgrade is not in that copy; restore keeps your current database aside first.`
       );
     }
     if (found >= SCHEMA_VERSION) {
@@ -3722,7 +3726,7 @@ export class Store {
           if (r !== "live") {
             const aside = this.asideKeys().map((a) => a.path).join(", ");
             throw new Error(
-              `monomem: this database holds encrypted notes but the key file ${keyPath(this.keyDir)} is missing; ` +
+              `this database holds encrypted notes but the key file ${keyPath(this.keyDir)} is missing; ` +
                 `refusing to write plaintext next to ciphertext.` +
                 (aside ? ` A key copy exists at ${aside} -- rename it back to ${keyPath(this.keyDir)}.` : ` Restore the key from a backup.`)
             );
@@ -5535,6 +5539,16 @@ export class Store {
   /** C-06: the in-memory body index's state in this process (encrypt status, the CLI search notice, tests). */
   bodyIndexInfo(): BodyIndexInfo {
     return this.bodyIndex.info();
+  }
+
+  /** C-06: searches so far that ran on titles and tags only while bodies are sealed (take it before a search, for bodySearchNotice). */
+  bodyIndexFallbacks(): number {
+    return this.bodyIndex.fallbackCount();
+  }
+
+  /** C-06: the reply notice when a search since `since` (bodyIndexFallbacks() before it) did not search sealed bodies; else null. */
+  bodySearchNotice(since: number): string | null {
+    return this.bodyIndex.notice(since);
   }
 
   /** C-06: build the body index now (servers call this just after start-up, so the first agent search does not wait). Never throws. */
@@ -7694,10 +7708,11 @@ export class Store {
       });
     }
     let k!: SigningKey;
+    const endRotation = beginKeyRotation(); // other writers' audit lines wait until the key-rotate line and the swap are both done
     try {
       // The signed audit log hands over to the new key: a key-rotate line signed by the OLD key (the file is not swapped
       // yet), naming the new public key. Only when the log beside this store is the one this key signs.
-      const handOver = old && resolve(dirname(auditPath())) === resolve(this.keyDir);
+      const handOver = !!old; // a log elsewhere is signed by a copy of this key beside it (mirrorKeyToLog), so it hands over too
       k = replaceSigningKey(this.keyDir, oldFile ?? undefined, handOver ? (next) => this.audit({ op: "key-rotate", detail: `${old.keyId} -> ${next.keyId}`, new_pub: next.publicKey }) : undefined);
     } catch (e) {
       if (old && recordedNow) {
@@ -7708,6 +7723,13 @@ export class Store {
         }
       }
       throw e;
+    } finally {
+      try {
+        this.mirrorKeyToLog(); // a log elsewhere keeps signing with the key beside it: hand that copy over in the same window
+      } catch {
+        /* the copy beside the log is refreshed again at the next open */
+      }
+      endRotation();
     }
     this.signingKey = null; // the next use re-reads the file and its stamp
     this.signingStamp = "";
@@ -8172,12 +8194,29 @@ export class Store {
   private ensureAuditKey(): void {
     if (this.auditKeyChecked || this.dbPath === ":memory:") return;
     this.auditKeyChecked = true;
-    if (resolve(dirname(auditPath())) !== resolve(this.keyDir)) return; // a log elsewhere is signed by the key beside it, if any
     try {
       this.signing();
+      this.mirrorKeyToLog();
     } catch (e) {
       console.error(`[monomem] audit lines stay unsigned: could not create the signing key (${(e as Error).message})`);
     }
+  }
+
+  /**
+   * A log elsewhere (MONOMEM_AUDIT_LOG) is signed by the key found beside it, so that folder gets a copy of the store key
+   * (mode 0600, written to a temp name and renamed). Rotation refreshes it. An in-memory store never does this.
+   */
+  private mirrorKeyToLog(): void {
+    const logDir = dirname(auditPath());
+    if (this.dbPath === ":memory:" || resolve(logDir) === resolve(this.keyDir)) return;
+    const src = attestKeyPath(this.keyDir);
+    const dest = attestKeyPath(logDir);
+    if (resolve(src) === resolve(dest)) return; // MONOMEM_ATTEST_KEY_FILE names one file for both
+    mkdirSync(logDir, { recursive: true, mode: 0o700 });
+    const tmp = `${dest}.${process.pid}.tmp`;
+    copyFileSync(src, tmp);
+    chmodQuiet(tmp, 0o600);
+    renameSync(tmp, dest);
   }
 
   /** The current key and every retired own key (key id -> public key): what `audit verify` and `verify-receipt` trust. */

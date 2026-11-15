@@ -183,7 +183,18 @@ export function serviceCmd(action: string | undefined, print: boolean, e: Servic
       console.log(`Not installed (no ${plan.file.path}). Install it: monomem service install`);
       return 1;
     }
-    return plan.status.every((c) => run(c)) ? 0 : 1;
+    for (const c of plan.status) {
+      try {
+        const out = execFileSync(c[0], c.slice(1), { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+        if (out.trim()) console.log(out.trimEnd());
+      } catch (err) {
+        // The service manager's own words ("cannot find the file specified") read like a Monomem fault: say what it means.
+        const said = (((err as { stderr?: string }).stderr ?? "") || (err as Error).message).trim().split("\n")[0];
+        console.log(`The background service is not installed or not running (${shown(c)} said: ${said}). Install it: monomem service install`);
+        return 1;
+      }
+    }
+    return 0;
   }
   if (action === "install") {
     mkdirSync(dirname(plan.file.path), { recursive: true });

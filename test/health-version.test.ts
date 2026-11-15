@@ -14,6 +14,7 @@ import { Store, SCHEMA_VERSION } from "../src/store.js";
 import { createApiServer } from "../src/api.js";
 import { createMcpHttpServer } from "../src/mcp-http.js";
 import { PACKAGE_VERSION } from "../src/config.js";
+import { ensureKey } from "../src/crypto.js";
 
 const CLI = fileURLToPath(new URL("../src/cli.js", import.meta.url));
 
@@ -63,6 +64,40 @@ describe("version handshake (U-10)", () => {
       assert.match(out, new RegExp(`\\[ok\\].*server .*${PACKAGE_VERSION.replace(/\./g, "\\.")}`));
     } finally {
       await new Promise<void>((r) => fake.close(() => r()));
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("doctor shows the body index of a verified server for this encrypted store, and warns when searches fell back", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "mm-doctor-bi-"));
+    const data = join(dir, "data");
+    ensureKey(data);
+    const TOKEN = "doctor-body-index-token-0123456789abcdef";
+    const store = new Store(join(data, "state.db"), { bodyIndexMaxNotes: 1 });
+    const srv = createApiServer(store, TOKEN);
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    const env = { ...process.env, HOME: dir, USERPROFILE: dir, MONOMEM_HOME: data, MONOMEM_TOKEN: TOKEN, MONOMEM_PORT: String((srv.address() as AddressInfo).port), MONOMEM_NO_SERVER_PROBE: "" };
+    try {
+      store.create({ title: "one", body: "sealed words", tags: [] });
+      store.warmBodyIndex();
+      const out = await runDoctor(env);
+      assert.match(out, /\[ok\].*server body search index: ready \(1 notes indexed, 0 bodies unreadable, 0 searches/, out);
+      store.create({ title: "two", body: "more sealed words", tags: [] });
+      store.close();
+    } finally {
+      await new Promise<void>((r) => srv.close(() => r()));
+    }
+    // A server started on a store over its cap (here 1 note): every search is on titles and tags only, and doctor says so.
+    const capped = new Store(join(data, "state.db"), { bodyIndexMaxNotes: 1 });
+    const srv2 = createApiServer(capped, TOKEN);
+    await new Promise<void>((r) => srv2.listen(0, "127.0.0.1", r));
+    try {
+      capped.searchRanked("sealed");
+      const out = await runDoctor({ ...env, MONOMEM_PORT: String((srv2.address() as AddressInfo).port) });
+      assert.match(out, /\[warn\].*server body search index: too large .*[1-9]\d* searches on titles and tags only.*not built above 1 notes/, out);
+    } finally {
+      await new Promise<void>((r) => srv2.close(() => r()));
+      capped.close();
       rmSync(dir, { recursive: true, force: true });
     }
   });

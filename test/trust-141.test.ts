@@ -545,15 +545,15 @@ describe("G: attestation keys, pinning, rotation, versions", () => {
     assert.equal(verifyRecord(att, { ...rec, namespace: "other" }, trusted, null).ok, false);
   });
 
-  test("listing the trust state never creates a signing key; the first signed export or `identity` does", () => {
+  test("opening a store makes its signing key (1.5.0); listing the trust state never replaces it", () => {
     const k = join(dir, "a", ATTEST_KEY_FILENAME);
-    assert.ok(!existsSync(k));
-    assert.equal(a.peekIdentity().public_key, undefined);
+    assert.ok(existsSync(k), "the key exists from store open");
+    const before = a.peekIdentity().public_key;
+    assert.ok(before);
     a.trustView();
     a.attesterList();
-    assert.ok(!existsSync(k), "reading the policy did not mint a key");
-    a.identity();
-    assert.ok(existsSync(k));
+    assert.equal(a.peekIdentity().public_key, before, "reading the policy did not change the key");
+    assert.equal(a.identity().public_key, before);
     assert.equal(a.peekIdentity().public_key, a.identity().public_key);
   });
 

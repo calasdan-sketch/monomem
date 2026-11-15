@@ -144,6 +144,8 @@ const GATED_SQL_RE = /\b(?:FROM|JOIN|UPDATE|INTO)\s+(notes|note_history|quaranti
 const SQL_ALLOWED: Record<string, string[]> = {
   // backup.ts counts the notes of the COPY it just made and strips local-only _meta keys from that copy.
   "backup.ts": ["_meta", "notes"],
+  // bench/monomem-adapter.ts clears the copied key-id marker (_meta) of the throwaway drill copy of a database it just made.
+  "bench/monomem-adapter.ts": ["_meta"],
   // bench/scale.ts counts sealed bodies (body_enc IS NOT NULL, a COUNT only) in the synthetic temp-folder store it just built.
   "bench/scale.ts": ["notes"],
   // health.ts keeps its own "audit lines seen" marker in _meta (health_audit_seen); it reads no trust setting.
@@ -221,7 +223,7 @@ describe("B: one gate for reading a note", () => {
     if (/req\.method === "GET" && qCtxMatch/.test(api)) routes.add("/quarantine/:id/context");
     const NOTE_ROUTES = ["/notes", "/notes/:id", "/search", "/stats", "/changes", "/tasks", "/tasks/:id", "/handoffs", "/catch-up", "/export", "/index", "/timeline", "/sessions", "/sessions/:id", "/files/timeline", "/quality", "/quarantine", "/quarantine/:id/context"];
     // /access: the read access log holds writer labels and redacted query previews, never note text.
-    const NO_NOTE_CONTENT = ["/health", "/ready", "/", "/dashboard.js", "/favicon.ico", "(sign pages)", "/runner/status", "/trust", "/access", "/whoami", "/audit", "/insights", "/tokens"];
+    const NO_NOTE_CONTENT = ["/health", "/proof", "/status", "/ready", "/", "/dashboard.js", "/favicon.ico", "(sign pages)", "/runner/status", "/trust", "/access", "/whoami", "/audit", "/insights", "/tokens"];
     assert.deepEqual([...routes].sort(), [...NOTE_ROUTES, ...NO_NOTE_CONTENT].sort(), "a GET route was added: add it to NOTE_ROUTES (and to the canary test below) or NO_NOTE_CONTENT");
 
     const mcp = read("mcp-server-core.ts");

@@ -4,7 +4,7 @@
 // log. All dependency-free on purpose -- this code sits in front of a service
 // that can be exposed over a public tunnel, so less surface is safer.
 
-import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import type { IncomingMessage } from "node:http";
@@ -942,6 +942,49 @@ export function verifyAuditChain(
 export const ADMIN_SCOPE_NEEDED =
   "this token lacks the required 'admin' scope. Deleting and managing need an administrator key (the person can make one with: monomem token add <name> --admin).";
 
+const ROTATING_MARKER = ".audit-rotating";
+const ROTATING_STALE_MS = 5000;
+let rotatingHere = false;
+const sleepMs = (ms: number): void => void Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+/**
+ * Key rotation vs other writers: while a rotation runs (key-rotate line, then the key swap) a marker sits beside the log.
+ * audit() in other processes waits for it to go (at most ROTATING_STALE_MS), so no line is signed by the old key AFTER the
+ * key-rotate line. This waits a moment for lines already past the marker check, then returns the function that removes it.
+ */
+export function beginKeyRotation(): () => void {
+  const marker = join(dirname(auditPath()), ROTATING_MARKER);
+  try {
+    mkdirSync(dirname(marker), { recursive: true, mode: 0o700 });
+    writeFileSync(marker, String(process.pid));
+  } catch {
+    return () => {};
+  }
+  rotatingHere = true;
+  sleepMs(40); // lines that passed the marker check just before it appeared finish in microseconds
+  return () => {
+    rotatingHere = false;
+    try {
+      unlinkSync(marker);
+    } catch {
+      /* already gone */
+    }
+  };
+}
+
+function waitWhileRotating(path: string): void {
+  if (rotatingHere) return;
+  const marker = join(dirname(path), ROTATING_MARKER);
+  for (let i = 0; i < ROTATING_STALE_MS / 5; i++) {
+    try {
+      if (Date.now() - statSync(marker).mtimeMs > ROTATING_STALE_MS) return;
+    } catch {
+      return; // no marker
+    }
+    sleepMs(5);
+  }
+}
+
 export function audit(entry: {
   op: string;
   id?: number;
@@ -962,6 +1005,7 @@ export function audit(entry: {
       mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
       auditDirMade = path;
     }
+    waitWhileRotating(path);
     rotateAuditIfNeeded(path);
     // Hash chain: `prev` = sha256 of the previous line (carried across rotation from audit.log.1).
     // F-03: the tail is re-read only when the file is not the size this process left it at (another process

@@ -50,6 +50,17 @@ upgrading from 1.3.x takes one step (docs/upgrading.md).
 - **`derived_from` no longer leaks across namespaces.** A note's `derived_from` list names only parents the reader may
   see, so a parent's id in a namespace the reader cannot read is no longer shown. Deleting a note removes its links and
   confirmations.
+- **`service install` with a non-loopback `MONOMEM_BIND` or `MONOMEM_ALLOWED_HOSTS` needs a person at a terminal.** It asks
+  you to type yes; an agent's shell or a script is refused and nothing is installed. `--print` is never gated, and a
+  loopback-only service is not asked. The Windows task now carries `MONOMEM_HOME` and the other settings (never a key).
+- **The signing key exists from the moment a store is opened**, not from its first write, so the first audit line is already
+  signed. With `MONOMEM_AUDIT_LOG` pointing to another folder, a copy of the key sits beside that log (and `trust rotate`
+  updates it), so that log is signed too. An in-memory store writes unsigned lines (documented in SECURITY.md).
+- **`trust rotate` no longer races other writers.** While the key-rotate line and the key swap run, other processes' audit
+  lines wait (at most 5 s), so no line is signed by the retired key after the hand-over line. `audit verify` still warns
+  about an unsigned line after signing began and `--strict` fails on it.
+- **A flood pause set while flagging a note now sticks** (the throw used to roll the pause back, so the writer was never
+  paused). A refusal that pauses a writer is one audit line, not two.
 
 ### Changed
 
@@ -127,11 +138,18 @@ upgrading from 1.3.x takes one step (docs/upgrading.md).
   every note, so ranking is the plain store's: encrypted recall is now identical to plain on LongMemEval-S (96.8 / 84.0 R@5 /
   Rall@5) and LoCoMo-10 turn and session. Kept current for this process's writes by connection-only triggers, and for other
   processes' writes from the change log. The REST and MCP servers build it just after start-up (0.6-0.8 s and about 30 MB
-  of memory per 10,000 notes, measured); the hooks never build it, so session start stays fast and on an encrypted store the
-  session-start context is still matched on titles and tags. Not built above 100,000 notes. `MONOMEM_BODY_INDEX=off` turns it
+  of memory per 10,000 notes, measured); the hooks never build it, so session start stays fast. On an encrypted store session start
+  matches titles and tags itself and, when a Monomem server for the same store runs on this computer, asks that server
+  (127.0.0.1 only, at most 0.3 s) which notes' bodies match; with no server, or a slow one, it stays on titles and tags.
+  The hook sends its main key only after the server proves, over a fresh nonce, that it holds the same key and store
+  (`GET /proof`), and it takes only note ids back: every note is re-read and filtered locally. Not built above 100,000 notes. `MONOMEM_BODY_INDEX=off` turns it
   off. **Security change:** while a server runs, every body's words are in its memory, which the system can page to swap or a
   hibernation file or write into a crash dump; use whole-disk encryption too (SECURITY.md, docs/encryption-retention.md,
   `encrypt status --surfaces` lists it). A search that finds nothing says bodies were not searched only when that is true.
+  A search that runs on titles and tags only while bodies are sealed (over the cap, inside a write before the index is
+  built, or after a failed build) is never silent: REST `/search` and `/relevant` and MCP replies carry a `body_search`
+  notice with the reason, every one is counted, and the new admin-only `GET /status` and `monomem doctor` (for a server it
+  has verified is this store's) show the index state, unreadable bodies and the fallback count. `/health` is unchanged.
 - **137 deterministic scenarios** (was 131): A 38, B 31, C 27, D 19, E 22. Obsolete-fact scenarios A33 and A34 in `monomem bench`. With the replace step the old value never reaches the agent (A34
   passes). Without it, search used to rank the outdated note above its update (A33): first recorded as the known gap
   `GAP-OBSOLETE-UNREPLACED`, now fixed (below). **0 known gaps are open.** MemoryAgentBench was not run (docs/BENCHMARK.md says why).
@@ -163,6 +181,17 @@ upgrading from 1.3.x takes one step (docs/upgrading.md).
 
 ### Fixed
 
+- Messages: the missing-key error no longer starts with "monomem: monomem:"; the "database is newer than this build" error
+  gives the same steps as docs/upgrading.md (close apps, `monomem restore <file> --yes`, install the older version);
+  `why` and `receipts` say why times are local, what the offset means and which end comes first; `doctor` prints
+  "encryption on: N bodies sealed with the key at ..." when that is true.
+- First-run walk as a new user: `doctor` now says when held writes wait for a decision instead of a bare "All good", and
+  `service status` with no service installed says so in plain words (it used to print the task manager's "cannot find the
+  file" as a failure).
+- `monomem drill` no longer prints a "NEW attestation key" warning for every server it starts on its throwaway copy.
+- git sync: a computer that resurrects a note another computer deleted (after losing its seen record) makes that other
+  computer stop with the "older than one this computer already synced" message. Reproduced and pinned by a test; this is
+  by design (a deleted note leaves no tombstone, so it looks like a replay), the message names the recovery step.
 - Similarity links in an encrypted store survive a restart (the rebuild now reads the decrypted text).
 - Pinning a note with only an admin (dashboard) confirm explains that a person must confirm it at a terminal.
 - First run: an empty store scores 100 for tidiness, the first note is #1, and Windows shows one folder-permission line.

@@ -543,8 +543,11 @@ async function doctor(): Promise<void> {
   // writing in the old shape); a missing one is created as before.
   const { SchemaMismatchError, SCHEMA_VERSION: BUILD_SCHEMA } = await import("./store.js");
   let oldSchema = false;
+  let storeIdForProbe = ""; // for the server probe below: which store this is
+  let sealedNotes = 0;
   try {
     const s = new Store(DB_PATH, { noMigrate: Store.peekSchemaVersion(DB_PATH) !== null });
+    storeIdForProbe = s.serverIdValue;
     // The same count `monomem health` shows: every namespace and every kind. list() counts only hand-written notes
     // (kind "note"), so a store full of captured observations and session summaries read as a handful of notes.
     const total = s.countAll();
@@ -564,22 +567,27 @@ async function doctor(): Promise<void> {
       const { existsSync } = await import("node:fs");
       const kp = keyPath(dirname(DB_PATH));
       const sealed = s.encryptedCount();
+      sealedNotes = sealed;
       if (sealed > 0 && !existsSync(kp)) {
         fail(`${sealed} note${sealed === 1 ? " is" : "s are"} encrypted, but the key is missing at ${kp}`, "Put the key file back (from the computer or backup it came from). Without it those notes cannot be read.");
       } else if (existsSync(kp)) {
         const plain = s.plaintextBodyCount();
-        if (plain > 0) warn(`${plain} note bod${plain === 1 ? "y is" : "ies are"} not encrypted although encryption is on`, "Seal them: monomem encrypt enable");
+        if (plain > 0) warn(`${plain} note bod${plain === 1 ? "y is" : "ies are"} not encrypted although a key file exists (new notes are sealed; these older ones are still plain text)`, "Seal them: monomem encrypt enable");
+        else ok(`encryption on: ${sealed} note bod${sealed === 1 ? "y is" : "ies are"} sealed with the key at ${kp} (titles and tags stay readable; back the key up, losing it loses the bodies)`);
       }
     }
     distrustCount = s.distrustRules().length;
     const { meterStats, meterLine } = await import("./meter.js");
     const footprint = meterLine(meterStats(s));
     const ruleLines = s.confirmRuleLines();
+    // A held write is waiting on a person: "all good" must not hide it (it is not a fault, so an info line).
+    const heldCount = s.listQuarantine({ limit: 500 }).length;
     s.close();
     ok(`database OK at ${DB_PATH} (${total} notes)`);
     ok(footprint);
     // 1.4.0: one line per confirm rule, so "why isn't my note in session start?" has an answer here.
     for (const l of ruleLines) console.log("  [info] " + l);
+    if (heldCount) console.log(`  [info] ${heldCount >= 500 ? "500 or more writes are" : heldCount === 1 ? "1 write is" : `${heldCount} writes are`} held and waiting for your decision (not saved yet): monomem quarantine`);
     // Migration v4 adds the similarity-edge table but does not score
     // existing notes: a store upgraded from 1.0.0 has notes and no edges
     // until a one-time rebuild.
@@ -948,6 +956,24 @@ async function doctor(): Promise<void> {
         );
       } else {
         ok(`server on port ${API_PORT} runs ${v}${versionBelow(PACKAGE_VERSION, v!) ? ` (newer than this CLI ${PACKAGE_VERSION}: update the CLI)` : ""}`);
+      }
+      // C-06: on an encrypted store, the server's in-memory body index (only a server proven to be this store's gets the key).
+      const { provenLocalServer } = await import("./local-server.js");
+      const proven = sealedNotes > 0 && storeIdForProbe ? await provenLocalServer(API_PORT, storeIdForProbe, AbortSignal.timeout(1000)) : null;
+      if (proven) {
+        const st = (await (await fetch(`${proven.base}/status`, { headers: { authorization: `Bearer ${proven.key}` }, signal: AbortSignal.timeout(1000) })).json()) as {
+          body_index?: { state?: string; notes?: number; errors?: number; fallbacks?: number; lastFallback?: string | null };
+        };
+        const b = st.body_index;
+        if (b) {
+          const line = `server body search index: ${b.state} (${b.notes ?? 0} notes indexed, ${b.errors ?? 0} bodies unreadable, ${b.fallbacks ?? 0} searches on titles and tags only)`;
+          if (b.state === "ready" && !b.errors && !b.fallbacks) ok(line);
+          else
+            warn(
+              line + (b.lastFallback ? `; last: ${b.lastFallback}` : ""),
+              b.errors ? "Unreadable bodies were sealed with another key: monomem encrypt status" : b.state === "off" ? "MONOMEM_BODY_INDEX=off is set for the server" : "Searches that fall back say so in their reply (body_search)"
+            );
+        }
       }
     }
   } catch {
@@ -3604,7 +3630,7 @@ async function encryptCmd(): Promise<void> {
       console.log(`Enabled at-rest encryption. Encrypted ${n} note ${n === 1 ? "body" : "bodies"}.`);
       console.log(`Key file: ${crypto.keyPath(keyDir)} -- back it up; losing it loses the bodies.`);
       console.log(
-        "Body search keeps working from an index held in memory only (never on disk); the session-start hook searches titles and tags. " +
+        "Body search keeps working from an index held in memory only (never on disk); the session-start hook matches titles and tags, plus body words when a Monomem server for this store is running. " +
           "That memory can reach swap or a hibernation file: use whole-disk encryption too (monomem encrypt status --surfaces)."
       );
       const copies = Store.preMigrationBackups(DB_PATH);
