@@ -1,7 +1,6 @@
 // Entry point: boots the HTTP/JSON API on MONOMEM_PORT (default 8790).
 import "./quiet-sqlite.js"; // first: hide the node:sqlite ExperimentalWarning
 import "./legacy-env.js"; // second: read the old CLAUDE_BRIDGE_* variables as MONOMEM_*
-import { Store } from "./store.js";
 import { createApiServer } from "./api.js";
 import { exitOnListenError } from "./http-common.js";
 import { DB_PATH, API_PORT, BIND_HOST, resolveTokens, startTokenReload, assertSafeExposure, prepareDataDir } from "./config.js";

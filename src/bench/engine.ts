@@ -15,7 +15,6 @@ import {
   type OpResult,
   type Scenario,
   type ScenarioResult,
-  type Suite,
   type WorldSpec,
 } from "./types.js";
 

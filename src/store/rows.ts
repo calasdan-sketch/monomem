@@ -69,7 +69,7 @@ export function needsHumanConfirm(n: Pick<NoteRecord, "tags" | "rev" | "confirme
 }
 
 /** AAD binding a sealed quarantine column to its column name and namespace (v2, rows sealed before 1.5.0). */
-export function quarantineAad(col: string, namespace: string): string {
+function quarantineAad(col: string, namespace: string): string {
   return `quarantine|${col}|${namespace}`;
 }
 

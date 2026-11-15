@@ -119,7 +119,7 @@ export function unconfirmedCountLine(c: { tool: number; via: number; declared: n
 }
 
 /** A path in comparable form: absolute, one separator, no trailing separator, lowercased on Windows. */
-export function normFolder(p: string): string {
+function normFolder(p: string): string {
   const r = resolvePath(p).replace(/\\/g, "/").replace(/\/+$/, "");
   return process.platform === "win32" ? r.toLowerCase() : r;
 }

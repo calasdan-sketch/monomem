@@ -12,7 +12,7 @@
 // app-level "remember to reindex" step to forget.
 
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, statSync, statfsSync, readdirSync, renameSync, linkSync, existsSync, copyFileSync, unlinkSync } from "node:fs";
+import { mkdirSync, statSync, statfsSync, readdirSync, renameSync, linkSync, existsSync, unlinkSync } from "node:fs";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { dirname, basename, join } from "node:path";
 import { checkSizes, checkNames, audit, ADMIN_SCOPE_NEEDED } from "./security.js";
@@ -36,49 +36,25 @@ import {
 import { isStale, stalenessConfig, annotateStaleness } from "./staleness.js";
 // At-rest encryption for note bodies. No module cycle: crypto.ts imports
 // only node: builtins, never store.ts.
-import { encrypt, decryptIfEncrypted, isEncrypted, loadKey, keyPath, noteAad, captureAad, encryptV3, decryptV3, ENC_PREFIX_V3 } from "./crypto.js";
+import { encrypt, decryptIfEncrypted, isEncrypted, loadKey, keyPath, noteAad, captureAad } from "./crypto.js";
 import { currentActor, currentWriter, cleanWriter, currentCeiling, actorStore } from "./actor.js";
 import { redact } from "./redact.js";
 import {
   ORIGIN_PREFIX,
-  ORIGIN_TOOL_PREFIX,
-  ORIGIN_DECLARED,
-  SESSION_TAINT_EXEMPT,
   sessionTaintExempt,
-  sameFolder,
-  isOutsideTool,
   isTainted,
-  toolTag,
-  sourceKey,
-  promotionRefusal,
   UNCONFIRMED_LABEL,
-  ORIGIN_VIA_MEMORY,
-  CONFIRM_MODES,
-  DEFAULT_CONFIRM_DAYS,
-  MAX_CONFIRM_DAYS,
-  MAX_DERIVED_FROM,
   DISTRUSTED_BASE_LABEL,
   expiredLabel,
   type ConfirmMode,
 } from "./taint.js";
-import { taintWindowHours } from "./config.js";
-import { contentHash as syncContentHash } from "./sync-hash.js";
 import {
   type Sensitivity,
   DEFAULT_SENSITIVITY,
-  SENSITIVITY_HELP,
-  isSensitivity,
   levelsAtOrBelow,
-  parseSensitivity,
-  sensitivityRank,
   sensitivityVisible,
 } from "./sensitivity.js";
 import {
-  ALL_NAMESPACES,
-  MAX_DISTRUST_RULES,
-  MAX_DISTRUST_RULES_PER_NAMESPACE,
-  MAX_TRUST_LOG_ROWS,
-  MAX_TRUST_LOG_ROWS_GLOBAL,
   MAX_TAINT_NAMES,
   capTaint,
   canonicalRuleWriter,
@@ -97,7 +73,6 @@ import {
   type WriterFacts,
 } from "./trust.js";
 import {
-  contentHash,
   ephemeralKey,
   isPublicKey,
   keyIdOf,
@@ -110,7 +85,6 @@ import {
   loadOrCreateSigningKey,
   parseTrustedAttestersEnvDetailed,
   peekSigningKey,
-  tightenKeyFile,
   attestKeyPath,
   signRecord,
   verifyRecord,
@@ -118,7 +92,6 @@ import {
   type SigningKey,
   type TrustedAttester,
   type VerifyContext,
-  type VerifyReason,
 } from "./attest.js";
 import {
   ValidationError,
@@ -128,14 +101,13 @@ import {
   CandidateScanError,
   QuarantinedError,
   WriterPausedError,
-  heldHandled,
 } from "./errors.js";
 import * as gateOps from "./store/gates.js";
 import * as trustOps from "./store/trust.js";
 import * as quarantineOps from "./store/quarantine.js";
 import * as confirmOps from "./store/confirm.js";
 import * as taintOps from "./store/taint.js";
-import { SESSION_IDLE_MS, tagsToStorage, parseTags, CONFIRM_RANK, rankSql, dueBase, needsHumanConfirm, type DueRow, quarantineAad, sealQuarantineCol, openQuarantineCol, isoOrNull, clampInt, envCount, floodWritesPerHour, isOperatorWrite, isStringArray, isPlainObject } from "./store/rows.js";
+import { tagsToStorage, parseTags, dueBase, needsHumanConfirm, sealQuarantineCol, openQuarantineCol, isoOrNull, clampInt, envCount, floodWritesPerHour, isOperatorWrite, isPlainObject } from "./store/rows.js";
 export { dueBase, needsHumanConfirm, clampInt, floodWritesPerHour };
 export { ValidationError, NoteUnreadableError, StaleWriteError, RebuildBusyError, CandidateScanError, QuarantinedError, WriterPausedError };
 
@@ -886,8 +858,6 @@ interface NoteRow {
 }
 
 export const DEFAULT_NAMESPACE = "default";
-/** The capture's outside-content stamp (reserved-tags.ts re-exports it; taint.ts imports nothing, so no import cycle). */
-export { ORIGIN_TOOL_PREFIX };
 
 /** A pre-upgrade copy (`-backup`, a dated `-backup-YYYYMMDD-HHMMSS` kept copy) or an unfinished/killed one (`.<id>.partial` and its sidecars). */
 const PREMIGRATION_FILE_RE = /-backup(-\d{8}-\d{6}(-\d+)?)?(\.[0-9a-f]+\.partial(-journal|-wal|-shm)?)?$/;
