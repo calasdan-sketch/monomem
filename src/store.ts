@@ -131,6 +131,16 @@ import {
  */
 export class ValidationError extends Error {}
 
+/**
+ * 1.5.0 (round 2, S-04): this process opened the database before a newer Monomem upgraded it. Writing now would store rows in
+ * the old shape (the re-confirmation clock, new columns), so every write is refused until the app restarts.
+ */
+export class SchemaNewerError extends ValidationError {
+  constructor(readonly found: number) {
+    super(`Monomem was upgraded (the database is now at schema v${found}, this app runs v${SCHEMA_VERSION}); nothing was saved. Restart this app to use the new version.`);
+  }
+}
+
 /** v16: a no-migrate open (the capture hooks) found a database at another schema version than this build's. */
 export class SchemaMismatchError extends Error {
   constructor(readonly found: number) {
@@ -3078,7 +3088,7 @@ export class Store {
       return rows.length < 2 || rows.some((r) => !r.sql.includes("written_by")) || Boolean(oldIdx);
     };
     if (!stale()) return;
-    this.db.exec("BEGIN IMMEDIATE");
+    this.beginWrite();
     try {
       if (stale()) {
         this.createLogTriggers();
@@ -3270,7 +3280,8 @@ export class Store {
     // nested inside a caller's transaction (consolidateNotes) a SAVEPOINT
     // keeps the note + edges all-or-nothing without touching the outer txn.
     const nested = this.db.isTransaction;
-    this.db.exec(nested ? "SAVEPOINT monomem_create" : "BEGIN IMMEDIATE");
+    if (nested) this.db.exec("SAVEPOINT monomem_create");
+    else this.beginWrite();
     let id: number;
     try {
       // Key state is read INSIDE the write transaction (see writeKey): the
@@ -3533,7 +3544,7 @@ export class Store {
     this.pendingAccess = new Map();
     let ok = false;
     this.bestEffortWrite(() => {
-      this.db.exec("BEGIN IMMEDIATE");
+      this.beginWrite();
       try {
         const up = this.db.prepare(
           `UPDATE notes SET access_count = access_count + ?,
@@ -4131,7 +4142,8 @@ export class Store {
     // Inside a caller's transaction (a rollback restores many notes in one) a SAVEPOINT keeps this write all-or-nothing.
     const nested = this.db.isTransaction;
     const undo = (): void => this.rollbackTx(nested ? "ROLLBACK TO monomem_update; RELEASE monomem_update" : "ROLLBACK");
-    this.db.exec(nested ? "SAVEPOINT monomem_update" : "BEGIN IMMEDIATE");
+    if (nested) this.db.exec("SAVEPOINT monomem_update");
+    else this.beginWrite();
     try {
       // Sealed under the write lock so the key state cannot change between
       // the check and the write (see writeKey), bound to this id+namespace.
@@ -4301,7 +4313,7 @@ export class Store {
     const rows = this.db.prepare(`SELECT id, namespace FROM notes WHERE superseded_by = ?${this.ceilingSql()}`).all(deletedId) as Array<{ id: number; namespace: string }>;
     if (rows.length === 0) return;
     const now = new Date().toISOString();
-    this.db.exec("BEGIN IMMEDIATE");
+    this.beginWrite();
     try {
       const upd = this.db.prepare("UPDATE notes SET archived_at = NULL, superseded_by = NULL, superseded_at = NULL, superseded_by_writer = '', rev = rev + 1 WHERE id = ? AND superseded_by = ?");
       const log = this.db.prepare("INSERT INTO supersede_log (at, actor, action, namespace, old_id, new_id, flags) VALUES (?, ?, 'undo', ?, ?, ?, 'replacement-deleted')");
@@ -4807,7 +4819,8 @@ export class Store {
     const now = new Date().toISOString();
     // Inside a caller's transaction (confirm creates the replacing note in the same one) a SAVEPOINT keeps this all-or-nothing.
     const nested = this.db.isTransaction;
-    this.db.exec(nested ? "SAVEPOINT monomem_supersede" : "BEGIN IMMEDIATE");
+    if (nested) this.db.exec("SAVEPOINT monomem_supersede");
+    else this.beginWrite();
     try {
       // Single use: a nonce that was already spent makes the whole call fail. Spent nonces are kept past their expiry.
       this.spendNonce(input.nonce, input.expiresMs);
@@ -4858,7 +4871,7 @@ export class Store {
     const nsRow = this.db.prepare("SELECT namespace FROM notes WHERE id = ?").get(id) as { namespace: string } | undefined;
     if (nsRow) refuseAgentInApproveFirst(this, nsRow.namespace, "bringing back a replaced note");
     const now = new Date().toISOString();
-    this.db.exec("BEGIN IMMEDIATE");
+    this.beginWrite();
     try {
       const row = this.db.prepare("SELECT namespace, superseded_by FROM notes WHERE id = ? AND superseded_by IS NOT NULL").get(id) as
         | { namespace: string; superseded_by: number }
@@ -5046,7 +5059,7 @@ export class Store {
     const updPlain = this.db.prepare("UPDATE notes SET body_enc = ?, body = '' WHERE id = ?");
     const updEnc = this.db.prepare("UPDATE notes SET body_enc = ? WHERE id = ?");
     let count = 0;
-    this.db.exec("BEGIN IMMEDIATE");
+    this.beginWrite();
     try {
       let after = 0;
       for (;;) {
@@ -5133,7 +5146,7 @@ export class Store {
     };
     if (hasPrefix()) return;
     try {
-      this.db.exec("BEGIN IMMEDIATE");
+      this.beginWrite();
       try {
         if (!hasPrefix()) {
           this.db.exec(`DROP TABLE notes_fts;
@@ -5223,7 +5236,7 @@ export class Store {
     );
     const upd = this.db.prepare("UPDATE notes SET body = ?, body_enc = NULL WHERE id = ?");
     let count = 0;
-    this.db.exec("BEGIN IMMEDIATE");
+    this.beginWrite();
     try {
       let after = 0;
       for (;;) {
@@ -5303,8 +5316,21 @@ export class Store {
    * BEGIN/COMMIT inline because it needs to distinguish a stale rev from a
    * vanished row after a failed compare-and-swap; the outcome is identical.
    */
-  transaction<T>(fn: () => T): T {
+  /**
+   * 1.5.0 (round 2, S-04): every write starts here. The version is read under the write lock, so a newer Monomem that
+   * upgraded the file from another process can't slip in between the check and the write; this process then refuses.
+   */
+  private beginWrite(): void {
     this.db.exec("BEGIN IMMEDIATE");
+    const uv = Number((this.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
+    if (uv > SCHEMA_VERSION) {
+      this.db.exec("ROLLBACK");
+      throw new SchemaNewerError(uv);
+    }
+  }
+
+  transaction<T>(fn: () => T): T {
+    this.beginWrite();
     try {
       const out = fn();
       this.commitTx();
@@ -6816,7 +6842,7 @@ export class Store {
         // snapshot's would resurrect stale ones. INSERT OR IGNORE keeps
         // resume-redo and edges a concurrent create() already wrote from
         // aborting the transaction on PK conflicts.
-        this.db.exec("BEGIN IMMEDIATE");
+        this.beginWrite();
         try {
           const live = new Map(
             (liveRevsStmt.all(nsName) as Array<{ id: number; rev: number }>).map((r) => [
@@ -8896,7 +8922,7 @@ export class Store {
     const nested = this.db.isTransaction;
     // What a held EDIT clears (confidence / forget_after set to null) is stored in the INSERT itself, not by a second statement.
     const clears = q.op === "update" ? (["forget_after", "confidence"] as const).filter((f) => (f === "confidence" ? q.confidence : q.forgetAfter) === null) : [];
-    if (!nested) this.db.exec("BEGIN IMMEDIATE");
+    if (!nested) this.beginWrite();
     let id: number;
     try {
       const key = this.writeKey();

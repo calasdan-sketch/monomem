@@ -4,6 +4,11 @@
 
 Applies to Monomem 1.3.x (and to a development build that already made the store v20). A fresh install needs none of this.
 
+- **Close every app that uses Monomem first** (Claude Code, Claude Desktop, Cursor, Codex, the server), then upgrade and start
+  them again. An app still running the old version keeps writing in the old shape after the file is upgraded; 1.3.x and 1.4.x
+  cannot notice that. From 1.5.0 on, a running Monomem notices a newer upgrade and refuses to save ("restart this app") until
+  you restart it. `monomem doctor` only reports an older database; it never upgrades it.
+
 - **What changes.** The first start migrates the database from schema v19 to **v21** (1.4.0 and 1.5.0 ship as one step): new columns on notes (when the upgrade ran,
   who approved a held write and when, the latest confirm), two on held writes (their forget date and confidence), one on capture
   sessions, and two new tables (confirms, and "derived from" links between notes), and, from 1.5.0, when a note's title or body last changed (the re-confirmation clock starts there, not at any edit) and the folder of the local process that wrote it. No note text is rewritten. Every note that exists
