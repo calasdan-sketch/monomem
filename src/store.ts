@@ -1559,6 +1559,9 @@ export interface DecayCandidate {
   idleDays: number;
 }
 
+/** _meta key: this database was checked for pre-1.2.1 (v1) ciphertext with a key present (P2). */
+const V1_CHECKED = "v1_envelopes_checked";
+
 /** A3 shape checks for trust settings kept as JSON in _meta. */
 const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
 const isPlainObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -1743,6 +1746,8 @@ export class Store {
    * `opts.busyTimeoutMs` (see the constructor and bestEffortWrite).
    */
   private static readonly BUSY_TIMEOUT_MS = 20_000;
+  /** SQLite page-cache cap: a negative value is KiB, so -65536 = 64 MB. */
+  static readonly CACHE_SIZE_KIB = -65536;
   /** See the constructor: refuse instead of migrating. */
   private readonly noMigrate: boolean;
 
@@ -1778,6 +1783,9 @@ export class Store {
       this.db.exec("PRAGMA foreign_keys = ON;");
       // Zero freed pages: without this a deleted note's text stays readable in the file until reused.
       this.db.exec("PRAGMA secure_delete = ON;");
+      // 1.5.0 (round 2, P1): a 64 MB page-cache CAP (memory is used only as pages are read, so a short CLI run costs nothing
+      // extra). The 2 MB default made session start at 50k notes 413 ms; with this, 66 ms (round2-performance.md).
+      this.db.exec(`PRAGMA cache_size = ${Store.CACHE_SIZE_KIB};`);
       // Load the at-rest key before migrations so a v10 upgrade on an encrypted
       // store can read existing rows. loadKey throws on a corrupt key file
       // rather than silently degrading -- see crypto.ts.
@@ -3645,18 +3653,29 @@ export class Store {
   private upgradeV1Envelopes(): void {
     const key = this.lastKey;
     if (!key) return;
+    // 1.5.0 (round 2, P2): the probe is a full scan (no index on body_enc), so it runs once per database. Nothing writes v1
+    // any more; an old backup restored over the file brings its own _meta without the mark, so it is checked again.
+    if (this.getMeta(V1_CHECKED) === "1") return;
     try {
       const probe = this.db.prepare("SELECT 1 FROM notes WHERE body_enc LIKE 'v1:%' LIMIT 1").get();
-      if (!probe) return;
-      this.transaction(() => {
-        const rows = this.db
-          .prepare("SELECT id, namespace, body_enc FROM notes WHERE body_enc LIKE 'v1:%'")
-          .all() as unknown as Array<{ id: number; namespace: string; body_enc: string }>;
-        const upd = this.db.prepare("UPDATE notes SET body_enc = ? WHERE id = ?");
-        for (const r of rows) {
-          upd.run(encrypt(decryptIfEncrypted(r.body_enc, key), key, noteAad(r.id, r.namespace)), r.id);
-        }
-      });
+      if (probe) {
+        this.transaction(() => {
+          const rows = this.db
+            .prepare("SELECT id, namespace, body_enc FROM notes WHERE body_enc LIKE 'v1:%'")
+            .all() as unknown as Array<{ id: number; namespace: string; body_enc: string }>;
+          const upd = this.db.prepare("UPDATE notes SET body_enc = ? WHERE id = ?");
+          for (const r of rows) {
+            upd.run(encrypt(decryptIfEncrypted(r.body_enc, key), key, noteAad(r.id, r.namespace)), r.id);
+          }
+          this.setMeta(V1_CHECKED, "1");
+        });
+        return;
+      }
+      try {
+        this.setMeta(V1_CHECKED, "1");
+      } catch {
+        /* a busy or read-only open: the next open checks again */
+      }
     } catch (e) {
       process.stderr.write(`monomem: could not upgrade v1 ciphertext to v2 (${(e as Error).message}); run \`monomem encrypt enable\` to retry.\n`);
     }

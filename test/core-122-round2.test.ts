@@ -278,6 +278,7 @@ describe("5: low items", () => {
     const s = new Store(join(dir, "state.db"));
     const n = s.create({ title: "legacy", body: "x" });
     raw(s).prepare("UPDATE notes SET body = '', body_enc = ? WHERE id = ?").run(encrypt("v1 body", key), n.id);
+    raw(s).prepare("DELETE FROM _meta WHERE key = 'v1_envelopes_checked'").run(); // 1.5.0 (P2): a pre-1.5.0 database has no "checked" mark
     s.close();
     const again = new Store(join(dir, "state.db"));
     const env = (raw(again).prepare("SELECT body_enc FROM notes WHERE id = ?").get(n.id) as any).body_enc as string;
