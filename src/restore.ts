@@ -60,7 +60,7 @@ export const BUSY_MESSAGE =
   "Monomem looks like it is running (or an app is using the database). Close Claude Code, Claude Desktop and any other app that uses Monomem, stop the server, then run this again. Nothing was changed.";
 
 /** SQLITE_BUSY (5) or SQLITE_LOCKED (6), by code or by wording. */
-function isBusyError(e: unknown): boolean {
+export function isBusyError(e: unknown): boolean {
   const code = Number((e as { errcode?: unknown })?.errcode);
   return (Number.isFinite(code) && ((code & 0xff) === 5 || (code & 0xff) === 6)) || /locked|busy/i.test(String((e as Error)?.message ?? e));
 }

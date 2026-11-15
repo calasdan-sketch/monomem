@@ -496,8 +496,12 @@ async function doctor(): Promise<void> {
   let distrustCount = 0;
   let hasLabelled = false;
   let hasPrivate = false;
+  // 1.5.0 (infra HIGH-3): doctor only looks. An older database is not upgraded here (apps that still have it open would keep
+  // writing in the old shape); a missing one is created as before.
+  const { SchemaMismatchError, SCHEMA_VERSION: BUILD_SCHEMA } = await import("./store.js");
+  let oldSchema = false;
   try {
-    const s = new Store(DB_PATH);
+    const s = new Store(DB_PATH, { noMigrate: Store.peekSchemaVersion(DB_PATH) !== null });
     // The same count `monomem health` shows: every namespace and every kind. list() counts only hand-written notes
     // (kind "note"), so a store full of captured observations and session summaries read as a handful of notes.
     const total = s.countAll();
@@ -536,9 +540,17 @@ async function doctor(): Promise<void> {
       );
     }
   } catch (e) {
-    dbProblem = true;
-    const d = (await import("./db-problem.js")).describeDbFailure(DB_PATH, e);
-    fail(d.problem, d.fix);
+    if (e instanceof SchemaMismatchError && e.found < BUILD_SCHEMA) {
+      oldSchema = true;
+      warn(
+        `the database at ${DB_PATH} is at schema v${e.found}; this build uses v${BUILD_SCHEMA}. doctor did not upgrade it.`,
+        "Close every app that uses Monomem (Claude Code, Claude Desktop, Cursor, the server), then run `monomem ls` once: that upgrades it (one way, after a safety copy)."
+      );
+    } else {
+      dbProblem = true;
+      const d = (await import("./db-problem.js")).describeDbFailure(DB_PATH, e);
+      fail(d.problem, d.fix);
+    }
   }
 
   await doctorSecurityChecks(DATA_DIR, BIND_HOST, warn);
@@ -807,7 +819,7 @@ async function doctor(): Promise<void> {
     const set = captureSettings(DATA_DIR);
     let last: string | null = null;
     let backlog = 0;
-    if (!dbProblem) {
+    if (!dbProblem && !oldSchema) {
       const s = new Store(DB_PATH);
       try {
         last = lastCaptureAt(s);

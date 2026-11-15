@@ -124,6 +124,7 @@ function cachedFor<T>(store: Store, key: string, fn: () => Promise<T>): Promise<
 let scanIds = 0;
 import { SupersedeError, supersedePreview, supersedeConfirm, supersedeUndo, noteHistory, restoreVersion, purgeNoteHistory, type Caller } from "./supersede.js";
 import { withFacts, factFeedback } from "./facts.js";
+import { isBusyError } from "./restore.js";
 import { assertPlainWriteTags, assertReviewedTag } from "./reserved-tags.js";
 import { ORIGIN_DECLARED, ReadTaint, taintRegistryFor, unconfirmedIdsIn } from "./taint.js";
 import { waitForChanges, parseWait, WaitBusyError } from "./change-wait.js";
@@ -231,6 +232,11 @@ function sendError(res: ServerResponse, e: unknown): void {
   } else if (e instanceof NoteUnreadableError) {
     console.error("[monomem] " + e.message);
     sendJson(res, 500, { error: e.message, id: e.noteId });
+  } else if (isBusyError(e)) {
+    // 1.5.0 (infra HIGH-1): another program held the database lock past the wait. Retryable, not a server fault.
+    console.error("[monomem] write gave up waiting for the database lock:", (e as Error).message);
+    res.setHeader("Retry-After", "2");
+    sendJson(res, 503, { error: "The database is busy (another program is writing to it); nothing was saved. Try again in a few seconds." });
   } else {
     console.error("[monomem] write error:", (e as Error).message);
     sendJson(res, 500, { error: "internal error" });
