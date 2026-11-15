@@ -130,8 +130,10 @@ import {
   WriterPausedError,
   heldHandled,
 } from "./errors.js";
+import * as confirmOps from "./store/confirm.js";
 import * as taintOps from "./store/taint.js";
-import { SESSION_IDLE_MS, tagsToStorage, parseTags } from "./store/rows.js";
+import { SESSION_IDLE_MS, tagsToStorage, parseTags, CONFIRM_RANK, rankSql, dueBase, needsHumanConfirm, type DueRow } from "./store/rows.js";
+export { dueBase, needsHumanConfirm };
 export { ValidationError, NoteUnreadableError, StaleWriteError, RebuildBusyError, CandidateScanError, QuarantinedError, WriterPausedError };
 
 /**
@@ -842,7 +844,7 @@ export interface ReviewItem {
   writer: string;
   why: string;
 }
-interface ReviewRow {
+export interface ReviewRow {
   id: number;
   namespace: string;
   title: string;
@@ -1035,43 +1037,6 @@ function isNoopPatch(
     if (want.size !== have.size || [...want].some((t) => !have.has(t))) return false;
   }
   return true;
-}
-
-/** Strength of a confirm kind: a weaker confirm never overwrites a stronger one for the same rev. */
-const CONFIRM_RANK: Record<string, number> = { corroborated: 1, admin: 2, human: 3 };
-/** CONFIRM_RANK as SQL, for the kind stored in column `col`. */
-const rankSql = (col: string): string => `CASE ${col} WHEN 'human' THEN 3 WHEN 'admin' THEN 2 WHEN 'corroborated' THEN 1 ELSE 0 END`;
-
-/** The times a note's re-confirmation clock may start from (the v20 columns). */
-interface DueRow {
-  updated_at: string;
-  content_at?: string | null;
-  confirmed_at?: string | null;
-  confirmed_kind?: string | null;
-  confirmed_rev?: number | null;
-  rev: number;
-  grandfathered_at?: string | null;
-}
-/**
- * When a note's re-confirmation clock started (ms): the latest of its last CONTENT change (title/body), a person's or an
- * admin's confirm of its current rev (a corroboration releases the session-start hold but never restarts the clock), the
- * upgrade (grandfathered) and the mode switch. Due = this + days. The ONE formula for labels and counts. 0 = no usable time:
- * the caller treats that as not due.
- */
-export function dueBase(r: DueRow, c: { set_at?: string }): number {
-  const confirmed =
-    r.confirmed_at && Number(r.confirmed_rev) === Number(r.rev) && (r.confirmed_kind === "human" || r.confirmed_kind === "admin") ? r.confirmed_at : null;
-  const times = [r.content_at ?? r.updated_at, confirmed, r.grandfathered_at, c.set_at ?? null].map((t) => (t ? Date.parse(t) : NaN)).filter((t) => !Number.isNaN(t));
-  return times.length ? Math.max(...times) : 0;
-}
-
-/**
- * A tainted note whose current rev has no HUMAN confirm: it may not be pinned or used as a replacement. Grandfathered notes
- * (from before the 1.4.0 upgrade) are included: they are exempt from the session-start hold only, so a 1.3.5 summary that
- * read the web shows as before but is not promoted without a person.
- */
-export function needsHumanConfirm(n: Pick<NoteRecord, "tags" | "rev" | "confirmed_kind" | "confirmed_rev">): boolean {
-  return isTainted(n.tags) && !(n.confirmed_kind === "human" && n.confirmed_rev === n.rev);
 }
 
 /** What a confirm did (Store.confirm). `counted` false = recorded (when `recorded`) but releases nothing; `message` says why. */
@@ -7561,7 +7526,7 @@ export class Store {
   }
 
   /** The query fragment hiding distrusted rows (empty when the list is empty). */
-  private distrustFragment(cols = NOTE_COLUMNS, namespaces?: readonly string[]): { sql: string; params: string[] } {
+  /** @internal */ distrustFragment(cols = NOTE_COLUMNS, namespaces?: readonly string[]): { sql: string; params: string[] } {
     return distrustSql(this.distrustRules(), this.serverId(), cols, namespaces);
   }
 
@@ -7570,7 +7535,7 @@ export class Store {
   // (the operator, stdio, the CLI, a token without one) = no filter and the SQL is byte-identical to before.
 
   /** " AND <col> IN ('public','internal')": hides notes above the caller's ceiling; "" when it has none. Fail closed: NULL and unknown labels never match. */
-  private ceilingSql(col = "sensitivity"): string {
+  /** @internal */ ceilingSql(col = "sensitivity"): string {
     const max = currentCeiling();
     if (max === undefined) return "";
     const levels = levelsAtOrBelow(max);
@@ -7994,7 +7959,7 @@ export class Store {
   }
 
   /** Read a _meta value (null when unset or unreadable). */
-  private getMeta(key: string): string | null {
+  /** @internal */ getMeta(key: string): string | null {
     try {
       const row = this.db.prepare("SELECT value FROM _meta WHERE key = ?").get(key) as
         | { value: string }
@@ -8032,7 +7997,7 @@ export class Store {
   }
 
   /** Upsert a _meta value. Internal keys only -- never caller-chosen. */
-  private setMeta(key: string, value: string): void {
+  /** @internal */ setMeta(key: string, value: string): void {
     this.db
       .prepare(
         "INSERT INTO _meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
@@ -8199,7 +8164,7 @@ export class Store {
    * consolidation (isOperatorWrite), the server's own jobs (`server`), callers with no writer identity (library use),
    * and importNotes (a restore).
    */
-  private floodGate(mode: LintMode, count = true): void {
+  /** @internal */ floodGate(mode: LintMode, count = true): void {
     const w = this.floodSubject(mode);
     if (w === null) return;
     if (this.isPaused(w)) throw this.pausedError(w);
@@ -8402,189 +8367,73 @@ export class Store {
 
   /** Live unconfirmed notes (tainted, not grandfathered, no confirm for the current rev), in `namespaces` or everywhere. */
   unconfirmedCount(namespaces?: string[]): number {
-    return this.unconfirmedRows(namespaces).length;
+    return confirmOps.unconfirmedCount(this, namespaces);
   }
 
   /** The unconfirmed notes by cause (each counted once: tool, else via memory, else declared). Counts only; no titles. */
   unconfirmedBreakdown(namespaces?: string[]): { tool: number; via: number; declared: number } {
-    const out = { tool: 0, via: 0, declared: 0 };
-    for (const r of this.unconfirmedRows(namespaces)) {
-      const t = parseTags(r.tags);
-      if (t.some((x) => x.startsWith(ORIGIN_TOOL_PREFIX))) out.tool++;
-      else if (t.includes(ORIGIN_VIA_MEMORY)) out.via++;
-      else out.declared++;
-    }
-    return out;
+    return confirmOps.unconfirmedBreakdown(this, namespaces);
   }
 
   /** A backlog nobody can see is not "healthy": 10 or more unconfirmed notes, or one older than 7 days, caps the grade at B. */
   confirmBacklog(): { count: number; oldest_days: number; capped: boolean; reason: string } {
-    const rows = this.unconfirmedRows();
-    const oldest = rows.reduce((m, r) => Math.min(m, Date.parse(r.updated_at) || Date.now()), Date.now());
-    const days = Math.floor((Date.now() - oldest) / 86_400_000);
-    const many = rows.length >= 10;
-    const old = rows.length > 0 && days > 7;
-    return { count: rows.length, oldest_days: days, capped: many || old, reason: many ? `${rows.length} unconfirmed notes wait for review` : old ? `the oldest unconfirmed note has waited ${days} days` : "" };
+    return confirmOps.confirmBacklog(this);
   }
 
   /**
    * unconfirmedRows' last answer, reused while nothing in the database changed: total_changes() moves on this connection's
    * writes, PRAGMA data_version on another process's commit. Session start asks once per prompt; the scan is the cost.
    */
-  private unconfirmedCache: { key: string; rows: ReviewRow[] } | null = null;
+  /** @internal */ unconfirmedCache: { key: string; rows: ReviewRow[] } | null = null;
   /** Rows this connection wrote that are not notes (access counts, access log, write_rate): subtracted from total_changes() in the cache key. */
-  private bookkeepingChanges = 0;
+  /** @internal */ bookkeepingChanges = 0;
 
-  private unconfirmedRows(namespaces?: string[]): ReviewRow[] {
-    if (namespaces && namespaces.length === 0) return [];
-    const ver = this.db.prepare("SELECT total_changes() AS t").get() as { t: number };
-    const dv = this.db.prepare("PRAGMA data_version").get() as { data_version: number };
-    // Read bookkeeping (access counts, the access log, the flood counter) moves total_changes() but no note: not counted.
-    const key = JSON.stringify([namespaces ?? null, ver.t - this.bookkeepingChanges, dv.data_version, currentCeiling() ?? null]);
-    if (this.unconfirmedCache?.key === key) return this.unconfirmedCache.rows;
-    const rows = this.scanUnconfirmed(namespaces);
-    this.unconfirmedCache = { key, rows };
-    return rows;
+  /** @internal */ unconfirmedRows(namespaces?: string[]): ReviewRow[] {
+    return confirmOps.unconfirmedRows(this, namespaces);
   }
 
-  /** The unconfirmed scan's SQL and parameters (also read by test/query-plans.test.ts to check the plan). */
-  private unconfirmedSql(namespaces?: string[]): { sql: string; params: Array<string | number> } {
-    const ns = namespaces ? ` AND namespace IN (${namespaces.map(() => "?").join(",")})` : "";
-    const dis = this.distrustFragment(NOTE_COLUMNS, namespaces);
-    return {
-      // INDEXED BY: left to itself the planner prefers idx_notes_archived (every live note); the partial index holds only the stamped ones.
-      sql: `SELECT id, namespace, title, written_by, tags, updated_at FROM notes INDEXED BY idx_notes_origin WHERE archived_at IS NULL AND grandfathered_at IS NULL AND tags LIKE '%obs.origin:%'
-           AND NOT (confirmed_kind IS NOT NULL AND confirmed_rev = rev)${ns}${this.ceilingSql()}${dis.sql} ORDER BY id`,
-      params: [...(namespaces ?? []), ...dis.params] as Array<string | number>,
-    };
+  /** @internal */ unconfirmedSql(namespaces?: string[]): { sql: string; params: Array<string | number> } {
+    return confirmOps.unconfirmedSql(this, namespaces);
   }
 
-  private scanUnconfirmed(namespaces?: string[]): ReviewRow[] {
-    const { sql, params } = this.unconfirmedSql(namespaces);
-    const rows = this.db.prepare(sql).all(...params) as unknown as ReviewRow[];
-    return rows.filter((r) => isTainted(parseTags(r.tags)));
+  /** @internal */ scanUnconfirmed(namespaces?: string[]): ReviewRow[] {
+    return confirmOps.scanUnconfirmed(this, namespaces);
   }
 
   // --- Re-confirmation expiry (1.4.0, 1a) ---------------------------------------------------------------------------
   // Settings in _meta (confirm_mode, confirm_days, confirm_mode_set_at), like approve_first. Read at most once a second
   // per Store (every record read consults them), so a change made by another process shows within a second.
-  private confirmCache: { at: number; v: ConfirmSettings } | null = null;
+  /** @internal */ confirmCache: { at: number; v: ConfirmSettings } | null = null;
 
   confirmSettings(): ConfirmSettings {
-    const now = Date.now();
-    if (this.confirmCache && now - this.confirmCache.at < 1000) return this.confirmCache.v;
-    const m = this.getMeta("confirm_mode");
-    const d = Number(this.getMeta("confirm_days"));
-    const setAt = this.getMeta("confirm_mode_set_at");
-    const v: ConfirmSettings = {
-      // A3: unset = the default (label); set but unknown = damaged, so the strictest mode (enforce).
-      mode: m === null ? "label" : (CONFIRM_MODES as readonly string[]).includes(m) ? (m as ConfirmMode) : "enforce",
-      days: Number.isInteger(d) && d >= 1 && d <= MAX_CONFIRM_DAYS ? d : DEFAULT_CONFIRM_DAYS,
-      ...(setAt ? { set_at: setAt } : {}),
-    };
-    this.confirmCache = { at: now, v };
-    return v;
+    return confirmOps.confirmSettings(this);
   }
 
   /**
    * Change the expiry settings (operator: the CLI gates lowering protection). A mode change records when, so turning
    * expiry on starts every note's clock then, not at its last edit.
    */
-  setConfirmSettings(s: { mode?: ConfirmMode; days?: number }): ConfirmSettings {
-    if (s.mode !== undefined && !CONFIRM_MODES.includes(s.mode)) throw new ValidationError(`confirm-mode must be one of: ${CONFIRM_MODES.join(", ")}`);
-    if (s.days !== undefined && !(Number.isInteger(s.days) && s.days >= 1 && s.days <= MAX_CONFIRM_DAYS)) {
-      throw new ValidationError(`confirm-days must be a whole number from 1 to ${MAX_CONFIRM_DAYS}`);
-    }
-    const before = this.confirmSettings();
-    // Shortening the period while enforce is on would hide notes at once; like turning expiry on, it restarts the clock.
-    // label <-> enforce keeps every due date: switching between the two never restarts a note's clock.
-    const shrinksUnderEnforce = s.days !== undefined && s.days < before.days && (s.mode ?? before.mode) === "enforce";
-    this.transaction(() => {
-      if (s.days !== undefined) this.setMeta("confirm_days", String(s.days));
-      if (s.mode !== undefined && s.mode !== before.mode) this.setMeta("confirm_mode", s.mode);
-      const turnsOn = s.mode !== undefined && s.mode !== before.mode && before.mode === "off";
-      if (turnsOn || shrinksUnderEnforce) this.setMeta("confirm_mode_set_at", new Date().toISOString());
-    });
-    this.confirmCache = null;
-    const after = this.confirmSettings();
-    this.audit({ op: "confirm-settings", detail: `mode ${after.mode}, days ${after.days}` });
-    return after;
+  setConfirmSettings(next: { mode?: ConfirmMode; days?: number }): ConfirmSettings {
+    return confirmOps.setConfirmSettings(this, next);
   }
 
-  /** Live ordinary notes past their re-confirmation date (none when the mode is off). Pinned notes are exempt. */
-  private expiredRows(namespaces?: string[]): ReviewRow[] {
-    const c = this.confirmSettings();
-    if (c.mode === "off" || (namespaces && namespaces.length === 0)) return [];
-    const ns = namespaces ? ` AND namespace IN (${namespaces.map(() => "?").join(",")})` : "";
-    const dis = this.distrustFragment(NOTE_COLUMNS, namespaces);
-    const cutoff = Date.now() - c.days * 86_400_000;
-    // 1.5.0: the clock's start (the same formula as dueBase) is computed in SQL, so only notes that are probably due come back, not
-    // every old note. A day of slack because SQLite and Date.parse may read an odd timestamp a little differently; dueBase()
-    // then decides exactly in JS.
-    const loose = new Date(cutoff + 86_400_000).toISOString();
-    const setAtMs = c.set_at ? Date.parse(c.set_at) : NaN;
-    const setAtDay = Number.isNaN(setAtMs) ? 0 : 2440587.5 + setAtMs / 86_400_000;
-    const rows = this.db
-      .prepare(
-        `SELECT id, namespace, title, written_by, tags, updated_at, content_at, confirmed_at, confirmed_kind, confirmed_rev, rev, grandfathered_at FROM notes
-          WHERE archived_at IS NULL AND superseded_by IS NULL AND COALESCE(pinned, 0) = 0 AND COALESCE(kind, 'note') = 'note'
-            AND tags NOT LIKE '%"task"%' AND tags NOT LIKE '%"handoff"%'
-            AND MAX(COALESCE(julianday(COALESCE(content_at, updated_at)), 0),
-                    CASE WHEN confirmed_kind IN ('human', 'admin') AND confirmed_rev = rev THEN COALESCE(julianday(confirmed_at), 0) ELSE 0 END,
-                    COALESCE(julianday(grandfathered_at), 0), ?) <= julianday(?)${ns}${this.ceilingSql()}${dis.sql} ORDER BY id`
-      )
-      .all(setAtDay, loose, ...(namespaces ?? []), ...dis.params) as unknown as Array<ReviewRow & DueRow>;
-    return rows.filter((r) => {
-      const base = dueBase(r, c);
-      return base > 0 && base <= cutoff;
-    });
+  /** @internal */ expiredRows(namespaces?: string[]): ReviewRow[] {
+    return confirmOps.expiredRows(this, namespaces);
   }
 
   /** How many notes are past their re-confirmation date, in `namespaces` or everywhere (0 when the mode is off). */
   expiredCount(namespaces?: string[]): number {
-    return this.expiredRows(namespaces).length;
+    return confirmOps.expiredCount(this, namespaces);
   }
 
   /** `monomem review`: unconfirmed and expired notes, with why and who wrote them. For a person at a terminal only. */
   reviewList(namespaces?: string[]): ReviewItem[] {
-    const days = this.confirmSettings().days;
-    const out = new Map<number, ReviewItem>();
-    const add = (r: ReviewRow, why: string): void => {
-      const cur = out.get(r.id);
-      if (cur) out.set(r.id, { ...cur, why: `${cur.why}; ${why}` });
-      else out.set(r.id, { id: Number(r.id), namespace: r.namespace, title: r.title, writer: r.written_by ?? "", why });
-    };
-    for (const r of this.unconfirmedRows(namespaces)) {
-      const origins = parseTags(r.tags).filter((t) => t.startsWith(ORIGIN_PREFIX)).map((t) => t.slice(ORIGIN_PREFIX.length));
-      add(r, `unconfirmed: from outside content (${origins.join(", ")}), nobody confirmed this version`);
-    }
-    for (const r of this.expiredRows(namespaces)) add(r, `expired: not re-confirmed in ${days} days (last changed ${r.updated_at.slice(0, 10)})`);
-    return [...out.values()].sort((a, b) => a.id - b.id);
+    return confirmOps.reviewList(this, namespaces);
   }
 
   /** Plain-English lines for `monomem doctor` and `monomem health`: one per 1.4.0 confirm rule, with counts. */
   confirmRuleLines(): string[] {
-    const c = this.confirmSettings();
-    const unconfirmed = this.unconfirmedCount();
-    const expired = this.expiredCount();
-    const hours = taintWindowHours();
-    const plural = (n: number): string => `${n} note${n === 1 ? "" : "s"}`;
-    const b = this.unconfirmedBreakdown();
-    const back = this.confirmBacklog();
-    const wins = this.openWindows();
-    return [
-      `Unconfirmed notes (from outside content, kept out of session start until confirmed): ${unconfirmed}${unconfirmed ? " (monomem review)" : ""}`,
-      ...(unconfirmed ? [`By origin: ${b.tool} written during a session that read the web, ${b.via} after reading unconfirmed notes, ${b.declared} declared by the writer`] : []),
-      ...(wins.length ? [`Open outside-content windows: ${wins.map((w) => `${w.cwd || "(unknown folder)"} (${w.tools.join(", ") || "other"}, ${w.minutes} min ago)`).join("; ")} (end them: monomem taint clear)`] : []),
-      ...(back.capped ? [`The health grade is capped at B: ${back.reason}. Review them: monomem review`] : []),
-      c.mode === "off"
-        ? "Re-confirmation expiry: off (no note expires; turn on: monomem config set confirm-mode label)"
-        : `Re-confirmation expiry: ${c.mode}, every ${c.days} days; ${plural(expired)} past due (${c.mode === "enforce" ? "kept out of session start" : "labelled in search, still shown"})`,
-      hours > 0
-        ? `Outside-content window: notes written by a local app (no key of its own) launched in the same folder as a hooked session that read outside content, within ${hours} hours and while that session is active (idle 30 minutes ends it), are marked; apps with their own key are not (MONOMEM_TAINT_WINDOW_HOURS)`
-        : "Outside-content window: off (MONOMEM_TAINT_WINDOW_HOURS=0), so hooked sessions' outside reads mark nothing",
-      "Reading unconfirmed notes marks later writes: when an app reads a note nobody has confirmed, what it writes next is marked too, until that note is confirmed or the taint window passes. This is counted per connection and starts over when the server restarts.",
-    ];
+    return confirmOps.confirmRuleLines(this);
   }
 
   /**
@@ -8593,13 +8442,7 @@ export class Store {
    * operator gate (terminal + typed yes) before it calls this. Everyone else, admin tokens included, is refused.
    */
   requireHumanConfirm(id: number, verb: string): void {
-    const n = this.read(id);
-    if (!n || !needsHumanConfirm(n)) return;
-    if (currentWriter() === "cli") {
-      this.confirm(id, { source: `operator: ${verb}` });
-      return;
-    }
-    throw new ValidationError(promotionRefusal(verb, id, n.confirmed_kind === "admin" && n.confirmed_rev === n.rev));
+    return confirmOps.requireHumanConfirm(this, id, verb);
   }
 
   /**
@@ -8613,112 +8456,11 @@ export class Store {
    * note derived from this one, and a second confirm by the same writer for the same rev. Confirms count in the flood guard.
    */
   confirm(id: number, opts: { source?: string; admin?: boolean; dashboard?: boolean } = {}): ConfirmResult | null {
-    const n = this.readVisible(id, { hideArchived: true }); // gate-ok: a hidden note answers like a missing one (null)
-    if (!n) return null;
-    const w = currentWriter();
-    const human = w === "cli";
-    if (!human) this.floodGate("full");
-    const source = (opts.source ?? "").replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 200);
-    const key = source ? sourceKey(source) : "";
-    const at = new Date().toISOString();
-    const base = { id, title: n.title, rev: n.rev, by: w, at, source };
-    // R1-03: the rules (`already`, `same_source`, ...) and the kind are decided INSIDE the write transaction (BEGIN IMMEDIATE), so
-    // two processes cannot both read "nothing yet" and both count.
-    const st: { refusal: { code: string; message: string } | null; kind: ConfirmResult["kind"]; stored: boolean; kept: { at: string; kind: string } | null } = {
-      refusal: null,
-      kind: "not_counted",
-      stored: false, // this confirm became the note's confirm
-      kept: null, // a stronger confirm of this version stays (this one is recorded)
-    };
-    const write = (): void => {
-      const refusal = this.confirmRefusal(n, w, human, opts.admin === true, key, opts.admin === true && opts.dashboard === true);
-      st.refusal = refusal;
-      if (refusal?.code === "already") return;
-      const kind: ConfirmResult["kind"] = refusal ? "not_counted" : human ? "human" : opts.admin ? "admin" : "corroborated";
-      st.kind = kind;
-      this.db
-        .prepare("INSERT INTO confirmations (note_id, note_rev, at, by, by_authed, kind, source, source_key, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(id, n.rev, at, w, actorStore.getStore()?.authed ? 1 : 0, kind, source, key, refusal?.code ?? "");
-      if (refusal) return;
-      // Only a confirm at least as strong as the note's current one (for this rev) replaces it and restarts the
-      // re-confirmation clock: an agent's corroboration never refreshes a person's or an admin's confirm. Decided inside
-      // the UPDATE, so two processes cannot let a weaker kind overwrite a stronger one. `rev = ?`: the version read.
-      const res = this.db
-        .prepare(
-          `UPDATE notes SET confirmed_at = ?, confirmed_rev = rev, confirmed_kind = ?, confirmed_by = ?
-           WHERE id = ? AND rev = ? AND NOT (confirmed_rev = rev AND ${rankSql("confirmed_kind")} > ?)`
-        )
-        .run(at, kind, w, id, n.rev, CONFIRM_RANK[kind]);
-      st.stored = Number(res.changes) > 0;
-      if (!st.stored) {
-        const cur = this.db.prepare("SELECT rev, confirmed_at, confirmed_kind FROM notes WHERE id = ?").get(id) as { rev: number; confirmed_at: string; confirmed_kind: string } | undefined;
-        if (cur && Number(cur.rev) === n.rev) st.kept = { at: cur.confirmed_at, kind: cur.confirmed_kind };
-      }
-    };
-    // Inside a caller's transaction (a CLI supersede's commit) the rows ride on it.
-    if (this.db.isTransaction) write();
-    else this.transaction(write);
-    const { refusal, kind, stored, kept } = st;
-    if (refusal?.code === "already") return { ...base, counted: false, recorded: false, kind: "not_counted", reason: refusal.code, message: refusal.message };
-    this.audit({ op: refusal ? "confirm-not-counted" : "confirm", id, namespace: n.namespace, detail: refusal ? refusal.code : kind });
-    if (!refusal && !stored && !kept) {
-      const message = `Not counted: note ${id} changed while it was being confirmed. Read it again and confirm the new version.`;
-      return { ...base, counted: false, recorded: true, kind: "not_counted", reason: "changed", message };
-    }
-    const checked = source ? ` Checked against: ${source}.` : "";
-    const cs = this.confirmSettings();
-    // The due date is the one stored: this confirm's, or the stronger one the note keeps.
-    const dueAt = kept ? Date.parse((kept as { at: string }).at) + cs.days * 86_400_000 : Date.parse(at) + cs.days * 86_400_000;
-    const dueDay = new Date(dueAt).toISOString().slice(0, 10);
-    const keptKind = kept ? (kept as { kind: string }).kind : "";
-    const weakOnly = !refusal && (stored ? kind === "corroborated" : keptKind === "corroborated");
-    const due =
-      weakOnly
-        ? " This releases the session-start hold. It does not restart the re-confirmation clock: a person or an admin must confirm for that."
-        : cs.mode === "off" ? "" : dueAt <= Date.now() ? ` It is past its re-confirmation date (${dueDay}): a person or an admin must confirm it again.` : ` Next check due ${dueDay}.`;
-    // Only the person at the terminal sees the title echoed: to an agent a title is outside text it did not ask to read.
-    const what = human ? `"${n.title.slice(0, 80)}"` : `note #${id}`;
-    const keptNote = kept ? ` The note keeps its stronger ${(kept as { kind: string }).kind} confirm; this one is recorded but does not restart its clock.` : "";
-    const message = refusal ? refusal.message : `Confirmed ${what} by ${w || "(unknown)"} at ${at.slice(0, 16).replace("T", " ")}.${checked}${keptNote}${due}`;
-    return { ...base, counted: !refusal, recorded: true, kind, ...(refusal ? { reason: refusal.code } : {}), message };
+    return confirmOps.confirm(this, id, opts);
   }
 
-  /** Why a confirm does not count (null = it counts). Plain words, naming the rule. */
-  private confirmRefusal(n: NoteRecord, w: string, human: boolean, admin: boolean, key: string, dashboard = false): { code: string; message: string } | null {
-    const who = w || "an unidentified writer";
-    // With expiry on, a confirm older than the expiry period no longer blocks a new one: re-confirming is the point.
-    const c = this.confirmSettings();
-    const since = c.mode === "off" ? "" : new Date(Date.now() - c.days * 86_400_000).toISOString();
-    const again = this.db
-      .prepare("SELECT 1 FROM confirmations WHERE note_id = ? AND note_rev = ? AND by = ? AND reason = '' AND at > ? LIMIT 1")
-      .get(n.id, n.rev, w, since);
-    if (again) return { code: "already", message: `Not counted again: ${who} already confirmed this version of the note. One confirm per writer per version.` };
-    if (human) return null;
-    const own = [n.written_by, n.created_by, n.attested_writer ?? "", ...(n.merged_from_writers ?? [])].filter(Boolean);
-    if (w && own.includes(w)) return { code: "same_writer", message: `Not counted: ${who} wrote this note, so it can't confirm it. A person or a different agent must confirm.` };
-    const actor = actorStore.getStore();
-    if (!actor?.authed || w === "" || w === "stdio" || w.startsWith("stdio:")) {
-      return { code: "unauthenticated", message: `Not counted: ${who} is a local connection without its own key, so its name is a claim, not an identity. The confirm is recorded but does not count. A person (monomem confirm ${n.id}) or an agent with its own key must confirm.` };
-    }
-    if (this.isDistrusted({ namespace: n.namespace, written_by: w })) return { code: "distrusted", message: `Not counted: ${who} is on the distrust list for this namespace.` };
-    // The dashboard (a session opened with monomem open; it lists the note to show the button) skips this rule: a person
-    // is looking at the note, and an admin confirm only releases the session-start hold, never promotion. Any other key,
-    // admin or not, that was handed the note while unconfirmed is refused: REST cannot tell a person from an agent.
-    if (!dashboard && actor.taintedReads?.has(n.id)) {
-      return { code: "read_it", message: `Not counted: ${who} read this note's text while it was unconfirmed, so the confirm could be the note talking. A person or an agent that has not read it must confirm.` };
-    }
-    const derived = this.db
-      .prepare("SELECT 1 FROM note_links l JOIN notes c ON c.id = l.note_id WHERE l.derived_from = ? AND (c.written_by = ? OR c.created_by = ?) LIMIT 1")
-      .get(n.id, w, w);
-    if (derived) return { code: "derived", message: `Not counted: ${who} wrote a note built from this one, so it can't confirm it.` };
-    if (admin) return null;
-    if (!key) return { code: "no_source", message: "Not counted: an agent's confirm must name the source it checked the note against (source)." };
-    // Bounded like "already": after the expiry period an earlier confirm's source may be named again.
-    const used = this.db.prepare("SELECT source_key FROM confirmations WHERE note_id = ? AND note_rev = ? AND reason = '' AND at > ?").all(n.id, n.rev, since) as Array<{ source_key: string }>;
-    if ((n.source && sourceKey(n.source) === key) || used.some((u) => u.source_key === key)) {
-      return { code: "same_source", message: "Not counted: that source is the note's own, or one an earlier confirm already named. Name a different source." };
-    }
-    return null;
+  /** @internal */ confirmRefusal(n: NoteRecord, w: string, human: boolean, admin: boolean, key: string, dashboard = false): { code: string; message: string } | null {
+    return confirmOps.confirmRefusal(this, n, w, human, admin, key, dashboard);
   }
 
   /** Pinned notes (id, namespace, title), oldest first; `namespaces` limits it to those. */
@@ -8739,19 +8481,7 @@ export class Store {
    * last written by it then, or with a kept or dropped history version it replaced then. `family`: "stdio" also means stdio:<app>.
    */
   rollbackCandidates(writer: string, family: boolean, sinceIso: string, namespaces?: string[]): number[] {
-    if (namespaces && namespaces.length === 0) return [];
-    const m = (col: string) => nameIsSql(col, writer, family);
-    const [c, w, h, d] = [m("created_by"), m("written_by"), m("h.saved_by"), m("d.saved_by")];
-    const nsSql = namespaces ? ` AND namespace IN (${namespaces.map(() => "?").join(",")})` : "";
-    const rows = this.db
-      .prepare(
-        `SELECT id FROM notes WHERE ((${c.sql} AND created_at >= ?) OR (${w.sql} AND updated_at >= ?)
-           OR id IN (SELECT h.note_id FROM note_history h WHERE ${h.sql} AND h.saved_at >= ?)
-           OR id IN (SELECT d.note_id FROM note_history_dropped d WHERE ${d.sql} AND d.last_at >= ?))${nsSql}${this.ceilingSql()}
-         ORDER BY id`
-      )
-      .all(...c.params, sinceIso, ...w.params, sinceIso, ...h.params, sinceIso, ...d.params, sinceIso, ...(namespaces ?? [])) as Array<{ id: number }>;
-    return rows.map((r) => Number(r.id));
+    return confirmOps.rollbackCandidates(this, writer, family, sinceIso, namespaces);
   }
 
   /** Mark a confirmation code's nonce used (the supersede_used table); throws when it already was. Caller holds the write lock. */
