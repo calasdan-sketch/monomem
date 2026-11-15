@@ -148,6 +148,8 @@ const SQL_ALLOWED: Record<string, string[]> = {
   "bench/monomem-adapter.ts": ["_meta"],
   // bench/scale.ts counts sealed bodies (body_enc IS NOT NULL, a COUNT only) in the synthetic temp-folder store it just built.
   "bench/scale.ts": ["notes"],
+  // drill.ts forgets the copied key-id marker (_meta attest_key_id) in its own temp-folder COPY of the database, as the bench adapter does.
+  "drill.ts": ["_meta"],
   // health.ts keeps its own "audit lines seen" marker in _meta (health_audit_seen); it reads no trust setting.
   "health.ts": ["_meta"],
   // restore.ts counts (and checks for encryption) the BACKUP FILE it is about to put in place, before any store opens it.
