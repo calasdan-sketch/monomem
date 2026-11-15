@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
 import { Store, QuarantinedError, StaleWriteError, ValidationError } from "../src/store.js";
 import { createApiServer } from "../src/api.js";
@@ -195,6 +196,23 @@ describe("R1-14 a person at a terminal is told the hold is missing before the ty
     } finally {
       Object.assign(process.stdin, { isTTY: tty[0] });
       Object.assign(process.stdout, { isTTY: tty[1] });
+    }
+  });
+});
+
+describe("R1-22 L2 the gate says what a confirm is, not that it lowers protection", () => {
+  test("monomem confirm from a script: refused with person-confirm wording", () => {
+    const home = mkdtempSync(join(tmpdir(), "om-gatewording-"));
+    try {
+      const env = { ...process.env, MONOMEM_HOME: home, ONEMEMORY_HOME: home, MONOMEM_DB_PATH: join(home, "t.db") };
+      const cli = fileURLToPath(new URL("../src/cli.js", import.meta.url));
+      spawnSync(process.execPath, [cli, "add", "from a page", "--outside"], { env, encoding: "utf8" });
+      const r = spawnSync(process.execPath, [cli, "confirm", "1"], { env, encoding: "utf8", input: "" });
+      assert.equal(r.status, 1);
+      assert.match(r.stderr, /is recorded as a person's confirm/);
+      assert.doesNotMatch(r.stderr, /lowers/);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
     }
   });
 });

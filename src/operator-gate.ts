@@ -32,10 +32,18 @@ export async function gateOutside(store: import("./store.js").Store, ids: number
  * agent running the CLI through a non-interactive shell tool. It is not a guarantee: a tool that allocates
  * a pseudo-terminal can pass it (SECURITY.md).
  */
-export async function requireOperator(what: string, precheck?: () => void): Promise<void> {
+/** Why the gate asks (R1-22 L2): most commands lower protection; a confirm is a person vouching for a note. */
+export type GateReason = "lowers-protection" | "person-confirm";
+const REASON: Record<GateReason, { refused: string; prompt: string }> = {
+  "lowers-protection": { refused: "lowers this store's protection", prompt: "lowers protection" },
+  "person-confirm": { refused: "is recorded as a person's confirm", prompt: "is recorded as your confirm" },
+};
+
+export async function requireOperator(what: string, precheck?: () => void, reason: GateReason = "lowers-protection"): Promise<void> {
+  const r = REASON[reason];
   if (!(process.stdin.isTTY && process.stdout.isTTY)) {
     console.error(
-      `Refused: ${what} lowers this store's protection, so a person must run it in a terminal and type a confirmation. ` +
+      `Refused: ${what} ${r.refused}, so a person must run it in a terminal and type a confirmation. ` +
         "This is not a terminal (an agent's shell tool, a script or a pipe), and there is no --yes for it. Open a terminal and run the same command there."
     );
     process.exit(1);
@@ -44,7 +52,7 @@ export async function requireOperator(what: string, precheck?: () => void): Prom
   // and a script (refused above) learns nothing from it.
   precheck?.();
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const answer = await new Promise<string>((resolve) => rl.question(`${what} lowers protection. Type "yes" to continue: `, resolve));
+  const answer = await new Promise<string>((resolve) => rl.question(`${what} ${r.prompt}. Type "yes" to continue: `, resolve));
   rl.close();
   if (answer.trim().toLowerCase() !== "yes") {
     console.error("Not confirmed; nothing changed.");

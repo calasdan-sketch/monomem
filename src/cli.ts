@@ -2766,7 +2766,7 @@ async function confirmCmd(args: string[]): Promise<void> {
       console.error(`Error: no note with id ${id}`);
       process.exit(1);
     }
-    await requireOperator(`confirm note #${id} ("${printable(n.title, 60)}")`);
+    await requireOperator(`confirm note #${id} ("${printable(n.title, 60)}")`, undefined, "person-confirm");
     const r = store.confirm(id, { source });
     if (!r) {
       console.error(`Error: no note with id ${id}`);
@@ -2797,7 +2797,7 @@ async function reviewCmd(args: string[]): Promise<void> {
     const items = store.reviewList(ns !== undefined ? [ns] : undefined);
     if (flags.step === true) {
       if (!items.length) return void console.log("Nothing waits for review.");
-      await requireOperator(`review ${items.length} note${items.length === 1 ? "" : "s"} one at a time (each y is recorded as your confirm)`);
+      await requireOperator(`review ${items.length} note${items.length === 1 ? "" : "s"} one at a time: each y`, undefined, "person-confirm");
       const readline = await import("node:readline/promises");
       const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
       let ended = false;
@@ -2830,7 +2830,7 @@ async function reviewCmd(args: string[]): Promise<void> {
     }
     if (!items.length) return;
     const source = typeof flags.source === "string" ? flags.source : "reviewed with monomem review";
-    await requireOperator(`confirm all ${items.length} notes listed above as checked ("${printable(source, 60)}")`);
+    await requireOperator(`confirm all ${items.length} notes listed above as checked ("${printable(source, 60)}")`, undefined, "person-confirm");
     let counted = 0;
     for (const r of items) {
       const res = store.confirm(r.id, { source });
