@@ -64,6 +64,13 @@ upgrading from 1.3.x takes one step (docs/upgrading.md).
 
 ### Changed
 
+- **Keyword search ranks better (round 3, item 4).** The any-keyword search also matches other forms of a word ("camping"
+  finds "camped"; plural s/es, ed and ing only), and a note's keyword-coverage share now weighs each keyword by how rare it is in
+  the store, so the note holding a question's one rare word beats one holding two common ones. Full runs, keyword-only,
+  before / after: LongMemEval-S strict recall-all@5 84.0 to 85.7 (R@5 96.8 to 97.2), LoCoMo-10 by turn R@5 57.8 to 60.8, by
+  session 90.4 to 90.9. Tuned on half the questions; on the held-out half every metric rose except LoCoMo-10 session R@5, which
+  fell 0.3 (about 3 questions). Identical with encryption on. docs/BENCHMARK.md has both halves.
+
 - **`monomem setup --yes` adds the start-of-session hook for Claude Code** (it is what makes remembered notes reach a new
   session). It says what it added; leave it out with `--no-hook`, take it back with `setup --undo`. When the hook is not
   installed, setup says so on its last line.
@@ -126,7 +133,8 @@ upgrading from 1.3.x takes one step (docs/upgrading.md).
 - `monomem service install | status | uninstall` (Windows Task Scheduler, macOS LaunchAgent, Linux systemd user unit; never
   run by setup) and `start --log` writing a rotated `server.log`.
 - `monomem bench --longmemeval | --locomo` prints strict recall-all@5 (`Rall@5`, every gold session in the top 5) next to
-  the any-hit `R@5`. LongMemEval-S keyword: 96.8 any-hit, 84.0 strict (docs/BENCHMARK.md).
+  the any-hit `R@5`. LongMemEval-S keyword: 97.2 any-hit, 85.7 strict (docs/BENCHMARK.md). `--split a|b` runs half the
+  questions (by a hash of the question id), so a ranking change can be tuned on one half and checked on the other.
 - `monomem bench --scale 10k`: session start, search and write p50/p95 on a synthetic store in a temp folder, plain and
   encrypted, with the 50 ms encrypted session-start gate (exit 1 when it fails). On the development PC at 10k notes:
   encrypted session start 12-18 ms p50, plain 9-10 ms (docs/BENCHMARK.md).
@@ -135,7 +143,7 @@ upgrading from 1.3.x takes one step (docs/upgrading.md).
   titles and tags, so before this change keyword recall on LongMemEval-S fell from 96.8 to 0.0 R@5. Each Monomem process that
   searches now keeps a second index of every note's decrypted body **in memory only** (an attached in-memory SQLite database
   on its own connection; nothing is written to the database, the WAL or a temp file, and a test checks the files). It covers
-  every note, so ranking is the plain store's: encrypted recall is now identical to plain on LongMemEval-S (96.8 / 84.0 R@5 /
+  every note, so ranking is the plain store's: encrypted recall is now identical to plain on LongMemEval-S (97.2 / 85.7 R@5 /
   Rall@5) and LoCoMo-10 turn and session. Kept current for this process's writes by connection-only triggers, and for other
   processes' writes from the change log. The REST and MCP servers build it just after start-up (0.6-0.8 s and about 30 MB
   of memory per 10,000 notes, measured); the hooks never build it, so session start stays fast. On an encrypted store session start
