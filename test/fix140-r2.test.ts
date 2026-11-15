@@ -157,7 +157,7 @@ describe("N4: a cli write from a script is retro-marked by a spooled outside rea
     const dir = mkdtempSync(join(tmpdir(), "om-n4-"));
     try {
       const s = new Store(":memory:");
-      spoolEvent(dir, { ...normalizeHookInput("post-tool", { session_id: "late", cwd: "C:/w", tool_name: "WebFetch", tool_input: { url: "https://x" }, tool_response: "p" }, new Date(Date.now() - 60_000)), namespace: "default" });
+      spoolEvent(dir, { ...normalizeHookInput("post-tool", { session_id: "late", cwd: "C:/w", tool_name: "WebFetch", tool_input: { url: "https://x" }, tool_response: "p" }, new Date(Date.now() - 60_000)), namespace: "default" }, null);
       setProcessWriter("cli");
       setTtyCheck(() => false);
       const piped = s.create({ title: "from a script" });

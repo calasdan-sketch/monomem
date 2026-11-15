@@ -92,7 +92,7 @@ describe("taint-spool-retro", () => {
       const s = new Store(":memory:");
       const at = new Date(Date.now() - 60_000);
       // The hook could not open the database: the event went to the spool.
-      assert.ok(spoolEvent(dir, { ...fetchEv("late", at), namespace: "default" }));
+      assert.ok(spoolEvent(dir, { ...fetchEv("late", at), namespace: "default" }, null));
       setProcessWriter("stdio");
       const n = s.create({ title: "written meanwhile", body: "from the page" });
       assert.equal(n.unconfirmed, undefined, "not seen yet");

@@ -10,6 +10,8 @@
 //   - a prompt-injection-shaped tool output -> security_alert (the label and the source only, never the text)
 //   - a decision phrase in a prompt ("let's go with", "from now on", ...) -> decision
 //   - concepts: keywords.ts over the observation's own text, as obs.concept:<word> tags
+// With a key present (1.5.0 S-02a) titles and tags are never sealed, so a capture note gets fixed words for a title
+// ("Decision (sealed)", "Session 2026-11-14"), its built title moves to the first line of the sealed body, and no concept tags.
 // Observations and summaries go through Store.create / Store.update like any note (lint, quarantine, history apply);
 // their kind/session/type are set through write options no request can reach, and their tags are reserved
 // (reserved-tags.ts), so an ordinary write cannot forge one. Observations run from `distilled_seq` onward (each event is
@@ -46,6 +48,7 @@ interface SessionRow {
   id: string;
   namespace: string;
   cwd: string;
+  started_at: string;
   distilled_seq: number;
   summary_note_id: number | null;
 }
@@ -287,7 +290,7 @@ function eventsAfter(store: Store, sessionId: string, seq: number, limit = BATCH
 }
 
 function session(store: Store, id: string): SessionRow | null {
-  return (store.captureDb().prepare("SELECT id, namespace, cwd, distilled_seq, summary_note_id FROM sessions WHERE id = ?").get(id) as SessionRow | undefined) ?? null;
+  return (store.captureDb().prepare("SELECT id, namespace, cwd, started_at, distilled_seq, summary_note_id FROM sessions WHERE id = ?").get(id) as SessionRow | undefined) ?? null;
 }
 
 /** Words the observation templates themselves add: not concepts. */
@@ -298,11 +301,25 @@ function tagsFor(kind: "observation" | "summary", type: string, text: string): s
   return [kind, `obs.type:${type}`, ...concepts.slice(0, 5).map((k) => `obs.concept:${k}`)];
 }
 
+/** The fixed title a sealed observation gets ("Decision (sealed)", "Security alert (sealed)"). */
+const SEALED_SUFFIX = " (sealed)";
+const sealedObsTitle = (type: string): string => `${type.charAt(0).toUpperCase()}${type.slice(1).replace(/_/g, " ")}${SEALED_SUFFIX}`;
+/** The fixed title a sealed session summary gets: the day it started. */
+export const sealedSessionTitle = (startedAt: string): string => `Session ${startedAt.slice(0, 10)}`;
+/** An observation's own title: a sealed one keeps it as the first line of its body. */
+const obsTitle = (n: { title: string; body: string }): string => (n.title.endsWith(SEALED_SUFFIX) ? n.body.split("\n")[0] : n.title);
+
 /** Write one capture note; a write the linter holds or refuses is skipped (the linter doing its job), never thrown. */
 function write(store: Store, s: SessionRow, kind: "observation" | "summary", type: string, title: string, body: string, files: Observation["files"], extraTags: string[] = []): NoteRecord | null {
+  const sealed = store.sealsWrites();
+  if (sealed) {
+    // The summary's request is already in its body ("Request: ..."); an observation's title becomes its first body line.
+    if (kind === "observation") body = `${title}\n${body}`;
+    title = kind === "observation" ? sealedObsTitle(type) : sealedSessionTitle(s.started_at);
+  }
   const attempt = (extra: string[]): NoteRecord => {
     const note = store.create(
-      { namespace: s.namespace || DEFAULT_NAMESPACE, title, body, tags: [...tagsFor(kind, type, `${title} ${body}`), ...extra], source: CAPTURE_SOURCE },
+      { namespace: s.namespace || DEFAULT_NAMESPACE, title, body, tags: [...tagsFor(kind, type, sealed ? "" : `${title} ${body}`), ...extra], source: CAPTURE_SOURCE },
       { kind, sessionId: s.id, obsType: kind === "observation" ? type : "", skipEdges: true }
     );
     linkFiles(store, note.id, files);
@@ -411,9 +428,10 @@ export function distillSession(store: Store, sessionId: string): { observations:
     if (batch.length < BATCH) break;
   }
   const all = eventsAfter(store, sessionId, 0, 20_000);
-  const titles = store.list({ kinds: ["observation"], sessionId, limit: 50, order: "created_asc" }).notes.map((n) => n.title);
+  const titles = store.list({ kinds: ["observation"], sessionId, limit: 50, order: "created_asc" }).notes.map(obsTitle);
   const sum = summarize(all, s.cwd, titles);
   if (!sum) return { observations: written, summaryId: s.summary_note_id };
+  if (store.sealsWrites()) sum.title = sealedSessionTitle(s.started_at);
   // The summary quotes the session's errors and closing words, which can carry what an outside tool returned: stamp it.
   // Observations are not stamped: their text comes from the user's prompts and local commands, never from tool output.
   const origin = originTags(all);

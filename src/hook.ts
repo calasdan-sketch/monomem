@@ -11,6 +11,8 @@
 // user-prompt prints one title line per note other writers saved since the previous prompt (nothing when there are none).
 // file-context (PreToolUse on Read) prints what memory knows about the file about to be read (file-context.ts); advisory only.
 import { existsSync } from "node:fs";
+import { dirname } from "node:path";
+import { loadKey } from "./crypto.js";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { HOOK_EVENTS, type HookEvent, captureSettings, normalizeHookInput, shouldCapture, recordEvent, spoolEvent, drainSpool, type CaptureEvent } from "./capture.js";
@@ -144,7 +146,15 @@ export async function captureHook(event: HookEvent, payload: Record<string, unkn
   } catch (e) {
     process.stderr.write(`monomem hook ${event}: ${(e as Error).message}; keeping the event for later\n`);
     if (await postCapture(env, { ...ev, namespace })) return "posted";
-    return spoolEvent(dataDir, { ...ev, namespace }) ? "spooled" : "dropped";
+    // With a key beside the database the spool line is sealed (S-02b); a key file that cannot be read drops the event
+    // rather than writing it in the clear.
+    let key: Buffer | null;
+    try {
+      key = loadKey(dirname(dbPath));
+    } catch {
+      return "dropped";
+    }
+    return spoolEvent(dataDir, { ...ev, namespace }, key) ? "spooled" : "dropped";
   } finally {
     try {
       store?.close();

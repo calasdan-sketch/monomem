@@ -59,6 +59,11 @@ export function captureAad(seq: number, sessionId: string, field: "output" | "in
   return `${field === "input" ? "capture-input" : "capture"}|${seq}|${sessionId}`;
 }
 
+/** The AAD that binds a sealed capture-spool line (capture.ts) to its spool id, so a line moved under another id does not open. */
+export function spoolAad(spoolId: string): string {
+  return `spool|${spoolId}`;
+}
+
 /** Default key location: beside the database, in the data dir. */
 export const KEY_FILENAME = ".key";
 

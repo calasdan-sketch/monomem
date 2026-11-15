@@ -120,7 +120,10 @@ export async function llmSummarize(store: Store, sessionId: string, env: NodeJS.
     const facts = sum.body.split("\n").filter((l) => /^(?:Files changed|Files read|Commands|Errors|Outcome):/.test(l));
     // Marked model-written (a reserved tag) so memory_get / the index / SessionStart can say so.
     const tags = [...sum.tags.filter((t) => t !== MODEL_WRITTEN_TAG), MODEL_WRITTEN_TAG];
-    store.update(sum.id, { title: `Session: ${parsed.title}`, body: [parsed.body, ...facts].join("\n").slice(0, BODY_MAX + 2000), tags });
+    // Key present (S-02a): titles are not sealed, so the model's title (made from the prompts) goes into the body instead.
+    const sealed = store.sealsWrites();
+    const body = [...(sealed ? [parsed.title] : []), parsed.body, ...facts].join("\n").slice(0, BODY_MAX + 2000);
+    store.update(sum.id, { title: sealed ? sum.title : `Session: ${parsed.title}`, body, tags });
     return true;
   } catch (e) {
     process.stderr.write(`monomem: LLM summary skipped (${(e as Error).message}); the automatic summary stays\n`);

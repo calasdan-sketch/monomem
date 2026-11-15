@@ -59,7 +59,7 @@ describe("R1-13 spool drain", () => {
       setProcessWriter("stdio:cursor");
       const note = actorStore.run({ label: "stdio:cursor", cwd: "/w" }, () => s!.create({ title: "written after the web read", body: "b" }));
       setProcessWriter("");
-      spoolEvent(dir, { ...webEvent(), namespace: "default" });
+      spoolEvent(dir, { ...webEvent(), namespace: "default" }, null);
       const real = s.retroTaint.bind(s);
       let calls = 0;
       s.retroTaint = ((...a: Parameters<Store["retroTaint"]>) => {
@@ -91,7 +91,7 @@ describe("R1-13 spool drain", () => {
     let s: Store | undefined;
     try {
       s = new Store(join(dir, "state.db"));
-      spoolEvent(dir, { ...webEvent(), namespace: "default" });
+      spoolEvent(dir, { ...webEvent(), namespace: "default" }, null);
       const line = readFileSync(join(dir, SPOOL_FILE), "utf8");
       drainSpool(s, dir);
       writeFileSync(join(dir, SPOOL_FILE), line); // the same line comes back

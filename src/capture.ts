@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import type { Store } from "./store.js";
 import { redact } from "./redact.js";
-import { captureAad } from "./crypto.js";
+import { captureAad, encrypt, spoolAad } from "./crypto.js";
 import { currentWriter } from "./actor.js";
 import { isOutsideTool } from "./taint.js";
 import { audit } from "./security.js";
@@ -224,12 +224,31 @@ export const SPOOL_MAX_TRIES = 5;
 /** A `.draining` file this old was left by a hook that died mid-drain: the next drain adopts it. */
 const STALE_DRAIN_MS = 10 * 60_000;
 
-export function spoolEvent(dataDir: string, ev: SpooledEvent): boolean {
+/**
+ * One spool line. With a key (1.5.0 S-02b) it is `{spool_id, tries, sealed}`: the whole event sealed and bound to its spool
+ * id. Without one it is the event itself, as before. `seal` returns null when there is no key.
+ */
+function spoolLine(ev: SpooledEvent, seal: (plain: string, aad: string) => string | null): object {
+  const full = { ...ev, spool_id: ev.spool_id ?? randomBytes(16).toString("hex") };
+  const sealed = seal(JSON.stringify(full), spoolAad(full.spool_id));
+  return sealed ? { spool_id: full.spool_id, ...(full.tries ? { tries: full.tries } : {}), sealed } : full;
+}
+
+/** Spool one event, sealed when `key` is given (the key beside the database; null = encryption off). */
+export function spoolEvent(dataDir: string, ev: SpooledEvent, key: Buffer | null): boolean {
+  try {
+    return appendSpool(dataDir, spoolLine(ev, (plain, aad) => (key ? encrypt(plain, key, aad) : null)));
+  } catch {
+    return false;
+  }
+}
+
+function appendSpool(dataDir: string, line: object): boolean {
   try {
     mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     const p = join(dataDir, SPOOL_FILE);
     if (existsSync(p) && statSync(p).size > SPOOL_MAX_BYTES) return false;
-    appendFileSync(p, JSON.stringify({ ...ev, spool_id: ev.spool_id ?? randomBytes(16).toString("hex") }) + "\n", { mode: 0o600 });
+    appendFileSync(p, JSON.stringify(line) + "\n", { mode: 0o600 });
     try {
       chmodSync(p, 0o600);
     } catch {
@@ -273,17 +292,39 @@ export function drainSpool(store: Store, dataDir: string, now = Date.now()): num
     try {
       for (const line of readFileSync(taken, "utf8").split("\n")) {
         if (!line.trim()) continue;
-        let ev: SpooledEvent;
+        let raw: Record<string, unknown> | null;
         try {
-          ev = JSON.parse(line) as SpooledEvent;
+          raw = JSON.parse(line) as Record<string, unknown> | null;
         } catch {
           continue; // a torn line (a hook killed mid-write) is dropped
         }
+        let ev: SpooledEvent;
+        if (raw && typeof raw.sealed === "string") {
+          // A sealed line opens only with the key and under the spool id it was sealed with; the id it carries is the one used.
+          const id = String(raw.spool_id ?? "");
+          try {
+            ev = { ...(JSON.parse(store.openCapture("", raw.sealed, spoolAad(id))) as SpooledEvent), spool_id: id, tries: Number(raw.tries) || 0 };
+          } catch {
+            // Key gone, or the line was moved under another id: kept as it is until the try limit, never opened.
+            const tries = (Number(raw.tries) || 0) + 1;
+            if (tries < SPOOL_MAX_TRIES) appendSpool(dataDir, { ...raw, tries });
+            else dropped++;
+            continue;
+          }
+        } else ev = raw as unknown as SpooledEvent;
         if (!ev || typeof ev.session_id !== "string" || !(HOOK_EVENTS as readonly string[]).includes(ev.event)) continue;
         const respool = (extra: Partial<SpooledEvent>): void => {
           const tries = (Number(ev.tries) || 0) + 1;
-          if (tries < SPOOL_MAX_TRIES) spoolEvent(dataDir, { ...ev, ...extra, tries });
-          else dropped++;
+          if (tries >= SPOOL_MAX_TRIES) {
+            dropped++;
+            return;
+          }
+          // Put back sealed when the store seals (an old plain line comes back sealed too).
+          try {
+            appendSpool(dataDir, spoolLine({ ...ev, ...extra, tries }, (plain, aad) => store.sealCapture(plain, aad).enc));
+          } catch {
+            dropped++; // the store refuses to write plaintext (its key went missing): never spooled in the clear
+          }
         };
         if (!ev.retro_only) {
           try {

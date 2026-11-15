@@ -3815,6 +3815,11 @@ export class Store {
     return this.lastKey;
   }
 
+  /** Whether a write made now is sealed (a key file is present). The capture writer uses it to keep user text out of titles. */
+  sealsWrites(): boolean {
+    return this.writeKey() !== null;
+  }
+
   /**
    * Key for DECRYPTING. Prefers the last key seen so a reader racing a
    * concurrent `encrypt disable` (key file already gone, its snapshot still

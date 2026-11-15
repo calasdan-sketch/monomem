@@ -289,7 +289,7 @@ describe("guards the mutation run found untested", () => {
     try {
       const s = new Store(":memory:");
       const at = new Date(Date.now() - 60_000);
-      spoolEvent(dir, { ...normalizeHookInput("post-tool", { session_id: "late", cwd: "C:/w", tool_name: "WebFetch", tool_input: { url: "https://x" }, tool_response: "p" }, at), namespace: "default" });
+      spoolEvent(dir, { ...normalizeHookInput("post-tool", { session_id: "late", cwd: "C:/w", tool_name: "WebFetch", tool_input: { url: "https://x" }, tool_response: "p" }, at), namespace: "default" }, null);
       setProcessWriter("cli");
       setTtyCheck(() => true); // the person at a terminal (1.4.0: a cli write from a script is not exempt)
       const mine = s.create({ title: "the operator's note" });
