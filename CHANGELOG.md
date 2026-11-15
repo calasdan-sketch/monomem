@@ -127,8 +127,11 @@ upgrading from 1.3.x takes one step (docs/upgrading.md).
   every note, so ranking is the plain store's: encrypted recall is now identical to plain on LongMemEval-S (96.8 / 84.0 R@5 /
   Rall@5) and LoCoMo-10 turn and session. Kept current for this process's writes by connection-only triggers, and for other
   processes' writes from the change log. The REST and MCP servers build it just after start-up (0.6-0.8 s and about 30 MB
-  of memory per 10,000 notes, measured); the hooks never build it, so session start stays fast and on an encrypted store the
-  session-start context is still matched on titles and tags. Not built above 100,000 notes. `MONOMEM_BODY_INDEX=off` turns it
+  of memory per 10,000 notes, measured); the hooks never build it, so session start stays fast. On an encrypted store session start
+  matches titles and tags itself and, when a Monomem server for the same store runs on this computer, asks that server
+  (127.0.0.1 only, at most 0.3 s) which notes' bodies match; with no server, or a slow one, it stays on titles and tags.
+  The hook sends its main key only after the server proves, over a fresh nonce, that it holds the same key and store
+  (`GET /proof`), and it takes only note ids back: every note is re-read and filtered locally. Not built above 100,000 notes. `MONOMEM_BODY_INDEX=off` turns it
   off. **Security change:** while a server runs, every body's words are in its memory, which the system can page to swap or a
   hibernation file or write into a crash dump; use whole-disk encryption too (SECURITY.md, docs/encryption-retention.md,
   `encrypt status --surfaces` lists it). A search that finds nothing says bodies were not searched only when that is true.

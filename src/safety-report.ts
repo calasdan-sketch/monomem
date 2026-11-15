@@ -54,7 +54,7 @@ export async function safetyChecks(i: SafetyInput): Promise<Check[]> {
   const enc = existsSync(keyPath(dirname(i.dbPath)));
   out.push(enc
     ? { name: "Encryption at rest", status: "Pass", detail: "Note bodies are encrypted in the database file. While a Monomem server runs, its body search index holds their words in memory, which the system can page to swap or a hibernation file: use whole-disk encryption too." }
-    : { name: "Encryption at rest", status: "Warn", detail: "Note bodies are stored as plain text in the database file (anyone who can read the file can read them).", fix: "monomem encrypt enable (body search then runs from an index kept in memory only; the session-start hook searches titles and tags)" });
+    : { name: "Encryption at rest", status: "Warn", detail: "Note bodies are stored as plain text in the database file (anyone who can read the file can read them).", fix: "monomem encrypt enable (body search then runs from an index kept in memory only; the session-start hook matches titles and tags, plus body words when a Monomem server for this store is running)" });
 
   const age = backupAgeDays(i.dataDir);
   out.push(age !== null && age <= 7

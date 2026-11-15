@@ -8,10 +8,12 @@
 // What is injected is ranked by relevance to where you are (git branch, changed files, recent work) and packed into a
 // token budget by context-inject.ts; no embeddings involved.
 import type { NoteRecord } from "./store.js";
+import type { ContextSignals } from "./context-inject.js";
 import { actorStore } from "./actor.js";
 import { noteFlags } from "./taint.js";
 import { recallCeilingFromEnv, SENSITIVITY_HELP } from "./sensitivity.js";
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { UNTRUSTED_BANNER, describeWriter } from "./security.js";
 import {
   namespaceConfigSource,
@@ -65,7 +67,14 @@ export interface RecallOptions {
   cwd?: string;
   /** The hook payload's session_id: what was injected is counted on the meter (meter.ts). */
   sessionId?: string;
+  /** Test hook: these git signals instead of asking git. */
+  signals?: ContextSignals;
+  /** Test hook: the loopback port of a Monomem server to ask for body matches (default MONOMEM_PORT, 8790). */
+  serverPort?: number;
 }
+
+/** 1.5.0: the longest session start waits for a local server's body matches on an encrypted store (askServerForBodyHits). */
+export const SERVER_ASK_MS = 300;
 
 /**
  * Pure function: notes -> the human-readable summary injected as
@@ -188,6 +197,60 @@ export async function resolveRecallNamespace(cwd: string = process.cwd()): Promi
   }
 }
 
+/**
+ * 1.5.0: on an encrypted store this hook matches titles and tags only (it never builds the in-memory body index: time
+ * budget). A Monomem server running here for the SAME store has that index, so ask it which notes' bodies match the
+ * session's keywords: 127.0.0.1 only, within SERVER_ASK_MS, and only after the server proves (GET /proof, an HMAC over a
+ * fresh nonce and this store's id) that it holds this store's main key, so the key never goes to another program on the
+ * port. Only note ids are taken from the answer: the caller re-reads and re-filters every one locally. null = no server,
+ * too slow, not provably ours, or no main key here: matching stays on titles and tags, as before.
+ */
+export async function askServerForBodyHits(
+  storeId: string,
+  port: number,
+  keywords: string[],
+  o: { namespace?: string; writtenBy?: string; notWrittenBy?: string; includeDistrusted?: boolean } = {}
+): Promise<number[] | null> {
+  const { TOKEN_FILE, sha256Hex } = await import("./config.js");
+  const { serverProof } = await import("./http-common.js");
+  let key = process.env.MONOMEM_TOKEN?.trim() ?? "";
+  try {
+    if (!key) key = readFileSync(TOKEN_FILE, "utf8").trim(); // read only: the hook never creates the key file
+  } catch {
+    return null;
+  }
+  if (!key || !keywords.length) return null;
+  const signal = AbortSignal.timeout(SERVER_ASK_MS);
+  const base = `http://127.0.0.1:${port}`;
+  try {
+    const nonce = randomBytes(16).toString("hex");
+    const p = await fetch(`${base}/proof?nonce=${nonce}`, { signal });
+    if (!p.ok) return null;
+    const proof = ((await p.json()) as { proof?: unknown }).proof;
+    const want = Buffer.from(serverProof(sha256Hex(key), nonce, storeId), "hex");
+    const got = typeof proof === "string" && /^[0-9a-f]{64}$/.test(proof) ? Buffer.from(proof, "hex") : Buffer.alloc(0);
+    if (got.length !== want.length || !timingSafeEqual(got, want)) return null;
+    const r = await fetch(`${base}/relevant`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        message: keywords.join(" "),
+        limit: 50,
+        ...(o.namespace !== undefined ? { namespace: o.namespace } : {}),
+        ...(o.writtenBy ? { written_by: o.writtenBy } : {}),
+        ...(o.notWrittenBy ? { not_written_by: o.notWrittenBy } : {}),
+        ...(o.includeDistrusted ? { include_distrusted: true } : {}),
+      }),
+      signal,
+    });
+    if (!r.ok) return null;
+    const results = ((await r.json()) as { results?: unknown }).results;
+    return Array.isArray(results) ? results.map((n) => Number((n as { id?: unknown })?.id)).filter((id) => Number.isSafeInteger(id) && id > 0) : null;
+  } catch {
+    return null; // nothing on the port, too slow, or not a Monomem answer
+  }
+}
+
 interface RecallData {
   /** The ranked, budgeted memory text from context-inject.ts ("" when there is none). */
   memory: string;
@@ -251,7 +314,11 @@ async function fetchRecentNotes(opts: RecallOptions): Promise<RecallData> {
     // Claude Code loads CLAUDE.md and its own auto-memory itself: notes imported from them (import --claude) would be shown
     // twice. Claude Code sets CLAUDE_PROJECT_DIR for its hooks (and CLAUDECODE=1); other apps still get those notes.
     const claudeCode = process.env.CLAUDE_PROJECT_DIR !== undefined || process.env.CLAUDECODE === "1";
-    const memory = await injectContext(store, { namespace, limit, cwd: opts.cwd, ...(opts.sessionId ? { sessionId: opts.sessionId } : {}), ...(claudeCode ? { skipTags: CLAUDE_OWN_TAGS } : {}), ...wf });
+    // 1.5.0: body matches from a local server for this store, when the bodies are sealed (askServerForBodyHits).
+    const port = opts.serverPort ?? (process.env.MONOMEM_NO_SERVER_PROBE === "1" ? null : (await import("./config.js")).API_PORT);
+    const storeId = store.storeId();
+    const bodyHits = port !== null && store.sealsWrites() ? (keywords: string[]) => askServerForBodyHits(storeId, port, keywords, { namespace, ...wf }) : undefined;
+    const memory = await injectContext(store, { ...(bodyHits ? { bodyHits } : {}),  namespace, limit, cwd: opts.cwd, ...(opts.sessionId ? { sessionId: opts.sessionId } : {}), ...(opts.signals ? { signals: opts.signals } : {}), ...(claudeCode ? { skipTags: CLAUDE_OWN_TAGS } : {}), ...wf });
     let board = "";
     try {
       const ns = namespace ? [namespace] : undefined;

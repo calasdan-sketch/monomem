@@ -133,8 +133,9 @@ immediately visible through the others:
 `GET /changes`, `POST /supersede/preview` · `POST /supersede/confirm` · `POST /supersede/undo`,
 `GET /notes/:id/history` · `POST /notes/:id/history/restore` · `DELETE /notes/:id/history` (admin), plus open
 `GET /health` (liveness) and `GET /ready` (DB-touch readiness, used by the
-Docker healthcheck) and the dashboard at `/`. Every route except `/health`,
-`/ready`, and the dashboard requires `Authorization: Bearer <token>`.
+Docker healthcheck), `GET /proof?nonce=` (1.5.0: an HMAC of the nonce and the store id under the main key's hash, so the
+session-start hook can check it reached this store's server before it sends the key; no key or note data) and the
+dashboard at `/`. Every route except `/health`, `/ready`, `/proof` and the dashboard requires `Authorization: Bearer <token>`.
 
 `PUT /notes/:id` takes an optional `if_rev` (the `rev` you last read), as the MCP tool `state_write` does: if the note has
 been changed since, the edit is refused with `409 { error: "stale write: ..." }` instead of replacing the newer write. Without

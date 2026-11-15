@@ -3604,7 +3604,7 @@ async function encryptCmd(): Promise<void> {
       console.log(`Enabled at-rest encryption. Encrypted ${n} note ${n === 1 ? "body" : "bodies"}.`);
       console.log(`Key file: ${crypto.keyPath(keyDir)} -- back it up; losing it loses the bodies.`);
       console.log(
-        "Body search keeps working from an index held in memory only (never on disk); the session-start hook searches titles and tags. " +
+        "Body search keeps working from an index held in memory only (never on disk); the session-start hook matches titles and tags, plus body words when a Monomem server for this store is running. " +
           "That memory can reach swap or a hibernation file: use whole-disk encryption too (monomem encrypt status --surfaces)."
       );
       const copies = Store.preMigrationBackups(DB_PATH);

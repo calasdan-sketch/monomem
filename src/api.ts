@@ -64,7 +64,7 @@ function signAsset(file: string): string | null {
   return signCache.get(file) ?? null;
 }
 import { runnerStatus } from "./liveness.js";
-import { PayloadTooLargeError, readBody, normalizeTokens, IMPORT_BODY_BYTES, applyServerLimits, healthBody } from "./http-common.js";
+import { PayloadTooLargeError, readBody, normalizeTokens, IMPORT_BODY_BYTES, applyServerLimits, healthBody, serverProof } from "./http-common.js";
 
 /**
  * Import size above which the similarity-graph rebuild is DEFERRED rather
@@ -530,6 +530,24 @@ export function createApiServer(
         } catch {
           sendJson(res, 503, { status: "unavailable" });
         }
+        return;
+      }
+
+      // GET /proof?nonce=<32 hex> -> { proof }: lets the session-start hook check that this server holds the same main key and
+      // store before it sends that key here (recall.ts askServerForBodyHits). An HMAC only: no key, no note data.
+      if (req.method === "GET" && path === "/proof") {
+        if (anonLimited()) return;
+        const nonce = url.searchParams.get("nonce") ?? "";
+        const primary = tokens.find((t) => t.label === "primary");
+        if (!primary) {
+          sendJson(res, 404, { error: "this server has no main key" });
+          return;
+        }
+        if (!/^[0-9a-f]{32}$/.test(nonce)) {
+          sendJson(res, 400, { error: "nonce must be 32 lowercase hex characters" });
+          return;
+        }
+        sendJson(res, 200, { proof: serverProof(tokenId(primary), nonce, store.storeId()) });
         return;
       }
 
