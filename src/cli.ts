@@ -3054,8 +3054,12 @@ async function reviewCmd(args: string[]): Promise<void> {
   const store = new Store(DB_PATH);
   try {
     const items = store.reviewList(ns !== undefined ? [ns] : undefined);
+    // Held writes are decided in `monomem quarantine`, but "review" is where people look first: never a false all-clear.
+    const held = store.listQuarantine({ ...(ns !== undefined ? { namespaces: [ns] } : {}), limit: 500 }).length;
+    const heldLine = held ? `${held >= 500 ? "500 or more held writes wait" : held === 1 ? "1 held write waits" : `${held} held writes wait`} for your decision: monomem quarantine` : "";
     if (flags.step === true) {
-      if (!items.length) return void console.log("Nothing waits for review.");
+      if (heldLine && flags.json !== true) console.log(heldLine);
+      if (!items.length) return void (heldLine || console.log("Nothing waits for review."));
       await requireOperator(`review ${items.length} note${items.length === 1 ? "" : "s"} one at a time: each y`, undefined, "person-confirm");
       const readline = await import("node:readline/promises");
       const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -3073,16 +3077,18 @@ async function reviewCmd(args: string[]): Promise<void> {
     const flagged = store.flaggedList(ns !== undefined ? [ns] : undefined);
     const codeChanged = store.codeChangedList(ns !== undefined ? [ns] : undefined);
     if (flags.json === true) {
-      console.log(JSON.stringify({ notes: items, flagged, code_changed: codeChanged }, null, 2));
+      console.log(JSON.stringify({ notes: items, flagged, code_changed: codeChanged, held_writes: held }, null, 2));
       if (flags["confirm-all"] !== true) return;
     } else if (!items.length && !flagged.length && !codeChanged.length) {
-      console.log("Nothing waits for review.");
+      console.log(heldLine || "Nothing waits for review.");
       return;
     } else if (!items.length) {
+      if (heldLine) console.log(heldLine);
       if (flagged.length) printFlagged(flagged);
       if (codeChanged.length) printCodeChanged(codeChanged);
       return;
     } else {
+      if (heldLine) console.log(heldLine);
       if (flagged.length) printFlagged(flagged);
       if (codeChanged.length) printCodeChanged(codeChanged);
       console.log(`${items.length} note${items.length === 1 ? "" : "s"} wait for a person:`);

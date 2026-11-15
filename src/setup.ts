@@ -1825,12 +1825,15 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   io.out("");
 
   // With automatic memory offered, its plan (which includes the start-of-session hook) is the one shown.
-  const optional = hosts.flatMap((h) => capturePlans.get(h) ?? hookPlans.get(h) ?? []);
+  // --yes asks nothing: show only what it will really add (no capture; the start-of-session hook for Claude Code only).
+  const yesCaptureOff = opts.yes && capture === "ask";
+  const yesSkipsHook = (h: HookHost) => opts.yes && opts.hook === "ask" && h.client !== "claude-code";
+  const optional = hosts.flatMap((h) => (yesCaptureOff ? undefined : capturePlans.get(h)) ?? (yesSkipsHook(h) ? undefined : hookPlans.get(h)) ?? []);
   const shown = [...plan.changes, ...optional];
   if (shown.length) {
     io.out("The exact change" + (shown.length > 1 ? "s" : "") + ":");
     for (const c of shown) {
-      if (optional.includes(c)) io.out(`  Optional, only if you agree (${c.lines.join("; ")}):`);
+      if (optional.includes(c)) io.out(opts.yes ? `  Added because of --yes (${c.lines.join("; ")}):` : `  Optional, only if you agree (${c.lines.join("; ")}):`);
       let after: string;
       try {
         after = applyFor(c.before ?? "", c.ops, c.format);

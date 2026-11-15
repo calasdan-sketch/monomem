@@ -141,3 +141,16 @@ describe("setup: automatic memory hooks", () => {
     assert.match(after.hooks.SessionStart[0].hooks[0].command, /recall --budget-ms/);
   });
 });
+
+describe("setup --yes preview (final panel, ease B2)", () => {
+  test("the preview shows only what --yes adds: the start-of-session hook, not the capture hooks it leaves out", async () => {
+    const s = sandbox();
+    const out = io();
+    assert.equal(await runSetup(s.e, out, opts({ yes: true, db: s.db })), 0, out.all());
+    const after = read(s.settings);
+    assert.ok(after.hooks.SessionStart, "--yes adds the start-of-session hook");
+    assert.equal(after.hooks.PostToolUse, undefined, "--yes leaves capture out");
+    assert.doesNotMatch(out.all(), /PostToolUse/, "the preview must not show a capture hook that is never written");
+    assert.doesNotMatch(out.all(), /record what/i);
+  });
+});
