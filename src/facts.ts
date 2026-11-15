@@ -5,7 +5,7 @@
 // What it cannot know: whether two notes mean the same subject when an agent reuses one key for two things. Use a common key
 // (COMMON_FACT_KEYS) when one fits, and prefix a subject ("api.deploy_target") only when the project has several.
 import type { Store, NoteRecord } from "./store.js";
-import { ValidationError } from "./store.js";
+import { ValidationError } from "./errors.js";
 import { printable } from "./security.js";
 import { actorStore } from "./actor.js";
 import { heldFromSessionStart } from "./taint.js";

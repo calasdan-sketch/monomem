@@ -12,17 +12,14 @@
 // app-level "remember to reindex" step to forget.
 
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, statSync, statfsSync, readdirSync, renameSync, linkSync, existsSync, copyFileSync, unlinkSync } from "node:fs";
+import { mkdirSync, statSync, statfsSync, readdirSync, renameSync, linkSync, existsSync, unlinkSync } from "node:fs";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { dirname, basename, join } from "node:path";
 import { checkSizes, checkNames, audit, ADMIN_SCOPE_NEEDED } from "./security.js";
 import { chmodQuiet } from "./config.js";
 import { SECRET_ASSIGN_LABEL } from "./security.js";
 import { lintContent, lintPolicy, describeFindings, type LintFinding, type LintAction, type LintCategory } from "./lint.js";
-// Reuses consolidate.ts's zero-dependency text similarity for the note
-// similarity graph. This is a module cycle (consolidate.ts imports Store
-// from here), but a safe one: both modules only touch the other's bindings
-// inside function bodies at runtime, never during module evaluation.
+// The zero-dependency text similarity for the note similarity graph (shared with consolidate.ts).
 import {
   precomputeTfMaps,
   computeDocFreqs,
@@ -32,56 +29,32 @@ import {
   termFreq,
   tokenize,
   MIN_SHARED_TOKENS_FOR_EDGE,
-} from "./consolidate.js";
+} from "./text-sim.js";
 // No module cycle: staleness.ts imports config.ts at runtime and store.ts
 // only as a type (erased at compile), so store -> staleness -> config is
 // acyclic.
 import { isStale, stalenessConfig, annotateStaleness } from "./staleness.js";
 // At-rest encryption for note bodies. No module cycle: crypto.ts imports
 // only node: builtins, never store.ts.
-import { encrypt, decryptIfEncrypted, isEncrypted, loadKey, keyPath, noteAad, captureAad, encryptV3, decryptV3, ENC_PREFIX_V3 } from "./crypto.js";
+import { encrypt, decryptIfEncrypted, isEncrypted, loadKey, keyPath, noteAad, captureAad } from "./crypto.js";
 import { currentActor, currentWriter, cleanWriter, currentCeiling, actorStore } from "./actor.js";
 import { redact } from "./redact.js";
 import {
   ORIGIN_PREFIX,
-  ORIGIN_TOOL_PREFIX,
-  ORIGIN_DECLARED,
-  SESSION_TAINT_EXEMPT,
   sessionTaintExempt,
-  sameFolder,
-  isOutsideTool,
   isTainted,
-  toolTag,
-  sourceKey,
-  promotionRefusal,
   UNCONFIRMED_LABEL,
-  ORIGIN_VIA_MEMORY,
-  CONFIRM_MODES,
-  DEFAULT_CONFIRM_DAYS,
-  MAX_CONFIRM_DAYS,
-  MAX_DERIVED_FROM,
   DISTRUSTED_BASE_LABEL,
   expiredLabel,
   type ConfirmMode,
 } from "./taint.js";
-import { taintWindowHours } from "./config.js";
-import { contentHash as syncContentHash } from "./sync-hash.js";
 import {
   type Sensitivity,
   DEFAULT_SENSITIVITY,
-  SENSITIVITY_HELP,
-  isSensitivity,
   levelsAtOrBelow,
-  parseSensitivity,
-  sensitivityRank,
   sensitivityVisible,
 } from "./sensitivity.js";
 import {
-  ALL_NAMESPACES,
-  MAX_DISTRUST_RULES,
-  MAX_DISTRUST_RULES_PER_NAMESPACE,
-  MAX_TRUST_LOG_ROWS,
-  MAX_TRUST_LOG_ROWS_GLOBAL,
   MAX_TAINT_NAMES,
   capTaint,
   canonicalRuleWriter,
@@ -100,7 +73,6 @@ import {
   type WriterFacts,
 } from "./trust.js";
 import {
-  contentHash,
   ephemeralKey,
   isPublicKey,
   keyIdOf,
@@ -113,7 +85,6 @@ import {
   loadOrCreateSigningKey,
   parseTrustedAttestersEnvDetailed,
   peekSigningKey,
-  tightenKeyFile,
   attestKeyPath,
   signRecord,
   verifyRecord,
@@ -121,15 +92,24 @@ import {
   type SigningKey,
   type TrustedAttester,
   type VerifyContext,
-  type VerifyReason,
 } from "./attest.js";
-
-/**
- * A caller-input error (bad/oversized/secret-bearing data, empty title, stale
- * write). The HTTP layer maps these to 400 with the message shown; anything
- * else is an unexpected fault mapped to a generic 500, so internals never leak.
- */
-export class ValidationError extends Error {}
+import {
+  ValidationError,
+  NoteUnreadableError,
+  StaleWriteError,
+  RebuildBusyError,
+  CandidateScanError,
+  QuarantinedError,
+  WriterPausedError,
+} from "./errors.js";
+import * as gateOps from "./store/gates.js";
+import * as trustOps from "./store/trust.js";
+import * as quarantineOps from "./store/quarantine.js";
+import * as confirmOps from "./store/confirm.js";
+import * as taintOps from "./store/taint.js";
+import { tagsToStorage, parseTags, dueBase, needsHumanConfirm, sealQuarantineCol, openQuarantineCol, isoOrNull, clampInt, envCount, floodWritesPerHour, isOperatorWrite, isPlainObject } from "./store/rows.js";
+export { dueBase, needsHumanConfirm, clampInt, floodWritesPerHour };
+export { ValidationError, NoteUnreadableError, StaleWriteError, RebuildBusyError, CandidateScanError, QuarantinedError, WriterPausedError };
 
 /**
  * 1.5.0 (round 2, S-04): this process opened the database before a newer Monomem upgraded it. Writing now would store rows in
@@ -145,21 +125,6 @@ export class SchemaNewerError extends ValidationError {
 export class SchemaMismatchError extends Error {
   constructor(readonly found: number) {
     super(`monomem: the database is at schema v${found}, this build uses v${SCHEMA_VERSION}; not opening it without a migration`);
-  }
-}
-
-/**
- * A stored note body could not be decrypted (wrong key file, or the row was
- * tampered with / moved). NOT a ValidationError: it is the operator's problem,
- * so the REST layer answers 500 -- but with this clear, id-bearing message
- * instead of a bare "internal error", and never hangs a stream.
- */
-export class NoteUnreadableError extends Error {
-  constructor(
-    public readonly noteId: number,
-    detail: string
-  ) {
-    super(`note ${noteId} cannot be decrypted (wrong key file, or the stored data was altered): ${detail}`);
   }
 }
 
@@ -244,62 +209,8 @@ function historyAad(hid: number): string {
   return `history|${hid}`;
 }
 
-/**
- * A compare-and-swap update was refused because the note moved on since the caller read it
- * (`ifRev` no longer matches). A ValidationError subclass so every surface keeps its message;
- * the REST layer answers 409 so a client can tell "re-read and retry" from "bad request".
- */
-export class StaleWriteError extends ValidationError {}
-/** A held write another process (or an earlier click) already approved, kept as history or rejected: REST answers 409. */
-const heldHandled = (id: number): StaleWriteError => new StaleWriteError(`held write ${id} was already handled (approved, kept as history or rejected); refresh the list`);
-
-/**
- * A rebuild was requested while another one is already running in this
- * process (single-flight). A ValidationError subclass so every surface maps
- * it to a clean caller-facing error; the REST layer answers 409.
- */
-export class RebuildBusyError extends ValidationError {
-  constructor() {
-    super("a similarity-edge rebuild is already running; retry when it finishes");
-  }
-}
-
-/**
- * A guarded duplicate-candidate scan (consolidate.ts findCandidatesGuarded)
- * was refused (one already running), cancelled, or ran out of time.
- */
-export class CandidateScanError extends ValidationError {}
-
-/**
- * A write held for admin review by the write-time linter (MONOMEM_LINT
- * quarantine policy). A ValidationError subclass so an unaware caller still
- * maps it to a clean caller-facing error; the REST and MCP write paths catch
- * it and report `{ quarantined: { id, reasons } }` instead.
- */
-export class QuarantinedError extends ValidationError {
-  constructor(
-    readonly quarantineId: number,
-    readonly findings: LintFinding[]
-  ) {
-    super(
-      `held in quarantine #${quarantineId} pending admin review (${describeFindings(findings)})`
-    );
-  }
-}
-
-/** A write from a writer the flood guard paused (Store.floodGate). Cleared by an operator: `monomem resume <label>`. */
-export class WriterPausedError extends ValidationError {}
-
-/** Env knob: a non-negative number, or `dflt` when unset, empty or unusable. */
-function envCount(name: string, dflt: number): number {
-  const raw = process.env[name]?.trim();
-  const n = raw ? Number(raw) : NaN;
-  return Number.isFinite(n) && n >= 0 ? n : dflt;
-}
 /** Days of read-access log kept (MONOMEM_ACCESS_LOG_DAYS, default 30; 0 = the log is off). */
 export const accessLogDays = (): number => envCount("MONOMEM_ACCESS_LOG_DAYS", 30);
-/** Writes one writer may make in a rolling hour before it is paused (MONOMEM_FLOOD_WRITES_PER_HOUR, default 500; 0 = off). */
-export const floodWritesPerHour = (): number => Math.floor(envCount("MONOMEM_FLOOD_WRITES_PER_HOUR", 500));
 /** Longest query preview kept in the access log. */
 export const ACCESS_PREVIEW_MAX = 120;
 const ACCESS_AAD = "access_log";
@@ -390,17 +301,6 @@ function lintFor(
 /** bm25 column weights for notes_fts(title, body, tags). */
 const FTS_WEIGHTS = "5, 1, 2";
 const APPROVAL_FINDING: LintFinding = { category: "approval", label: "namespace requires approval", field: "namespace" };
-
-/**
- * Approve-first namespaces hold every write that is not the operator's. The operator is the local
- * `monomem` CLI (writer marker `cli`, no token behind the call) plus the internal lint modes: "none"
- * is an approved quarantine replay, "trusted" is consolidation re-writing stored notes. Everything
- * else counts as an agent: MCP over stdio or HTTP, every REST call (an admin token included -- REST
- * has no separate operator login), the server's own jobs, the runner, capture hooks, library callers.
- */
-function isOperatorWrite(mode: LintMode): boolean {
-  return mode !== "full" || currentWriter() === "cli";
-}
 
 /**
  * Archive, restore and supersede change what agents see but cannot wait in the quarantine queue (it
@@ -631,7 +531,7 @@ export interface QuarantineEntry {
 }
 
 /** The quarantine columns approval needs beyond QuarantineEntry (Store.applyHeld). */
-interface HeldRow {
+export interface HeldRow {
   if_rev: number | null;
   set_namespace: number;
   created_at: string;
@@ -679,8 +579,6 @@ const FTS_PREFIX_OPT = "prefix='1'";
 
 /** Current schema version (PRAGMA user_version). See Store.migrate. */
 export const SCHEMA_VERSION = 21;
-/** A hooked session with no event for this long no longer counts as open (same as extract.ts STALE_SESSION_MS). */
-const SESSION_IDLE_MS = 30 * 60_000;
 
 /**
  * Notes fetched per page by exportBatch(), which both streaming export
@@ -902,7 +800,7 @@ export interface ReviewItem {
   writer: string;
   why: string;
 }
-interface ReviewRow {
+export interface ReviewRow {
   id: number;
   namespace: string;
   title: string;
@@ -960,27 +858,10 @@ interface NoteRow {
 }
 
 export const DEFAULT_NAMESPACE = "default";
-/** The capture's outside-content stamp (reserved-tags.ts re-exports it; taint.ts imports nothing, so no import cycle). */
-export { ORIGIN_TOOL_PREFIX };
 
 /** A pre-upgrade copy (`-backup`, a dated `-backup-YYYYMMDD-HHMMSS` kept copy) or an unfinished/killed one (`.<id>.partial` and its sidecars). */
 const PREMIGRATION_FILE_RE = /-backup(-\d{8}-\d{6}(-\d+)?)?(\.[0-9a-f]+\.partial(-journal|-wal|-shm)?)?$/;
 const PREMIGRATION_PARTIAL_RE = /\.[0-9a-f]+\.partial(-journal|-wal|-shm)?$/;
-
-/** AAD binding a sealed quarantine column to its column name and namespace (v2, rows sealed before 1.5.0). */
-function quarantineAad(col: string, namespace: string): string {
-  return `quarantine|${col}|${namespace}`;
-}
-/**
- * 1.5.0 S-05: a held write is sealed as v3, bound to its row id too, so one held body moved into another held row (same
- * namespace) does not open and cannot be approved under that row's writer. v2 rows are still read.
- */
-function sealQuarantineCol(v: string, key: Buffer, col: string, namespace: string, id: number): string {
-  return encryptV3(v, key, `${quarantineAad(col, namespace)}|${id}`);
-}
-function openQuarantineCol(v: string, key: Buffer | null, col: string, namespace: string, id: number): string {
-  return v.startsWith(ENC_PREFIX_V3) ? decryptV3(v, key, `${quarantineAad(col, namespace)}|${id}`) : decryptIfEncrypted(v, key, quarantineAad(col, namespace));
-}
 
 /** Who is making this write: an internal override, else the connection's server-stamped writer. */
 function writerNow(opts: { writtenBy?: string }): string {
@@ -1097,43 +978,6 @@ function isNoopPatch(
   return true;
 }
 
-/** Strength of a confirm kind: a weaker confirm never overwrites a stronger one for the same rev. */
-const CONFIRM_RANK: Record<string, number> = { corroborated: 1, admin: 2, human: 3 };
-/** CONFIRM_RANK as SQL, for the kind stored in column `col`. */
-const rankSql = (col: string): string => `CASE ${col} WHEN 'human' THEN 3 WHEN 'admin' THEN 2 WHEN 'corroborated' THEN 1 ELSE 0 END`;
-
-/** The times a note's re-confirmation clock may start from (the v20 columns). */
-interface DueRow {
-  updated_at: string;
-  content_at?: string | null;
-  confirmed_at?: string | null;
-  confirmed_kind?: string | null;
-  confirmed_rev?: number | null;
-  rev: number;
-  grandfathered_at?: string | null;
-}
-/**
- * When a note's re-confirmation clock started (ms): the latest of its last CONTENT change (title/body), a person's or an
- * admin's confirm of its current rev (a corroboration releases the session-start hold but never restarts the clock), the
- * upgrade (grandfathered) and the mode switch. Due = this + days. The ONE formula for labels and counts. 0 = no usable time:
- * the caller treats that as not due.
- */
-export function dueBase(r: DueRow, c: { set_at?: string }): number {
-  const confirmed =
-    r.confirmed_at && Number(r.confirmed_rev) === Number(r.rev) && (r.confirmed_kind === "human" || r.confirmed_kind === "admin") ? r.confirmed_at : null;
-  const times = [r.content_at ?? r.updated_at, confirmed, r.grandfathered_at, c.set_at ?? null].map((t) => (t ? Date.parse(t) : NaN)).filter((t) => !Number.isNaN(t));
-  return times.length ? Math.max(...times) : 0;
-}
-
-/**
- * A tainted note whose current rev has no HUMAN confirm: it may not be pinned or used as a replacement. Grandfathered notes
- * (from before the 1.4.0 upgrade) are included: they are exempt from the session-start hold only, so a 1.3.5 summary that
- * read the web shows as before but is not promoted without a person.
- */
-export function needsHumanConfirm(n: Pick<NoteRecord, "tags" | "rev" | "confirmed_kind" | "confirmed_rev">): boolean {
-  return isTainted(n.tags) && !(n.confirmed_kind === "human" && n.confirmed_rev === n.rev);
-}
-
 /** What a confirm did (Store.confirm). `counted` false = recorded (when `recorded`) but releases nothing; `message` says why. */
 export interface ConfirmResult {
   counted: boolean;
@@ -1147,26 +991,6 @@ export interface ConfirmResult {
   by: string;
   at: string;
   source: string;
-}
-
-function tagsToStorage(tags: string[] | undefined): string {
-  if (!tags || tags.length === 0) return "";
-  // Store as a JSON array so tags can contain commas/spaces; dedupe + trim.
-  const cleaned = Array.from(new Set(tags.map((t) => t.trim()).filter(Boolean)));
-  return cleaned.length ? JSON.stringify(cleaned) : "";
-}
-
-function parseTags(raw: string): string[] {
-  if (!raw) return [];
-  if (raw[0] === "[") {
-    try {
-      const a = JSON.parse(raw);
-      if (Array.isArray(a)) return a.filter((x) => typeof x === "string");
-    } catch {
-      /* fall through to legacy comma parse */
-    }
-  }
-  return raw.split(",").map((t) => t.trim()).filter(Boolean); // legacy rows
 }
 
 /**
@@ -1199,23 +1023,6 @@ function buildMatchQuery(q: string, any = false): string {
     // match every word starting with go). A typed search keeps prefix matching for every word.
     .map((t) => `"${t.replace(/"/g, '""')}"${any && /^[\p{L}]{1,2}$/u.test(t) ? "" : "*"}`);
   return tokens.join(any ? " OR " : " AND "); // "" when nothing usable; caller returns []
-}
-
-/**
- * Normalize a caller-supplied timestamp to canonical ISO-8601 (UTC, ms), or
- * null when it is missing, not a string, or doesn't parse. Canonical form
- * matters: created_at/updated_at are compared and sorted as strings.
- */
-function isoOrNull(v: unknown): string | null {
-  if (typeof v !== "string" || !v.trim()) return null;
-  const t = Date.parse(v);
-  return Number.isNaN(t) ? null : new Date(t).toISOString();
-}
-
-/** Coerce a possibly-NaN/undefined value to a bounded integer with a default. */
-export function clampInt(v: number | undefined, def: number, min: number, max: number): number {
-  const n = typeof v === "number" && Number.isFinite(v) ? Math.floor(v) : def;
-  return Math.min(Math.max(n, min), max);
 }
 
 // --- Similarity edge graph (v4) -------------------------------------------
@@ -1599,9 +1406,6 @@ interface EdgeRow {
 /** _meta key: this database was checked for pre-1.2.1 (v1) ciphertext with a key present (P2). */
 const V1_CHECKED = "v1_envelopes_checked";
 
-/** A3 shape checks for trust settings kept as JSON in _meta. */
-const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
-const isPlainObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 /** A3: the revocation set used when the stored list is damaged: every key reads as revoked. */
 class AllRevoked extends Set<string> {
   override has(_k: string): boolean {
@@ -1732,10 +1536,10 @@ function dropFromIndex(idx: NsEdgeIndex, id: number): void {
 let warnedEnvAttesters = "";
 
 export class Store {
-  private db: DatabaseSync;
+  /** @internal */ db: DatabaseSync;
   private readonly dbPath: string;
   /** Per-namespace edge-scoring index (see NsEdgeIndex). */
-  private edgeIndexes = new Map<string, NsEdgeIndex>();
+  /** @internal */ edgeIndexes = new Map<string, NsEdgeIndex>();
   /** Namespaces whose index is being built in the background, with the notes written meanwhile (linked when it is ready). */
   private edgeBuilds = new Map<string, Set<number>>();
   /** Recent live-note counts per namespace, so a write does not recount a big namespace every time. */
@@ -1756,7 +1560,7 @@ export class Store {
   /** Directory the key file resolves against (single resolver: beside the DB). */
   private readonly keyDir: string;
   /** This database's server_id (the `store_uuid` in _meta); filled in by the constructor. */
-  private serverIdValue = "";
+  /** @internal */ serverIdValue = "";
   /** The attestation signing key, loaded (or created) on first use. */
   private signingKey: SigningKey | null = null;
 
@@ -3634,7 +3438,7 @@ export class Store {
    */
   private linksStmt: ReturnType<DatabaseSync["prepare"]> | null = null;
   /** note_links is add-only: once it has a row it always will. An empty answer is re-asked at most once a second. */
-  private linksSeen: { any: boolean; at: number } | null = null;
+  /** @internal */ linksSeen: { any: boolean; at: number } | null = null;
   private anyLinks(): boolean {
     if (this.linksSeen?.any || (this.linksSeen && Date.now() - this.linksSeen.at < 1000)) return this.linksSeen.any;
     this.linksSeen = { any: this.db.prepare("SELECT 1 FROM note_links LIMIT 1").get() !== undefined, at: Date.now() };
@@ -3801,7 +3605,7 @@ export class Store {
    * deleted key (unrecoverable) or keep writing plaintext after enable.
    * Null = encryption is off (no key file).
    */
-  private writeKey(): Buffer | null {
+  /** @internal */ writeKey(): Buffer | null {
     const stamp = this.stampOf();
     if (stamp === "") {
       // No key. Fine for a plaintext store; but if encrypted rows exist the key
@@ -3847,7 +3651,7 @@ export class Store {
    * encrypted) keeps working; falls back to a fresh load when this process
    * started before `encrypt enable`.
    */
-  private readKey(): Buffer | null {
+  /** @internal */ readKey(): Buffer | null {
     return this.lastKey ?? this.writeKey();
   }
 
@@ -5352,7 +5156,7 @@ export class Store {
    * 1.5.0 (round 2, S-04): every write starts here. The version is read under the write lock, so a newer Monomem that
    * upgraded the file from another process can't slip in between the check and the write; this process then refuses.
    */
-  private beginWrite(): void {
+  /** @internal */ beginWrite(): void {
     this.db.exec("BEGIN IMMEDIATE");
     const uv = Number((this.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
     if (uv > SCHEMA_VERSION) {
@@ -7479,45 +7283,29 @@ export class Store {
    * `writer_id`.
    */
   serverId(): string {
-    return this.serverIdValue || (this.serverIdValue = this.storeId());
+    return trustOps.serverId(this);
   }
 
   /** `<server_id>/<label>`: the stable id of a writer on this server ("" for an unknown writer). */
   writerId(label: string): string {
-    return makeWriterId(this.serverId(), label);
+    return trustOps.writerId(this, label);
   }
 
-  /** Who is changing the trust configuration right now, for the log. */
-  private trustActor(): string {
-    return currentWriter() || currentActor() || "unknown";
+  /** @internal */ trustActor(): string {
+    return trustOps.trustActor(this);
   }
 
-  private logTrust(action: string, namespace: string, subject: string): void {
-    const actor = this.trustActor();
-    this.db
-      .prepare("INSERT INTO trust_log (at, actor, action, namespace, subject) VALUES (?, ?, ?, ?, ?)")
-      .run(new Date().toISOString(), actor, action, namespace, subject);
-    this.pruneTrustLog(namespace);
-    this.audit({ op: `trust.${action}`, namespace, label: actor, kind: "trust", detail: subject.slice(0, 200) });
+  /** @internal */ logTrust(action: string, namespace: string, subject: string): void {
+    return trustOps.logTrust(this, action, namespace, subject);
   }
 
-  /**
-   * Bounded per namespace: each namespace keeps its own newest MAX_TRUST_LOG_ROWS rows (the server-wide lines, namespace `*`,
-   * their own bucket of MAX_TRUST_LOG_ROWS_GLOBAL), so a pinned admin flooding its own namespace can only push out its own lines,
-   * never another admin's or the attester / key-rotation lines. The audit log keeps the full trail.
-   */
-  private pruneTrustLog(namespace: string): void {
-    const keep = namespace === ALL_NAMESPACES ? MAX_TRUST_LOG_ROWS_GLOBAL : MAX_TRUST_LOG_ROWS;
-    this.db
-      .prepare("DELETE FROM trust_log WHERE namespace = ? AND seq NOT IN (SELECT seq FROM trust_log WHERE namespace = ? ORDER BY seq DESC LIMIT ?)")
-      .run(namespace, namespace, keep);
+  /** @internal */ pruneTrustLog(namespace: string): void {
+    return trustOps.pruneTrustLog(this, namespace);
   }
 
   /** The distrust list (every namespace). Cheap: a tiny table read per query, so a change elsewhere is seen at once. */
   distrustRules(): DistrustRule[] {
-    return this.db
-      .prepare("SELECT namespace, writer, added_at, added_by FROM trust_distrust ORDER BY namespace, writer")
-      .all() as unknown as DistrustRule[];
+    return trustOps.distrustRules(this);
   }
 
   /**
@@ -7526,60 +7314,17 @@ export class Store {
    * scope is checked by the caller; the change is logged. Returns the rule.
    */
   distrustAdd(namespace: string, writer: string): DistrustRule {
-    const ns = typeof namespace === "string" ? namespace.trim() : "";
-    if (!ns) throw new ValidationError('namespace is required (use "*" for every namespace)');
-    if (ns.length > 200) throw new ValidationError("namespace is too long");
-    const parsed = canonicalRuleWriter(writer);
-    if (!parsed.ok) throw new ValidationError(parsed.error);
-    const canonical = parsed.writer;
-    const addedBy = this.trustActor();
-    const at = new Date().toISOString();
-    this.transaction(() => {
-      const have = this.db.prepare("SELECT 1 FROM trust_distrust WHERE namespace = ? AND writer = ?").get(ns, canonical);
-      if (have) return;
-      const perNs = Number((this.db.prepare("SELECT COUNT(*) AS c FROM trust_distrust WHERE namespace = ?").get(ns) as { c: number }).c);
-      if (perNs >= MAX_DISTRUST_RULES_PER_NAMESPACE) {
-        throw new ValidationError(`the distrust list for ${ns === "*" ? "the * bucket" : `namespace ${ns}`} is full (${MAX_DISTRUST_RULES_PER_NAMESPACE} entries); remove one first`);
-      }
-      const n = Number((this.db.prepare("SELECT COUNT(*) AS c FROM trust_distrust").get() as { c: number }).c);
-      if (n >= MAX_DISTRUST_RULES) throw new ValidationError(`the distrust list is full (${MAX_DISTRUST_RULES} entries); remove one first`);
-      // Namespace-specific rules may not use the room reserved for the `*` bucket, so ten namespaces
-      // (or ten pinned admins) cannot lock the server-wide admin out of adding a `*` rule.
-      if (ns !== ALL_NAMESPACES && n >= MAX_DISTRUST_RULES - MAX_DISTRUST_RULES_PER_NAMESPACE) {
-        throw new ValidationError(`the distrust list is full for namespace-specific entries (${MAX_DISTRUST_RULES - MAX_DISTRUST_RULES_PER_NAMESPACE}; the rest is kept for "*" entries); remove one first`);
-      }
-      this.db.prepare("INSERT INTO trust_distrust (namespace, writer, added_at, added_by) VALUES (?, ?, ?, ?)").run(ns, canonical, at, addedBy);
-      this.logTrust("distrust", ns, canonical);
-    });
-    return (this.db.prepare("SELECT namespace, writer, added_at, added_by FROM trust_distrust WHERE namespace = ? AND writer = ?").get(ns, canonical) as unknown) as DistrustRule;
+    return trustOps.distrustAdd(this, namespace, writer);
   }
 
   /** How many stored notes the rule `(namespace, writer)` hides right now (0 usually means a misspelt label). */
   distrustMatchCount(namespace: string, writer: string): number {
-    const parsed = canonicalRuleWriter(writer);
-    if (!parsed.ok) return 0;
-    const rule: DistrustRule = { namespace, writer: parsed.writer, added_at: "", added_by: "" };
-    const d = distrustSql([rule], this.serverId(), NOTE_COLUMNS);
-    if (!d.sql) return 0;
-    const nsSql = namespace === ALL_NAMESPACES ? "" : " AND notes.namespace = ?";
-    const nsParams = namespace === ALL_NAMESPACES ? [] : [namespace];
-    const all = Number((this.db.prepare(`SELECT COUNT(*) AS c FROM notes WHERE 1 = 1${nsSql}${this.ceilingSql("notes.sensitivity")}`).get(...nsParams) as { c: number }).c);
-    const visible = Number((this.db.prepare(`SELECT COUNT(*) AS c FROM notes WHERE 1 = 1${nsSql}${d.sql}${this.ceilingSql("notes.sensitivity")}`).get(...nsParams, ...d.params) as { c: number }).c);
-    return all - visible;
+    return trustOps.distrustMatchCount(this, namespace, writer);
   }
 
   /** Take a writer off the list. True if it was there. */
   distrustRemove(namespace: string, writer: string): boolean {
-    const ns = typeof namespace === "string" ? namespace.trim() : "";
-    const parsed = canonicalRuleWriter(writer);
-    if (!ns || !parsed.ok) throw new ValidationError("namespace and writer are required");
-    const canonical = parsed.writer;
-    let removed = false;
-    this.transaction(() => {
-      removed = Number(this.db.prepare("DELETE FROM trust_distrust WHERE namespace = ? AND writer = ?").run(ns, canonical).changes) > 0;
-      if (removed) this.logTrust("undistrust", ns, canonical);
-    });
-    return removed;
+    return trustOps.distrustRemove(this, namespace, writer);
   }
 
   /**
@@ -7589,17 +7334,7 @@ export class Store {
    * or other tenants' subjects.
    */
   trustLog(limit = 20, pinnedNamespace?: string): Array<{ at: string; actor: string; action: string; namespace: string; subject: string }> {
-    const n = clampInt(limit, 20, 1, 200);
-    return (
-      pinnedNamespace === undefined
-        ? this.db.prepare("SELECT at, actor, action, namespace, subject FROM trust_log ORDER BY seq DESC LIMIT ?").all(n)
-        : this.db
-            .prepare(
-              `SELECT at, actor, action, namespace, subject FROM trust_log
-               WHERE (namespace = ? OR namespace = '*') AND action NOT LIKE 'attester-%' AND action <> 'key-rotate' ORDER BY seq DESC LIMIT ?`
-            )
-            .all(pinnedNamespace, n)
-    ) as unknown as Array<{ at: string; actor: string; action: string; namespace: string; subject: string }>;
+    return trustOps.trustLog(this, limit, pinnedNamespace);
   }
 
   /**
@@ -7613,35 +7348,26 @@ export class Store {
     revoked: ReturnType<Store["revocationList"]>;
     log: ReturnType<Store["trustLog"]>;
   } {
-    const pinned = pinnedNamespace !== undefined;
-    return {
-      distrust: this.distrustRules().filter((r) => !pinned || r.namespace === pinnedNamespace || r.namespace === ALL_NAMESPACES),
-      attesters: pinned ? [] : this.attesterList(),
-      revoked: pinned ? [] : this.revocationList(),
-      log: this.trustLog(20, pinnedNamespace),
-    };
+    return trustOps.trustView(this, pinnedNamespace);
   }
 
   /** Does the distrust list name a writer that touched this note (current writer, attested original, merged sources)? */
   isDistrusted(n: WriterFacts): boolean {
-    return matchesDistrust(this.distrustRules(), n, this.serverId());
+    return trustOps.isDistrusted(this, n);
   }
 
   /** isDistrusted against rules the caller already loaded (hot loops). */
   isDistrustedWith(rules: readonly DistrustRule[], serverId: string, n: WriterFacts): boolean {
-    return matchesDistrust(rules, n, serverId);
+    return trustOps.isDistrustedWith(this, rules, serverId, n);
   }
 
   /** Flag (distrusted: true) the notes whose writer is on the list. Used where a read opted in with include_distrusted. */
   markDistrusted<T extends NoteRecord>(notes: T[]): T[] {
-    const rules = this.distrustRules();
-    if (rules.length === 0) return notes;
-    const id = this.serverId();
-    return notes.map((n) => (matchesDistrust(rules, n, id) ? { ...n, distrusted: true as const } : n));
+    return trustOps.markDistrusted(this, notes);
   }
 
   /** The query fragment hiding distrusted rows (empty when the list is empty). */
-  private distrustFragment(cols = NOTE_COLUMNS, namespaces?: readonly string[]): { sql: string; params: string[] } {
+  /** @internal */ distrustFragment(cols = NOTE_COLUMNS, namespaces?: readonly string[]): { sql: string; params: string[] } {
     return distrustSql(this.distrustRules(), this.serverId(), cols, namespaces);
   }
 
@@ -7650,7 +7376,7 @@ export class Store {
   // (the operator, stdio, the CLI, a token without one) = no filter and the SQL is byte-identical to before.
 
   /** " AND <col> IN ('public','internal')": hides notes above the caller's ceiling; "" when it has none. Fail closed: NULL and unknown labels never match. */
-  private ceilingSql(col = "sensitivity"): string {
+  /** @internal */ ceilingSql(col = "sensitivity"): string {
     const max = currentCeiling();
     if (max === undefined) return "";
     const levels = levelsAtOrBelow(max);
@@ -7659,68 +7385,38 @@ export class Store {
 
   /** Operator-level (no ceiling): how many notes carry a label other than "internal". Used only for start-up and sync warnings. */
   labelledAboveDefault(): number {
-    return Number((this.db.prepare("SELECT COUNT(*) AS c FROM notes WHERE sensitivity <> ?").get(DEFAULT_SENSITIVITY) as { c: number }).c);
+    return trustOps.labelledAboveDefault(this);
   }
 
   /** Operator-level: is there any note labelled private? */
   hasPrivateNotes(): boolean {
-    return !!this.db.prepare("SELECT 1 FROM notes WHERE sensitivity = 'private' LIMIT 1").get();
+    return trustOps.hasPrivateNotes(this);
   }
 
   /** True when this row is above the caller's ceiling (and so must read as "not found"). */
-  private hiddenByCeiling(row: { sensitivity?: string | null }): boolean {
+  /** @internal */ hiddenByCeiling(row: { sensitivity?: string | null }): boolean {
     return !sensitivityVisible(row.sensitivity ?? DEFAULT_SENSITIVITY, currentCeiling());
   }
 
   /** True when note `id` exists but is above the caller's ceiling (for callers that hold a bare id from a side table, e.g. a session's summary). */
   hiddenFromCaller(id: number): boolean {
-    if (currentCeiling() === undefined) return false;
-    const row = this.db.prepare("SELECT sensitivity FROM notes WHERE id = ?").get(id) as { sensitivity: string } | undefined;
-    return !!row && this.hiddenByCeiling(row);
+    return trustOps.hiddenFromCaller(this, id);
   }
 
-  /** By-id guard for the write/move paths that touch a row without reading it first: true when the caller may not see note `id`. */
   private idHidden(id: number): boolean {
-    if (currentCeiling() === undefined) return false;
-    const row = this.db.prepare("SELECT sensitivity FROM notes WHERE id = ?").get(id) as { sensitivity: string } | undefined;
-    return !row || this.hiddenByCeiling(row);
+    return trustOps.idHidden(this, id);
   }
 
-  /** The label a new note gets: the one asked for (checked against the ceiling), else "internal" -- or the ceiling itself when that is lower. */
   private labelForNew(raw: unknown): Sensitivity {
-    const max = currentCeiling();
-    if (raw === undefined || raw === null) {
-      if (max === undefined) return DEFAULT_SENSITIVITY;
-      const levels = levelsAtOrBelow(max);
-      if (levels.length === 0) throw new ValidationError("this token's sensitivity ceiling is not a valid label, so it cannot write");
-      return levels.includes(DEFAULT_SENSITIVITY) ? DEFAULT_SENSITIVITY : levels[levels.length - 1];
-    }
-    const label = parseSensitivity(raw);
-    if (!label) throw new ValidationError(`sensitivity must be ${SENSITIVITY_HELP}`);
-    if (!sensitivityVisible(label, max)) {
-      throw new ValidationError(`this token cannot write a "${label}" note: its sensitivity ceiling is "${String(max)}"`);
-    }
-    return label;
+    return trustOps.labelForNew(this, raw);
   }
 
-  /** A relabel of an existing note: undefined when nothing changes; otherwise the new label, after the ceiling and declassify checks. */
   private labelForRelabel(raw: unknown, current: string | undefined): Sensitivity | undefined {
-    const label = parseSensitivity(raw);
-    if (!label) throw new ValidationError(`sensitivity must be ${SENSITIVITY_HELP}`);
-    const max = currentCeiling();
-    if (!sensitivityVisible(label, max)) {
-      throw new ValidationError(`this token cannot label a note "${label}": its sensitivity ceiling is "${String(max)}"`);
-    }
-    const now = current ?? DEFAULT_SENSITIVITY;
-    if (label === now) return undefined;
-    if (sensitivityRank(label) < sensitivityRank(now) && actorStore.getStore()?.canDeclassify === false) {
-      throw new ValidationError("lowering a note's sensitivity label needs an admin token (raising it does not)");
-    }
-    return label;
+    return trustOps.labelForRelabel(this, raw, current);
   }
 
   /** rangeClause + the distrust exclusion (unless the caller opted in) + the sensitivity ceiling (always). */
-  private rangeFor(opts: RangeOpts, namespaces?: readonly string[]): { sql: string; params: string[] } {
+  /** @internal */ rangeFor(opts: RangeOpts, namespaces?: readonly string[]): { sql: string; params: string[] } {
     const base = rangeClause(opts, this.serverId());
     const ceil = this.ceilingSql();
     const r = ceil ? { sql: base.sql + ceil, params: base.params } : base;
@@ -8074,7 +7770,7 @@ export class Store {
   }
 
   /** Read a _meta value (null when unset or unreadable). */
-  private getMeta(key: string): string | null {
+  /** @internal */ getMeta(key: string): string | null {
     try {
       const row = this.db.prepare("SELECT value FROM _meta WHERE key = ?").get(key) as
         | { value: string }
@@ -8085,34 +7781,17 @@ export class Store {
     }
   }
 
-  /**
-   * 1.5.0 (A3): a trust setting stored as JSON. `damaged` = present but unparsable or the wrong shape: the readers then fail
-   * CLOSED (approve-first everywhere, every agent paused, every attester key revoked), never open. Missing = not damaged.
-   */
-  private metaJson<T>(key: string, ok: (v: unknown) => v is T): { v: T | null; damaged: boolean } {
-    const raw = this.getMeta(key);
-    if (raw === null) return { v: null, damaged: false };
-    try {
-      const v = JSON.parse(raw) as unknown;
-      return ok(v) ? { v, damaged: false } : { v: null, damaged: true };
-    } catch {
-      return { v: null, damaged: true };
-    }
+  /** @internal */ metaJson<T>(key: string, ok: (v: unknown) => v is T): { v: T | null; damaged: boolean } {
+    return gateOps.metaJson(this, key, ok);
   }
 
   /** 1.5.0 (A3): the trust settings whose stored value is damaged (doctor reports them). */
   damagedTrustSettings(): string[] {
-    const out: string[] = [];
-    if (this.metaJson("approve_first", isStringArray).damaged) out.push("approve_first");
-    if (this.metaJson("flood_paused", isStringArray).damaged) out.push("flood_paused");
-    if (this.metaJson("revoked_attester_keys", isPlainObject).damaged) out.push("revoked_attester_keys");
-    const m = this.getMeta("confirm_mode");
-    if (m !== null && !(CONFIRM_MODES as readonly string[]).includes(m)) out.push("confirm_mode");
-    return out;
+    return gateOps.damagedTrustSettings(this);
   }
 
   /** Upsert a _meta value. Internal keys only -- never caller-chosen. */
-  private setMeta(key: string, value: string): void {
+  /** @internal */ setMeta(key: string, value: string): void {
     this.db
       .prepare(
         "INSERT INTO _meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
@@ -8228,47 +7907,28 @@ export class Store {
 
   /** Writer identities the flood guard paused (sorted). */
   pausedWriters(): string[] {
-    return [...(this.metaJson("flood_paused", isStringArray).v ?? [])].sort();
+    return gateOps.pausedWriters(this);
   }
 
-  /** A3: a damaged pause list pauses every writer the flood guard counts (the operator is never counted). */
-  private isPaused(w: string): boolean {
-    const p = this.metaJson("flood_paused", isStringArray);
-    return p.damaged || (p.v ?? []).includes(w);
+  /** @internal */ isPaused(w: string): boolean {
+    return gateOps.isPaused(this, w);
   }
 
   /** Lift a pause and clear that writer's count. Returns false when the writer was not paused. */
   resumeWriter(label: string): boolean {
-    const w = cleanWriter(label);
-    if (!w) throw new ValidationError("writer label is required");
-    // A3: a damaged list cannot say who else was paused: the operator's resume resets it (audited below).
-    const damaged = this.metaJson("flood_paused", isStringArray).damaged;
-    const all = this.pausedWriters();
-    if (!damaged && !all.includes(w)) return false;
-    this.setMeta("flood_paused", JSON.stringify(damaged ? [] : all.filter((x) => x !== w)));
-    // A fresh hour: otherwise its very next write would trip the guard again on the old count.
-    this.db.prepare("DELETE FROM write_rate WHERE writer = ?").run(w);
-    this.audit({ op: "flood-resume", label: w });
-    return true;
+    return gateOps.resumeWriter(this, label);
   }
 
-  /** The identity the flood guard counts, or null for writes it leaves alone: see floodGate. */
-  private floodSubject(mode: LintMode): string | null {
-    const w = currentWriter();
-    return isOperatorWrite(mode) || w === "" || w === "server" ? null : w;
+  /** @internal */ floodSubject(mode: LintMode): string | null {
+    return gateOps.floodSubject(this, mode);
   }
 
-  /** archive / restore: refused for a paused writer (they are not counted). */
   private refusePaused(): void {
-    const w = this.floodSubject("full");
-    if (w !== null && this.isPaused(w)) throw this.pausedError(w);
+    return gateOps.refusePaused(this);
   }
 
-  private pausedError(w: string): WriterPausedError {
-    return new WriterPausedError(
-      `writer "${w}" is paused by the flood guard (more than ${floodWritesPerHour()} writes in an hour). ` +
-        `Its writes are refused until an operator runs: monomem resume ${w}`
-    );
+  /** @internal */ pausedError(w: string): WriterPausedError {
+    return gateOps.pausedError(this, w);
   }
 
   /**
@@ -8279,34 +7939,15 @@ export class Store {
    * consolidation (isOperatorWrite), the server's own jobs (`server`), callers with no writer identity (library use),
    * and importNotes (a restore).
    */
-  private floodGate(mode: LintMode, count = true): void {
-    const w = this.floodSubject(mode);
-    if (w === null) return;
-    if (this.isPaused(w)) throw this.pausedError(w);
-    const limit = floodWritesPerHour();
-    if (limit === 0 || !count) return;
-    const now = Date.now();
-    // ponytail: count-then-insert is not atomic across processes; concurrent writers can overshoot by a few.
-    const n = Number(
-      (this.db.prepare("SELECT COUNT(*) AS n FROM write_rate WHERE writer = ? AND at >= ?").get(w, new Date(now - 3_600_000).toISOString()) as { n: number }).n
-    );
-    if (n >= limit) {
-      // One statement, no transaction: a write can run inside a caller's transaction (which this throw rolls back, pause
-      // included; the count stays, so the next write pauses it again).
-      this.setMeta("flood_paused", JSON.stringify([...new Set([...this.pausedWriters(), w])].sort()));
-      this.audit({ op: "flood-pause", label: w, detail: `${n} writes in the last hour (limit ${limit})` });
-      console.error(`[monomem] flood guard: paused writer "${w}" after ${n} writes in an hour. Resume with: monomem resume ${w}`);
-      throw this.pausedError(w);
-    }
-    this.db.prepare("INSERT INTO write_rate (writer, at) VALUES (?, ?)").run(w, new Date(now).toISOString());
-    this.bookkeepingChanges += 1;
+  /** @internal */ floodGate(mode: LintMode, count = true): void {
+    return gateOps.floodGate(this, mode, count);
   }
 
   /** Audit lines written inside a transaction wait here until it commits; a rollback drops them. */
   private pendingAudit: Array<Parameters<typeof audit>[0]> = [];
 
   /** Audit line, except from an in-memory store with no MONOMEM_AUDIT_LOG: that must never touch the owner's real log. */
-  private audit(entry: Parameters<typeof audit>[0]): void {
+  /** @internal */ audit(entry: Parameters<typeof audit>[0]): void {
     if (this.dbPath === ":memory:" && !process.env.MONOMEM_AUDIT_LOG) return;
     // Name the key that made the change (a label, never the key itself) so `monomem audit` can say who did what.
     const who = actorStore.getStore()?.label;
@@ -8324,13 +7965,13 @@ export class Store {
   }
 
   /** COMMIT (or a savepoint RELEASE), then write the audit lines it held, once the outermost transaction has ended. */
-  private commitTx(sql = "COMMIT"): void {
+  /** @internal */ commitTx(sql = "COMMIT"): void {
     this.db.exec(sql);
     if (!this.db.isTransaction) this.flushAudit();
   }
 
   /** ROLLBACK (or ROLLBACK TO a savepoint); when the whole transaction is gone, so are the audit lines it held. */
-  private rollbackTx(sql = "ROLLBACK"): void {
+  /** @internal */ rollbackTx(sql = "ROLLBACK"): void {
     try {
       this.db.exec(sql);
     } finally {
@@ -8343,34 +7984,26 @@ export class Store {
 
   /** Namespaces whose agent writes wait in the quarantine queue for an operator (sorted). */
   approveFirstNamespaces(): string[] {
-    return [...(this.metaJson("approve_first", isStringArray).v ?? [])].sort();
+    return gateOps.approveFirstNamespaces(this);
   }
 
   /** True when approve-first is on for every namespace, including ones created later. */
   approveFirstAll(): boolean {
-    return this.getMeta("approve_first_all") === "1";
+    return gateOps.approveFirstAll(this);
   }
 
   isApproveFirst(namespace: string): boolean {
-    // A3: a damaged list cannot say which namespaces were approve-first: all of them are.
-    return this.approveFirstAll() || this.metaJson("approve_first", isStringArray).damaged || this.approveFirstNamespaces().includes(namespace);
+    return gateOps.isApproveFirst(this, namespace);
   }
 
   /** Turn approve-first on or off for every namespace at once. Operator-only, like the per-namespace switch. */
   setApproveFirstAll(on: boolean): void {
-    this.setMeta("approve_first_all", on ? "1" : "0");
-    this.audit({ op: on ? "approve-first-all-on" : "approve-first-all-off" });
+    return gateOps.setApproveFirstAll(this, on);
   }
 
   /** Turn approve-first on or off for a namespace. Writes already held stay in the queue either way. */
   setApproveFirst(namespace: string, on: boolean): void {
-    const ns = typeof namespace === "string" ? namespace.trim() : "";
-    if (!ns) throw new ValidationError("namespace is required");
-    this.transaction(() => {
-      const rest = this.approveFirstNamespaces().filter((n) => n !== ns);
-      this.setMeta("approve_first", JSON.stringify(on ? [...rest, ns].sort() : rest));
-    });
-    this.audit({ op: on ? "approve-first-on" : "approve-first-off", namespace: ns });
+    return gateOps.setApproveFirst(this, namespace, on);
   }
 
   // --- Pinned notes (v18) ----------------------------------------------------
@@ -8383,202 +8016,75 @@ export class Store {
    * token included), the server's own jobs, library callers. Reading is not affected.
    */
   refuseAgentOnPinned(id: number, what: string): void {
-    if (currentWriter() === "cli") return;
-    const r = this.db.prepare("SELECT pinned FROM notes WHERE id = ?").get(id) as { pinned: number } | undefined;
-    if (r && Number(r.pinned) === 1) {
-      throw new ValidationError(`note ${id} is pinned by the operator: ${what} is done by the operator (monomem CLI), not by an agent. It can still be read.`);
-    }
+    return gateOps.refuseAgentOnPinned(this, id, what);
   }
 
   /** Pin or unpin a note. False when there is no such note. Not a content change: rev, written_by and the change feed are untouched. */
   setPinned(id: number, on: boolean, namespaces?: string[]): boolean {
-    if (namespaces && namespaces.length === 0) return false;
-    // One transaction: the operator's pass recorded as the human confirm and the pin land together or not at all.
-    const ok = this.transaction(() => {
-      if (on) {
-        const ns = (this.db.prepare("SELECT namespace FROM notes WHERE id = ?").get(id) as { namespace: string } | undefined)?.namespace;
-        if (ns === undefined || (namespaces && !namespaces.includes(ns))) return false; // a note outside the caller's namespaces reads as missing
-        this.requireHumanConfirm(id, "pin");
-      }
-      const where = namespaces ? ` AND namespace IN (${namespaces.map(() => "?").join(",")})` : "";
-      const res = this.db.prepare(`UPDATE notes SET pinned = ? WHERE id = ?${where}`).run(on ? 1 : 0, id, ...(namespaces ?? []));
-      return Number(res.changes) > 0;
-    });
-    if (ok) this.audit({ op: on ? "pin" : "unpin", id });
-    return ok;
+    return gateOps.setPinned(this, id, on, namespaces);
   }
 
   // --- Outside-content taint and confirms (1.4.0, taint.ts) -------------------------------------------
 
-  /**
-   * The `obs.origin:*` tags a write gets: `outside: true` (declared), the connection's own (ActorRef.taint: a reads_outside
-   * token), read-taint (via:memory, while a note this connection read is still unconfirmed and was read within the taint window)
-   * and the hook session signal. `writer` null = an internal write for someone else (only `declared`).
-   * 1.5.0: taint follows the ACTOR. The hook window stamps only local unauthenticated writers (stdio, a non-terminal cli), matched
-   * by the writer process's folder, never by the namespace the write names; a token writer gets only its own signals.
-   */
   private taintFor(declared: boolean | undefined, writer: string | null): string[] {
-    const out = new Set<string>(declared === true ? [ORIGIN_DECLARED] : []);
-    if (writer === null) return [...out];
-    const actor = actorStore.getStore();
-    for (const t of actor?.taint ?? []) if (t.startsWith(ORIGIN_PREFIX)) out.add(t);
-    if (this.readTaintLive(actor?.taintedReads)) out.add(ORIGIN_VIA_MEMORY);
-    if (actor?.authed !== true && !sessionTaintExempt(writer)) for (const t of this.sessionOutsideTags(actor?.cwd)) out.add(t);
-    return [...out];
+    return taintOps.taintFor(this, declared, writer);
   }
 
-  /** Read-taint: some note this connection read within the taint window is still unconfirmed now. */
-  private readTaintLive(reads: ReadonlyMap<number, number> | undefined): boolean {
-    if (!reads || reads.size === 0) return false;
-    const h = taintWindowHours();
-    const cutoff = Date.now() - (h > 0 ? h : 12) * 3_600_000;
-    const q = this.db.prepare("SELECT tags, grandfathered_at, confirmed_kind, confirmed_rev, rev FROM notes WHERE id = ?");
-    for (const [id, at] of reads) {
-      if (at < cutoff) continue;
-      const r = q.get(id) as { tags: string; grandfathered_at: string | null; confirmed_kind: string | null; confirmed_rev: number | null; rev: number } | undefined;
-      if (r && isTainted(parseTags(r.tags)) && r.grandfathered_at === null && !(r.confirmed_kind && Number(r.confirmed_rev) === Number(r.rev))) return true;
-    }
-    return false;
+  /** @internal */ readTaintLive(reads: ReadonlyMap<number, number> | undefined): boolean {
+    return taintOps.readTaintLive(this, reads);
   }
 
-  /**
-   * 1.4.0 (1d): a write's `derived_from`, checked: a list of at most MAX_DERIVED_FROM note ids (numbers or digit strings),
-   * each an existing note the caller may see, never the note itself. Duplicates collapse. Absent = [].
-   * "May see" = the caller's read rules: its namespaces (ActorRef.readable, when its server confines it), the distrust list
-   * and its sensitivity ceiling. Anything else answers exactly like a missing id, so a link is no probe.
-   */
   private derivedIds(list: unknown, self?: number): number[] {
-    if (list === undefined || list === null) return [];
-    if (!Array.isArray(list)) throw new ValidationError("derived_from must be a list of note ids");
-    if (list.length > MAX_DERIVED_FROM) throw new ValidationError(`derived_from: at most ${MAX_DERIVED_FROM} notes`);
-    const ids = list.map((v) => {
-      const n = typeof v === "number" ? v : typeof v === "string" && /^\s*\d{1,15}\s*$/.test(v) ? Number(v) : NaN;
-      if (!Number.isSafeInteger(n) || n < 1) throw new ValidationError(`derived_from: ${JSON.stringify(String(v).slice(0, 40))} is not a note id`);
-      return n;
-    });
-    const uniq = [...new Set(ids)];
-    const readable = actorStore.getStore()?.readable;
-    for (const id of uniq) {
-      if (id === self) throw new ValidationError("derived_from: a note cannot be built from itself");
-      const n = this.readVisible(id); // gate-ok: existence check only, nothing of the parent is returned
-      if (!n || (readable && !readable.includes(n.namespace))) throw new ValidationError(`derived_from: no note with id ${id}`);
-    }
-    return uniq;
+    return taintOps.derivedIds(this, list, self);
   }
 
-  /** A note built from an unconfirmed note is marked as written after reading unconfirmed memory. `parents` passed derivedIds (readable only). */
   private inheritedTaint(parents: number[]): string[] {
-    return parents.some((p) => this.read(p)?.unconfirmed === true) ? [ORIGIN_VIA_MEMORY] : [];
+    return taintOps.inheritedTaint(this, parents);
   }
 
-  /** Add-only: links are inserted, never deleted or replaced. Runs inside the caller's write transaction. */
-  /**
-   * A content write by the local CLI records whether it ran at a terminal (notes.cli_tty), so a spooled outside read marked
-   * later (retroTaint) can tell the person's write from the same command run by an agent's shell.
-   */
   private stampCliTerminal(id: number, writer: string): void {
-    if (writer === "cli") this.db.prepare("UPDATE notes SET cli_tty = ? WHERE id = ?").run(sessionTaintExempt("cli") ? 1 : 0, id);
-    // 1.5.0: the folder of the local server that wrote this content (NULL = another kind of writer, or unknown origin).
-    const actor = actorStore.getStore();
-    const cwd = actor?.authed !== true && (writer === "stdio" || writer.startsWith("stdio:")) && actor?.cwd ? actor.cwd : null;
-    this.db.prepare("UPDATE notes SET writer_cwd = ? WHERE id = ?").run(cwd, id);
+    return taintOps.stampCliTerminal(this, id, writer);
   }
 
   private addLinks(id: number, parents: number[], by: string, at: string): void {
-    const ins = this.db.prepare("INSERT OR IGNORE INTO note_links (note_id, derived_from, added_at, added_by) VALUES (?, ?, ?, ?)");
-    for (const p of parents) ins.run(id, p, at, by);
-    if (parents.length) this.linksSeen = { any: true, at: Date.now() };
+    return taintOps.addLinks(this, id, parents, by, at);
   }
 
-  /**
-   * Sessions a hook has seen recently: not ended, last capture event (or start) within SESSION_IDLE_MS, so a crashed or idle
-   * session stops counting at once instead of after distillStaleSessions has run.
-   */
-  private activeSessions(): Array<{ id: string; cwd: string; outside_at: string | null }> {
-    const idle = new Date(Date.now() - SESSION_IDLE_MS).toISOString();
-    return this.db
-      .prepare(
-        `SELECT s.id, s.cwd, s.outside_at FROM sessions s WHERE s.ended_at IS NULL
-           AND COALESCE((SELECT MAX(at) FROM capture_events e WHERE e.session_id = s.id), s.started_at) >= ?`
-      )
-      .all(idle) as Array<{ id: string; cwd: string; outside_at: string | null }>;
+  /** @internal */ activeSessions(): Array<{ id: string; cwd: string; outside_at: string | null }> {
+    return taintOps.activeSessions(this);
   }
 
-  /** Sessions whose outside window applies to a writer launched in `cwd` (undefined = unknown origin: every open window). */
-  private windowSessions(cwd: string | undefined): Array<{ id: string; cwd: string; outside_at: string }> {
-    const hours = taintWindowHours();
-    if (hours <= 0) return [];
-    const cutoff = new Date(Date.now() - hours * 3_600_000).toISOString();
-    const active = this.activeSessions();
-    const mine = cwd ? active.filter((x) => sameFolder(x.cwd, cwd)) : [];
-    // A folder that matches no active session is an unknown origin (Claude Desktop, a server an agent launched from a shell).
-    return (mine.length ? mine : active).filter((x): x is { id: string; cwd: string; outside_at: string } => x.outside_at !== null && x.outside_at >= cutoff);
+  /** @internal */ windowSessions(cwd: string | undefined): Array<{ id: string; cwd: string; outside_at: string }> {
+    return taintOps.windowSessions(this, cwd);
   }
 
-  private windowCache = new Map<string, { at: number; tags: string[] }>();
+  /** @internal */ windowCache = new Map<string, { at: number; tags: string[] }>();
 
-  /**
-   * The hook signal (R1-04): the stamps for a local writer launched in `cwd` while a session of that folder read outside content
-   * within the taint window. Returns the tools' stamps (at most 3), or `...:other`. Cached 1 s per folder (the lookup runs on
-   * every agent write); MONOMEM_SCAN_CACHE_SECONDS=0 turns that off for tests.
-   */
-  private sessionOutsideTags(cwd: string | undefined): string[] {
-    const ttl = Math.min(1000, Math.max(0, Number(process.env.MONOMEM_SCAN_CACHE_SECONDS ?? "60") || 0) * 1000);
-    const key = cwd ?? "";
-    const hit = this.windowCache.get(key);
-    if (ttl > 0 && hit && Date.now() - hit.at < ttl) return hit.tags;
-    const tags = this.computeWindowTags(cwd);
-    this.windowCache.set(key, { at: Date.now(), tags });
-    return tags;
+  /** @internal */ sessionOutsideTags(cwd: string | undefined): string[] {
+    return taintOps.sessionOutsideTags(this, cwd);
   }
 
-  private windowTools(ids: string[], cutoff: string): string[] {
-    if (!ids.length) return [];
-    const tools = this.db
-      .prepare(`SELECT DISTINCT tool FROM capture_events WHERE session_id IN (${ids.map(() => "?").join(",")}) AND event IN ('post-tool', 'post-tool-failure') AND at >= ?`)
-      .all(...ids, cutoff) as Array<{ tool: string }>;
-    return tools.map((r) => r.tool).filter((t) => isOutsideTool(t));
+  /** @internal */ windowTools(ids: string[], cutoff: string): string[] {
+    return taintOps.windowTools(this, ids, cutoff);
   }
 
-  private computeWindowTags(cwd: string | undefined): string[] {
-    const sessions = this.windowSessions(cwd);
-    if (!sessions.length) return [];
-    const cutoff = new Date(Date.now() - taintWindowHours() * 3_600_000).toISOString();
-    const tags = [...new Set(this.windowTools(sessions.map((x) => x.id), cutoff).map(toolTag))].sort().slice(0, 3);
-    return tags.length ? tags : [toolTag("other")];
+  /** @internal */ computeWindowTags(cwd: string | undefined): string[] {
+    return taintOps.computeWindowTags(this, cwd);
   }
 
   /** `monomem taint clear`: a person ends the open outside windows (all, one session, or the ones of one folder). Stamps already written stay. */
   taintClear(sel: { all?: boolean; session?: string; cwd?: string }): number {
-    const open = this.db.prepare("SELECT id, cwd FROM sessions WHERE ended_at IS NULL AND outside_at IS NOT NULL").all() as Array<{ id: string; cwd: string }>;
-    const ids = open.filter((x) => sel.all === true || (sel.session !== undefined && x.id === sel.session) || (sel.cwd !== undefined && sameFolder(x.cwd, sel.cwd))).map((x) => x.id);
-    if (ids.length) this.transaction(() => this.db.prepare(`UPDATE sessions SET outside_at = NULL WHERE id IN (${ids.map(() => "?").join(",")})`).run(...ids));
-    this.windowCache.clear();
-    this.audit({ op: "taint-clear", detail: `${ids.length} window(s) closed` });
-    return ids.length;
+    return taintOps.taintClear(this, sel);
   }
 
   /** The windows open now, for doctor and session start: folder, tools, minutes since the outside read. */
   openWindows(cwd?: string): Array<{ cwd: string; tools: string[]; minutes: number }> {
-    const hours = taintWindowHours();
-    if (hours <= 0) return [];
-    const cutoff = new Date(Date.now() - hours * 3_600_000).toISOString();
-    const rows = (cwd === undefined ? this.activeSessions() : this.activeSessions().filter((x) => sameFolder(x.cwd, cwd))).filter(
-      (x): x is { id: string; cwd: string; outside_at: string } => x.outside_at !== null && x.outside_at >= cutoff
-    );
-    return rows.map((r) => ({
-      cwd: r.cwd,
-      tools: [...new Set(this.windowTools([r.id], cutoff))].sort(),
-      minutes: Math.max(0, Math.round((Date.now() - Date.parse(r.outside_at)) / 60_000)),
-    }));
+    return taintOps.openWindows(this, cwd);
   }
 
   /** Session-start lines for a writer in `cwd` whose folder has an open outside window (none when no window is open). */
   openWindowLines(cwd: string): string[] {
-    return this.openWindows(cwd).map(
-      (w) =>
-        `Monomem: a session in this folder read outside content (${w.tools.join(", ") || "other"}) ${w.minutes} min ago; notes written from here are marked until it ends. A person can stop this: monomem taint clear --here`
-    );
+    return taintOps.openWindowLines(this, cwd);
   }
 
   /**
@@ -8587,214 +8093,78 @@ export class Store {
    * now. Add-only, no rev bump (the content did not change). Returns how many notes it marked.
    */
   retroTaint(cwd: string, atIso: string, tool: string): number {
-    const hours = taintWindowHours();
-    if (hours <= 0 || !isOutsideTool(tool)) return 0;
-    const until = new Date(Date.parse(atIso) + hours * 3_600_000).toISOString();
-    const tag = toolTag(tool);
-    const rows = this.db
-      .prepare("SELECT id, tags, written_by, cli_tty, writer_cwd FROM notes WHERE updated_at >= ? AND updated_at <= ? AND archived_at IS NULL AND COALESCE(kind, 'note') = 'note'")
-      .all(atIso, until) as Array<{ id: number; tags: string; written_by: string | null; cli_tty: number | null; writer_cwd: string | null }>;
-    const local = (r: { written_by: string | null; cli_tty: number | null }): boolean =>
-      r.written_by === "cli" ? Number(r.cli_tty) !== 1 : r.written_by === "stdio" || (r.written_by ?? "").startsWith("stdio:");
-    const marks = rows.filter((r) => local(r) && (r.writer_cwd === null || sameFolder(r.writer_cwd, cwd)) && !parseTags(r.tags).includes(tag));
-    if (!marks.length) return 0;
-    // One transaction; a note it marks is new outside content, so a pre-upgrade (grandfathered) note loses its exemption.
-    this.transaction(() => {
-      // 1.5.0 (R1-15): rev and updated_at move so the change feed, sync and embeddings see the new stamp, and a writer holding the
-      // old rev gets the normal stale-write answer. content_at stays (expiry unaffected); a confirm that was current carries over.
-      const up = this.db.prepare("UPDATE notes SET tags = ?, grandfathered_at = NULL, rev = rev + 1, updated_at = ?, confirmed_rev = CASE WHEN confirmed_rev = rev THEN rev + 1 ELSE confirmed_rev END WHERE id = ?");
-      const now = new Date().toISOString();
-      for (const r of marks) up.run(tagsToStorage([...parseTags(r.tags), tag]), now, r.id);
-    });
-    this.audit({ op: "retro-taint", detail: `${marks.length} note(s) marked ${tag}` });
-    return marks.length;
+    return taintOps.retroTaint(this, cwd, atIso, tool);
   }
 
   /** Live unconfirmed notes (tainted, not grandfathered, no confirm for the current rev), in `namespaces` or everywhere. */
   unconfirmedCount(namespaces?: string[]): number {
-    return this.unconfirmedRows(namespaces).length;
+    return confirmOps.unconfirmedCount(this, namespaces);
   }
 
   /** The unconfirmed notes by cause (each counted once: tool, else via memory, else declared). Counts only; no titles. */
   unconfirmedBreakdown(namespaces?: string[]): { tool: number; via: number; declared: number } {
-    const out = { tool: 0, via: 0, declared: 0 };
-    for (const r of this.unconfirmedRows(namespaces)) {
-      const t = parseTags(r.tags);
-      if (t.some((x) => x.startsWith(ORIGIN_TOOL_PREFIX))) out.tool++;
-      else if (t.includes(ORIGIN_VIA_MEMORY)) out.via++;
-      else out.declared++;
-    }
-    return out;
+    return confirmOps.unconfirmedBreakdown(this, namespaces);
   }
 
   /** A backlog nobody can see is not "healthy": 10 or more unconfirmed notes, or one older than 7 days, caps the grade at B. */
   confirmBacklog(): { count: number; oldest_days: number; capped: boolean; reason: string } {
-    const rows = this.unconfirmedRows();
-    const oldest = rows.reduce((m, r) => Math.min(m, Date.parse(r.updated_at) || Date.now()), Date.now());
-    const days = Math.floor((Date.now() - oldest) / 86_400_000);
-    const many = rows.length >= 10;
-    const old = rows.length > 0 && days > 7;
-    return { count: rows.length, oldest_days: days, capped: many || old, reason: many ? `${rows.length} unconfirmed notes wait for review` : old ? `the oldest unconfirmed note has waited ${days} days` : "" };
+    return confirmOps.confirmBacklog(this);
   }
 
   /**
    * unconfirmedRows' last answer, reused while nothing in the database changed: total_changes() moves on this connection's
    * writes, PRAGMA data_version on another process's commit. Session start asks once per prompt; the scan is the cost.
    */
-  private unconfirmedCache: { key: string; rows: ReviewRow[] } | null = null;
+  /** @internal */ unconfirmedCache: { key: string; rows: ReviewRow[] } | null = null;
   /** Rows this connection wrote that are not notes (access counts, access log, write_rate): subtracted from total_changes() in the cache key. */
-  private bookkeepingChanges = 0;
+  /** @internal */ bookkeepingChanges = 0;
 
-  private unconfirmedRows(namespaces?: string[]): ReviewRow[] {
-    if (namespaces && namespaces.length === 0) return [];
-    const ver = this.db.prepare("SELECT total_changes() AS t").get() as { t: number };
-    const dv = this.db.prepare("PRAGMA data_version").get() as { data_version: number };
-    // Read bookkeeping (access counts, the access log, the flood counter) moves total_changes() but no note: not counted.
-    const key = JSON.stringify([namespaces ?? null, ver.t - this.bookkeepingChanges, dv.data_version, currentCeiling() ?? null]);
-    if (this.unconfirmedCache?.key === key) return this.unconfirmedCache.rows;
-    const rows = this.scanUnconfirmed(namespaces);
-    this.unconfirmedCache = { key, rows };
-    return rows;
+  /** @internal */ unconfirmedRows(namespaces?: string[]): ReviewRow[] {
+    return confirmOps.unconfirmedRows(this, namespaces);
   }
 
-  /** The unconfirmed scan's SQL and parameters (also read by test/query-plans.test.ts to check the plan). */
-  private unconfirmedSql(namespaces?: string[]): { sql: string; params: Array<string | number> } {
-    const ns = namespaces ? ` AND namespace IN (${namespaces.map(() => "?").join(",")})` : "";
-    const dis = this.distrustFragment(NOTE_COLUMNS, namespaces);
-    return {
-      // INDEXED BY: left to itself the planner prefers idx_notes_archived (every live note); the partial index holds only the stamped ones.
-      sql: `SELECT id, namespace, title, written_by, tags, updated_at FROM notes INDEXED BY idx_notes_origin WHERE archived_at IS NULL AND grandfathered_at IS NULL AND tags LIKE '%obs.origin:%'
-           AND NOT (confirmed_kind IS NOT NULL AND confirmed_rev = rev)${ns}${this.ceilingSql()}${dis.sql} ORDER BY id`,
-      params: [...(namespaces ?? []), ...dis.params] as Array<string | number>,
-    };
+  /** @internal */ unconfirmedSql(namespaces?: string[]): { sql: string; params: Array<string | number> } {
+    return confirmOps.unconfirmedSql(this, namespaces);
   }
 
-  private scanUnconfirmed(namespaces?: string[]): ReviewRow[] {
-    const { sql, params } = this.unconfirmedSql(namespaces);
-    const rows = this.db.prepare(sql).all(...params) as unknown as ReviewRow[];
-    return rows.filter((r) => isTainted(parseTags(r.tags)));
+  /** @internal */ scanUnconfirmed(namespaces?: string[]): ReviewRow[] {
+    return confirmOps.scanUnconfirmed(this, namespaces);
   }
 
   // --- Re-confirmation expiry (1.4.0, 1a) ---------------------------------------------------------------------------
   // Settings in _meta (confirm_mode, confirm_days, confirm_mode_set_at), like approve_first. Read at most once a second
   // per Store (every record read consults them), so a change made by another process shows within a second.
-  private confirmCache: { at: number; v: ConfirmSettings } | null = null;
+  /** @internal */ confirmCache: { at: number; v: ConfirmSettings } | null = null;
 
   confirmSettings(): ConfirmSettings {
-    const now = Date.now();
-    if (this.confirmCache && now - this.confirmCache.at < 1000) return this.confirmCache.v;
-    const m = this.getMeta("confirm_mode");
-    const d = Number(this.getMeta("confirm_days"));
-    const setAt = this.getMeta("confirm_mode_set_at");
-    const v: ConfirmSettings = {
-      // A3: unset = the default (label); set but unknown = damaged, so the strictest mode (enforce).
-      mode: m === null ? "label" : (CONFIRM_MODES as readonly string[]).includes(m) ? (m as ConfirmMode) : "enforce",
-      days: Number.isInteger(d) && d >= 1 && d <= MAX_CONFIRM_DAYS ? d : DEFAULT_CONFIRM_DAYS,
-      ...(setAt ? { set_at: setAt } : {}),
-    };
-    this.confirmCache = { at: now, v };
-    return v;
+    return confirmOps.confirmSettings(this);
   }
 
   /**
    * Change the expiry settings (operator: the CLI gates lowering protection). A mode change records when, so turning
    * expiry on starts every note's clock then, not at its last edit.
    */
-  setConfirmSettings(s: { mode?: ConfirmMode; days?: number }): ConfirmSettings {
-    if (s.mode !== undefined && !CONFIRM_MODES.includes(s.mode)) throw new ValidationError(`confirm-mode must be one of: ${CONFIRM_MODES.join(", ")}`);
-    if (s.days !== undefined && !(Number.isInteger(s.days) && s.days >= 1 && s.days <= MAX_CONFIRM_DAYS)) {
-      throw new ValidationError(`confirm-days must be a whole number from 1 to ${MAX_CONFIRM_DAYS}`);
-    }
-    const before = this.confirmSettings();
-    // Shortening the period while enforce is on would hide notes at once; like turning expiry on, it restarts the clock.
-    // label <-> enforce keeps every due date: switching between the two never restarts a note's clock.
-    const shrinksUnderEnforce = s.days !== undefined && s.days < before.days && (s.mode ?? before.mode) === "enforce";
-    this.transaction(() => {
-      if (s.days !== undefined) this.setMeta("confirm_days", String(s.days));
-      if (s.mode !== undefined && s.mode !== before.mode) this.setMeta("confirm_mode", s.mode);
-      const turnsOn = s.mode !== undefined && s.mode !== before.mode && before.mode === "off";
-      if (turnsOn || shrinksUnderEnforce) this.setMeta("confirm_mode_set_at", new Date().toISOString());
-    });
-    this.confirmCache = null;
-    const after = this.confirmSettings();
-    this.audit({ op: "confirm-settings", detail: `mode ${after.mode}, days ${after.days}` });
-    return after;
+  setConfirmSettings(next: { mode?: ConfirmMode; days?: number }): ConfirmSettings {
+    return confirmOps.setConfirmSettings(this, next);
   }
 
-  /** Live ordinary notes past their re-confirmation date (none when the mode is off). Pinned notes are exempt. */
-  private expiredRows(namespaces?: string[]): ReviewRow[] {
-    const c = this.confirmSettings();
-    if (c.mode === "off" || (namespaces && namespaces.length === 0)) return [];
-    const ns = namespaces ? ` AND namespace IN (${namespaces.map(() => "?").join(",")})` : "";
-    const dis = this.distrustFragment(NOTE_COLUMNS, namespaces);
-    const cutoff = Date.now() - c.days * 86_400_000;
-    // 1.5.0: the clock's start (the same formula as dueBase) is computed in SQL, so only notes that are probably due come back, not
-    // every old note. A day of slack because SQLite and Date.parse may read an odd timestamp a little differently; dueBase()
-    // then decides exactly in JS.
-    const loose = new Date(cutoff + 86_400_000).toISOString();
-    const setAtMs = c.set_at ? Date.parse(c.set_at) : NaN;
-    const setAtDay = Number.isNaN(setAtMs) ? 0 : 2440587.5 + setAtMs / 86_400_000;
-    const rows = this.db
-      .prepare(
-        `SELECT id, namespace, title, written_by, tags, updated_at, content_at, confirmed_at, confirmed_kind, confirmed_rev, rev, grandfathered_at FROM notes
-          WHERE archived_at IS NULL AND superseded_by IS NULL AND COALESCE(pinned, 0) = 0 AND COALESCE(kind, 'note') = 'note'
-            AND tags NOT LIKE '%"task"%' AND tags NOT LIKE '%"handoff"%'
-            AND MAX(COALESCE(julianday(COALESCE(content_at, updated_at)), 0),
-                    CASE WHEN confirmed_kind IN ('human', 'admin') AND confirmed_rev = rev THEN COALESCE(julianday(confirmed_at), 0) ELSE 0 END,
-                    COALESCE(julianday(grandfathered_at), 0), ?) <= julianday(?)${ns}${this.ceilingSql()}${dis.sql} ORDER BY id`
-      )
-      .all(setAtDay, loose, ...(namespaces ?? []), ...dis.params) as unknown as Array<ReviewRow & DueRow>;
-    return rows.filter((r) => {
-      const base = dueBase(r, c);
-      return base > 0 && base <= cutoff;
-    });
+  /** @internal */ expiredRows(namespaces?: string[]): ReviewRow[] {
+    return confirmOps.expiredRows(this, namespaces);
   }
 
   /** How many notes are past their re-confirmation date, in `namespaces` or everywhere (0 when the mode is off). */
   expiredCount(namespaces?: string[]): number {
-    return this.expiredRows(namespaces).length;
+    return confirmOps.expiredCount(this, namespaces);
   }
 
   /** `monomem review`: unconfirmed and expired notes, with why and who wrote them. For a person at a terminal only. */
   reviewList(namespaces?: string[]): ReviewItem[] {
-    const days = this.confirmSettings().days;
-    const out = new Map<number, ReviewItem>();
-    const add = (r: ReviewRow, why: string): void => {
-      const cur = out.get(r.id);
-      if (cur) out.set(r.id, { ...cur, why: `${cur.why}; ${why}` });
-      else out.set(r.id, { id: Number(r.id), namespace: r.namespace, title: r.title, writer: r.written_by ?? "", why });
-    };
-    for (const r of this.unconfirmedRows(namespaces)) {
-      const origins = parseTags(r.tags).filter((t) => t.startsWith(ORIGIN_PREFIX)).map((t) => t.slice(ORIGIN_PREFIX.length));
-      add(r, `unconfirmed: from outside content (${origins.join(", ")}), nobody confirmed this version`);
-    }
-    for (const r of this.expiredRows(namespaces)) add(r, `expired: not re-confirmed in ${days} days (last changed ${r.updated_at.slice(0, 10)})`);
-    return [...out.values()].sort((a, b) => a.id - b.id);
+    return confirmOps.reviewList(this, namespaces);
   }
 
   /** Plain-English lines for `monomem doctor` and `monomem health`: one per 1.4.0 confirm rule, with counts. */
   confirmRuleLines(): string[] {
-    const c = this.confirmSettings();
-    const unconfirmed = this.unconfirmedCount();
-    const expired = this.expiredCount();
-    const hours = taintWindowHours();
-    const plural = (n: number): string => `${n} note${n === 1 ? "" : "s"}`;
-    const b = this.unconfirmedBreakdown();
-    const back = this.confirmBacklog();
-    const wins = this.openWindows();
-    return [
-      `Unconfirmed notes (from outside content, kept out of session start until confirmed): ${unconfirmed}${unconfirmed ? " (monomem review)" : ""}`,
-      ...(unconfirmed ? [`By origin: ${b.tool} written during a session that read the web, ${b.via} after reading unconfirmed notes, ${b.declared} declared by the writer`] : []),
-      ...(wins.length ? [`Open outside-content windows: ${wins.map((w) => `${w.cwd || "(unknown folder)"} (${w.tools.join(", ") || "other"}, ${w.minutes} min ago)`).join("; ")} (end them: monomem taint clear)`] : []),
-      ...(back.capped ? [`The health grade is capped at B: ${back.reason}. Review them: monomem review`] : []),
-      c.mode === "off"
-        ? "Re-confirmation expiry: off (no note expires; turn on: monomem config set confirm-mode label)"
-        : `Re-confirmation expiry: ${c.mode}, every ${c.days} days; ${plural(expired)} past due (${c.mode === "enforce" ? "kept out of session start" : "labelled in search, still shown"})`,
-      hours > 0
-        ? `Outside-content window: notes written by a local app (no key of its own) launched in the same folder as a hooked session that read outside content, within ${hours} hours and while that session is active (idle 30 minutes ends it), are marked; apps with their own key are not (MONOMEM_TAINT_WINDOW_HOURS)`
-        : "Outside-content window: off (MONOMEM_TAINT_WINDOW_HOURS=0), so hooked sessions' outside reads mark nothing",
-      "Reading unconfirmed notes marks later writes: when an app reads a note nobody has confirmed, what it writes next is marked too, until that note is confirmed or the taint window passes. This is counted per connection and starts over when the server restarts.",
-    ];
+    return confirmOps.confirmRuleLines(this);
   }
 
   /**
@@ -8803,13 +8173,7 @@ export class Store {
    * operator gate (terminal + typed yes) before it calls this. Everyone else, admin tokens included, is refused.
    */
   requireHumanConfirm(id: number, verb: string): void {
-    const n = this.read(id);
-    if (!n || !needsHumanConfirm(n)) return;
-    if (currentWriter() === "cli") {
-      this.confirm(id, { source: `operator: ${verb}` });
-      return;
-    }
-    throw new ValidationError(promotionRefusal(verb, id, n.confirmed_kind === "admin" && n.confirmed_rev === n.rev));
+    return confirmOps.requireHumanConfirm(this, id, verb);
   }
 
   /**
@@ -8823,123 +8187,16 @@ export class Store {
    * note derived from this one, and a second confirm by the same writer for the same rev. Confirms count in the flood guard.
    */
   confirm(id: number, opts: { source?: string; admin?: boolean; dashboard?: boolean } = {}): ConfirmResult | null {
-    const n = this.readVisible(id, { hideArchived: true }); // gate-ok: a hidden note answers like a missing one (null)
-    if (!n) return null;
-    const w = currentWriter();
-    const human = w === "cli";
-    if (!human) this.floodGate("full");
-    const source = (opts.source ?? "").replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 200);
-    const key = source ? sourceKey(source) : "";
-    const at = new Date().toISOString();
-    const base = { id, title: n.title, rev: n.rev, by: w, at, source };
-    // R1-03: the rules (`already`, `same_source`, ...) and the kind are decided INSIDE the write transaction (BEGIN IMMEDIATE), so
-    // two processes cannot both read "nothing yet" and both count.
-    const st: { refusal: { code: string; message: string } | null; kind: ConfirmResult["kind"]; stored: boolean; kept: { at: string; kind: string } | null } = {
-      refusal: null,
-      kind: "not_counted",
-      stored: false, // this confirm became the note's confirm
-      kept: null, // a stronger confirm of this version stays (this one is recorded)
-    };
-    const write = (): void => {
-      const refusal = this.confirmRefusal(n, w, human, opts.admin === true, key, opts.admin === true && opts.dashboard === true);
-      st.refusal = refusal;
-      if (refusal?.code === "already") return;
-      const kind: ConfirmResult["kind"] = refusal ? "not_counted" : human ? "human" : opts.admin ? "admin" : "corroborated";
-      st.kind = kind;
-      this.db
-        .prepare("INSERT INTO confirmations (note_id, note_rev, at, by, by_authed, kind, source, source_key, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(id, n.rev, at, w, actorStore.getStore()?.authed ? 1 : 0, kind, source, key, refusal?.code ?? "");
-      if (refusal) return;
-      // Only a confirm at least as strong as the note's current one (for this rev) replaces it and restarts the
-      // re-confirmation clock: an agent's corroboration never refreshes a person's or an admin's confirm. Decided inside
-      // the UPDATE, so two processes cannot let a weaker kind overwrite a stronger one. `rev = ?`: the version read.
-      const res = this.db
-        .prepare(
-          `UPDATE notes SET confirmed_at = ?, confirmed_rev = rev, confirmed_kind = ?, confirmed_by = ?
-           WHERE id = ? AND rev = ? AND NOT (confirmed_rev = rev AND ${rankSql("confirmed_kind")} > ?)`
-        )
-        .run(at, kind, w, id, n.rev, CONFIRM_RANK[kind]);
-      st.stored = Number(res.changes) > 0;
-      if (!st.stored) {
-        const cur = this.db.prepare("SELECT rev, confirmed_at, confirmed_kind FROM notes WHERE id = ?").get(id) as { rev: number; confirmed_at: string; confirmed_kind: string } | undefined;
-        if (cur && Number(cur.rev) === n.rev) st.kept = { at: cur.confirmed_at, kind: cur.confirmed_kind };
-      }
-    };
-    // Inside a caller's transaction (a CLI supersede's commit) the rows ride on it.
-    if (this.db.isTransaction) write();
-    else this.transaction(write);
-    const { refusal, kind, stored, kept } = st;
-    if (refusal?.code === "already") return { ...base, counted: false, recorded: false, kind: "not_counted", reason: refusal.code, message: refusal.message };
-    this.audit({ op: refusal ? "confirm-not-counted" : "confirm", id, namespace: n.namespace, detail: refusal ? refusal.code : kind });
-    if (!refusal && !stored && !kept) {
-      const message = `Not counted: note ${id} changed while it was being confirmed. Read it again and confirm the new version.`;
-      return { ...base, counted: false, recorded: true, kind: "not_counted", reason: "changed", message };
-    }
-    const checked = source ? ` Checked against: ${source}.` : "";
-    const cs = this.confirmSettings();
-    // The due date is the one stored: this confirm's, or the stronger one the note keeps.
-    const dueAt = kept ? Date.parse((kept as { at: string }).at) + cs.days * 86_400_000 : Date.parse(at) + cs.days * 86_400_000;
-    const dueDay = new Date(dueAt).toISOString().slice(0, 10);
-    const keptKind = kept ? (kept as { kind: string }).kind : "";
-    const weakOnly = !refusal && (stored ? kind === "corroborated" : keptKind === "corroborated");
-    const due =
-      weakOnly
-        ? " This releases the session-start hold. It does not restart the re-confirmation clock: a person or an admin must confirm for that."
-        : cs.mode === "off" ? "" : dueAt <= Date.now() ? ` It is past its re-confirmation date (${dueDay}): a person or an admin must confirm it again.` : ` Next check due ${dueDay}.`;
-    // Only the person at the terminal sees the title echoed: to an agent a title is outside text it did not ask to read.
-    const what = human ? `"${n.title.slice(0, 80)}"` : `note #${id}`;
-    const keptNote = kept ? ` The note keeps its stronger ${(kept as { kind: string }).kind} confirm; this one is recorded but does not restart its clock.` : "";
-    const message = refusal ? refusal.message : `Confirmed ${what} by ${w || "(unknown)"} at ${at.slice(0, 16).replace("T", " ")}.${checked}${keptNote}${due}`;
-    return { ...base, counted: !refusal, recorded: true, kind, ...(refusal ? { reason: refusal.code } : {}), message };
+    return confirmOps.confirm(this, id, opts);
   }
 
-  /** Why a confirm does not count (null = it counts). Plain words, naming the rule. */
-  private confirmRefusal(n: NoteRecord, w: string, human: boolean, admin: boolean, key: string, dashboard = false): { code: string; message: string } | null {
-    const who = w || "an unidentified writer";
-    // With expiry on, a confirm older than the expiry period no longer blocks a new one: re-confirming is the point.
-    const c = this.confirmSettings();
-    const since = c.mode === "off" ? "" : new Date(Date.now() - c.days * 86_400_000).toISOString();
-    const again = this.db
-      .prepare("SELECT 1 FROM confirmations WHERE note_id = ? AND note_rev = ? AND by = ? AND reason = '' AND at > ? LIMIT 1")
-      .get(n.id, n.rev, w, since);
-    if (again) return { code: "already", message: `Not counted again: ${who} already confirmed this version of the note. One confirm per writer per version.` };
-    if (human) return null;
-    const own = [n.written_by, n.created_by, n.attested_writer ?? "", ...(n.merged_from_writers ?? [])].filter(Boolean);
-    if (w && own.includes(w)) return { code: "same_writer", message: `Not counted: ${who} wrote this note, so it can't confirm it. A person or a different agent must confirm.` };
-    const actor = actorStore.getStore();
-    if (!actor?.authed || w === "" || w === "stdio" || w.startsWith("stdio:")) {
-      return { code: "unauthenticated", message: `Not counted: ${who} is a local connection without its own key, so its name is a claim, not an identity. The confirm is recorded but does not count. A person (monomem confirm ${n.id}) or an agent with its own key must confirm.` };
-    }
-    if (this.isDistrusted({ namespace: n.namespace, written_by: w })) return { code: "distrusted", message: `Not counted: ${who} is on the distrust list for this namespace.` };
-    // The dashboard (a session opened with monomem open; it lists the note to show the button) skips this rule: a person
-    // is looking at the note, and an admin confirm only releases the session-start hold, never promotion. Any other key,
-    // admin or not, that was handed the note while unconfirmed is refused: REST cannot tell a person from an agent.
-    if (!dashboard && actor.taintedReads?.has(n.id)) {
-      return { code: "read_it", message: `Not counted: ${who} read this note's text while it was unconfirmed, so the confirm could be the note talking. A person or an agent that has not read it must confirm.` };
-    }
-    const derived = this.db
-      .prepare("SELECT 1 FROM note_links l JOIN notes c ON c.id = l.note_id WHERE l.derived_from = ? AND (c.written_by = ? OR c.created_by = ?) LIMIT 1")
-      .get(n.id, w, w);
-    if (derived) return { code: "derived", message: `Not counted: ${who} wrote a note built from this one, so it can't confirm it.` };
-    if (admin) return null;
-    if (!key) return { code: "no_source", message: "Not counted: an agent's confirm must name the source it checked the note against (source)." };
-    // Bounded like "already": after the expiry period an earlier confirm's source may be named again.
-    const used = this.db.prepare("SELECT source_key FROM confirmations WHERE note_id = ? AND note_rev = ? AND reason = '' AND at > ?").all(n.id, n.rev, since) as Array<{ source_key: string }>;
-    if ((n.source && sourceKey(n.source) === key) || used.some((u) => u.source_key === key)) {
-      return { code: "same_source", message: "Not counted: that source is the note's own, or one an earlier confirm already named. Name a different source." };
-    }
-    return null;
+  /** @internal */ confirmRefusal(n: NoteRecord, w: string, human: boolean, admin: boolean, key: string, dashboard = false): { code: string; message: string } | null {
+    return confirmOps.confirmRefusal(this, n, w, human, admin, key, dashboard);
   }
 
   /** Pinned notes (id, namespace, title), oldest first; `namespaces` limits it to those. */
   pinnedNotes(namespaces?: string[]): Array<{ id: number; namespace: string; title: string }> {
-    if (namespaces && namespaces.length === 0) return [];
-    const where = namespaces ? ` AND namespace IN (${namespaces.map(() => "?").join(",")})` : "";
-    return this.db.prepare(`SELECT id, namespace, title FROM notes WHERE pinned = 1${where}${this.ceilingSql()} ORDER BY id`).all(...(namespaces ?? [])) as unknown as Array<{
-      id: number;
-      namespace: string;
-      title: string;
-    }>;
+    return gateOps.pinnedNotes(this, namespaces);
   }
 
   // --- Rollback by writer (v18) ------------------------------------------------
@@ -8949,19 +8206,7 @@ export class Store {
    * last written by it then, or with a kept or dropped history version it replaced then. `family`: "stdio" also means stdio:<app>.
    */
   rollbackCandidates(writer: string, family: boolean, sinceIso: string, namespaces?: string[]): number[] {
-    if (namespaces && namespaces.length === 0) return [];
-    const m = (col: string) => nameIsSql(col, writer, family);
-    const [c, w, h, d] = [m("created_by"), m("written_by"), m("h.saved_by"), m("d.saved_by")];
-    const nsSql = namespaces ? ` AND namespace IN (${namespaces.map(() => "?").join(",")})` : "";
-    const rows = this.db
-      .prepare(
-        `SELECT id FROM notes WHERE ((${c.sql} AND created_at >= ?) OR (${w.sql} AND updated_at >= ?)
-           OR id IN (SELECT h.note_id FROM note_history h WHERE ${h.sql} AND h.saved_at >= ?)
-           OR id IN (SELECT d.note_id FROM note_history_dropped d WHERE ${d.sql} AND d.last_at >= ?))${nsSql}${this.ceilingSql()}
-         ORDER BY id`
-      )
-      .all(...c.params, sinceIso, ...w.params, sinceIso, ...h.params, sinceIso, ...d.params, sinceIso, ...(namespaces ?? [])) as Array<{ id: number }>;
-    return rows.map((r) => Number(r.id));
+    return confirmOps.rollbackCandidates(this, writer, family, sinceIso, namespaces);
   }
 
   /** Mark a confirmation code's nonce used (the supersede_used table); throws when it already was. Caller holds the write lock. */
@@ -8973,7 +8218,6 @@ export class Store {
 
   // --- Quarantine (v7) -----------------------------------------------------
 
-  /** Hold a linter-flagged write for admin review; returns its quarantine id. */
   private quarantineWrite(q: {
     op: "create" | "update";
     targetId?: number;
@@ -9000,122 +8244,20 @@ export class Store {
     /** ... and (create) linked to its (origin, id). */
     syncIdentity?: { origin: string; id: number };
   }): number {
-    // Held writes are the flagged ones (secrets, injections): when at-rest
-    // encryption is on they are sealed too. The key state is read under the
-    // write lock (see writeKey) so a concurrent `encrypt disable` cannot
-    // strand a sealed row.
-    const nested = this.db.isTransaction;
-    // What a held EDIT clears (confidence / forget_after set to null) is stored in the INSERT itself, not by a second statement.
-    const clears = q.op === "update" ? (["forget_after", "confidence"] as const).filter((f) => (f === "confidence" ? q.confidence : q.forgetAfter) === null) : [];
-    if (!nested) this.beginWrite();
-    let id: number;
-    try {
-      const key = this.writeKey();
-      // Sealed rows are bound to their id (S-05): inserted with empty columns, sealed below in this same transaction.
-      const sealCol = (col: string, v: string | null): string | null => (v === null || !key ? v : "");
-      const res = this.db
-        .prepare(
-          `INSERT INTO quarantine (op, target_id, if_rev, namespace, title, body, tags, source,
-                                   created_at_override, reasons, created_at, set_namespace, sealed, written_by, sensitivity,
-                                   forget_after, confidence, clears)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .run(
-          q.op,
-          q.targetId ?? null,
-          q.ifRev ?? null,
-          q.namespace,
-          sealCol("title", q.title ?? null),
-          sealCol("body", q.body ?? null),
-          sealCol("tags", q.tags === undefined ? null : JSON.stringify(q.tags)),
-          q.source === undefined ? null : q.source.replace(/[\u{E0000}-\u{E007F}]/gu, ""),
-          isoOrNull(q.createdAt),
-          JSON.stringify(q.findings),
-          new Date().toISOString(),
-          q.setNamespace ? 1 : 0,
-          key ? 1 : 0,
-          q.writtenBy !== undefined ? cleanWriter(q.writtenBy) : currentWriter(),
-          q.sensitivity ?? DEFAULT_SENSITIVITY,
-          q.forgetAfter ?? null,
-          typeof q.confidence === "number" ? q.confidence : null,
-          clears.length ? JSON.stringify(clears) : null
-        );
-      id = Number(res.lastInsertRowid);
-      if (key) {
-        const seal = (col: string, v: string | null): string | null => (v === null ? null : sealQuarantineCol(v, key, col, q.namespace, id));
-        this.db
-          .prepare("UPDATE quarantine SET title = ?, body = ?, tags = ? WHERE id = ?")
-          .run(seal("title", q.title ?? null), seal("body", q.body ?? null), seal("tags", q.tags === undefined ? null : JSON.stringify(q.tags)), id);
-      }
-      if (q.importedUnverified || q.syncIdentity) {
-        this.db
-          .prepare("UPDATE quarantine SET imported_unverified = ?, sync_origin = ?, sync_origin_id = ? WHERE id = ?")
-          .run(q.importedUnverified ? 1 : 0, q.syncIdentity?.origin ?? null, q.syncIdentity?.id ?? null, id);
-      }
-      if (!nested) this.commitTx();
-    } catch (e) {
-      if (!nested) {
-        try {
-          this.rollbackTx();
-        } catch {
-          /* already rolled back */
-        }
-      }
-      throw e;
-    }
-    // Audit records the decision, never the content.
-    this.audit({ op: "quarantine", id, namespace: q.namespace, bytes: (q.body ?? "").length });
-    return id;
+    return quarantineOps.quarantineWrite(this, q);
   }
 
-  private quarantineRow(row: Record<string, unknown>): QuarantineEntry {
-    if (Number(row.sealed) === 1) {
-      const key = this.readKey();
-      const ns = String(row.namespace);
-      for (const col of ["title", "body", "tags"]) {
-        if (typeof row[col] === "string") row[col] = openQuarantineCol(row[col] as string, key, col, ns, Number(row.id));
-      }
-    }
-    let reasons: LintFinding[] = [];
-    try {
-      reasons = JSON.parse(String(row.reasons)) as LintFinding[];
-    } catch {
-      /* corrupt row: show it with no reasons rather than hide it */
-    }
-    return {
-      id: Number(row.id),
-      op: row.op === "update" ? "update" : "create",
-      target_id: row.target_id === null ? null : Number(row.target_id),
-      namespace: String(row.namespace),
-      title: (row.title as string | null) ?? null,
-      body: (row.body as string | null) ?? null,
-      tags: row.tags === null ? null : parseTags(String(row.tags)),
-      source: (row.source as string | null) ?? null,
-      written_by: typeof row.written_by === "string" ? row.written_by : "",
-      reasons,
-      created_at: String(row.created_at),
-    };
+  /** @internal */ quarantineRow(row: Record<string, unknown>): QuarantineEntry {
+    return quarantineOps.quarantineRow(this, row);
   }
 
   /** Pending quarantined writes, oldest first (optionally per namespace set). */
   listQuarantine(opts: { namespaces?: string[]; limit?: number } = {}): QuarantineEntry[] {
-    if (opts.namespaces && opts.namespaces.length === 0) return [];
-    const limit = clampInt(opts.limit, 50, 1, 500);
-    const where = `WHERE 1 = 1${
-      opts.namespaces ? ` AND namespace IN (${opts.namespaces.map(() => "?").join(",")})` : ""
-    }${this.ceilingSql()}`;
-    const rows = this.db
-      .prepare(`SELECT * FROM quarantine ${where} ORDER BY id ASC LIMIT ?`)
-      .all(...(opts.namespaces ?? []), limit) as Array<Record<string, unknown>>;
-    return rows.map((r) => this.quarantineRow(r));
+    return quarantineOps.listQuarantine(this, opts);
   }
 
   getQuarantine(id: number): QuarantineEntry | null {
-    const row = this.db.prepare("SELECT * FROM quarantine WHERE id = ?").get(id) as
-      | Record<string, unknown>
-      | undefined;
-    // A held write above the caller's ceiling does not exist as far as it can tell.
-    return row && !this.hiddenByCeiling(row as { sensitivity?: string | null }) ? this.quarantineRow(row) : null;
+    return quarantineOps.getQuarantine(this, id);
   }
 
   /**
@@ -9128,120 +8270,23 @@ export class Store {
    * named a namespace.
    */
   approveQuarantine(id: number): NoteRecord {
-    if (!this.getQuarantine(id)) throw new ValidationError(`no quarantined write with id ${id}`);
-    // The row is read again INSIDE the write transaction: another process may have approved or rejected it since the check above.
-    const done = this.transaction(() => {
-      const q = this.getQuarantine(id);
-      if (!q) throw heldHandled(id);
-      return { note: this.applyHeld(id, q), namespace: q.namespace };
-    });
-    this.audit({ op: "quarantine-approve", id, namespace: done.namespace });
-    return done.note;
+    return quarantineOps.approveQuarantine(this, id);
   }
 
-  /**
-   * Apply held write `id` (caller holds a transaction) and drop it from the queue.
-   *
-   * Times (1.4.0): the note keeps the time the write was WRITTEN (the hold time), not the approval time, so a late approval
-   * cannot make an old claim outrank a correction saved while it waited. approved_at/approved_by record the approval.
-   *  - create: created_at = the write's own created_at if it sent one, else the hold time; updated_at = the hold time.
-   *  - update: updated_at = the hold time, but never earlier than the note's current updated_at. The rev pin
-   *    (compare-and-swap) already guarantees the note did not change since the hold, so this only guards clock skew and
-   *    paths that touch updated_at without a rev bump; the note's time never moves backwards.
-   * forget_after counts from that written time; confidence is the writer's claim, as if the write had gone straight in.
-   */
-  private applyHeld(id: number, q: QuarantineEntry): NoteRecord {
-    const held = this.db
-      .prepare(
-        `SELECT op, if_rev, set_namespace, created_at, created_at_override, written_by, sensitivity, imported_unverified,
-                sync_origin, sync_origin_id, forget_after, confidence, clears FROM quarantine WHERE id = ?`
-      )
-      .get(id) as unknown as HeldRow | undefined;
-    if (!held) throw heldHandled(id);
-    const note = q.op === "create" ? this.applyHeldCreate(q, held) : this.applyHeldUpdate(id, q, held);
-    this.db.prepare("UPDATE notes SET approved_at = ?, approved_by = ? WHERE id = ?").run(new Date().toISOString(), currentWriter(), note.id);
-    this.db.prepare("DELETE FROM quarantine WHERE id = ?").run(id);
-    return this.read(note.id)!;
+  /** @internal */ applyHeld(id: number, q: QuarantineEntry): NoteRecord {
+    return quarantineOps.applyHeld(this, id, q);
   }
 
-  /** The held write's forget_after and confidence as a patch; a held EDIT that cleared one (null) clears it again. */
-  private heldExtras(held: HeldRow, id: number): { forget_after?: number; confidence?: number | null } {
-    let clears: string[] = [];
-    try {
-      clears = held.clears ? (JSON.parse(held.clears) as string[]) : [];
-      if (!Array.isArray(clears)) throw new Error("not a list");
-    } catch {
-      // A damaged list must not quietly clear nothing: the approved edit would keep a value the writer meant to remove.
-      throw new ValidationError(`held write ${id} has a damaged record of what it clears, so it cannot be approved safely; reject it and re-submit the change`);
-    }
-    return {
-      ...(held.forget_after !== null ? { forget_after: Number(held.forget_after) } : clears.includes("forget_after") ? { forget_after: null as unknown as number } : {}),
-      ...(held.confidence !== null ? { confidence: Number(held.confidence) } : clears.includes("confidence") ? { confidence: null } : {}),
-    };
+  /** @internal */ heldExtras(held: HeldRow, id: number): { forget_after?: number; confidence?: number | null } {
+    return quarantineOps.heldExtras(this, held, id);
   }
 
-  private applyHeldCreate(q: QuarantineEntry, held: HeldRow): NoteRecord {
-    const note = this.create(
-      {
-        namespace: q.namespace,
-        title: q.title ?? "",
-        body: q.body ?? "",
-        tags: q.tags ?? undefined,
-        source: q.source ?? undefined,
-        created_at: held.created_at_override ?? held.created_at,
-        sensitivity: held.sensitivity,
-        // A create has nothing to clear (heldExtras clears only for an edit), so no null reaches here.
-        ...(this.heldExtras(held, q.id) as { forget_after?: number; confidence?: number }),
-      },
-      { lint: "none", writtenBy: held.written_by ?? "", importedUnverified: Number(held.imported_unverified) === 1, updatedAt: held.created_at }
-    );
-    if (held.sync_origin !== null && held.sync_origin_id !== null) {
-      this.syncLink(held.sync_origin, Number(held.sync_origin_id), note.id);
-      // What this store has now synced for the note, so an origin edit before the next sync merges as an update.
-      this.setSyncBase(note.id, syncContentHash(note));
-    }
-    return note;
+  /** @internal */ applyHeldCreate(q: QuarantineEntry, held: HeldRow): NoteRecord {
+    return quarantineOps.applyHeldCreate(this, q, held);
   }
 
-  private applyHeldUpdate(id: number, q: QuarantineEntry, held: HeldRow): NoteRecord {
-    // Rows from before 1.1.0 may lack the rev the update was based on;
-    // applying them unguarded could overwrite later edits.
-    if (held.if_rev === null) {
-      throw new ValidationError(
-        `quarantined update #${id} predates rev tracking, so it can't be applied safely; reject it and re-submit the change`
-      );
-    }
-    // A stale if_rev makes update() throw "stale write" -- a conflict the
-    // admin resolves (reject, or re-submit), never a silent overwrite.
-    let updated: NoteRecord | null;
-    try {
-      updated = this.update(
-      q.target_id ?? -1,
-      {
-        ...(held.set_namespace ? { namespace: q.namespace } : {}),
-        ...(q.title !== null ? { title: q.title } : {}),
-        ...(q.body !== null ? { body: q.body } : {}),
-        ...(q.tags !== null ? { tags: q.tags } : {}),
-        ...(q.source !== null ? { source: q.source } : {}),
-        // The rev pin above means the note is exactly as it was when the write was held, so re-applying its label is a no-op
-        // unless the write itself relabelled the note.
-        sensitivity: held.sensitivity,
-        ...this.heldExtras(held, id),
-      },
-      { ifRev: held.if_rev, lint: "none", writtenBy: held.written_by ?? "", importedUnverified: Number(held.imported_unverified) === 1, writtenAt: held.created_at }
-      );
-    } catch (e) {
-      if (e instanceof StaleWriteError) throw new StaleWriteError("The note changed since this edit was held; reject it or edit the note by hand.");
-      throw e;
-    }
-    if (!updated) {
-      throw new ValidationError(
-        `quarantined update #${id} targets note ${q.target_id}, which no longer exists; reject it instead`
-      );
-    }
-    // A held sync update: record the synced content as the merge base (else the next origin edit looks like a conflict).
-    if (held.sync_origin !== null) this.setSyncBase(updated.id, syncContentHash(updated));
-    return updated;
+  /** @internal */ applyHeldUpdate(id: number, q: QuarantineEntry, held: HeldRow): NoteRecord {
+    return quarantineOps.applyHeldUpdate(this, id, q, held);
   }
 
   /**
@@ -9252,51 +8297,15 @@ export class Store {
    * (distrusted writers, sensitivity ceiling). null when there is no such held write.
    */
   quarantineContext(id: number): QuarantineContext | null {
-    const q = this.getQuarantine(id);
-    if (!q) return null;
-    const target = q.op === "update" && q.target_id !== null ? this.read(q.target_id) : null;
-    // A held edit that leaves the title alone is about its target's topic.
-    const topic = tokenize(`${q.title ?? target?.title ?? ""} ${(q.tags ?? []).join(" ")}`);
-    const words = new Set(topic);
-    // 1.5.0 (R1-17): every live note of the namespace saved since the hold, found by one query (the caller's ceiling and distrust
-    // rules in the SQL), then matched on title words. Before, only the newest 500 notes by recency were looked at.
-    // ponytail: title-word overlap; a ranked search if the queue ever needs fuzzier matching.
-    const range = this.rangeFor({}, [q.namespace]);
-    const rows = this.db
-      .prepare(
-        `SELECT id, title, tags, updated_at, written_by FROM notes WHERE namespace = ? AND updated_at >= ? AND id <> ? AND archived_at IS NULL${range.sql} ORDER BY updated_at DESC, id DESC LIMIT 2000`
-      )
-      .all(q.namespace, q.created_at, q.target_id ?? -1, ...range.params) as Array<{ id: number; title: string; tags: string; updated_at: string; written_by: string | null }>;
-    const notes = rows
-      .filter((n) => tokenize(`${n.title} ${parseTags(n.tags).join(" ")}`).some((w) => words.has(w)))
-      .map((n) => ({ id: Number(n.id), title: n.title, updated_at: n.updated_at, written_by: n.written_by ?? "" }));
-    return {
-      id: q.id,
-      op: q.op,
-      target_id: q.target_id,
-      namespace: q.namespace,
-      held_at: q.created_at,
-      ...(q.op === "update" ? { target_changed: !target || target.rev !== this.heldRev(id) } : {}),
-      ...this.heldClears(id),
-      notes,
-    };
+    return quarantineOps.quarantineContext(this, id);
   }
 
-  /** { clears } for a held edit that clears confidence or the forget date ({} when it clears nothing). */
-  private heldClears(id: number): { clears?: string[] } {
-    const row = this.db.prepare("SELECT clears FROM quarantine WHERE id = ?").get(id) as { clears: string | null } | undefined;
-    try {
-      const list = row?.clears ? (JSON.parse(row.clears) as unknown) : null;
-      return Array.isArray(list) && list.length ? { clears: list.filter((x): x is string => typeof x === "string") } : {};
-    } catch {
-      return {};
-    }
+  /** @internal */ heldClears(id: number): { clears?: string[] } {
+    return quarantineOps.heldClears(this, id);
   }
 
-  /** The rev a held edit was written against (its compare-and-swap pin); null for a create or a pre-1.1.0 row. */
-  private heldRev(id: number): number | null {
-    const row = this.db.prepare("SELECT if_rev FROM quarantine WHERE id = ?").get(id) as { if_rev: number | null } | undefined;
-    return row?.if_rev ?? null;
+  /** @internal */ heldRev(id: number): number | null {
+    return quarantineOps.heldRev(this, id);
   }
 
   /**
@@ -9306,54 +8315,12 @@ export class Store {
    * write left queued, when nothing newer and related was saved since it was held.
    */
   keepQuarantineAsHistory(id: number, byId?: number): { note: NoteRecord; superseded_by: number } {
-    const ctx = this.quarantineContext(id);
-    if (!ctx) throw new ValidationError(`no quarantined write with id ${id}`);
-    if (!ctx.notes.length) {
-      throw new ValidationError(
-        `held write #${id}: nothing newer on the same topic was saved in "${ctx.namespace}" since it was held, so there is nothing to keep it as history of. Approve or reject it instead.`
-      );
-    }
-    const by = byId === undefined ? ctx.notes[0] : ctx.notes.find((n) => n.id === byId);
-    if (!by) throw new ValidationError(`note ${byId} is not one of the newer related notes saved since held write #${id} was held`);
-    // 1.4.0: retiring one note in favour of another is a promotion of the other; neither side may be outside content no person
-    // has confirmed. The CLI (behind its operator gate) decides that itself.
-    if (currentWriter() !== "cli" && isTainted(this.getQuarantine(id)?.tags ?? [])) {
-      throw new ValidationError(`Can't keep as history: held write #${id} came from outside content. A person must decide it in a terminal: monomem quarantine keep-history ${id}`);
-    }
-    const note = this.transaction(() => {
-      // Inside the transaction: if applying the held write fails, the operator's pass is not left behind as a confirm.
-      const held = this.getQuarantine(id); // read again here: another process may have decided it since the checks above
-      if (!held) throw heldHandled(id);
-      this.requireHumanConfirm(by.id, "use it as a replacement");
-      const n = this.applyHeld(id, held);
-      if (n.id === by.id) throw new ValidationError("a note cannot replace itself");
-      const now = new Date().toISOString();
-      const actor = currentWriter();
-      const res = this.db
-        .prepare(
-          `UPDATE notes SET archived_at = ?, superseded_by = ?, superseded_at = ?, superseded_by_writer = ?, rev = rev + 1
-           WHERE id = ? AND archived_at IS NULL AND superseded_by IS NULL`
-        )
-        .run(now, by.id, now, actor, n.id);
-      if (Number(res.changes) === 0) throw new StaleWriteError(`note ${n.id} is no longer live; nothing was changed`);
-      this.db
-        .prepare("INSERT INTO supersede_log (at, actor, action, namespace, old_id, new_id, flags) VALUES (?, ?, 'supersede', ?, ?, ?, 'keep-history')")
-        .run(now, actor, n.namespace, n.id, by.id);
-      return n;
-    });
-    this.edgeIndexes.clear();
-    this.audit({ op: "quarantine-keep-history", id, namespace: ctx.namespace });
-    return { note: this.read(note.id)!, superseded_by: by.id };
+    return quarantineOps.keepQuarantineAsHistory(this, id, byId);
   }
 
   /** Discard a quarantined write. Returns false when no such entry. */
   rejectQuarantine(id: number): boolean {
-    const q = this.getQuarantine(id);
-    if (!q) return false;
-    // One statement: if another process decided it first, nothing is deleted and nothing is audited.
-    if (Number(this.db.prepare("DELETE FROM quarantine WHERE id = ?").run(id).changes) === 0) return false;
-    this.audit({ op: "quarantine-reject", id, namespace: q.namespace });
-    return true;
+    return quarantineOps.rejectQuarantine(this, id);
   }
 
   // --- Plain-file sync identity (v7) ---------------------------------------

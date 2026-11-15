@@ -164,7 +164,7 @@ function ruleApplies(rule: DistrustRule, namespace: string): boolean {
 }
 
 /** Does `rule` name a writer that touched these facts? `localId` is this database's server_id. */
-export function ruleMatches(rule: DistrustRule, f: WriterFacts, localId: string): boolean {
+function ruleMatches(rule: DistrustRule, f: WriterFacts, localId: string): boolean {
   if (!ruleApplies(rule, f.namespace)) return false;
   const ref = parseWriterRef(rule.writer);
   if (!ref.label) return false;
@@ -219,7 +219,7 @@ export function mergedHasSql(col: string): string {
  * empty taint set (nearly all) cost one string comparison. `n` bound
  * parameters: the tokens themselves, then `globs` GLOB patterns (a stdio family's `<name>:*`).
  */
-export function mergedHasAnySql(col: string, n: number, globs = 0): string {
+function mergedHasAnySql(col: string, n: number, globs = 0): string {
   const g = " OR value GLOB ?".repeat(globs);
   return `(${col} <> '' AND EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(${col}) THEN ${col} ELSE '[]' END) WHERE type = 'text' AND (value IN (${Array(n).fill("?").join(",")})${g})))`;
 }
@@ -372,4 +372,27 @@ export function writerTaintFilterSql(cols: WriterColumns, value: string, localId
   return foreign
     ? { sql: `(NOT (${cols.attBy} = ? AND ${a.sql}) AND NOT ${merged})`, params: [ref.serverId, ...a.params, ...m] }
     : { sql: `(NOT ${a.sql} AND NOT ${merged})`, params: [...a.params, ...m] };
+}
+
+/**
+ * Why an `include_distrusted` opt-in is refused, or null when it is honoured (1.5.0 P-01: the one rule REST and MCP share).
+ * The opt-in turns the distrust policy OFF for the call, so it is an admin decision: `local` = the stdio transport, which runs
+ * as admin with no token (nobody chose to give that agent admin); `not-admin` = a read or write caller; `other-namespace` = a
+ * namespace-pinned admin that also has read grants names a namespace other than its own (those belong to their own admins).
+ * A by-id read names no namespace: it is checked against the note's own namespace where the note is read.
+ */
+export type DistrustedOptInRefusal = "local" | "not-admin" | "other-namespace";
+export function distrustedOptInRefusal(c: {
+  admin: boolean;
+  local?: boolean;
+  byId: boolean;
+  /** Pinned to a namespace and able to read another one. */
+  pinnedWithGrants: () => boolean;
+  ownNs: string;
+  nsHint: unknown;
+}): DistrustedOptInRefusal | null {
+  if (c.local) return "local";
+  if (!c.admin) return "not-admin";
+  if (!c.byId && c.pinnedWithGrants() && c.nsHint !== c.ownNs) return "other-namespace";
+  return null;
 }

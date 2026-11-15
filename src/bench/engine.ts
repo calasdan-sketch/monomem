@@ -15,7 +15,6 @@ import {
   type OpResult,
   type Scenario,
   type ScenarioResult,
-  type Suite,
   type WorldSpec,
 } from "./types.js";
 
@@ -370,7 +369,7 @@ async function execStep(a: MemoryAdapter, run: Run, step: AnyStep): Promise<void
       return;
     }
     case "export": {
-      const r = a.exportAll ? await a.exportAll(as, { attest: step.attest === true }) : ({ outcome: "unsupported" } as OpResult);
+      const r = a.exportAll ? await a.exportAll(as, { attest: step.attest === true }) : ({ outcome: "unsupported" } as OpResult); // gate-ok: bench adapter over HTTP GET /export (admin-only), not a Store read
       if (r.outcome === "ok") run.exports.set(step.id as string, r.data?.payload);
       keep(r);
       return;
