@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { Store } from "../src/store.js";
+import { Store, quarantineCasNote } from "../src/store.js";
 import { setProcessWriter } from "../src/actor.js";
 import { rollbackCli, type CliIO } from "../src/supersede-cli.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -282,4 +282,32 @@ describe("U-08 the verbs people try first get a hint (nothing runs)", () => {
       // Nothing ran: no database was even created.
       assert.equal(JSON.parse(run(dir, ["trust", "list", "--json"]).stdout).distrust.length, 0);
     }));
+});
+
+describe("U-14 plain words", () => {
+  test("why prints short writer labels (never cut off) and one legend line", () =>
+    withDir((dir) => {
+      cursorStore(join(dir, "t.db"));
+      const r = run(dir, ["why", "1"]);
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stdout, /created by stdio:cursor \(local app\)/);
+      assert.doesNotMatch(r.stdout, /self-declared by its\.\.\./);
+      assert.equal(r.stdout.match(/^Writers: /gm)?.length, 1);
+      assert.match(r.stdout, /^Writers: .*local app = .*launch config/m);
+    }));
+
+  test("the compare-and-swap paragraph shows only for a held edit, in plain words", () => {
+    assert.doesNotMatch(quarantineCasNote("create"), /held edit|compare-and-swap/);
+    assert.match(quarantineCasNote("create"), /Approving keeps the time the write was made/);
+    assert.match(quarantineCasNote("update"), /changed since it was held, approval fails/);
+    assert.doesNotMatch(quarantineCasNote("update"), /compare-and-swap/);
+  });
+
+  test("doctor's read-taint line says what happens in plain words", () => {
+    const s = new Store(":memory:");
+    const lines = s.confirmRuleLines().join("\n");
+    assert.doesNotMatch(lines, /Read-taint/);
+    assert.match(lines, /Reading unconfirmed notes marks later writes/);
+    s.close();
+  });
 });

@@ -31,7 +31,7 @@ import {
   validateForgetAfter,
   coerceNumeric,
   DEFAULT_NAMESPACE,
-  QUARANTINE_CAS_NOTE,
+  quarantineCasNote,
 } from "./store.js";
 import { truthyParam } from "./trust.js";
 import { originAllowed, hostAllowed, hostRefusal, RateLimiter, AuthTarpit, clientKey, tokenKey, authenticateEntry, scopeAllows, LIMITS, audit, auditFailureCount, printable } from "./security.js";
@@ -1397,7 +1397,7 @@ export function createApiServer(
           sendJson(res, 404, { error: `no quarantined write with id ${id}` });
           return;
         }
-        sendJson(res, 200, { ...ctx, note: QUARANTINE_CAS_NOTE });
+        sendJson(res, 200, { ...ctx, note: quarantineCasNote(ctx.op) });
         return;
       }
 

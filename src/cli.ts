@@ -2707,7 +2707,7 @@ async function tokenCmd(): Promise<void> {
 // `monomem quarantine [list | show <id> | approve <id> | keep-history <id> [--by <note id>] | reject <id>]`.
 async function quarantineCmd(): Promise<void> {
   const { DB_PATH } = await import("./config.js");
-  const { Store, ValidationError, QUARANTINE_CAS_NOTE } = await import("./store.js");
+  const { Store, ValidationError, quarantineCasNote } = await import("./store.js");
   const { maybeEmbed } = await import("./search-service.js");
   const [action = "list", idRaw] = process.argv.slice(3);
   const store = new Store(DB_PATH);
@@ -2736,7 +2736,7 @@ async function quarantineCmd(): Promise<void> {
       process.exit(1);
     }
     if (action === "show") {
-      showHeld(store, id, QUARANTINE_CAS_NOTE);
+      showHeld(store, id, quarantineCasNote);
       return;
     }
     if (action === "keep-history") {
@@ -2784,7 +2784,7 @@ async function quarantineCmd(): Promise<void> {
 }
 
 /** `monomem quarantine show <id>`: the held write in full, plus what was saved in its namespace since it was held. */
-function showHeld(store: import("./store.js").Store, id: number, casNote: string): void {
+function showHeld(store: import("./store.js").Store, id: number, casNote: (op: "create" | "update") => string): void {
   const q = store.getQuarantine(id);
   const ctx = store.quarantineContext(id);
   if (!q || !ctx) {
@@ -2805,7 +2805,7 @@ function showHeld(store: import("./store.js").Store, id: number, casNote: string
     console.log(`\nSince this was held, ${n} newer note${n === 1 ? "" : "s"} in ${printable(q.namespace, 100)}:`);
     for (const c of ctx.notes) console.log(`    #${c.id} "${printable(c.title)}" (${c.written_by ? `agent ${printable(c.written_by, 100)}, ` : ""}${c.updated_at.slice(0, 10)})`);
   }
-  console.log(`\n${casNote}`);
+  console.log(`\n${casNote(q.op)}`);
   console.log(`Decide: monomem quarantine approve ${id}${n ? ` | keep-history ${id}` : ""} | reject ${id}`);
 }
 

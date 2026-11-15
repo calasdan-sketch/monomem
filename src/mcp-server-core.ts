@@ -20,7 +20,7 @@ import {
   clampInt,
   REBUILD_CONFIRM_NOTE_COUNT,
   CHANGES_MAX_LIMIT,
-  QUARANTINE_CAS_NOTE,
+  quarantineCasNote,
   type NoteRecord,
 } from "./store.js";
 import type { LintFinding } from "./lint.js";
@@ -2266,7 +2266,7 @@ export function createMcpServer(
             ...(ctx.target_changed !== undefined ? { target_changed: ctx.target_changed } : {}),
             ...(ctx.clears ? { clears: ctx.clears } : {}),
             since_held: ctx.notes,
-            note: QUARANTINE_CAS_NOTE,
+            note: quarantineCasNote(ctx.op),
           });
         }
         if (action === "keep_history") {

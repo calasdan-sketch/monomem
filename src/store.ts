@@ -647,10 +647,13 @@ interface HeldRow {
   clears: string | null;
 }
 
-/** Shown with every approval view (CLI, MCP, REST, dashboard). */
-export const QUARANTINE_CAS_NOTE =
-  "Approving keeps the time the write was made. A held edit is applied only to the exact version of the note it was written " +
-  "against: if the note changed since (compare-and-swap), approval fails and the edit stays held so you can reject it.";
+/** Shown with every approval view (CLI, MCP, REST, dashboard). The second sentence only applies to a held edit. */
+export function quarantineCasNote(op: "create" | "update"): string {
+  return (
+    "Approving keeps the time the write was made." +
+    (op === "update" ? " A held edit applies only to the version of the note it was written against: if the note changed since it was held, approval fails and the edit stays held so you can reject it." : "")
+  );
+}
 
 /** What was saved while a held write waited (Store.quarantineContext). Never the held text. */
 export interface QuarantineContext {
@@ -8723,7 +8726,7 @@ export class Store {
       hours > 0
         ? `Outside-content window: notes written by a local app (no key of its own) launched in the same folder as a hooked session that read outside content, within ${hours} hours and while that session is active (idle 30 minutes ends it), are marked; apps with their own key are not (MONOMEM_TAINT_WINDOW_HOURS)`
         : "Outside-content window: off (MONOMEM_TAINT_WINDOW_HOURS=0), so hooked sessions' outside reads mark nothing",
-      "Read-taint: a connection that reads an unconfirmed note marks what it writes next, until that note is confirmed or the taint window passes. This is per connection; it resets when the server restarts.",
+      "Reading unconfirmed notes marks later writes: when an app reads a note nobody has confirmed, what it writes next is marked too, until that note is confirmed or the taint window passes. This is counted per connection and starts over when the server restarts.",
     ];
   }
 
