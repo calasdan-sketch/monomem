@@ -431,10 +431,7 @@ export function lintContent(input: {
   return out;
 }
 
-/** "GitHub token in body; instruction override in title" */
-export function describeFindings(findings: LintFinding[]): string {
-  return findings.map((f) => (f.category === "approval" ? f.label : `${f.label} in ${f.field}`)).join("; ");
-}
+export { describeFindings } from "./lint-describe.js";
 
 // Body/fact mismatch (warn only). A note that carries `facts` but whose own text states another value for one of those keys
 // ("deploy target is vercel" with fact deploy_target=render) leaves two answers in one note. Deterministic: the key's words, a

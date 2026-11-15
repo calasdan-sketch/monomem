@@ -1024,7 +1024,7 @@ async function doctor(): Promise<void> {
 }
 
 
-import { describeFindings } from "./lint.js";
+import { describeFindings } from "./lint-describe.js"; // not lint.js: that loads config.js before bench moves MONOMEM_HOME
 import { didYouMean } from "./suggest.js";
 const CONNECT_APPS = ["claude-code", "claude-desktop", "cursor", "codex", "gemini", "muse", "vscode", "zed", "windsurf"] as const;
 const APP_ALIASES: Record<string, string> = { claude: "claude-code", "claudecode": "claude-code", desktop: "claude-desktop", "claude desktop": "claude-desktop", code: "vscode", "vs-code": "vscode", "visual-studio-code": "vscode", gemini_cli: "gemini", "codex-cli": "codex" };

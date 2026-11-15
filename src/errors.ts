@@ -2,7 +2,8 @@
 // needs to throw or catch one (facts.ts, reserved-tags.ts, src/store/*) does not import store.ts and join an import cycle.
 // store.ts re-exports every one of them, so existing `from "./store.js"` imports keep working.
 
-import { describeFindings, type LintFinding } from "./lint.js";
+import { describeFindings } from "./lint-describe.js";
+import type { LintFinding } from "./lint.js";
 
 /**
  * A caller-input error (bad/oversized/secret-bearing data, empty title, stale
