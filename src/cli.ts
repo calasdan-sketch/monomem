@@ -1018,7 +1018,7 @@ async function openCmd(): Promise<void> {
   if (!(await up()) && flags.print !== true) {
     console.log("Starting Monomem in the background...");
     const { spawn } = await import("node:child_process");
-    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), "start"], { detached: true, stdio: "ignore", windowsHide: true });
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), "start", "--log"], { detached: true, stdio: "ignore", windowsHide: true }); // no terminal: output goes to server.log
     child.unref();
     for (let i = 0; i < 40 && !(await up()); i++) await new Promise((r) => setTimeout(r, 250));
     if (!(await up())) {

@@ -20,6 +20,7 @@ folder). `monomem doctor` prints which one, and its size.
 | `.token`, `tokens.json` | first start (the API token) / by you | `uninstall --purge` |
 | `.key`, `.attest-key`, `.sync-key` | `encrypt enable` / first signed export / first `sync --git --encrypt` (`MONOMEM_KEY_FILE`, `MONOMEM_ATTEST_KEY_FILE`, `MONOMEM_SYNC_KEY_FILE` move them) | `uninstall --purge` (a key moved elsewhere: by hand) |
 | `audit.log`, `audit.log.1..5` | every API write; rotated at 5 MB, 5 kept (`MONOMEM_AUDIT_LOG`, `_MAX_BYTES`, `_KEEP`) | `uninstall --purge` |
+| `server.log`, `server.log.1..5` | a server with no terminal (`monomem open`, `monomem service`, `start --log`): what it prints (paths, ports, errors; no note text, no key); rotated like `audit.log` | `uninstall --purge` |
 | `capture-spool.jsonl` (+ `.draining`) | a capture hook could not open the database; capped at 10 MB, drained by the next hook | `uninstall --purge` |
 | `capture.json`, `spaces.json` | by you | `uninstall --purge` |
 | `setup-history.json` | each `setup` that changed a file (what `--undo` / `uninstall` replay) | `uninstall --purge` |
