@@ -50,6 +50,17 @@ upgrading from 1.3.x takes one step (docs/upgrading.md).
 - **`derived_from` no longer leaks across namespaces.** A note's `derived_from` list names only parents the reader may
   see, so a parent's id in a namespace the reader cannot read is no longer shown. Deleting a note removes its links and
   confirmations.
+- **`service install` with a non-loopback `MONOMEM_BIND` or `MONOMEM_ALLOWED_HOSTS` needs a person at a terminal.** It asks
+  you to type yes; an agent's shell or a script is refused and nothing is installed. `--print` is never gated, and a
+  loopback-only service is not asked. The Windows task now carries `MONOMEM_HOME` and the other settings (never a key).
+- **The signing key exists from the moment a store is opened**, not from its first write, so the first audit line is already
+  signed. With `MONOMEM_AUDIT_LOG` pointing to another folder, a copy of the key sits beside that log (and `trust rotate`
+  updates it), so that log is signed too. An in-memory store writes unsigned lines (documented in SECURITY.md).
+- **`trust rotate` no longer races other writers.** While the key-rotate line and the key swap run, other processes' audit
+  lines wait (at most 5 s), so no line is signed by the retired key after the hand-over line. `audit verify` still warns
+  about an unsigned line after signing began and `--strict` fails on it.
+- **A flood pause set while flagging a note now sticks** (the throw used to roll the pause back, so the writer was never
+  paused). A refusal that pauses a writer is one audit line, not two.
 
 ### Changed
 
@@ -170,6 +181,14 @@ upgrading from 1.3.x takes one step (docs/upgrading.md).
 
 ### Fixed
 
+- Messages: the missing-key error no longer starts with "monomem: monomem:"; the "database is newer than this build" error
+  gives the same steps as docs/upgrading.md (close apps, `monomem restore <file> --yes`, install the older version);
+  `why` and `receipts` say why times are local, what the offset means and which end comes first; `doctor` prints
+  "encryption on: N bodies sealed with the key at ..." when that is true.
+- `monomem drill` no longer prints a "NEW attestation key" warning for every server it starts on its throwaway copy.
+- git sync: a computer that resurrects a note another computer deleted (after losing its seen record) makes that other
+  computer stop with the "older than one this computer already synced" message. Reproduced and pinned by a test; this is
+  by design (a deleted note leaves no tombstone, so it looks like a replay), the message names the recovery step.
 - Similarity links in an encrypted store survive a restart (the rebuild now reads the decrypted text).
 - Pinning a note with only an admin (dashboard) confirm explains that a person must confirm it at a terminal.
 - First run: an empty store scores 100 for tidiness, the first note is #1, and Windows shows one folder-permission line.
