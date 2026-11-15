@@ -13,7 +13,7 @@ import { PROJECT_ROOT } from "../src/config.js";
 
 const CLI = join(PROJECT_ROOT, "dist", "src", "cli.js");
 
-test("a 0-result search on a store with encrypted bodies says bodies were not searched; a plain store does not", () => {
+test("a 0-result search says encrypted bodies were not searched only when they really were not (index off); a plain store never does", () => {
   const dir = mkdtempSync(join(tmpdir(), "om-enc-hint-"));
   try {
     const db = join(dir, "state.db");
@@ -31,10 +31,19 @@ test("a 0-result search on a store with encrypted bodies says bodies were not se
     s2.create({ title: "sealed one", body: "the staging port is narwhal9443", tags: [] });
     assert.ok(s2.encryptedCount() > 0, "the second note is sealed");
     s2.close();
+    // C-06: the CLI search builds the in-memory body index, so the sealed body IS searched and no notice is shown.
     const enc = spawnSync(process.execPath, [CLI, "search", "narwhal9443"], { encoding: "utf8", env });
     assert.equal(enc.status, 0, enc.stderr);
-    assert.match(enc.stdout, /No relevant notes found\./);
-    assert.match(enc.stdout, /encrypted.*bod(y|ies).*not searched/i);
+    assert.match(enc.stdout, /sealed one/);
+    assert.doesNotMatch(enc.stdout, /not searched/);
+    const miss = spawnSync(process.execPath, [CLI, "search", "unicornword"], { encoding: "utf8", env });
+    assert.match(miss.stdout, /No relevant notes found\./);
+    assert.doesNotMatch(miss.stdout, /not searched/, "bodies were searched: an empty result means nothing mentions it");
+    // With the index turned off, bodies really are not searched: then (and only then) it says so.
+    const off = spawnSync(process.execPath, [CLI, "search", "narwhal9443"], { encoding: "utf8", env: { ...env, MONOMEM_BODY_INDEX: "off" } });
+    assert.equal(off.status, 0, off.stderr);
+    assert.match(off.stdout, /No relevant notes found\./);
+    assert.match(off.stdout, /encrypted.*bod(y|ies).*not searched/i);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
