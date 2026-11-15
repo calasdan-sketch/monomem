@@ -19,7 +19,7 @@ const COMMANDS = [
   "consolidate", "rebuild-edges", "relevant", "search", "token", "changes", "backup", "runner-status", "watch", "export", "import", "trust",
   "quarantine", "approve-first", "access", "flood", "resume", "decay", "archive", "restore", "delete", "quality", "conflicts", "facts", "fact",
   "encrypt", "meter", "receipts", "why", "never-show", "supersede", "history", "pin", "unpin", "rollback", "bench", "drill", "health", "audit",
-  "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet", "confirm", "review", "taint", "config",
+  "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet", "confirm", "review", "taint", "config", "service",
   "help", "--help", "-h", "--version", "-v", "version",
 ];
 
@@ -91,6 +91,7 @@ function shortUsage(): void {
       "",
       "Maintenance",
       "  backup [--out <dir>]    Copy the database safely, even while the server runs",
+      "  service install|status|uninstall [--print]   Keep the server running in the background after you sign in",
       "  export | import         Move notes in and out (JSON or Markdown)",
       "  quality                 Duplicates, stale notes and flagged notes worth a look",
       "  delete <id>             Delete a note permanently, with its earlier versions",
@@ -123,6 +124,10 @@ function usage(all = false): void {
       "            it cannot see private notes; --name sets that key's label; --print only prints the settings to paste in.",
       "  open [--print]",
       "            Open my notes in the browser with a one-time sign-in code (starts Monomem if needed).",
+      "  service install|status|uninstall [--print]",
+      "            Run the server in the background from sign-in: a Task Scheduler task (Windows), a LaunchAgent (macOS) or a",
+      "            systemd --user unit (Linux), each running this node with this cli.js; output in <data>/server.log.",
+      "            --print shows the file and the commands and changes nothing. setup never installs one.",
       "  uninstall [--dry-run] [--yes] [--purge] [--no-backup]",
       "            Take Monomem out of every app setup connected (same as setup --undo, for every setup run).",
       "            --purge also deletes the data folder, after a final backup it names (unless --no-backup).",
@@ -3796,6 +3801,22 @@ async function main(): Promise<void> {
     case "connect":
       await connectCmd();
       break;
+    case "service": {
+      const { flags, rest } = parseFlags(process.argv.slice(3), { values: [], bools: ["print"] });
+      const { DATA_DIR } = await import("./config.js");
+      const { homedir } = await import("node:os");
+      const { serviceCmd } = await import("./service.js");
+      process.exitCode = serviceCmd(rest[0], flags.print === true, {
+        platform: process.platform,
+        node: process.execPath,
+        cli: fileURLToPath(import.meta.url),
+        home: homedir(),
+        dataDir: DATA_DIR,
+        uid: process.getuid?.(),
+        env: process.env,
+      });
+      break;
+    }
     case "open":
       await openCmd();
       break;

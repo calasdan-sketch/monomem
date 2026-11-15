@@ -467,10 +467,36 @@ definitions themselves could not be run in the environment they were written in
 (no systemd, no Windows), so check them once on your machine: **verify with
 `systemd-analyze verify` / `Get-ScheduledTask`, then reboot once.**
 
-### Linux: systemd
+### For your own user, on any OS: `monomem service install`
+
+```bash
+monomem service install --print   # shows the file it would write and the commands it would run; changes nothing
+monomem service install           # Windows: a Task Scheduler task at sign-in; macOS: a LaunchAgent; Linux: a systemd --user unit
+monomem service status
+monomem service uninstall
+```
+
+Each one runs the absolute `node` binary with the absolute `cli.js` of the install you ran it from, as `start --log`
+(output goes to `<data>/server.log`, rotated like `audit.log`), and is restarted if it stops. Nothing depends on `PATH`,
+nvm's shell setup or npm's `monomem.ps1` / `monomem.cmd` shims. `monomem setup` never installs one. After you update
+Monomem, run `monomem service install` again so the task points at the new files (`monomem doctor` warns when the running
+server is older than the CLI). The service files were generated and checked by tests; they were not installed on a test
+machine, so run `monomem service status` once and reboot once.
+
+- Windows: the task starts when you sign in, in a console window; minimise it (closing it stops Monomem until Task
+  Scheduler restarts it, within a minute). It uses the `MONOMEM_*` variables saved for your user (`setx`), not ones set
+  only in the terminal you installed from.
+- macOS and Linux: the unit carries the data folder in use when you installed it, plus any `MONOMEM_PORT`,
+  `MONOMEM_MCP_PORT`, `MONOMEM_BIND`, `MONOMEM_ALLOWED_HOSTS`, `MONOMEM_DB_PATH` set then (never a key). On Linux,
+  `loginctl enable-linger` keeps it running while you are logged out.
+
+### Linux: a system-wide systemd service
 
 `/etc/systemd/system/monomem.service` (adjust `User`, the `monomem` path
-from `which monomem`, and the data dir):
+from `which monomem`, and the data dir). `ExecStart` must be a path the
+service user can read: with `ProtectHome=true`, an nvm install under a home
+folder is hidden from it, so install Node and Monomem system-wide (or use
+`monomem service install` for your own user instead):
 
 ```ini
 [Unit]
@@ -511,19 +537,12 @@ journalctl -u monomem -f
 
 ### Windows: Task Scheduler for Monomem itself
 
-The tunnel recipe in section 1 only keeps *cloudflared* alive. This keeps
-Monomem alive: it starts at logon and Task Scheduler restarts it if it exits.
-PowerShell (run once, normal user; adjust the path from `where.exe monomem`):
-
-```powershell
-$exe = (Get-Command monomem).Source
-$action   = New-ScheduledTaskAction -Execute $exe -Argument "start"
-$trigger  = New-ScheduledTaskTrigger -AtLogOn
-$settings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
-            -ExecutionTimeLimit ([TimeSpan]::Zero) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-Register-ScheduledTask -TaskName "Monomem" -Action $action -Trigger $trigger -Settings $settings
-Start-ScheduledTask -TaskName "Monomem"
-```
+The tunnel recipe in section 1 only keeps *cloudflared* alive. To keep
+Monomem alive, run `monomem service install` (above). It registers a task
+that starts at logon and is restarted if it exits; its action is `node.exe`
+with the full path of `cli.js`. (An older version of this guide used
+`(Get-Command monomem).Source`, which on an npm install is `monomem.ps1`: Task
+Scheduler opens that file instead of running it, so the server never started.)
 
 Caveats: it starts when you log in, not at raw boot (use NSSM or a service
 wrapper for that), and if your PC sleeps the store sleeps, which also pauses
