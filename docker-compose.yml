@@ -19,6 +19,8 @@ services:
       MONOMEM_TOKEN: "${MONOMEM_TOKEN:?set MONOMEM_TOKEN in a .env file}"
       MONOMEM_HOME: "/data"
       MONOMEM_DB_PATH: "/data/state.db"
+      # The name a tunnel reaches the server under (e.g. mybox.tail1234.ts.net); without it such requests get 403 "host not allowed".
+      MONOMEM_ALLOWED_HOSTS: "${MONOMEM_ALLOWED_HOSTS:-}"
     volumes:
       - monomem-data:/data
     restart: unless-stopped
