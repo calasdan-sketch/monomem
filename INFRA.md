@@ -20,6 +20,7 @@ how to build/run it locally.
 | MCP-over-HTTP path | `/mcp` |
 | Bearer token env var | `MONOMEM_TOKEN` (auto-generated and persisted to `~/.monomem/.token` if unset; a from-source git checkout that already has `./data/state.db` keeps using `./data/`) |
 | DB path env var | `MONOMEM_DB_PATH` (defaults to `~/.monomem/state.db`, or `$MONOMEM_HOME/state.db`) |
+| Lock wait | The HTTP server waits up to 2 s for another program's database lock (backup, `encrypt`, an import), then answers "busy, try again": REST `503` + `Retry-After`, MCP a tool error. The CLI and the stdio server wait up to 20 s. |
 
 Placeholders used below that are specific to *your* setup:
 

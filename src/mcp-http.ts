@@ -175,8 +175,8 @@ async function runStandalone(): Promise<void> {
   assertSafeExposure();
   (await import("./tokens-admin.js")).hardenTokensFile(); // 1.5.0: plain-text keys in tokens.json become hashes on the first start
   const tokens = resolveTokens();
-  const { openStoreOrExit } = await import("./db-problem.js");
-  const store = openStoreOrExit(DB_PATH);
+  const { openStoreOrExit, SERVER_BUSY_TIMEOUT_MS } = await import("./db-problem.js");
+  const store = openStoreOrExit(DB_PATH, { busyTimeoutMs: SERVER_BUSY_TIMEOUT_MS });
   warnUnlabelledExposure(store, tokens);
   startTokenReload(tokens);
   // Namespace resolution happens ONCE here, at startup, from the process cwd.

@@ -30,7 +30,7 @@ import {
 import { autoConsolidateCooperative, AUTO_MERGE_SCORE } from "./consolidate.js";
 import { resolveStartupNamespace } from "./namespace.js";
 import { warnUnlabelledExposure } from "./sensitivity.js";
-import { openStoreOrExit } from "./db-problem.js";
+import { openStoreOrExit, SERVER_BUSY_TIMEOUT_MS } from "./db-problem.js";
 import { abortAllWaiters } from "./change-wait.js";
 import { pruneStaleHeartbeats } from "./liveness.js";
 
@@ -38,7 +38,7 @@ prepareDataDir();
 assertSafeExposure();
 hardenTokensFile(); // 1.5.0: plain-text keys in tokens.json become hashes on the first start
 const tokens = resolveTokens();
-const store = openStoreOrExit(DB_PATH);
+const store = openStoreOrExit(DB_PATH, { busyTimeoutMs: SERVER_BUSY_TIMEOUT_MS });
 warnUnlabelledExposure(store, tokens);
 startTokenReload(tokens);
 
