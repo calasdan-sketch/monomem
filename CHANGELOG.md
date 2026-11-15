@@ -62,6 +62,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Search shows the part of a long note that matched.** When `state_search` cuts a body to 600 characters, it now shows the
   600 characters with the most of your query words instead of the first 600, and `body_offset` says where they start. It
   works on encrypted notes too. `state_list` and short notes are unchanged (docs/search.md).
+- **Write receipts.** `state_write` and REST `POST`/`PUT /notes` answer with `receipt: {seq, chain_hash, decision}` for an
+  accepted, held or refused write: the audit-log line that recorded the decision. `monomem verify-receipt <seq> <hash>`
+  checks that line is still in an unbroken audit chain and names the first broken line if not. It is not signed: it shows
+  the line was not changed later, not who wrote the log (SECURITY.md). Audit lines now carry a `seq` number.
 - `monomem show`, `ls` and `why` print the trust state: unconfirmed, expired and built-on-distrusted labels, a plain origin
   line, confirmations (counted or not, and why) and who approved a held write. `ls --archived` includes notes kept as history.
 - `monomem review --step`: one typed yes, then y / n / q per note.

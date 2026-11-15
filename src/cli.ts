@@ -18,7 +18,7 @@ const COMMANDS = [
   "start", "serve", "mcp", "mcp:stdio", "doctor", "init", "setup", "uninstall", "sync", "reindex", "recall", "hook",
   "consolidate", "rebuild-edges", "relevant", "search", "token", "changes", "backup", "runner-status", "watch", "export", "import", "trust",
   "quarantine", "approve-first", "access", "flood", "resume", "decay", "archive", "restore", "delete", "quality", "conflicts", "facts", "fact",
-  "encrypt", "meter", "receipts", "why", "never-show", "supersede", "history", "pin", "unpin", "rollback", "bench", "drill", "health", "audit",
+  "encrypt", "meter", "receipts", "why", "never-show", "supersede", "history", "pin", "unpin", "rollback", "bench", "drill", "health", "audit", "verify-receipt",
   "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet", "confirm", "review", "taint", "config", "service",
   "help", "--help", "-h", "--version", "-v", "version",
 ];
@@ -330,6 +330,9 @@ function usage(all = false): void {
       "            Walk the audit log's hash chain and report the first broken line (edits/deletions inside the chain).",
       "            Keep the printed head hash off this machine (a git commit, a password manager). --expect <hash> exits 1 if",
       "            that line is no longer in the log (rewritten or cut off); the log growing past it is fine. Usage errors exit 2.",
+      "  verify-receipt <seq> <chain_hash>",
+      "            Check the receipt a write returned (accepted, held or refused) is still a line of the audit log, in an",
+      "            unbroken chain. Exits 1 naming the first broken line, or when the line is gone; usage errors exit 2. Not signed.",
       "  scrub [--yes] [--out <dir>]   (also: purge-deleted)",
       "            Remove the text of long-deleted notes from the database file (rebuilds the search index and compacts it).",
       "            Without --yes it only explains. With --yes it takes a backup first, then shows the size before and after.",
@@ -3833,6 +3836,32 @@ async function main(): Promise<void> {
         }
         console.log(r.anchor.linesAfter === 0 ? "Anchor OK: the hash you gave is the current head." : `Anchor OK: the line you noted is still in the chain, ${r.anchor.linesAfter} line(s) older than the head (the log has grown since).`);
       }
+      break;
+    }
+    case "verify-receipt": {
+      // R2-06: a write's receipt {seq, chain_hash} is a line of the audit log; check it is still there, in an unbroken chain.
+      const [seqRaw, hashRaw] = process.argv.slice(3);
+      const hash = hashRaw?.trim().toLowerCase();
+      if (!/^\d{1,15}$/.test(seqRaw ?? "") || !/^[0-9a-f]{64}$/.test(hash ?? "") || process.argv.length > 5) {
+        console.error("Usage: monomem verify-receipt <seq> <chain_hash>   (both from the `receipt` a write returned)");
+        process.exit(2);
+      }
+      const { verifyAuditChain } = await import("./security.js");
+      const r = verifyAuditChain(undefined, hash);
+      if (!r.ok) {
+        console.error(`Receipt NOT verified: the audit chain is BROKEN at line ${r.brokenLine} of ${r.file} (it follows from none of the lines before it: a line was edited or removed). ${r.breaks} break(s) in all.`);
+        process.exit(1);
+      }
+      if (!r.anchor?.found) {
+        console.error("Receipt NOT verified: no line in the audit log has that hash. The line was edited or removed, the log was cut off or rotated past it, or the receipt is from another store.");
+        process.exit(1);
+      }
+      if (r.anchor.seq !== Number(seqRaw)) {
+        console.error(`Receipt NOT verified: the line with that hash has seq ${r.anchor.seq || "(none)"}, not ${seqRaw}.`);
+        process.exit(1);
+      }
+      console.log(`Receipt OK: seq ${seqRaw} is line ${r.anchor.line} of the audit log, in an unbroken chain of ${r.lines} line(s) (${r.anchor.linesAfter} written after it).`);
+      console.log("This shows the line was not edited or removed since. It does not prove who wrote the log: the chain is not signed.");
       break;
     }
     case "quality":

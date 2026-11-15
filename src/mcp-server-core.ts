@@ -228,7 +228,7 @@ function noteWriterArgs(note_written_by?: string, not_note_written_by?: string):
 }
 
 // A linter-held write is not an error: the write was accepted for review.
-function quarantinedResult(e: QuarantinedError) {
+function quarantinedResult(e: QuarantinedError, extra?: Record<string, unknown>) {
   // Lead with what the linter saw: under approve-first an injected instruction used to be reported only as "waiting for
   // approval", and the agent then told the person it was routine. The labels are the linter's own words, never note text.
   const approval = e.findings.some((f) => f.category === "approval");
@@ -252,6 +252,7 @@ function quarantinedResult(e: QuarantinedError) {
         "An admin can approve or reject it in the Monomem dashboard, or with `monomem quarantine` " +
         "(and through the memory_quarantine tool where MONOMEM_TOOLS makes it available).",
     },
+    ...extra,
   });
 }
 
@@ -314,12 +315,12 @@ function withIgnored(r: unknown, tool: string, ignored: string[], shape: z.ZodRa
 
 const BUSY_TOOL_MESSAGE = "The database is busy (another program is writing to it); nothing was saved. Try again in a few seconds.";
 
-function errorResult(message: string) {
+function errorResult(message: string, extra?: Record<string, unknown>) {
   return {
     content: [
       {
         type: "text" as const,
-        text: JSON.stringify({ error: message }),
+        text: JSON.stringify({ error: message, ...extra }),
       },
     ],
     isError: true,
@@ -330,8 +331,8 @@ function errorResult(message: string) {
 // caller-input problem (ValidationError) is echoed back, but any unexpected
 // fault (e.g. a raw node:sqlite error) is logged server-side and returned as a
 // generic message so SQLite/internal details never leak to the MCP caller.
-function errorFor(e: unknown) {
-  if (e instanceof ValidationError) return errorResult(e.message);
+function errorFor(e: unknown, extra?: Record<string, unknown>) {
+  if (e instanceof ValidationError) return errorResult(e.message, extra);
   // 1.5.0 (U-09): another program held the database lock past the wait. Retryable, not a fault; same words as REST's 503.
   if (isBusyError(e)) return errorResult(BUSY_TOOL_MESSAGE);
   // eslint-disable-next-line no-console
@@ -840,9 +841,12 @@ export function createMcpServer(
       const warnings: LintFinding[] = [];
       let title = givenTitle;
       let tags = plainTags;
+      // R2-06: the audit line of this write's decision (accepted, held, refused) comes back as `receipt`.
+      const withReceipt = (r = store.takeWriteReceipt()) => (r ? { receipt: r } : {});
       try {
         const denied = denyIfUnder("write");
         if (denied) return errorResult(denied);
+        store.takeWriteReceipt(); // drop a decision left by an earlier call
         // task / handoff / task.* tags belong to task_put and session_handoff.
         // 1.5.0 (A2): for an update the guard runs below, on the note this caller may see (the same order as REST), so a
         // reserved-tag refusal can't reveal a hidden note.
@@ -869,10 +873,11 @@ export function createMcpServer(
           const result = store.update(id, patch, { ifRev: if_rev, lintWarnings: warnings });
           if (!result) return errorResult(`no note with id ${id}`);
           const { unchanged, ...updated } = result;
+          const receipt = withReceipt(); // before any await: the write is synchronous, the next one is not ours
           if (!unchanged) await maybeEmbed(store, updated);
           // A partial update echoes back the merged note, which can include a
           // pre-existing body planted by someone else -- wrap it as untrusted.
-          return untrustedResult(withConflicts(withWarnings({ note: noBody(updated), ...(unchanged ? { unchanged: true } : {}) }, warnings), store, updated, facts));
+          return untrustedResult(withConflicts(withWarnings({ note: noBody(updated), ...(unchanged ? { unchanged: true } : {}), ...receipt }, warnings), store, updated, facts));
         }
         let titleGenerated = false;
         if (!title || !title.trim()) {
@@ -890,12 +895,14 @@ export function createMcpServer(
             : { namespace, title, body, tags, source, forget_after, sensitivity, outside, derived_from, ...(typeof confidence === "number" ? { confidence } : {}) },
           { lintWarnings: warnings }
         );
+        const receipt = withReceipt();
         await maybeEmbed(store, created);
         const sim = store.similarNote(created.id);
-        return untrustedResult(withConflicts(withWarnings({ note: noBody(created), ...(titleGenerated ? { title_generated: `No title was given, so it was made from the body's first line. To change it: state_write id=${created.id} title="..."` } : {}), ...(sim ? { similar_note: { id: sim.id, title: sim.title, hint: `looks similar to #${sim.id} - consider updating it (state_write with id=${sim.id}) if this is the same thing` } } : {}) }, warnings), store, created, facts));
+        return untrustedResult(withConflicts(withWarnings({ note: noBody(created), ...receipt, ...(titleGenerated ? { title_generated: `No title was given, so it was made from the body's first line. To change it: state_write id=${created.id} title="..."` } : {}), ...(sim ? { similar_note: { id: sim.id, title: sim.title, hint: `looks similar to #${sim.id} - consider updating it (state_write with id=${sim.id}) if this is the same thing` } } : {}) }, warnings), store, created, facts));
       } catch (e) {
-        if (e instanceof QuarantinedError) return quarantinedResult(e);
-        return errorFor(e);
+        const receipt = withReceipt(store.refusedWriteReceipt(e, id));
+        if (e instanceof QuarantinedError) return quarantinedResult(e, receipt);
+        return errorFor(e, receipt);
       }
     }
   );

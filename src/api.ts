@@ -33,6 +33,7 @@ import {
   DEFAULT_NAMESPACE,
   quarantineCasNote,
 } from "./store.js";
+import type { WriteReceipt } from "./store/write-receipt.js";
 import { truthyParam, distrustedOptInRefusal } from "./trust.js";
 import { originAllowed, hostAllowed, hostRefusal, RateLimiter, AuthTarpit, clientKey, tokenKey, authenticateEntry, scopeAllows, LIMITS, audit, auditFailureCount, printable } from "./security.js";
 import { type Scope, type TokenEntry, TIME_ZONE, PROJECT_ROOT, DATA_DIR, resolveToken, tokenId, sha256Hex } from "./config.js";
@@ -211,7 +212,9 @@ export function unknownNoteFields(body: unknown, allowed: readonly string[], ign
   return bad.length ? `unknown field${bad.length === 1 ? "" : "s"}: ${bad.map((k) => printable(k, 40)).join(", ")} (allowed: ${allowed.join(", ")})` : null;
 }
 
-function sendError(res: ServerResponse, e: unknown): void {
+/** `receipt` (R2-06): the audit line of a note write's held / refused decision, from Store.refusedWriteReceipt. */
+function sendError(res: ServerResponse, e: unknown, receipt?: WriteReceipt): void {
+  const r = receipt ? { receipt } : {};
   // A linter-held write was accepted for admin review, not rejected: 202.
   if (e instanceof QuarantinedError) {
     sendJson(res, 202, {
@@ -220,17 +223,18 @@ function sendError(res: ServerResponse, e: unknown): void {
         reasons: e.findings,
         next: "The write was held, not lost. An administrator can approve or reject it in the dashboard, or with: monomem quarantine list",
       },
+      ...r,
     });
     return;
   }
   if (e instanceof SupersedeError) {
     sendJson(res, e.status, { error: e.message, ...(e.warning ? { warning: e.warning } : {}) });
   } else if (e instanceof StaleWriteError) {
-    sendJson(res, 409, { error: e.message });
+    sendJson(res, 409, { error: e.message, ...r });
   } else if (e instanceof WriterPausedError) {
-    sendJson(res, 429, { error: e.message });
+    sendJson(res, 429, { error: e.message, ...r });
   } else if (e instanceof ValidationError) {
-    sendJson(res, 400, { error: e.message });
+    sendJson(res, 400, { error: e.message, ...r });
   } else if (e instanceof NoteUnreadableError) {
     console.error("[monomem] " + e.message);
     sendJson(res, 500, { error: e.message, id: e.noteId });
@@ -837,12 +841,14 @@ export function createApiServer(
           delete (parsed as { facts?: unknown }).facts;
           parsed.tags = withFacts(parsed.tags, facts);
           const warnings: LintFinding[] = [];
+          store.takeWriteReceipt(); // drop a decision left by an earlier call
           const note = store.create(parsed, { lintWarnings: warnings });
+          const receipt = store.takeWriteReceipt(); // R2-06, read before any await
           await maybeEmbed(store, note);
           const sim = store.similarNote(note.id);
-          sendJson(res, 201, { note, ...(sim ? { similar_note: { id: sim.id, title: sim.title, hint: `looks similar to #${sim.id} - consider updating it (PUT /notes/${sim.id}) if this is the same thing` } } : {}), ...(warnings.length ? { warnings } : {}), ...(facts === undefined ? {} : factFeedback(store, note)) });
+          sendJson(res, 201, { note, ...(receipt ? { receipt } : {}), ...(sim ? { similar_note: { id: sim.id, title: sim.title, hint: `looks similar to #${sim.id} - consider updating it (PUT /notes/${sim.id}) if this is the same thing` } } : {}), ...(warnings.length ? { warnings } : {}), ...(facts === undefined ? {} : factFeedback(store, note)) });
         } catch (e) {
-          sendError(res, e);
+          sendError(res, e, store.refusedWriteReceipt(e));
         }
         return;
       }
@@ -947,15 +953,17 @@ export function createApiServer(
           if (nsCtx.active) delete parsed.namespace;
           if (check.tags !== undefined) parsed.tags = check.tags;
           const warnings: LintFinding[] = [];
+          store.takeWriteReceipt(); // drop a decision left by an earlier call
           const { unchanged, ...note } = store.update(id, parsed, { lintWarnings: warnings, ...(ifRev !== undefined ? { ifRev } : {}) }) ?? ({} as NoteRecord);
+          const receipt = store.takeWriteReceipt(); // R2-06, read before any await
           if (!note.id) {
             sendJson(res, 404, { error: "not found" });
             return;
           }
           if (!unchanged) await maybeEmbed(store, note);
-          sendJson(res, 200, { note, ...(unchanged ? { unchanged: true } : {}), ...(warnings.length ? { warnings } : {}), ...(putFacts === undefined ? {} : factFeedback(store, note)) });
+          sendJson(res, 200, { note, ...(unchanged ? { unchanged: true } : {}), ...(receipt ? { receipt } : {}), ...(warnings.length ? { warnings } : {}), ...(putFacts === undefined ? {} : factFeedback(store, note)) });
         } catch (e) {
-          sendError(res, e);
+          sendError(res, e, store.refusedWriteReceipt(e, id));
         }
         return;
       }

@@ -658,8 +658,18 @@ export function rotateLogIfNeeded(path: string, writes: number): void {
 const GENESIS = "0".repeat(64);
 const sha = (line: string): string => createHash("sha256").update(line).digest("hex");
 
-/** sha256 of the last line of `path` (or of path.1 right after a rotation); GENESIS when there is none. */
-function lastAuditLineHash(path: string): string {
+/** `seq` of an audit line (R2-06: a running count from the first line written by 1.5.0); 0 for an older line or garbage. */
+function lineSeq(line: string): number {
+  try {
+    const v = (JSON.parse(line) as { seq?: unknown }).seq;
+    return typeof v === "number" && Number.isSafeInteger(v) && v > 0 ? v : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** sha256 and seq of the last line of `path` (or of path.1 right after a rotation); GENESIS / 0 when there is none. */
+function lastAuditLine(path: string): { hash: string; seq: number } {
   for (const p of [path, `${path}.1`]) {
     try {
       const size = statSync(p).size;
@@ -673,12 +683,12 @@ function lastAuditLineHash(path: string): string {
         closeSync(fd);
       }
       const lines = buf.toString("utf8").split("\n").filter(Boolean);
-      if (lines.length) return sha(lines[lines.length - 1]);
+      if (lines.length) return { hash: sha(lines[lines.length - 1]), seq: lineSeq(lines[lines.length - 1]) };
     } catch {
       /* missing file: try the next */
     }
   }
-  return GENESIS;
+  return { hash: GENESIS, seq: 0 };
 }
 
 /**
@@ -695,7 +705,7 @@ const FORK_WINDOW = 16;
 export function verifyAuditChain(path: string = auditPath(), expect?: string): {
   ok: boolean;
   /** Only with `expect`: the line whose hash is `expect` is still in the log, and how many lines follow it (0 = it is the head). */
-  anchor?: { found: boolean; linesAfter: number };
+  anchor?: { found: boolean; linesAfter: number; line?: number; seq?: number };
   lines: number;
   brokenLine?: number;
   file?: string;
@@ -716,6 +726,7 @@ export function verifyAuditChain(path: string = auditPath(), expect?: string): {
   let brokenLine: number | undefined;
   let file: string | undefined;
   let anchorAt = -1; // line number whose hash equals `expect`
+  let anchorSeq = 0;
   for (const f of files) {
     for (const line of readFileSync(f, "utf8").split("\n")) {
       if (!line) continue;
@@ -742,12 +753,12 @@ export function verifyAuditChain(path: string = auditPath(), expect?: string): {
         }
       }
       const h = sha(line);
-      if (expect !== undefined && h === expect) anchorAt = n;
+      if (expect !== undefined && h === expect) [anchorAt, anchorSeq] = [n, lineSeq(line)];
       recent.push(h);
       if (recent.length > FORK_WINDOW) recent.shift();
     }
   }
-  return { ok: breaks === 0, lines: n, ...(expect !== undefined ? { anchor: { found: anchorAt > 0, linesAfter: anchorAt > 0 ? n - anchorAt : 0 } } : {}), breaks, forks, unchained, ...(brokenLine !== undefined ? { brokenLine, file } : {}), ...(recent.length ? { head: recent[recent.length - 1] } : {}) };
+  return { ok: breaks === 0, lines: n, ...(expect !== undefined ? { anchor: { found: anchorAt > 0, linesAfter: anchorAt > 0 ? n - anchorAt : 0, ...(anchorAt > 0 ? { line: anchorAt, seq: anchorSeq } : {}) } } : {}), breaks, forks, unchained, ...(brokenLine !== undefined ? { brokenLine, file } : {}), ...(recent.length ? { head: recent[recent.length - 1] } : {}) };
 }
 
 /** The refusal for a call that needs the admin scope (state_delete, a forget date on someone else's note). */
@@ -765,7 +776,7 @@ export function audit(entry: {
   kind?: string;
   /** Short free text (a consumer label, "replay", ...); never note content. */
   detail?: string;
-}): void {
+}): { seq: number; chain_hash: string } | undefined {
   try {
     const path = auditPath();
     if (auditDirMade !== path) {
@@ -784,12 +795,17 @@ export function audit(entry: {
     } catch {
       mkdirSync(dirname(path), { recursive: true, mode: 0o700 }); // no file (yet, or the folder was removed)
     }
-    const prev = auditTail && auditTail.path === path && auditTail.size === size && auditTail.mtime === mtime ? auditTail.hash : lastAuditLineHash(path);
-    const line = JSON.stringify({ ts: new Date().toISOString(), prev, ...entry });
+    const last = auditTail && auditTail.path === path && auditTail.size === size && auditTail.mtime === mtime ? auditTail : lastAuditLine(path);
+    // R2-06: `seq` counts on from the line before (1 after a log from before 1.5.0). Two processes appending at once can
+    // write the same seq (a fork); a receipt is found by its hash, the seq is checked against that line.
+    const seq = last.seq + 1;
+    const line = JSON.stringify({ ts: new Date().toISOString(), prev: last.hash, seq, ...entry });
     appendFileSync(path, line + "\n", { mode: 0o600 });
     // Cache only when the file is exactly what we left (another process appending right now means: re-read next time).
     const after = statSync(path);
-    auditTail = after.size === size + Buffer.byteLength(line) + 1 ? { path, size: after.size, mtime: after.mtimeMs, hash: sha(line) } : null;
+    const hash = sha(line);
+    auditTail = after.size === size + Buffer.byteLength(line) + 1 ? { path, size: after.size, mtime: after.mtimeMs, hash, seq } : null;
+    return { seq, chain_hash: hash };
   } catch (e) {
     auditDirMade = undefined;
     auditTail = null;
@@ -799,13 +815,14 @@ export function audit(entry: {
     if (auditFailures === 1 || auditFailures % 1000 === 0) {
       console.error(`[monomem] could not write the audit log (${(e as Error)?.message ?? e}); ${auditFailures} entr${auditFailures === 1 ? "y" : "ies"} missing so far`);
     }
+    return undefined;
   }
 }
 
 let auditFailures = 0;
 /** F-03: the directory is made once per path; size, mtime and hash of the last line this process wrote. */
 let auditDirMade: string | undefined;
-let auditTail: { path: string; size: number; mtime: number; hash: string } | null = null;
+let auditTail: { path: string; size: number; mtime: number; hash: string; seq: number } | null = null;
 /** Audit entries this process could not write. */
 export function auditFailureCount(): number {
   return auditFailures;
