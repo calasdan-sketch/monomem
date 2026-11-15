@@ -18,7 +18,7 @@ const COMMANDS = [
   "start", "serve", "mcp", "mcp:stdio", "doctor", "init", "setup", "uninstall", "sync", "reindex", "recall", "hook",
   "consolidate", "rebuild-edges", "relevant", "search", "token", "changes", "backup", "runner-status", "watch", "export", "import", "trust",
   "quarantine", "approve-first", "access", "flood", "resume", "decay", "archive", "restore", "delete", "quality", "conflicts", "facts", "fact",
-  "encrypt", "meter", "receipts", "why", "never-show", "supersede", "history", "pin", "unpin", "rollback", "bench", "drill", "health", "audit",
+  "encrypt", "meter", "receipts", "why", "never-show", "supersede", "history", "pin", "unpin", "rollback", "bench", "drill", "health", "audit", "verify-receipt",
   "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet", "confirm", "review", "taint", "config", "service",
   "help", "--help", "-h", "--version", "-v", "version",
 ];
@@ -163,12 +163,12 @@ function usage(all = false): void {
       "            Notes from writers on the distrust list are left out unless --include-distrusted.",
       "            When: wired into Claude Code settings.json. See:",
       "            https://github.com/calasdan-sketch/monomem/blob/main/docs/sessionstart-hook.md",
-      "  hook <session-start|user-prompt|post-tool|post-tool-failure|stop|subagent-stop|session-end|file-context> [--db <file>]",
+      "  hook <session-start|user-prompt|post-tool|post-tool-failure|stop|subagent-stop|session-end|pre-compact|file-context> [--db <file>]",
       "            Automatic memory: the agent's lifecycle hooks (hook JSON on stdin). Records what the agent does, redacted,",
       "            on this machine only, and distills it into observations and a session summary. Always exits 0.",
       "            Off switch: MONOMEM_CAPTURE=off. When: installed by `monomem setup --capture`.",
       "            file-context (PreToolUse on Read) lists what memory knows about the file, once per session; it never",
-      "            blocks or changes the Read.",
+      "            blocks or changes the Read. pre-compact (Claude Code PreCompact) saves the session so far as its summary.",
       "  why <note-id> [--json] [--body]",
       "            The story of one note in time order: who wrote it, versions, replacements, holds, pin, sessions shown it, status.",
       "  receipts [session-id] [--json]",
@@ -330,6 +330,9 @@ function usage(all = false): void {
       "            Walk the audit log's hash chain and report the first broken line (edits/deletions inside the chain).",
       "            Keep the printed head hash off this machine (a git commit, a password manager). --expect <hash> exits 1 if",
       "            that line is no longer in the log (rewritten or cut off); the log growing past it is fine. Usage errors exit 2.",
+      "  verify-receipt <seq> <chain_hash>",
+      "            Check the receipt a write returned (accepted, held or refused) is still a line of the audit log, in an",
+      "            unbroken chain. Exits 1 naming the first broken line, or when the line is gone; usage errors exit 2. Not signed.",
       "  scrub [--yes] [--out <dir>]   (also: purge-deleted)",
       "            Remove the text of long-deleted notes from the database file (rebuilds the search index and compacts it).",
       "            Without --yes it only explains. With --yes it takes a backup first, then shows the size before and after.",
@@ -341,12 +344,13 @@ function usage(all = false): void {
       "  import --rules [--project dir[,dir]] [--dry-run] [--namespace ns]   Bring in .cursorrules, .cursor/rules, AGENTS.md, GEMINI.md, .windsurfrules.",
       "  delete <id> [--yes]",
       "            Delete a note permanently, with all its earlier versions. Asks first; cannot be undone.",
-      "  encrypt <enable|status|disable>",
+      "  encrypt <enable|status [--surfaces] [--json]|disable>",
       "            enable   Create the AES-256-GCM key and encrypt every note",
       "                     body at rest. Keyword search then covers title+tags",
       "                     only (bodies cannot be indexed as ciphertext).",
       "            status   Report whether at-rest encryption is on, the key",
-      "                     path, and how many bodies are encrypted.",
+      "                     path, and how many bodies are encrypted. --surfaces lists",
+      "                     every place note text can exist and whether it is encrypted now.",
       "            disable  Decrypt every body and remove the key file.",
       "            When: running Monomem as a shared / multi-agent store.",
       "            See: docs/encryption-retention.md for the real tradeoffs.",
@@ -3347,7 +3351,7 @@ async function encryptCmd(): Promise<void> {
   const [action] = process.argv.slice(3);
 
   if (action !== "enable" && action !== "status" && action !== "disable") {
-    console.error("Usage: monomem encrypt <enable|status|disable>");
+    console.error("Usage: monomem encrypt <enable|status [--surfaces] [--json]|disable>");
     process.exit(1);
   }
 
@@ -3356,6 +3360,18 @@ async function encryptCmd(): Promise<void> {
     const enabled = crypto.encryptionEnabled(keyDir);
     const keyFile = crypto.keyPath(keyDir);
     try {
+      if (process.argv.includes("--surfaces")) {
+        // C-04: every place note content can exist, from counts on this store (docs/encryption-retention.md says the same).
+        const { DATA_DIR } = await import("./config.js");
+        const rows = store.encryptionSurfaces({ dataDir: DATA_DIR, dbPath: DB_PATH });
+        if (process.argv.includes("--json")) return void console.log(JSON.stringify({ key: enabled, key_file: keyFile, surfaces: rows }, null, 2));
+        console.log(`encryption key: ${enabled ? keyFile : "none (monomem encrypt enable)"}`);
+        const w = Math.max(...rows.map((r) => r.surface.length));
+        const count = (r: (typeof rows)[number]): string => (r.encrypted !== "nothing stored" && (r.sealed !== undefined || r.plain !== undefined) ? ` (${r.sealed !== undefined ? `${r.sealed} sealed, ` : ""}${r.plain ?? 0} plain)` : "");
+        for (const r of rows) console.log(`  ${r.surface.padEnd(w)}  ${(r.encrypted + count(r)).padEnd(34)}  ${r.detail}`);
+        console.log("Encryption here is confidentiality only: it does not stop an older sealed copy being put back. Whole-disk encryption covers titles, the index and logs too.");
+        return;
+      }
       console.log(`encryption: ${enabled ? "on" : "off"}`);
       console.log(`key file:   ${keyFile}${enabled ? "" : " (not present)"}`);
       console.log(`encrypted bodies: ${store.encryptedCount()}`);
@@ -3836,6 +3852,32 @@ async function main(): Promise<void> {
         }
         console.log(r.anchor.linesAfter === 0 ? "Anchor OK: the hash you gave is the current head." : `Anchor OK: the line you noted is still in the chain, ${r.anchor.linesAfter} line(s) older than the head (the log has grown since).`);
       }
+      break;
+    }
+    case "verify-receipt": {
+      // R2-06: a write's receipt {seq, chain_hash} is a line of the audit log; check it is still there, in an unbroken chain.
+      const [seqRaw, hashRaw] = process.argv.slice(3);
+      const hash = hashRaw?.trim().toLowerCase();
+      if (!/^\d{1,15}$/.test(seqRaw ?? "") || !/^[0-9a-f]{64}$/.test(hash ?? "") || process.argv.length > 5) {
+        console.error("Usage: monomem verify-receipt <seq> <chain_hash>   (both from the `receipt` a write returned)");
+        process.exit(2);
+      }
+      const { verifyAuditChain } = await import("./security.js");
+      const r = verifyAuditChain(undefined, hash);
+      if (!r.ok) {
+        console.error(`Receipt NOT verified: the audit chain is BROKEN at line ${r.brokenLine} of ${r.file} (it follows from none of the lines before it: a line was edited or removed). ${r.breaks} break(s) in all.`);
+        process.exit(1);
+      }
+      if (!r.anchor?.found) {
+        console.error("Receipt NOT verified: no line in the audit log has that hash. The line was edited or removed, the log was cut off or rotated past it, or the receipt is from another store.");
+        process.exit(1);
+      }
+      if (r.anchor.seq !== Number(seqRaw)) {
+        console.error(`Receipt NOT verified: the line with that hash has seq ${r.anchor.seq || "(none)"}, not ${seqRaw}.`);
+        process.exit(1);
+      }
+      console.log(`Receipt OK: seq ${seqRaw} is line ${r.anchor.line} of the audit log, in an unbroken chain of ${r.lines} line(s) (${r.anchor.linesAfter} written after it).`);
+      console.log("This shows the line was not edited or removed since. It does not prove who wrote the log: the chain is not signed.");
       break;
     }
     case "quality":

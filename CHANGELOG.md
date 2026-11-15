@@ -59,6 +59,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Search shows the part of a long note that matched.** When `state_search` cuts a body to 600 characters, it now shows the
+  600 characters with the most of your query words instead of the first 600, and `body_offset` says where they start. It
+  works on encrypted notes too. `state_list` and short notes are unchanged (docs/search.md).
+- **Write receipts.** `state_write` and REST `POST`/`PUT /notes` answer with `receipt: {seq, chain_hash, decision}` for an
+  accepted, held or refused write: the audit-log line that recorded the decision. `monomem verify-receipt <seq> <hash>`
+  checks that line is still in an unbroken audit chain and names the first broken line if not. It is not signed: it shows
+  the line was not changed later, not who wrote the log (SECURITY.md). Audit lines now carry a `seq` number.
+- **Claude Code `PreCompact` hook.** `monomem hook pre-compact` saves the session so far as its summary note before the
+  context is compacted (same redaction, stamps and spool as the other capture hooks). `setup --capture` adds it for
+  Claude Code only; `setup --undo` removes it. Run `setup --capture` again to add it to an existing install.
+- **`monomem encrypt status --surfaces`** lists every place note text can exist (bodies, titles, tags, sources, old
+  versions, held writes, captured events and titles, the capture spool, file paths, the search index, the change feed,
+  embeddings, the access and audit logs, the server log, backups, exports, sync files) and whether each is encrypted on
+  this store right now, with counts. Backups and sync folders are outside the database, so the report says "not checked"
+  for them. docs/encryption-retention.md now lists the same places.
 - `monomem show`, `ls` and `why` print the trust state: unconfirmed, expired and built-on-distrusted labels, a plain origin
   line, confirmations (counted or not, and why) and who approved a held write. `ls --archived` includes notes kept as history.
 - `monomem review --step`: one typed yes, then y / n / q per note.

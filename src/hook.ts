@@ -1,5 +1,5 @@
 // `monomem hook <event>`: the agent's lifecycle hooks (Claude Code: SessionStart, UserPromptSubmit, PostToolUse,
-// PostToolUseFailure, Stop, SubagentStop, SessionEnd; Codex, Gemini CLI and Muse are mapped onto the same events in setup.ts hookHosts).
+// PostToolUseFailure, Stop, SubagentStop, SessionEnd, PreCompact; Codex, Gemini CLI and Muse are mapped onto the same events in setup.ts hookHosts).
 //
 // FAIL-OPEN, ALWAYS: whatever happens (garbage on stdin, no database, a database from another version, a locked file, a
 // bug) the process exits 0 and prints either nothing or one valid hook JSON object on stdout. Capture is a bonus; it must
@@ -129,7 +129,9 @@ export async function captureHook(event: HookEvent, payload: Record<string, unkn
       drainSpool(store, dataDir);
       distillStaleSessions(store, ev.session_id);
     }
-    if (event === "stop" || event === "session-end") distillSession(store, ev.session_id);
+    // pre-compact (R2-05): the context is about to be compacted, so the session so far becomes its (interim) summary now;
+    // a later stop / session-end rebuilds the same summary note from the whole session.
+    if (event === "stop" || event === "session-end" || event === "pre-compact") distillSession(store, ev.session_id);
     if (event === "session-end") {
       // Optional local model (llm.ts, off unless configured): one call per session; on any failure the summary above stays.
       const { llmConfig, llmSummarize } = await import("./llm.js");

@@ -1056,6 +1056,8 @@ export const CAPTURE_HOOKS: ReadonlyArray<{ on: string; event: string; async: bo
   { on: "Stop", event: "stop", async: true },
   { on: "SubagentStop", event: "subagent-stop", async: true },
   { on: "SessionEnd", event: "session-end", async: true },
+  // Claude Code only (R2-05): before /compact or an automatic compaction, the session so far is saved as its summary.
+  { on: "PreCompact", event: "pre-compact", async: true },
 ];
 
 /** `monomem hook <event>` as a hook command (same launcher rules as buildHookCommand). */

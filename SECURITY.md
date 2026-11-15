@@ -60,6 +60,15 @@ To check your own setup, run `monomem drill` (replays 20 known memory-poisoning 
   somewhere else to catch a later rewrite. Lines written before this was added have no `prev` and are counted as
   unchained. Archive through MCP `state_delete` currently writes two lines (one from the store, one
   from the tool, which names the caller).
+- **Write receipts (1.5.0):** a note write through MCP `state_write` or REST `POST`/`PUT /notes` answers with
+  `receipt: {seq, chain_hash, decision}`: the audit line that recorded it, and whether it was `accepted`, `held` (waiting
+  for a person) or `refused` (by the store's checks: linter, secret guard, paused writer, stale `if_rev`, tag rules; the
+  refusal line names the error type, never the note text). `monomem verify-receipt <seq> <chain_hash>` checks that line
+  is still in the log in an unbroken chain, and names the first broken line when it is not. The same limits as the chain
+  apply: it is not signed, so it shows a line was not edited or removed later, not who wrote the log. `seq` counts from the
+  first line written by 1.5.0, and two apps writing at the same moment can give two lines the same `seq` (the hash tells
+  them apart). No receipt comes back when nothing was written (an unchanged update), for a request refused before it
+  reached the store (wrong key scope, malformed request), or when the audit log could not be written.
 - **Supply chain:** committed lockfile + `npm ci`, Dependabot, `npm audit` in
   CI, and MIT-licensed with only two production dependencies.
 

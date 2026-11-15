@@ -50,7 +50,7 @@ import { waitForChanges, parseWait, WAIT_MAX_SECONDS, WAIT_RECOMMENDED_SECONDS }
 import { type Scope, PACKAGE_VERSION } from "./config.js";
 export { PACKAGE_VERSION };
 import { ADMIN_SCOPE_NEEDED, scopeAllows, UNTRUSTED_BANNER, provenanceBanner, audit, printableWords } from "./security.js";
-import { runSearch, runSearchExplained, semanticNotice, parseMode, maybeEmbed, runRelevantSearch, roundRobin, describeWhen, SEARCH_MODES, type SearchOpts, type RelevantOpts, type ExplainedHit } from "./search-service.js";
+import { runSearch, runSearchExplained, semanticNotice, parseMode, maybeEmbed, runRelevantSearch, roundRobin, describeWhen, bestPassage, SEARCH_MODES, type SearchOpts, type RelevantOpts, type ExplainedHit } from "./search-service.js";
 import {
   type ServerNamespaceOpts,
   canRead,
@@ -111,14 +111,18 @@ const zFacts = () =>
 const READ_MAX_CHARS = 40_000;
 /** state_read ids: at most this many notes per call. */
 const MULTI_READ_MAX = 10;
-const CUT_NOTE = `Long bodies are cut to ${LIST_BODY_CHARS} characters (body_truncated, body_chars); state_read id=N for the full text.`;
+const CUT_NOTE = `Long bodies are cut to ${LIST_BODY_CHARS} characters (body_truncated, body_chars); a search shows the part with the most query words, and body_offset says where it starts. state_read id=N for the full text.`;
 /** The same payload with each note body in `results` / `notes` cut to LIST_BODY_CHARS (a host caps how much tool output it shows). */
-function cutBodies(payload: Record<string, unknown>): Record<string, unknown> {
+function cutBodies(payload: Record<string, unknown>, query?: string): Record<string, unknown> {
+  // A search (query given) shows the window with the most query hits (C-01); body_offset says where it starts, so
+  // state_read offset=N continues from there. The window is a slice of that note's own body: nothing else is read.
   const cut = (v: unknown): unknown =>
     Array.isArray(v)
       ? v.map((n) => {
           const b = (n as { body?: unknown } | null)?.body;
-          return typeof b === "string" && b.length > LIST_BODY_CHARS ? { ...(n as object), body: b.slice(0, LIST_BODY_CHARS), body_truncated: true, body_chars: b.length } : n;
+          if (typeof b !== "string" || b.length <= LIST_BODY_CHARS) return n;
+          const p = query ? bestPassage(b, query, LIST_BODY_CHARS) : { start: 0, text: b.slice(0, LIST_BODY_CHARS) };
+          return { ...(n as object), body: p.text, body_truncated: true, body_chars: b.length, ...(p.start > 0 ? { body_offset: p.start } : {}) };
         })
       : v;
   return { ...payload, ...("results" in payload ? { results: cut(payload.results) } : {}), ...("notes" in payload ? { notes: cut(payload.notes) } : {}) };
@@ -128,8 +132,8 @@ function noBody<T extends { body?: unknown }>(n: T): Omit<T, "body"> {
   const { body: _body, ...rest } = n;
   return rest;
 }
-function untrustedResultCut(payload: Record<string, unknown>) {
-  return untrustedResult(cutBodies(payload));
+function untrustedResultCut(payload: Record<string, unknown>, query?: string) {
+  return untrustedResult(cutBodies(payload, query));
 }
 
 /** False only for a payload with a results / notes / recent list and no record anywhere (every list empty or plain strings): no stored text is in it. */
@@ -224,7 +228,7 @@ function noteWriterArgs(note_written_by?: string, not_note_written_by?: string):
 }
 
 // A linter-held write is not an error: the write was accepted for review.
-function quarantinedResult(e: QuarantinedError) {
+function quarantinedResult(e: QuarantinedError, extra?: Record<string, unknown>) {
   // Lead with what the linter saw: under approve-first an injected instruction used to be reported only as "waiting for
   // approval", and the agent then told the person it was routine. The labels are the linter's own words, never note text.
   const approval = e.findings.some((f) => f.category === "approval");
@@ -248,6 +252,7 @@ function quarantinedResult(e: QuarantinedError) {
         "An admin can approve or reject it in the Monomem dashboard, or with `monomem quarantine` " +
         "(and through the memory_quarantine tool where MONOMEM_TOOLS makes it available).",
     },
+    ...extra,
   });
 }
 
@@ -310,12 +315,12 @@ function withIgnored(r: unknown, tool: string, ignored: string[], shape: z.ZodRa
 
 const BUSY_TOOL_MESSAGE = "The database is busy (another program is writing to it); nothing was saved. Try again in a few seconds.";
 
-function errorResult(message: string) {
+function errorResult(message: string, extra?: Record<string, unknown>) {
   return {
     content: [
       {
         type: "text" as const,
-        text: JSON.stringify({ error: message }),
+        text: JSON.stringify({ error: message, ...extra }),
       },
     ],
     isError: true,
@@ -326,8 +331,8 @@ function errorResult(message: string) {
 // caller-input problem (ValidationError) is echoed back, but any unexpected
 // fault (e.g. a raw node:sqlite error) is logged server-side and returned as a
 // generic message so SQLite/internal details never leak to the MCP caller.
-function errorFor(e: unknown) {
-  if (e instanceof ValidationError) return errorResult(e.message);
+function errorFor(e: unknown, extra?: Record<string, unknown>) {
+  if (e instanceof ValidationError) return errorResult(e.message, extra);
   // 1.5.0 (U-09): another program held the database lock past the wait. Retryable, not a fault; same words as REST's 503.
   if (isBusyError(e)) return errorResult(BUSY_TOOL_MESSAGE);
   // eslint-disable-next-line no-console
@@ -836,9 +841,12 @@ export function createMcpServer(
       const warnings: LintFinding[] = [];
       let title = givenTitle;
       let tags = plainTags;
+      // R2-06: the audit line of this write's decision (accepted, held, refused) comes back as `receipt`.
+      const withReceipt = (r = store.takeWriteReceipt()) => (r ? { receipt: r } : {});
       try {
         const denied = denyIfUnder("write");
         if (denied) return errorResult(denied);
+        store.takeWriteReceipt(); // drop a decision left by an earlier call
         // task / handoff / task.* tags belong to task_put and session_handoff.
         // 1.5.0 (A2): for an update the guard runs below, on the note this caller may see (the same order as REST), so a
         // reserved-tag refusal can't reveal a hidden note.
@@ -865,10 +873,11 @@ export function createMcpServer(
           const result = store.update(id, patch, { ifRev: if_rev, lintWarnings: warnings });
           if (!result) return errorResult(`no note with id ${id}`);
           const { unchanged, ...updated } = result;
+          const receipt = withReceipt(); // before any await: the write is synchronous, the next one is not ours
           if (!unchanged) await maybeEmbed(store, updated);
           // A partial update echoes back the merged note, which can include a
           // pre-existing body planted by someone else -- wrap it as untrusted.
-          return untrustedResult(withConflicts(withWarnings({ note: noBody(updated), ...(unchanged ? { unchanged: true } : {}) }, warnings), store, updated, facts));
+          return untrustedResult(withConflicts(withWarnings({ note: noBody(updated), ...(unchanged ? { unchanged: true } : {}), ...receipt }, warnings), store, updated, facts));
         }
         let titleGenerated = false;
         if (!title || !title.trim()) {
@@ -886,12 +895,14 @@ export function createMcpServer(
             : { namespace, title, body, tags, source, forget_after, sensitivity, outside, derived_from, ...(typeof confidence === "number" ? { confidence } : {}) },
           { lintWarnings: warnings }
         );
+        const receipt = withReceipt();
         await maybeEmbed(store, created);
         const sim = store.similarNote(created.id);
-        return untrustedResult(withConflicts(withWarnings({ note: noBody(created), ...(titleGenerated ? { title_generated: `No title was given, so it was made from the body's first line. To change it: state_write id=${created.id} title="..."` } : {}), ...(sim ? { similar_note: { id: sim.id, title: sim.title, hint: `looks similar to #${sim.id} - consider updating it (state_write with id=${sim.id}) if this is the same thing` } } : {}) }, warnings), store, created, facts));
+        return untrustedResult(withConflicts(withWarnings({ note: noBody(created), ...receipt, ...(titleGenerated ? { title_generated: `No title was given, so it was made from the body's first line. To change it: state_write id=${created.id} title="..."` } : {}), ...(sim ? { similar_note: { id: sim.id, title: sim.title, hint: `looks similar to #${sim.id} - consider updating it (state_write with id=${sim.id}) if this is the same thing` } } : {}) }, warnings), store, created, facts));
       } catch (e) {
-        if (e instanceof QuarantinedError) return quarantinedResult(e);
-        return errorFor(e);
+        const receipt = withReceipt(store.refusedWriteReceipt(e, id));
+        if (e instanceof QuarantinedError) return quarantinedResult(e, receipt);
+        return errorFor(e, receipt);
       }
     }
   );
@@ -1072,7 +1083,7 @@ export function createMcpServer(
             archived_then: view.archivedThen,
             results: hits.map((h) => asOfFields(h, withWhen)),
             searchedNamespaces: spaces ?? [],
-          });
+          }, query);
         }
         if (mode === "relevant") {
           if (when !== undefined || explain !== undefined || include_superseded !== undefined) {
@@ -1100,7 +1111,7 @@ export function createMcpServer(
         const untrustedResultN = (p: Record<string, unknown>) => {
           const n = Array.isArray(p.results) ? p.results.length : 0;
           const q = { ...p, ...(limit !== undefined && limit > 200 ? { limit_capped: 200 } : {}), ...(n >= effLimit ? { more: true } : {}) };
-          return untrustedResultCut(semNotice ? { ...q, notice: semNotice } : q);
+          return untrustedResultCut(semNotice ? { ...q, notice: semNotice } : q, query);
         };
         const wf = { ...writerFilterArgs(written_by, not_written_by, include_distrusted), ...supersededArg(include_superseded) };
         if (explain === true && currentCeiling() === undefined) {
@@ -1229,7 +1240,7 @@ export function createMcpServer(
     /** Cut long bodies (state_search mode "relevant"); state_relevant keeps them whole as before. */
     cut?: boolean;
   }) {
-    const out$ = cut ? untrustedResultCut : untrustedResult;
+    const out$ = cut ? (p: Record<string, unknown>) => untrustedResultCut(p, message) : untrustedResult;
     try {
       const denied = denyIfUnder("read");
       if (denied) return errorResult(denied);

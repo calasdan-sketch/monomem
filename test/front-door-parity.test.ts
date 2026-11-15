@@ -7,6 +7,9 @@ import "./setup-env.js";
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Store } from "../src/store.js";
@@ -169,6 +172,49 @@ describe("P-01: REST and MCP refuse include_distrusted the same way", () => {
       } finally {
         await io.close();
       }
+    }
+  });
+});
+
+describe("R2-06: REST and MCP give the same write receipt decision", () => {
+  // [caller, patch, approve-first on "work"?, expected receipt decision]
+  type Row = [Who, { body: string }, boolean, "accepted" | "held" | "refused"];
+  const rows: Row[] = [
+    ["writer", { body: "a new body" }, false, "accepted"],
+    ["writer", { body: "a new body" }, true, "held"], // approve-first: held for a person
+    ["writer", { body: "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8" }, false, "refused"], // looks like a GitHub token
+  ];
+  const receiptOf = (text: string, mcp: boolean): { decision?: string; chain_hash?: string } | undefined => {
+    const j = JSON.parse(text);
+    if (!mcp) return j.receipt;
+    const t = j.content[0].text as string;
+    return JSON.parse(t.slice(t.indexOf("{"))).receipt;
+  };
+
+  test("the table, through PUT /notes/:id and state_write", async () => {
+    const save = process.env.MONOMEM_AUDIT_LOG;
+    const dir = mkdtempSync(join(tmpdir(), "om-parity-r206-"));
+    process.env.MONOMEM_AUDIT_LOG = join(dir, "audit.log"); // an in-memory store audits only with an explicit log
+    try {
+      for (const [who, patch, approveFirst, want] of rows) {
+        const w = seed();
+        if (approveFirst) w.s.setApproveFirst("work", true);
+        const io = await surfaces(w);
+        try {
+          const label = `${who} ${want}`;
+          const r = receiptOf((await io.rest(who, "PUT", `/notes/${w.ids.work}`, patch)).text, false);
+          const m = receiptOf((await io.mcp(who, "state_write", { id: w.ids.work, body: patch.body + " (mcp)" })).text, true); // not the same text: that would be unchanged
+          assert.equal(r?.decision, want, `REST ${label}`);
+          assert.equal(m?.decision, want, `MCP ${label}`);
+          assert.notEqual(r?.chain_hash, m?.chain_hash, `${label}: two writes, two lines`);
+        } finally {
+          await io.close();
+        }
+      }
+    } finally {
+      if (save === undefined) delete process.env.MONOMEM_AUDIT_LOG;
+      else process.env.MONOMEM_AUDIT_LOG = save;
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

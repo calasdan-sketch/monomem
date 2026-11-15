@@ -107,6 +107,8 @@ import * as trustOps from "./store/trust.js";
 import * as quarantineOps from "./store/quarantine.js";
 import * as confirmOps from "./store/confirm.js";
 import * as taintOps from "./store/taint.js";
+import * as receiptOps from "./store/write-receipt.js";
+import * as surfaceOps from "./store/surfaces.js";
 import { tagsToStorage, parseTags, dueBase, needsHumanConfirm, sealQuarantineCol, openQuarantineCol, isoOrNull, clampInt, envCount, floodWritesPerHour, isOperatorWrite, isPlainObject } from "./store/rows.js";
 export { dueBase, needsHumanConfirm, clampInt, floodWritesPerHour };
 export { ValidationError, NoteUnreadableError, StaleWriteError, RebuildBusyError, CandidateScanError, QuarantinedError, WriterPausedError };
@@ -5102,6 +5104,11 @@ export class Store {
     return Number(r.c);
   }
 
+  /** C-04: every place note content can exist and whether it is encrypted here now (counts only; store/surfaces.ts). */
+  encryptionSurfaces(o: { dataDir: string; dbPath: string }): surfaceOps.EncryptionSurface[] {
+    return surfaceOps.encryptionSurfaces(this, o);
+  }
+
   encryptedCount(): number {
     const r = this.db.prepare("SELECT COUNT(*) AS c FROM notes WHERE body_enc IS NOT NULL").get() as {
       c: number;
@@ -7955,13 +7962,26 @@ export class Store {
     // Inside a transaction the write may still be rolled back: the line is written only once it commits (commitTx).
     if (this.db.isTransaction) return void this.pendingAudit.push(e);
     this.flushAudit();
-    audit(e);
+    receiptOps.noteAudited(this, e.op, audit(e));
   }
 
   private flushAudit(): void {
     const q = this.pendingAudit;
     this.pendingAudit = [];
-    for (const e of q) audit(e);
+    for (const e of q) receiptOps.noteAudited(this, e.op, audit(e));
+  }
+
+  /** @internal R2-06: the newest write decision this store audited, until a surface takes it (store/write-receipt.ts). */
+  lastWriteReceipt: receiptOps.WriteReceipt | undefined;
+
+  /** R2-06: the receipt `{seq, chain_hash, decision}` of the write that just ran, cleared as it is read. */
+  takeWriteReceipt(): receiptOps.WriteReceipt | undefined {
+    return receiptOps.takeWriteReceipt(this);
+  }
+
+  /** R2-06: the receipt for a write that ended in error `e` (held, or refused with a ValidationError); undefined for a fault. */
+  refusedWriteReceipt(e: unknown, id?: number): receiptOps.WriteReceipt | undefined {
+    return receiptOps.refusedWriteReceipt(this, e, id);
   }
 
   /** COMMIT (or a savepoint RELEASE), then write the audit lines it held, once the outermost transaction has ended. */
