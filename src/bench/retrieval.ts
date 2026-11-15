@@ -239,6 +239,9 @@ export async function runRetrieval(o: RetrievalOptions): Promise<RetrievalReport
   for (const [i, h] of stacks.entries()) {
     const dir = join(BENCH_HOME, `h${i}`);
     if (o.encrypted) ensureKey(dir);
+    // One audit log (and signing key) per throwaway store: a shared one makes every store after the first print
+    // "not replacing the signing key ... it belongs to another store".
+    process.env.MONOMEM_AUDIT_LOG = join(dir, "audit.log");
     const store = new Store(join(dir, "state.db"));
     try {
       const unitOf = new Map<number, string>();
