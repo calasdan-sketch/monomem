@@ -3199,7 +3199,10 @@ async function approveFirstCmd(): Promise<void> {
   try {
     if (ns === undefined) {
       const list = store.approveFirstNamespaces();
-      console.log(`All namespaces: ${store.approveFirstAll() ? "on (every namespace, including new ones)" : "off"}`);
+      const damaged = store.damagedTrustSettings().includes("approve_first");
+      console.log(
+        `All namespaces: ${damaged ? "on (the saved namespace list is damaged, so every namespace is held; set it again: monomem approve-first <namespace> on|off)" : store.approveFirstAll() ? "on (every namespace, including new ones)" : "off"}`
+      );
       console.log(list.length ? `Approve-first for these namespaces: ${list.join(", ")}` : "Approve-first for individual namespaces: none.");
       return;
     }
