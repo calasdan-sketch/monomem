@@ -110,6 +110,7 @@ describe("the real programs honour CLAUDE_BRIDGE_DB_PATH", () => {
 
   test("doctor names the old program each mapped setting came from", () => {
     const { dir } = oldDb();
+    mkdirSync(join(dir, "om"), { recursive: true }); // a set-up data folder: doctor on a missing one only says "not set up"
     const r = run(["doctor"], { HOME: join(dir, "home"), ONEMEMORY_HOME: join(dir, "om"), CLAUDE_BRIDGE_PORT: "18999" });
     const out = r.stdout + r.stderr;
     assert.match(out, /ONEMEMORY_HOME \(from OneMemory\)/);
