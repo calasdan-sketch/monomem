@@ -19,7 +19,7 @@ export interface Timing {
   p95: number;
 }
 export interface ModeTimings {
-  /** injectContext on an open store, one namespace (what the SessionStart hook runs after opening). */
+  /** injectContext on an open store, one namespace (what the SessionStart hook runs after opening; bodyIndex off, as the hook). */
   sessionStart: Timing;
   /** A fresh Store + injectContext + close: closer to a hook process, minus Node start-up. */
   openAndSessionStart: Timing;
@@ -31,6 +31,8 @@ export interface ModeTimings {
   dbMb: number;
   /** Rows whose body is an encryption envelope (0 for plain). */
   sealedBodies: number;
+  /** C-06, encrypted only: the in-memory body index the search store builds (the session-start store never does). */
+  bodyIndex?: { buildMs: number; notes: number; rssMb: number };
 }
 export interface ScaleReport {
   notes: number;
@@ -120,22 +122,33 @@ async function runMode(notes: number, encrypted: boolean, o: { iterations: numbe
     const ns = NAMESPACES[0];
     const signals = { diffFiles: [] }; // no git: same work in every run
     const open = await timed(o.iterations, async () => {
-      const s = new Store(db);
+      const s = new Store(db, { bodyIndex: "off" }); // as the hook opens it
       try {
         await injectContext(s, { namespace: ns, signals });
       } finally {
         s.close();
       }
     });
-    store = new Store(db);
+    const hook = new Store(db, { bodyIndex: "off" });
+    let session: number[];
     try {
-      await injectContext(store, { namespace: ns, signals }); // warm-up
-      const session = await timed(o.iterations, () => injectContext(store, { namespace: ns, signals }));
+      await injectContext(hook, { namespace: ns, signals }); // warm-up
+      session = await timed(o.iterations, () => injectContext(hook, { namespace: ns, signals }));
+    } finally {
+      hook.close();
+    }
+    store = new Store(db); // a server's store: builds the body index (C-06) when encrypted
+    try {
+      // ponytail: RSS growth around the build is approximate (V8 may grow or shrink alongside); good to tens of MB.
+      const rss0 = process.memoryUsage().rss;
+      store.warmBodyIndex();
+      const idx = store.bodyIndexInfo();
+      const bodyIndex = idx.state === "ready" ? { buildMs: idx.buildMs, notes: idx.notes, rssMb: Math.round((process.memoryUsage().rss - rss0) / 1e5) / 10 } : undefined;
       const q = rng(7);
       const search = await timed(o.iterations * 5, () => runSearch(store, `${word(q)} ${word(q)}`, { mode: "keyword", namespace: ns, limit: 10 }));
       const w = rng(9);
       const write = await timed(o.writes, () => store.create({ namespace: ns, title: words(w, 5), body: body(w) }));
-      return { sessionStart: timing(session), openAndSessionStart: timing(open), search: timing(search), write: timing(write), buildMs, ...dbFacts(store, db) };
+      return { sessionStart: timing(session), openAndSessionStart: timing(open), search: timing(search), write: timing(write), buildMs, ...dbFacts(store, db), ...(bodyIndex ? { bodyIndex } : {}) };
     } finally {
       store.close();
     }
@@ -186,6 +199,8 @@ export function renderScale(r: ScaleReport): string {
   row("write (create, edges on)", "write");
   lines.push(`build: plain ${(r.plain.buildMs / 1000).toFixed(1)} s, encrypted ${(r.encrypted.buildMs / 1000).toFixed(1)} s; ` +
     `DB ${r.plain.dbMb} MB / ${r.encrypted.dbMb} MB`);
+  const bi = r.encrypted.bodyIndex;
+  if (bi) lines.push(`encrypted body search index (in memory, C-06): ${bi.notes} notes in ${(bi.buildMs / 1000).toFixed(2)} s, RSS +${bi.rssMb} MB`);
   if (r.gate) {
     lines.push(`release gate: ${r.notes}-note encrypted session start p50 ${r.gate.encryptedSessionStartP50.toFixed(1)} ms ` +
       `< ${r.gate.thresholdMs} ms: ${r.gate.pass ? "PASS" : "FAIL"}`);

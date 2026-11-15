@@ -107,9 +107,19 @@ upgrading from 1.3.x takes one step (docs/upgrading.md).
 - `monomem bench --scale 10k`: session start, search and write p50/p95 on a synthetic store in a temp folder, plain and
   encrypted, with the 50 ms encrypted session-start gate (exit 1 when it fails). On the development PC at 10k notes:
   encrypted session start 12-18 ms p50, plain 9-10 ms (docs/BENCHMARK.md).
-- `monomem bench --longmemeval | --locomo --encrypted` runs the same retrieval benchmark on encrypted stores. Measured: keyword
-  recall falls from 96.8 to 0.0 R@5 on LongMemEval-S (titles there are session ids, and keyword search covers only title and
-  tags while encryption is on). The in-memory body index that would fix this is written up in docs/BENCHMARK.md, not built.
+- `monomem bench --longmemeval | --locomo --encrypted` runs the same retrieval benchmark on encrypted stores.
+- **Keyword search finds words in encrypted note bodies (C-06).** With encryption on, the on-disk search index can only hold
+  titles and tags, so before this change keyword recall on LongMemEval-S fell from 96.8 to 0.0 R@5. Each Monomem process that
+  searches now keeps a second index of every note's decrypted body **in memory only** (an attached in-memory SQLite database
+  on its own connection; nothing is written to the database, the WAL or a temp file, and a test checks the files). It covers
+  every note, so ranking is the plain store's: encrypted recall is now identical to plain on LongMemEval-S (96.8 / 84.0 R@5 /
+  Rall@5) and LoCoMo-10 turn and session. Kept current for this process's writes by connection-only triggers, and for other
+  processes' writes from the change log. The REST and MCP servers build it just after start-up (0.6-0.8 s and about 30 MB
+  of memory per 10,000 notes, measured); the hooks never build it, so session start stays fast and on an encrypted store the
+  session-start context is still matched on titles and tags. Not built above 100,000 notes. `MONOMEM_BODY_INDEX=off` turns it
+  off. **Security change:** while a server runs, every body's words are in its memory, which the system can page to swap or a
+  hibernation file or write into a crash dump; use whole-disk encryption too (SECURITY.md, docs/encryption-retention.md,
+  `encrypt status --surfaces` lists it). A search that finds nothing says bodies were not searched only when that is true.
 - **133 deterministic scenarios** (was 131): A 34, B 31, C 27, D 19, E 22. Obsolete-fact scenarios A33 and A34 in `monomem bench`. With the replace step the old value never reaches the agent (A34
   passes). Without it, search ranks the outdated note above its update (A33): recorded as the open known gap
   `GAP-OBSOLETE-UNREPLACED`, not hidden. MemoryAgentBench was not run (docs/BENCHMARK.md says why).

@@ -75,6 +75,12 @@ describe("C-04 encrypt status --surfaces", () => {
       assert.deepEqual([spool.sealed, spool.plain, spool.encrypted], [1, 1, "partly"]);
       assert.equal(by(rows, "note titles").encrypted, "no");
       assert.equal(by(rows, "search index").encrypted, "no");
+      assert.match(by(rows, "search index").detail, /sealed bodies are not indexed on disk/);
+      // C-06: the body search index lives in memory only; the row says so, and names the swap / dump caveat and the switch.
+      const mem = by(rows, "body search index");
+      assert.equal(mem.encrypted, "not on disk");
+      assert.match(mem.detail, /swap/);
+      assert.match(mem.detail, /MONOMEM_BODY_INDEX=off/);
     }));
 
   test("the CLI prints every surface; each one is named in docs/encryption-retention.md", () =>

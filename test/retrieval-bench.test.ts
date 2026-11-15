@@ -100,7 +100,7 @@ test("LoCoMo parsing: evidence split, session mapping, dates", () => {
   assert.equal(locomoDate("12:05 am on 1 June, 2023"), "2023-06-01T00:05:00.000Z");
 });
 
-test("encrypted retrieval run (C-06): same corpus with a key file; body-only answers are lost (titles are session ids)", async () => {
+test("encrypted retrieval run (C-06): same corpus with a key file; recall equals the plain run (bodies searched in memory)", async () => {
   const { mkdtempSync, writeFileSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
@@ -116,7 +116,9 @@ test("encrypted retrieval run (C-06): same corpus with a key file; body-only ans
   assert.equal(plain.encrypted, false);
   assert.equal(enc.encrypted, true);
   assert.equal(plain.keyword.metrics.all.r5, 1);
-  // Measured gap, not a goal: keyword search covers title + tags only while encryption is on (SECURITY.md). If bodies become
-  // searchable when encrypted, flip this to 1.
-  assert.equal(enc.keyword.metrics.all.r5, 0);
+  // 1.5.0 C-06: sealed bodies are searched through the in-memory body index, which has the plain store's statistics, so the
+  // encrypted run equals the plain run exactly (it was 0 before: titles here are session ids).
+  assert.equal(enc.keyword.metrics.all.r5, 1);
+  assert.deepEqual(enc.keyword.metrics, plain.keyword.metrics);
+  assert.deepEqual(enc.relevant.metrics, plain.relevant.metrics);
 });

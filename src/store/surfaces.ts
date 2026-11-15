@@ -11,7 +11,7 @@ import { SPOOL_FILE } from "../capture.js";
 export interface EncryptionSurface {
   surface: string;
   /** yes / partly / no (counts say), nothing stored, no note text (by design), not checked (outside this database). */
-  encrypted: "yes" | "partly" | "no" | "nothing stored" | "no note text" | "not checked";
+  encrypted: "yes" | "partly" | "no" | "nothing stored" | "no note text" | "not checked" | "not on disk";
   sealed?: number;
   plain?: number;
   detail: string;
@@ -83,7 +83,14 @@ export function encryptionSurfaces(s: Store, o: { dataDir: string; dbPath: strin
     counted("captured titles and tags", capturedFixed, capturedWords, key ? "sealed here = a fixed title and no word tags; older captured notes keep their words" : "no key: captured titles and tags use the words of the session"),
     never("captured file paths and folders", n("SELECT COUNT(*) AS c FROM note_files") + n("SELECT COUNT(*) AS c FROM sessions WHERE cwd <> ''"), "never encrypted: a secret in a file or folder name stays readable"),
     never("code anchors", n("SELECT COUNT(*) AS c FROM code_anchors"), "files a note was written about (state_write files): repository path, file path and git ids, never encrypted"),
-    never("search index", notes, plainBodies ? `every title and tag, and the bodies of the ${plainBodies} plain notes` : "every title and tag; sealed bodies are not indexed"),
+    never("search index", notes, plainBodies ? `every title and tag, and the bodies of the ${plainBodies} plain notes; sealed bodies are not indexed on disk` : "every title and tag; sealed bodies are not indexed on disk"),
+    {
+      surface: "body search index",
+      encrypted: "not on disk",
+      detail: key
+        ? `held in memory by each Monomem process that searches while encryption is on (servers build it at start, the hooks never do): every body's words, decrypted. Monomem never writes it to disk, but the OS can page it to swap or a hibernation file and a crash dump can contain it; MONOMEM_BODY_INDEX=off turns it off (in this process: ${s.bodyIndexInfo().state})`
+        : "not used without a key: search reads the on-disk index (swap and crash-dump caveat applies only with a key; MONOMEM_BODY_INDEX=off turns it off)",
+    },
     never("change feed log", n("SELECT COUNT(*) AS c FROM change_log"), "titles of recent changes, kept for the change feed"),
     never("embeddings", n("SELECT COUNT(*) AS c FROM note_vectors"), "vectors are never encrypted; with embeddings on, the decrypted body is sent to your embeddings endpoint"),
     counted("access log", accessSealed, n("SELECT COUNT(*) AS c FROM access_log WHERE query <> ''") - accessSealed, "the redacted 120-character preview of what was asked"),

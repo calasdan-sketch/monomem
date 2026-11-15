@@ -22,4 +22,10 @@ test("runScale reports plain and encrypted timings, seals bodies, and only gates
   assert.equal(r.plain.sealedBodies, 0);
   assert.ok(r.encrypted.sealedBodies >= 120, `sealed: ${r.encrypted.sealedBodies}`);
   assert.equal(r.gate, null);
+  // C-06: the encrypted run reports the in-memory body index (built once, by the search store; the hook store never builds it).
+  assert.ok(r.encrypted.bodyIndex, "encrypted run reports the body index");
+  assert.ok(r.encrypted.bodyIndex.notes >= 120, `indexed: ${r.encrypted.bodyIndex.notes}`);
+  assert.ok(r.encrypted.bodyIndex.buildMs > 0);
+  assert.equal(typeof r.encrypted.bodyIndex.rssMb, "number");
+  assert.equal(r.plain.bodyIndex, undefined);
 });

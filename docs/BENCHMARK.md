@@ -292,7 +292,7 @@ on the full store. Three back-to-back runs, ms p50 / p95 (the third run overlapp
 |---|---|---|
 | Session start (`injectContext`) | 8.8/10.1, 8.7/9.9, 9.8/15.6 | **12.5/15.6, 12.3/17.1, 18.2/42.0** |
 | Open store + session start | 23.2/32.2, 23.2/34.8, 24.6/32.8 | 28.6/54.7, 24.9/29.4, 39.3/115.7 |
-| Keyword search, 2 words | 6.9/10.4, 6.0/8.7, 6.8/10.4 | 3.3/4.9, 2.9/4.6, 5.7/14.2 (title + tags only, see below) |
+| Keyword search, 2 words | 6.9/10.4, 6.0/8.7, 6.8/10.4 | 3.3/4.9, 2.9/4.6, 5.7/14.2 (title + tags only: measured before C-06, see below) |
 | Write (`create`, edges on) | 5.7/10.7, 5.9/11.7, 6.6/12.3 | 6.0/9.7, 5.7/9.9, 9.0/31.9 |
 | Build 10k (one transaction per 1,000, no edges) | 10.8 s, 10.4 s, 10.6 s | 14.0 s, 12.9 s, 25.1 s |
 
@@ -300,39 +300,39 @@ on the full store. Three back-to-back runs, ms p50 / p95 (the third run overlapp
 time 24.9-39.3 ms, also under 50). Limits of this measurement: the bulk build skips similarity edges, so the database is 31 MB
 instead of the about 57-60 MB the performance seat's fully-edged 10k store had (edges are 43 % of that file); session start does
 not read edges, but a smaller file caches better. The time for a whole `monomem recall` hook process (Node start-up included,
-657-760 ms in the performance seat's before table) was not re-measured. Encrypted search is faster only because it searches less
-text (next section). 1,000 notes for comparison: session start 5.3 / 8.8 ms plain / encrypted p50.
+657-760 ms in the performance seat's before table) was not re-measured. Encrypted search was faster only because it searched less
+text (before C-06; next section has the re-run). 1,000 notes for comparison: session start 5.3 / 8.8 ms plain / encrypted p50.
 
 **Recall with encryption on vs off (`--encrypted`), new in this round.** The same commands with `--encrypted`, which puts a key
-file beside every throwaway database before the notes are written; same corpus, same questions, keyword-only:
+file beside every throwaway database before the notes are written; same corpus, same questions, keyword-only. Re-run after the
+in-memory body index (C-06, below) was built, 2026-11-15:
 
-| Run | plain R@5 / Rall@5 / R@10 / MRR | encrypted R@5 / Rall@5 / R@10 / MRR | encrypted search p50 |
+| Run | plain R@5 / Rall@5 / R@10 / MRR | encrypted R@5 / Rall@5 / R@10 / MRR | search p50 plain / encrypted |
 |---|---|---|---|
-| LongMemEval-S session (470), keyword | 96.8 / 84.0 / 98.3 / 91.0 | **0.0 / 0.0 / 0.0 / 0.0** | 0.7 ms |
-| LongMemEval-S session (470), relevant | 96.8 / 84.0 / 98.3 / 90.9 | **0.0 / 0.0 / 0.0 / 0.0** | 0.2 ms |
-| LoCoMo-10 turn (1,982), keyword | 57.8 / 49.8 / 65.2 / 46.6 | **0.1 / 0.1 / 0.1 / 0.1** | 0.3 ms |
-| LoCoMo-10 session (1,982), keyword | 90.4 / 81.5 / 95.5 / 78.6 | **0.0 / 0.0 / 0.0 / 0.0** | 0.3 ms |
+| LongMemEval-S session (470), keyword | 96.8 / 84.0 / 98.3 / 91.0 | **96.8 / 84.0 / 98.3 / 91.0** | 3.8 / 18.1 ms (each haystack has one question, so every encrypted search includes the first-search build) |
+| LongMemEval-S session (470), relevant | 96.8 / 84.0 / 98.3 / 90.9 | **96.8 / 84.0 / 98.3 / 90.9** | |
+| LoCoMo-10 turn (1,982), keyword | 57.8 / 49.8 / 65.2 / 46.6 | **57.8 / 49.8 / 65.2 / 46.6** | 1.7 / 4.0 ms |
+| LoCoMo-10 session (1,982), keyword | 90.4 / 81.5 / 95.5 / 78.6 | **90.4 / 81.5 / 95.5 / 78.6** | 1.5 / 3.3 ms |
 
-(`relevant` matched `keyword` to within 0.1 in every encrypted run.) **Recall drops to about zero.** The cause is the documented
-limit, not a bug: while encryption is on, the body is stored only as ciphertext (`body_enc`), so the full-text index has the
-title and tags but no body words, and keyword search covers title + tags only (SECURITY.md, docs/encryption-retention.md). In
-these datasets every title is a session or dialog id and there are no tags, so nothing a question says can match. This is the
-worst case: a real store whose titles carry words still finds notes by those words, but any fact that lives only in a body is
-invisible to keyword search when encrypted. Indexing was faster encrypted (LongMemEval-S 24.1 s total vs 47.0 s plain,
-because there is less to index; not a speed claim). Hybrid search (embeddings are still computed from the decrypted text and
-stored unencrypted) would likely recover much of this, but could not be measured: the local Ollama on 127.0.0.1:11434 has
-`nomic-embed-text` installed but did not answer an embedding request within 120 s during this round (it was not restarted,
-since other work was using it).
+Every metric (keyword and relevant, all of R@5, Rall@5, R@10, Rall@10, nDCG@10, MRR, per question type) is **byte-identical**
+between the plain and the encrypted run: the index covers every note with its decrypted body, so the bm25 statistics are the
+plain store's. Before C-06 the encrypted column read 0.0 / 0.0 / 0.0 / 0.0 (0.1 on LoCoMo turn): the on-disk index holds titles
+and tags only, and in these datasets every title is a session id. What this does **not** cover: the session-start hook never
+builds the index (time budget), so on an encrypted store the context it adds at session start is still matched on titles,
+tags, files and recency, not body words.
 
-**Proposal, not built (C-06).** Keep a body index in memory only while an encrypted store is open: a `TEMP` FTS5 table (with
-`PRAGMA temp_store = MEMORY` so SQLite never spills it to a temp file) filled from the decrypted bodies at open, kept in step by
-the write paths (create, update, edit, archive, restore, delete, supersede, import, purge), and queried by the two
-`notes_fts MATCH` sites in store.ts in place of the on-disk body column. Why it was not built now: it is not small. The on-disk
-index is external-content and kept in sync by SQL triggers, which cannot decrypt, so every write path needs an app-level
-hook; the open cost is one decryption per note (to be measured at 100k); ranking must give the same bm25 weights across two
-tables; and it puts decrypted text in process memory for the life of the process (no worse than a decrypted read, but a
-security-review item). Until then the honest statement stays: encryption costs keyword recall on body text, and the size of
-that cost depends on how much of what you look for is in titles and tags.
+**C-06: the in-memory body index, built.** While a key is present, each Monomem process that searches attaches a private
+`:memory:` database to its own connection and fills a contentless FTS5 table (same columns, tokenizer and prefix index as
+`notes_fts`) with every note's title, decrypted body and tags. The two `notes_fts MATCH` queries read it instead; every
+visibility filter stays on the `notes` join. TEMP triggers keep it current for this connection's writes (a decrypt that fails
+indexes "" and never aborts the write); other processes' commits are noticed through `PRAGMA data_version` and replayed from
+`change_log`, with a full rebuild when the log was trimmed past the last point seen. Servers build it on start-up; the hooks
+never do; above 100,000 notes it is not built. Measured with `monomem bench --scale 10k` (synthetic made-up words, a worse case
+for index size than real text): build 0.81 s and 0.58 s in two runs, process RSS +31.5 MB and +29.5 MB; session start (hook, no index) 15.3 and 12.4 ms p50 encrypted (10.2 and 10.7 plain),
+gate PASS; keyword search on the server store 10.7 and 7.7 ms p50 encrypted vs 9.0 and 8.1 plain; a write 7.8 and 5.9 ms p50 encrypted vs 7.2 and 7.6 plain (one extra decrypt
+and FTS insert). The design's scratch prototype measured 7.4 s and about 240 MB at 100,000 notes; not re-measured here. Security:
+nothing new on disk, but the words are in RAM for the life of the process and can reach swap, hibernation and crash-dump files
+(docs/encryption-retention.md).
 
 **Obsolete-fact test (C-07), new in this round.** arXiv 2610.36308 reports that an outdated statement in the retrieved context
 drops answer accuracy from 100 % to 44.6 %. Two provenance scenarios measure it here, in the stale suite: A33 writes a fact and a

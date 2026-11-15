@@ -122,7 +122,7 @@ export async function captureHook(event: HookEvent, payload: Record<string, unkn
   let store: InstanceType<typeof Store> | null = null;
   try {
     if (!existsSync(dbPath)) throw new Error("no database yet");
-    store = new Store(dbPath, { noMigrate: true, busyTimeoutMs: HOOK_BUSY_MS });
+    store = new Store(dbPath, { noMigrate: true, busyTimeoutMs: HOOK_BUSY_MS, bodyIndex: "off" });
     const { newSession } = recordEvent(store, ev, namespace);
     const { distillSession, distillStaleSessions } = await import("./extract.js");
     if (newSession || event === "session-start") {
@@ -188,7 +188,7 @@ async function newNotesHook(payload: Record<string, unknown>, env: NodeJS.Proces
     const { actorStore, stdioWriter } = await import("./actor.js");
     // The session's own writer is only known when the hook's environment names the app (MONOMEM_CLIENT, as the MCP entry does).
     const self = env.MONOMEM_CLIENT?.trim() ? stdioWriter(env).writer : undefined;
-    const store = new Store(dbPath, { noMigrate: true, busyTimeoutMs: HOOK_BUSY_MS });
+    const store = new Store(dbPath, { noMigrate: true, busyTimeoutMs: HOOK_BUSY_MS, bodyIndex: "off" });
     try {
       const run = (): string => newNotesSince(store, sid, { ...(res.kind === "resolved" ? { namespace: res.namespace } : {}), ...(self ? { notWrittenBy: self } : {}) });
       const text = cap ? actorStore.run({ label: "", maxSensitivity: cap, canDeclassify: false }, run) : run();
@@ -226,7 +226,7 @@ export async function runHook(eventArg: string, stdinText: string, opts: HookOpt
       if (typeof sid !== "string" || !sid || !existsSync(dbPath)) return "";
       const { Store } = await import("./store.js");
       const { llmSummarize } = await import("./llm.js");
-      const store = new Store(dbPath, { noMigrate: true });
+      const store = new Store(dbPath, { noMigrate: true, bodyIndex: "off" });
       try {
         await llmSummarize(store, sid, opts.env ?? process.env);
       } finally {

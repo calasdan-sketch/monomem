@@ -1559,6 +1559,7 @@ async function relevant(): Promise<void> {
     const { annotateStaleness } = await import("./staleness.js");
     const { noteFlags } = await import("./taint.js");
     const { semanticNotice, runSearch } = await import("./search-service.js");
+    const { BODY_INDEX_MAX_NOTES } = await import("./store/body-index.js");
     if (modeRaw !== undefined && !["keyword", "semantic", "hybrid"].includes(modeRaw)) {
       console.error("--mode must be keyword, semantic or hybrid");
       process.exit(1);
@@ -1576,10 +1577,13 @@ async function relevant(): Promise<void> {
       const n = (await search({ includeDistrusted: true })).filter((x) => x.distrusted).length;
       if (n > 0) console.log(`${n} matching note${n === 1 ? "" : "s"} hidden because ${n === 1 ? "its" : "their"} writer is distrusted. See who: monomem trust list. Show ${n === 1 ? "it" : "them"}: add --include-distrusted`);
     };
-    // With encryption on, keyword search sees titles and tags only: an empty result must not read as "nothing mentions it".
+    // Encrypted bodies are searched through the in-memory body index (C-06). When it is off or the store is above its size
+    // cap, search sees titles and tags only: an empty result must not read as "nothing mentions it".
     const sealedLine = (): void => {
+      const idx = store.bodyIndexInfo().state;
+      if (idx === "ready") return;
       const n = store.encryptedCount();
-      if (n > 0) console.log(`${n} note${n === 1 ? " has an encrypted body" : "s have encrypted bodies"}: their body text was not searched (titles and tags were).`);
+      if (n > 0) console.log(`${n} note${n === 1 ? " has an encrypted body" : "s have encrypted bodies"}: their body text was not searched (titles and tags were)${idx === "too large" ? `: the in-memory body index is not built above ${BODY_INDEX_MAX_NOTES.toLocaleString("en-US")} notes` : idx === "off" ? ": MONOMEM_BODY_INDEX=off" : ""}.`);
     };
     if (modeRaw && process.argv[2] === "search" && message.trim()) {
       // `search --mode` is the full search (the one that can use embeddings); `relevant` stays the keyword-extraction search.
@@ -3568,8 +3572,10 @@ async function encryptCmd(): Promise<void> {
       console.log(`plaintext bodies: ${plain}${enabled && plain > 0 ? "  (seal them: monomem encrypt enable)" : ""}`);
       if (enabled) {
         console.log(
-          "note: keyword search covers title+tags only for encrypted notes " +
-            "(bodies are not indexed as ciphertext)."
+          "note: the on-disk search index holds titles and tags only. Body search uses an index kept in memory by each Monomem " +
+            "process that searches (servers build it at start; the hooks never do, so session-start context is chosen by " +
+            "titles and tags). The system can page that memory to swap or a hibernation file: use whole-disk encryption too. " +
+            "MONOMEM_BODY_INDEX=off turns it off. Details: monomem encrypt status --surfaces"
         );
       }
     } finally {
@@ -3591,7 +3597,10 @@ async function encryptCmd(): Promise<void> {
       const n = store.encryptAll(key);
       console.log(`Enabled at-rest encryption. Encrypted ${n} note ${n === 1 ? "body" : "bodies"}.`);
       console.log(`Key file: ${crypto.keyPath(keyDir)} -- back it up; losing it loses the bodies.`);
-      console.log("Keyword search now covers title+tags only (bodies cannot be indexed as ciphertext).");
+      console.log(
+        "Body search keeps working from an index held in memory only (never on disk); the session-start hook searches titles and tags. " +
+          "That memory can reach swap or a hibernation file: use whole-disk encryption too (monomem encrypt status --surfaces)."
+      );
       const copies = Store.preMigrationBackups(DB_PATH);
       if (copies.length) {
         console.log(
@@ -3638,7 +3647,7 @@ async function encryptCmd(): Promise<void> {
   // Delete the key only after every body decrypted and the transaction committed.
   rmSync(aside, { force: true });
   console.log(`Disabled at-rest encryption. Decrypted ${decrypted} note ${decrypted === 1 ? "body" : "bodies"}.`);
-  console.log("Key file removed. Keyword search again covers full body text.");
+  console.log("Key file removed. Bodies are plain again and in the on-disk search index; no in-memory body index is kept.");
 }
 
 /** `monomem supersede ...` and `monomem history ...` (see supersede-cli.ts). */

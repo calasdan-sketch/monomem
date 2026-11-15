@@ -51,7 +51,7 @@ async function fileContext(payload: Record<string, unknown>, opts: HookOptions):
   const { normPath } = await import("./extract.js");
   const cap = recallCeilingFromEnv();
   if (cap === null) return ""; // MONOMEM_RECALL_MAX_SENSITIVITY is set to something that is not a label: say nothing
-  const store = new Store(dbPath, { noMigrate: true, busyTimeoutMs: BUSY_MS });
+  const store = new Store(dbPath, { noMigrate: true, busyTimeoutMs: BUSY_MS, bodyIndex: "off" });
   try {
     // note_files holds the path relative to the session folder when it is inside it, otherwise forward-slashed as given.
     const rel = normPath(file, cwd);

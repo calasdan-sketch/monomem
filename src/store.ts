@@ -36,6 +36,7 @@ import {
 import { isStale, stalenessConfig, annotateStaleness } from "./staleness.js";
 // At-rest encryption for note bodies. No module cycle: crypto.ts imports
 // only node: builtins, never store.ts.
+import { BodyIndex, type BodyIndexInfo } from "./store/body-index.js";
 import { encrypt, decryptIfEncrypted, isEncrypted, loadKey, keyPath, noteAad, captureAad } from "./crypto.js";
 import { currentActor, currentWriter, cleanWriter, currentCeiling, actorStore } from "./actor.js";
 import { redact } from "./redact.js";
@@ -1610,14 +1611,18 @@ export class Store {
   static readonly CACHE_SIZE_KIB = -65536;
   /** See the constructor: refuse instead of migrating. */
   private readonly noMigrate: boolean;
+  /** C-06: the in-memory index of decrypted bodies (store/body-index.ts). */
+  private readonly bodyIndex: BodyIndex;
 
   /**
    * `opts.noMigrate` (the capture hooks): never upgrade the file. A database at any other schema version than this build's
    * is refused with a SchemaMismatchError instead (the hook then spools the event). `opts.busyTimeoutMs` shortens the lock
    * wait for callers that would rather give up fast than block an agent.
    */
-  constructor(dbPath: string, opts: { noMigrate?: boolean; busyTimeoutMs?: number } = {}) {
+  constructor(dbPath: string, opts: { noMigrate?: boolean; busyTimeoutMs?: number; bodyIndex?: "lazy" | "off" } = {}) {
     this.dbPath = dbPath;
+    // C-06: hooks pass "off" (one prompt's life is too short to build it); MONOMEM_BODY_INDEX=off turns it off everywhere.
+    this.bodyIndex = new BodyIndex(this, opts.bodyIndex !== "off" && (process.env.MONOMEM_BODY_INDEX ?? "").trim().toLowerCase() !== "off");
     this.noMigrate = opts.noMigrate === true;
     this.busyTimeoutMs = Math.floor(opts.busyTimeoutMs ?? Store.BUSY_TIMEOUT_MS);
     if (dbPath !== ":memory:") {
@@ -5475,16 +5480,18 @@ export class Store {
     const matchQuery = buildMatchQuery(query, opts.anyTerm);
     if (!matchQuery) return []; // query was all punctuation/stopwords
     const range = this.rangeFor(opts, opts.namespace ? [opts.namespace] : undefined);
+    // C-06: the same two queries; only the table differs (the in-memory body index while encryption is on).
+    const fts = this.bodyIndex.table();
 
     try {
       let rows: Array<NoteRow & { score: number }>;
       if (opts.namespace) {
         rows = this.db
           .prepare(
-            `SELECT notes.*, -bm25(notes_fts, ${FTS_WEIGHTS}) AS score FROM notes_fts
-             JOIN notes ON notes.id = notes_fts.rowid
-             WHERE notes_fts MATCH ? AND notes.namespace = ? AND ${liveSql(opts.includeSuperseded)}${range.sql}
-             ORDER BY bm25(notes_fts, ${FTS_WEIGHTS}), notes.updated_at DESC, notes.id DESC
+            `SELECT notes.*, -bm25(${fts}, ${FTS_WEIGHTS}) AS score FROM ${fts}
+             JOIN notes ON notes.id = ${fts}.rowid
+             WHERE ${fts} MATCH ? AND notes.namespace = ? AND ${liveSql(opts.includeSuperseded)}${range.sql}
+             ORDER BY bm25(${fts}, ${FTS_WEIGHTS}), notes.updated_at DESC, notes.id DESC
              LIMIT ?`
           )
           .all(matchQuery, opts.namespace, ...range.params, limit) as unknown as Array<
@@ -5493,10 +5500,10 @@ export class Store {
       } else {
         rows = this.db
           .prepare(
-            `SELECT notes.*, -bm25(notes_fts, ${FTS_WEIGHTS}) AS score FROM notes_fts
-             JOIN notes ON notes.id = notes_fts.rowid
-             WHERE notes_fts MATCH ? AND ${liveSql(opts.includeSuperseded)}${range.sql}
-             ORDER BY bm25(notes_fts, ${FTS_WEIGHTS}), notes.updated_at DESC, notes.id DESC
+            `SELECT notes.*, -bm25(${fts}, ${FTS_WEIGHTS}) AS score FROM ${fts}
+             JOIN notes ON notes.id = ${fts}.rowid
+             WHERE ${fts} MATCH ? AND ${liveSql(opts.includeSuperseded)}${range.sql}
+             ORDER BY bm25(${fts}, ${FTS_WEIGHTS}), notes.updated_at DESC, notes.id DESC
              LIMIT ?`
           )
           .all(matchQuery, ...range.params, limit) as unknown as Array<
@@ -5511,6 +5518,20 @@ export class Store {
       // SQLITE_NOTADB) is rethrown, so it is reported instead of looking like "no notes".
       if (/fts5|syntax error|unterminated|no such column/i.test(e instanceof Error ? e.message : String(e))) return [];
       throw e;
+    }
+  }
+
+  /** C-06: the in-memory body index's state in this process (encrypt status, the CLI search notice, tests). */
+  bodyIndexInfo(): BodyIndexInfo {
+    return this.bodyIndex.info();
+  }
+
+  /** C-06: build the body index now (servers call this just after start-up, so the first agent search does not wait). Never throws. */
+  warmBodyIndex(): void {
+    try {
+      this.bodyIndex.table();
+    } catch {
+      /* table() falls back by itself; a closed store has nothing to warm */
     }
   }
 

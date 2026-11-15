@@ -178,6 +178,7 @@ async function runStandalone(): Promise<void> {
   const { openStoreOrExit, SERVER_BUSY_TIMEOUT_MS } = await import("./db-problem.js");
   const store = openStoreOrExit(DB_PATH, { busyTimeoutMs: SERVER_BUSY_TIMEOUT_MS });
   warnUnlabelledExposure(store, tokens);
+  setImmediate(() => store.warmBodyIndex()); // C-06: build the encrypted-body search index now, not on the first agent search
   startTokenReload(tokens);
   // Namespace resolution happens ONCE here, at startup, from the process cwd.
   const nsOpts = resolveStartupNamespace(process.cwd());

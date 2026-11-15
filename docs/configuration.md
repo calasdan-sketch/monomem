@@ -107,6 +107,7 @@ All environment variables are optional. This table lists **every** `MONOMEM_*` v
 | `MONOMEM_LLM_MODEL` | unset | The model name sent to `MONOMEM_LLM_URL` (e.g. `qwen2.5:7b`) |
 | `MONOMEM_LLM_TIMEOUT_MS` | `30000` | Upper bound on the one summary call (1000 - 300000) |
 | `MONOMEM_LLM_ALLOW_REMOTE` | unset | `1` = allow an `MONOMEM_LLM_URL` that is not this machine. Session text then leaves the PC; leave unset unless you mean it |
+| `MONOMEM_BODY_INDEX` | on | `off` = never build the in-memory index that lets keyword search find words in encrypted note bodies: search then covers titles and tags only on an encrypted store, and no decrypted words are held in RAM. Read by each process when it opens the database. The hooks never build it either way. See [encryption-retention.md](./encryption-retention.md) |
 | `MONOMEM_RECALL_TOKENS` | `1500` | Token budget (about 4 characters each) of the context the session-start hook injects |
 | `MONOMEM_PROFILE_TOKENS` | `300` | Share of that budget (at most half) for the "What I know about this project" block at the top: decisions, conventions (notes tagged `convention`), key files, last session, open-task count, built from stored notes with no model |
 | `MONOMEM_RECALL_MAX_SENSITIVITY` | unset | `public`, `internal` or `private`: the session-start hook (and the file-context hook) leave out every note labelled above it. Anything else injects nothing. See [sensitivity-labels.md](./sensitivity-labels.md) |
