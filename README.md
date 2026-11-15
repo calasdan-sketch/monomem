@@ -551,6 +551,7 @@ Limits no scenario can show (what the benchmark cannot see) are listed next, und
 - The writer name of a local app comes from its config file: it tells your apps apart, but it is not proof.
 - Notes are marked as from outside content only when Monomem sees the outside read. `Read`, `Bash` (`curl`) and apps
   without the hooks are not seen, and a confirm's stated source is a claim Monomem does not check.
+- With encryption on (`monomem encrypt enable`), keyword search sees titles and tags only: words that are only in a note's body are not found. Measured on LongMemEval-S, recall at 5 fell from 96.8 to 0.0, because every title there is a session id ([BENCHMARK.md](https://github.com/calasdan-sketch/monomem/blob/main/docs/BENCHMARK.md)).
 - Keyword search finds words, not meaning. Semantic search needs a local embedding service (Ollama); without one you get keyword results.
 - Upgrading the database is one way (older versions refuse a newer file). A backup copy is made first and `monomem restore` goes back.
 - Needs Node 22.16 or newer, because it uses Node's built-in SQLite (Node 20 does not have it; checked). Docker is the way around that.
@@ -576,7 +577,7 @@ what, with a redacted query preview and never note text) and a per-writer flood 
 write-time linter above, and an untrusted-data banner on every MCP read (REST responses do not
 carry it) so agents treat note content as data, not instructions. Optional AES-256-GCM
 encryption at rest for note bodies only (`monomem encrypt enable`; titles,
-tags, timestamps and embeddings stay readable), per-note
+tags, timestamps and embeddings stay readable; keyword search then sees titles and tags only, so words that are only in a body are not found), per-note
 TTL with reversible soft-archive, and `?explain=1` so a caller can see why
 a memory was retrieved. **Per-token namespace permissions** pin a token to
 one namespace so a single shared bridge stays isolated per agent — a pinned

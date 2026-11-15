@@ -54,7 +54,7 @@ export async function safetyChecks(i: SafetyInput): Promise<Check[]> {
   const enc = existsSync(keyPath(dirname(i.dbPath)));
   out.push(enc
     ? { name: "Encryption at rest", status: "Pass", detail: "Note bodies are encrypted in the database file." }
-    : { name: "Encryption at rest", status: "Warn", detail: "Note bodies are stored as plain text in the database file (anyone who can read the file can read them).", fix: "monomem encrypt enable" });
+    : { name: "Encryption at rest", status: "Warn", detail: "Note bodies are stored as plain text in the database file (anyone who can read the file can read them).", fix: "monomem encrypt enable (keyword search then covers titles and tags only)" });
 
   const age = backupAgeDays(i.dataDir);
   out.push(age !== null && age <= 7

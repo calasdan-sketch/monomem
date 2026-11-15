@@ -55,7 +55,7 @@ external-content FTS5 index over `notes(title, body, tags)`, maintained by
 SQL triggers. You cannot index encrypted text. So when encryption is on,
 the plaintext `body` column is left **empty**, ciphertext lives in a
 separate `body_enc` column, and **keyword search covers title + tags only**.
-Search still works; it just searches less. This is the honest cost of
+Search still works, but it searches much less: words that are only in a body are not found. On LongMemEval-S, where every title is a session id, keyword recall at 5 fell from 96.8 (plain) to 0.0 (encrypted); see [BENCHMARK.md](./BENCHMARK.md). Give notes titles and tags that say what they are about. This is the honest cost of
 at-rest encryption with a plaintext index — any tool claiming both full-text
 body search *and* encrypted-at-rest bodies without a native SQLite extension
 is quietly storing your body text in plaintext somewhere.
