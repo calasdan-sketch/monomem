@@ -1,7 +1,7 @@
 // `monomem service install|status|uninstall` (1.5.0, U-16): keep the server running in the background after you sign in.
 // Explicit only: setup never calls it. Each OS gets its native per-user mechanism, launching the absolute node binary with
 // the absolute cli.js (nothing depends on PATH, a .ps1/.cmd shim or nvm's shell setup):
-//   Windows  a Task Scheduler task at logon (schtasks /XML), restarted if it stops
+//   Windows  a Task Scheduler task at logon (schtasks /XML), restarted if it stops; cmd.exe (ComSpec) sets the settings, then runs node.exe
 //   macOS    ~/Library/LaunchAgents/io.monomem.server.plist (RunAtLoad + KeepAlive)
 //   Linux    ~/.config/systemd/user/monomem.service (systemctl --user, Restart=always)
 // The server runs `start --log`, so what it prints goes to <data>/server.log.
@@ -52,6 +52,17 @@ export function servicePlan(e: ServiceEnv): ServicePlan {
   const args = [e.cli, "start", "--log"];
   if (e.platform === "win32") {
     const path = join(e.dataDir, "monomem-task.xml");
+    // A task action cannot hold settings, so cmd.exe sets them and then runs node.exe (release-gate S1: without this the
+    // task used the default data folder). `set "K=V"` keeps & and spaces literal; % expands even in quotes, so such a
+    // value is left out and the note says to save it with setx. /v:off: ! stays literal too.
+    const sets: string[] = [];
+    const skipped: string[] = [];
+    for (const [k, v] of carried(e)) {
+      if (/[%"]/.test(v)) skipped.push(k);
+      else sets.push(`set "${k}=${v}"&& `);
+    }
+    const quoted = (a: string): string => (/\s/.test(a) ? `"${a}"` : a);
+    const cmdArgs = `/d /v:off /c ${sets.join("")}"${e.node}" ${args.map(quoted).join(" ")}`;
     const text = [
       '<?xml version="1.0" encoding="UTF-16"?>',
       '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">',
@@ -67,7 +78,7 @@ export function servicePlan(e: ServiceEnv): ServicePlan {
       "    <RestartOnFailure><Interval>PT1M</Interval><Count>999</Count></RestartOnFailure>",
       "  </Settings>",
       '  <Actions Context="Author">',
-      `    <Exec><Command>${xml(e.node)}</Command><Arguments>${xml(args.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(" "))}</Arguments><WorkingDirectory>${xml(e.dataDir)}</WorkingDirectory></Exec>`,
+      `    <Exec><Command>${xml(e.env.ComSpec?.trim() || "C:\\Windows\\System32\\cmd.exe")}</Command><Arguments>${xml(cmdArgs)}</Arguments><WorkingDirectory>${xml(e.dataDir)}</WorkingDirectory></Exec>`,
       "  </Actions>",
       "</Task>",
       "",
@@ -79,7 +90,8 @@ export function servicePlan(e: ServiceEnv): ServicePlan {
       uninstall: [["schtasks", "/End", "/TN", TASK_NAME], ["schtasks", "/Delete", "/TN", TASK_NAME, "/F"]],
       notes: [
         "It starts when you sign in to Windows, in a console window. Minimise that window: closing it stops Monomem (Task Scheduler starts it again within a minute).",
-        "A Windows task cannot hold settings: it uses the MONOMEM_* variables saved for your user (setx), not ones set only in this terminal.",
+        `It uses the data folder ${e.dataDir} and the MONOMEM_* settings set in this terminal now; a key never goes into the task.`,
+        ...skipped.map((k) => `${k} contains % or a quote, which the task cannot carry: save it for your user instead (setx ${k} "<value>").`),
       ],
     };
   }

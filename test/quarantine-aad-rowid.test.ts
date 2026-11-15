@@ -71,4 +71,33 @@ describe("S-05 quarantine AAD bound to the row id", () => {
       rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
   });
+
+  test("final-security SF3: one held row that does not open is marked in the list, refused plainly, and can be rejected", () => {
+    const dir = mkdtempSync(join(tmpdir(), "om-s05b-"));
+    let s: Store | undefined;
+    try {
+      ensureKey(dir);
+      s = new Store(join(dir, "state.db"));
+      s.setApproveFirst("ops", true);
+      setProcessWriter("stdio:a");
+      const a = hold(() => s!.create({ namespace: "ops", title: "first", body: "AAA" }));
+      const b = hold(() => s!.create({ namespace: "ops", title: "second", body: "BBB" }));
+      setProcessWriter("");
+      const body = (id: number) => (raw(s!).prepare("SELECT body FROM quarantine WHERE id = ?").get(id) as { body: string }).body;
+      raw(s).prepare("UPDATE quarantine SET body = ? WHERE id = ?").run(body(b), a); // a now holds b's sealed body
+      const list = s.listQuarantine();
+      assert.equal(list.length, 2, "the whole queue still lists");
+      assert.equal(list.find((q) => q.id === b)!.body, "BBB");
+      const bad = list.find((q) => q.id === a)!;
+      assert.match(String(bad.title), /cannot be opened/);
+      assert.equal(bad.body, null, "no sealed text and no half-opened row");
+      assert.throws(() => s!.getQuarantine(a), (e: unknown) => /cannot be opened/.test((e as Error).message) && !/Unsupported state/.test((e as Error).message));
+      assert.throws(() => s!.approveQuarantine(a), /cannot be opened/);
+      assert.equal(s.rejectQuarantine(a), true, "a damaged held write can still be thrown away");
+      assert.deepEqual(s.listQuarantine().map((q) => q.id), [b]);
+    } finally {
+      s?.close();
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
+  });
 });

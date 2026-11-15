@@ -4923,12 +4923,14 @@ export class Store {
     if (ns !== undefined) refuseAgentInApproveFirst(this, ns, "forgetting a note");
     this.refuseAgentOnPinned(id, "forgetting it");
     const iso = new Date().toISOString();
-    this.db
-      .prepare("UPDATE notes SET archived_at = ? WHERE id = ? AND archived_at IS NULL")
-      .run(iso, id);
-    // The embedding is a lossy copy of the text (and never encrypted): a forgotten note keeps none.
-    // A restore recomputes it on the REST path, or `monomem reindex` does; until then keyword search finds it.
-    this.db.prepare("DELETE FROM note_vectors WHERE note_id = ?").run(id);
+    this.writeTx(() => {
+      this.db
+        .prepare("UPDATE notes SET archived_at = ? WHERE id = ? AND archived_at IS NULL")
+        .run(iso, id);
+      // The embedding is a lossy copy of the text (and never encrypted): a forgotten note keeps none.
+      // A restore recomputes it on the REST path, or `monomem reindex` does; until then keyword search finds it.
+      this.db.prepare("DELETE FROM note_vectors WHERE note_id = ?").run(id);
+    });
     this.edgeIndexes.clear();
     this.announceChange();
     this.audit({ op: "archive", id, namespace: ns });
@@ -4952,13 +4954,15 @@ export class Store {
       throw new ValidationError(`note ${id} was replaced by ${this.idHidden(cur.superseded_by) ? "another note" : `note ${cur.superseded_by}`}; use "supersede undo" to bring it back (a plain restore would hide that it was replaced)`);
     }
     // A restored captured row counts as just read, or the next decay sweep would archive it again at once.
-    this.db
-      .prepare(
-        `UPDATE notes SET archived_at = NULL, expires_at = ?,
-                last_accessed = CASE WHEN kind IN ('observation', 'summary') THEN ? ELSE last_accessed END
-          WHERE id = ? AND archived_at IS NOT NULL`
-      )
-      .run(opts.forget_after === undefined ? null : retentionDeadline(opts.forget_after), new Date().toISOString(), id);
+    this.writeTx(() =>
+      this.db
+        .prepare(
+          `UPDATE notes SET archived_at = NULL, expires_at = ?,
+                  last_accessed = CASE WHEN kind IN ('observation', 'summary') THEN ? ELSE last_accessed END
+            WHERE id = ? AND archived_at IS NOT NULL`
+        )
+        .run(opts.forget_after === undefined ? null : retentionDeadline(opts.forget_after), new Date().toISOString(), id)
+    );
     this.edgeIndexes.clear(); // restored note rejoins the similarity index lazily
     this.announceChange();
     this.audit({ op: "restore", id, namespace: restoreNs });
@@ -5221,9 +5225,7 @@ export class Store {
       .get(id) as { namespace: string; sensitivity: string } | undefined;
     if (!row || this.hiddenByCeiling(row)) return false; // a note above the caller's ceiling is "not found", never deleted
     this.refuseAgentOnPinned(id, "deleting it");
-    const result = this.db
-      .prepare("DELETE FROM notes WHERE id = ? AND (? IS NULL OR rev = ?)")
-      .run(id, rev, rev);
+    const result = this.writeTx(() => this.db.prepare("DELETE FROM notes WHERE id = ? AND (? IS NULL OR rev = ?)").run(id, rev, rev));
     const ok = Number(result.changes) > 0;
     if (ok) {
       this.noteWritten(row.namespace, id, null);
@@ -5267,6 +5269,20 @@ export class Store {
     if (uv > SCHEMA_VERSION) {
       this.db.exec("ROLLBACK");
       throw new SchemaNewerError(uv);
+    }
+  }
+
+  /** One write through beginWrite (S-04: refused under a newer schema); inside a caller's transaction it just runs. */
+  private writeTx<T>(fn: () => T): T {
+    if (this.db.isTransaction) return fn();
+    this.beginWrite();
+    try {
+      const out = fn();
+      this.commitTx();
+      return out;
+    } catch (e) {
+      this.rollbackTx();
+      throw e;
     }
   }
 

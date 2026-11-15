@@ -21,6 +21,12 @@ describe("A3 damaged trust settings fail closed", () => {
     assert.throws(() => s.create({ namespace: "work", title: "agent write" }), QuarantinedError);
     assert.throws(() => s.create({ namespace: "other", title: "agent write" }), QuarantinedError, "unknown list: every namespace is approve-first");
     assert.ok(s.damagedTrustSettings().includes("approve_first"));
+    // release-gate S5: what status/doctor/GET /approve-first read says the same as enforcement: on everywhere.
+    assert.equal(s.approveFirstAll(), true, "a damaged list reads as approve-first on every namespace");
+    setProcessWriter("cli");
+    s.setApproveFirst("work", true); // setting it again repairs the list (doctor says so)
+    assert.equal(s.approveFirstAll(), false);
+    assert.deepEqual(s.approveFirstNamespaces(), ["work"]);
     s.close();
   });
 

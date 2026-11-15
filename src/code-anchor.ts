@@ -16,8 +16,8 @@ const GIT_TIMEOUT_MS = 2000;
 /** One anchor as stored: path relative to the repository root (forward slashes), its blob, the commit at write time. */
 export interface CodeAnchor { path: string; blob: string; commit: string; root: string }
 
-/** Test spy: how many `git ls-tree` calls were made (one per repository HEAD). */
-export const gitStats = { lsTree: 0 };
+/** Test spy: how many `git ls-tree` calls were made (one per repository HEAD), and `git rev-parse HEAD` fallbacks. */
+export const gitStats = { lsTree: 0, revParse: 0 };
 
 function git(cwd: string, args: string[], maxBuffer = 1 << 20): string | null {
   try {
@@ -133,16 +133,34 @@ export function headCommit(root: string): string | null {
 
 /** Per repository root: the blobs of the last HEAD seen. ponytail: whole-tree listing, once per HEAD; fine to ~100k files. */
 const treeCache = new Map<string, { head: string; blobs: Map<string, string> }>();
+/** Per repository root: when git last could not say (SF-1). Roots are the few repositories notes were written in. */
+const treeMisses = new Map<string, number>();
+const MISS_TTL_MS = 60_000;
+
+function revParseHead(root: string): string {
+  gitStats.revParse++;
+  return git(root, ["rev-parse", "HEAD"])?.trim() ?? "";
+}
 
 /** The blobs at HEAD for `root` (path -> sha) and the HEAD commit; null when git cannot say. One git call per HEAD. */
 export function headBlobs(root: string): { head: string; blobs: Map<string, string> } | null {
-  const head = headCommit(root) ?? git(root, ["rev-parse", "HEAD"])?.trim() ?? "";
-  if (!/^[0-9a-f]{40,64}$/.test(head)) return null;
+  // SF-1: a folder git could not answer for (.git gone or unreadable, reftable, no git) is not asked again for a minute,
+  // so reading notes anchored there does not spawn git on every read.
+  const missed = treeMisses.get(root);
+  if (missed !== undefined && Date.now() - missed < MISS_TTL_MS) return null;
+  const head = headCommit(root) ?? revParseHead(root);
+  if (!/^[0-9a-f]{40,64}$/.test(head)) {
+    treeMisses.set(root, Date.now());
+    return null;
+  }
   const hit = treeCache.get(root);
   if (hit?.head === head) return hit;
   gitStats.lsTree++;
   const out = git(root, ["ls-tree", "-r", "-z", "--full-tree", head], 256 << 20);
-  if (out === null) return null;
+  if (out === null) {
+    treeMisses.set(root, Date.now());
+    return null;
+  }
   const blobs = new Map<string, string>();
   for (const rec of out.split("\0")) {
     const m = /^\d+ blob ([0-9a-f]{40,64})\t(.+)$/s.exec(rec);

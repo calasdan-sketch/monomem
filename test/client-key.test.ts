@@ -67,6 +67,33 @@ describe("R2-04 client_key on note writes", () => {
     s.close();
   });
 
+  test("final-security SF6: a REST dedup reply carries no body, and an unconfirmed note in it marks the token like a read", async () => {
+    const s = new Store(":memory:");
+    const tok = "w".padEnd(32, "x");
+    const server = createApiServer(s, [{ token: tok, scope: "write", label: "agent" }], {});
+    await new Promise<void>((r) => server.listen(0, r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const post = async (body: object) => {
+      const r = await fetch(base + "/notes", { method: "POST", headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      return { status: r.status, text: await r.text() };
+    };
+    try {
+      const first = JSON.parse((await post({ title: "one", body: "b", client_key: "k1" })).text) as { note: { id: number } };
+      // Another writer puts outside text nobody confirmed into that note.
+      as("other", () => s.update(first.note.id, { body: "OTHER-WRITER-CANARY", outside: true }));
+      const again = await post({ title: "one", body: "b", client_key: "k1" });
+      assert.equal(again.status, 200);
+      assert.match(again.text, /"deduplicated":\s*true/);
+      assert.doesNotMatch(again.text, /OTHER-WRITER-CANARY/, "no body, as on MCP");
+      const next = JSON.parse((await post({ title: "after", body: "c" })).text) as { note: { tags: string[] } };
+      assert.ok(next.note.tags.some((t) => /via:memory/.test(t)), `the next write is marked: ${next.note.tags}`);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((r) => server.close(() => r()));
+      s.close();
+    }
+  });
+
   test("REST POST /notes and MCP state_write agree", async () => {
     const s = new Store(":memory:");
     const tok = "w".padEnd(32, "x");

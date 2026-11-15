@@ -25,9 +25,11 @@ export function resumeWriter(s: Store, label: string): boolean {
   const damaged = s.metaJson("flood_paused", isStringArray).damaged;
   const all = s.pausedWriters();
   if (!damaged && !all.includes(w)) return false;
-  s.setMeta("flood_paused", JSON.stringify(damaged ? [] : all.filter((x) => x !== w)));
-  // A fresh hour: otherwise its very next write would trip the guard again on the old count.
-  s.db.prepare("DELETE FROM write_rate WHERE writer = ?").run(w);
+  s.transaction(() => {
+    s.setMeta("flood_paused", JSON.stringify(damaged ? [] : all.filter((x) => x !== w)));
+    // A fresh hour: otherwise its very next write would trip the guard again on the old count.
+    s.db.prepare("DELETE FROM write_rate WHERE writer = ?").run(w);
+  });
   s.audit({ op: "flood-resume", label: w });
   return true;
 }
@@ -79,12 +81,13 @@ export function approveFirstNamespaces(s: Store): string[] {
 }
 
 export function approveFirstAll(s: Store): boolean {
-  return s.getMeta("approve_first_all") === "1";
+  // A3: a damaged list cannot say which namespaces were approve-first: all of them are. Said here, so status, doctor and
+  // GET /approve-first show what is enforced (release-gate S5), not "off".
+  return s.getMeta("approve_first_all") === "1" || s.metaJson("approve_first", isStringArray).damaged;
 }
 
 export function isApproveFirst(s: Store, namespace: string): boolean {
-  // A3: a damaged list cannot say which namespaces were approve-first: all of them are.
-  return s.approveFirstAll() || s.metaJson("approve_first", isStringArray).damaged || s.approveFirstNamespaces().includes(namespace);
+  return s.approveFirstAll() || s.approveFirstNamespaces().includes(namespace);
 }
 
 export function setApproveFirstAll(s: Store, on: boolean): void {

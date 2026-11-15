@@ -35,11 +35,12 @@ function anyFlags(s: Store): boolean {
 }
 
 export function flagNote(s: Store, id: number, reason: unknown): { note_id: number; rev: number; at: string } | null {
+  // Visibility first: a reason error on a hidden note would tell it apart from a missing id (final-security SF1).
+  const n = s.readVisible(id, { hideArchived: true });
+  if (!n) return null;
   const why = typeof reason === "string" ? reason.replace(/\s+/g, " ").trim() : "";
   if (!why) throw new ValidationError("reason is required: say in one line what looks wrong");
   if (why.length > MAX_FLAG_REASON) throw new ValidationError(`reason is at most ${MAX_FLAG_REASON} characters`);
-  const n = s.readVisible(id, { hideArchived: true });
-  if (!n) return null;
   const w = currentWriter();
   if (w !== "" && n.written_by === w) throw new ValidationError("this is your own note: change it (state_write with its id) instead of flagging it");
   const at = new Date().toISOString();
@@ -113,7 +114,7 @@ export function keepFlagged(s: Store, id: number): number {
   const n = s.read(id); // gate-ok: operator action from the CLI; clears flags, returns a count only
   if (!n) return 0;
   const by = currentWriter() || "cli";
-  const c = Number(s.db.prepare("UPDATE note_flags SET cleared_at = ?, cleared_by = ? WHERE note_id = ? AND note_rev = ? AND cleared_at IS NULL").run(new Date().toISOString(), by, id, n.rev).changes);
+  const c = s.transaction(() => Number(s.db.prepare("UPDATE note_flags SET cleared_at = ?, cleared_by = ? WHERE note_id = ? AND note_rev = ? AND cleared_at IS NULL").run(new Date().toISOString(), by, id, n.rev).changes));
   if (c) s.audit({ op: "flag-keep", id, namespace: n.namespace });
   return c;
 }

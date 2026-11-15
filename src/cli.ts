@@ -3231,7 +3231,10 @@ async function approveFirstCmd(): Promise<void> {
   try {
     if (ns === undefined) {
       const list = store.approveFirstNamespaces();
-      console.log(`All namespaces: ${store.approveFirstAll() ? "on (every namespace, including new ones)" : "off"}`);
+      const damaged = store.damagedTrustSettings().includes("approve_first");
+      console.log(
+        `All namespaces: ${damaged ? "on (the saved namespace list is damaged, so every namespace is held; set it again: monomem approve-first <namespace> on|off)" : store.approveFirstAll() ? "on (every namespace, including new ones)" : "off"}`
+      );
       console.log(list.length ? `Approve-first for these namespaces: ${list.join(", ")}` : "Approve-first for individual namespaces: none.");
       return;
     }
@@ -3556,7 +3559,9 @@ async function encryptCmd(): Promise<void> {
       }
       const sealed = store.encryptedCount();
       // Sealed bodies with no key is not "off": it is on with the key gone (doctor FAILs on the same state).
-      console.log(`encryption: ${enabled ? "on" : sealed ? `on, but the key file is missing at ${keyFile}: restore it from your backup` : "off"}`);
+      console.log(
+        enabled ? "encryption: on" : sealed > 0 ? `encryption: on, but the key file is missing at ${keyFile}: ${sealed} note bod${sealed === 1 ? "y" : "ies"} cannot be read until you restore it from your backup (check: monomem doctor)` : "encryption: off"
+      );
       console.log(`key file:   ${keyFile}${enabled ? "" : " (not present)"}`);
       console.log(`encrypted bodies: ${sealed}`);
       const plain = store.plaintextBodyCount();
@@ -4129,6 +4134,12 @@ async function main(): Promise<void> {
       const { DATA_DIR } = await import("./config.js");
       const { homedir } = await import("node:os");
       const { serviceCmd } = await import("./service.js");
+      // final-security SF4: a service that starts at every logon with a wider bind (or extra allowed hosts) is a lasting
+      // exposure an agent's shell must not set up on its own. A loopback-only service stays ungated.
+      const { isLoopback } = await import("./config.js");
+      if (rest[0] === "install" && !flags.print && (!isLoopback(process.env.MONOMEM_BIND?.trim() || "127.0.0.1") || process.env.MONOMEM_ALLOWED_HOSTS?.trim())) {
+        await requireOperator("service install (a background server reachable beyond this computer)");
+      }
       process.exitCode = serviceCmd(rest[0], flags.print === true, {
         platform: process.platform,
         node: process.execPath,
