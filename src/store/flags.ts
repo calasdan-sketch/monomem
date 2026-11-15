@@ -35,11 +35,12 @@ function anyFlags(s: Store): boolean {
 }
 
 export function flagNote(s: Store, id: number, reason: unknown): { note_id: number; rev: number; at: string } | null {
+  // Visibility first: a reason error on a hidden note would tell it apart from a missing id (final-security SF1).
+  const n = s.readVisible(id, { hideArchived: true });
+  if (!n) return null;
   const why = typeof reason === "string" ? reason.replace(/\s+/g, " ").trim() : "";
   if (!why) throw new ValidationError("reason is required: say in one line what looks wrong");
   if (why.length > MAX_FLAG_REASON) throw new ValidationError(`reason is at most ${MAX_FLAG_REASON} characters`);
-  const n = s.readVisible(id, { hideArchived: true });
-  if (!n) return null;
   const w = currentWriter();
   if (w !== "" && n.written_by === w) throw new ValidationError("this is your own note: change it (state_write with its id) instead of flagging it");
   const at = new Date().toISOString();

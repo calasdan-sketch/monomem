@@ -57,6 +57,9 @@ describe("R1-12 hidden notes answer like missing ones", () => {
       ["PUT", (id) => `/tasks/${id}`, () => ({ owner: "x" })],
       ["POST", () => `/notes`, (id) => ({ title: "t", body: "b", derived_from: [id] })],
       ["POST", () => `/get`, (id) => ({ ids: [id] })],
+      // final-security SF1: an empty or too-long reason must not be checked before visibility
+      ["POST", (id) => `/notes/${id}/flag`, () => ({ reason: "" })],
+      ["POST", (id) => `/notes/${id}/flag`, () => ({ reason: "x".repeat(201) })],
     ];
     try {
       for (const [m, p, b] of routes) {
@@ -87,6 +90,8 @@ describe("R1-12 hidden notes answer like missing ones", () => {
       ["task_get", (id) => ({ id })],
       ["task_claim", (id) => ({ id, owner: "x" })],
       ["memory_timeline", (id) => ({ anchor: id })],
+      ["memory_flag", (id) => ({ id, reason: "" })],
+      ["memory_flag", (id) => ({ id, reason: "x".repeat(201) })],
     ];
     const out = async (name: string, args: Record<string, unknown>): Promise<string> => norm(0, JSON.stringify(await client.callTool({ name, arguments: args })));
     try {
