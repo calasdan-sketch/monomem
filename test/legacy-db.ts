@@ -67,7 +67,7 @@ export function downgradeTo(path: string, version: 11 | 12 | 13 | 14 | 15 | 16 |
   try {
     // v22 additions (1.5.0 round 2), removed for every older shape; the v21 delete trigger and edge index come back.
     raw.exec(`
-      DROP TABLE IF EXISTS note_flags; DROP TABLE IF EXISTS note_client_keys; DROP TABLE IF EXISTS writer_events; DROP INDEX IF EXISTS idx_notes_live_kind;
+      DROP TABLE IF EXISTS note_flags; DROP TABLE IF EXISTS note_client_keys; DROP TABLE IF EXISTS writer_events; DROP TABLE IF EXISTS code_anchors; DROP INDEX IF EXISTS idx_notes_live_kind;
       CREATE INDEX IF NOT EXISTS idx_note_edges_note_id ON note_edges(note_id);
       DROP TRIGGER IF EXISTS notes_links_ad;
       CREATE TRIGGER notes_links_ad AFTER DELETE ON notes BEGIN

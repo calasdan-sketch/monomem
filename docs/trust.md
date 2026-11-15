@@ -329,6 +329,49 @@ most 200 characters. The note itself does not change.
 Limits: an edit that makes a new version leaves the old flags behind (flag again if it is still wrong); flags from a session
 that read outside content are not marked differently yet.
 
+## Notes about code that changed (1.5.0)
+
+A note can name the files it is about: `files: ["src/auth.ts"]` on `state_write` or `POST /notes` when creating it (at most
+20). Each file must be tracked by git in the writer's repository: the folder a local MCP server was started in, otherwise the
+folder the Monomem process runs in. Monomem records the file's id in git's index, the commit and the repository folder, using
+the local `git` program only (no network, short timeout, the repository's fsmonitor and hooks switched off).
+
+- When a later commit changes or removes one of those files, reads carry `code_changed: [{path, since_commit}]` and the label
+  `[code changed since this was written: src/auth.ts]`, at session start too. The note is not hidden, deleted or unpinned for
+  it: a pinned note stays pinned, with the label.
+- It is compared with the **committed** code (HEAD), not with unsaved or uncommitted edits. HEAD is read from the `.git`
+  files; git itself runs once per new commit per repository, not once per read.
+- `monomem stale --code` lists these notes; `monomem review` lists them too. `monomem review keep <id>` says the note is still
+  right (its files count as checked against the current commit); `monomem supersede --old <id> ...` replaces it.
+- Refused: a path with `..`, a path outside the repository (absolute, or through a symlink), a folder, a file git does not
+  track. No git, no commit yet, or a folder outside a repository: `files` is accepted and nothing is recorded, as before.
+- Not covered yet: files cannot be added to an existing note (write a new one, or a person runs `review keep`), a write held
+  for approval drops its files, captured observations are not anchored, and anchors are not exported or synced (a backup
+  copy of the database keeps them). The file paths are stored plain, also with encryption on (docs/encryption-retention.md).
+
+## Confirmed notes in AGENTS.md / CLAUDE.md (1.5.0)
+
+`monomem project-rules [--file AGENTS.md|CLAUDE.md] [--ns <namespace>] [--dry-run]` copies notes into a fenced block of the
+current git repository's rules file, for apps that read only rules files. A rules file is read as instructions, so the gate
+is stricter than session start. A note goes in only when **a person** confirmed its current version (`monomem confirm` at a
+terminal) or pinned it, and none of these holds:
+
+- it is outside content no person confirmed (a pin alone does not let it in), or built on a distrusted writer's note;
+- its writer is on the distrust list, it is `private`, an agent flagged it, it is disputed by another note's fact, or a file
+  it is about changed in git since;
+- it is held back from session start (for example past its re-confirmation date with `confirm-mode enforce`);
+- its line fails the memory linter when checked again now.
+
+An admin key's confirm and an agent's corroboration do not count. Each note becomes one line, `- <title>: <text> (om:#12)`,
+cut to 300 characters. The command prints what goes in, what is left out and why, and the change to the block; then a
+person types yes at a terminal (a script, a pipe or an agent's shell tool is refused, and there is no `--yes`). Only the
+text between `<!-- monomem:begin v1 -->` and `<!-- monomem:end -->` is replaced; the rest of the file is kept byte for byte,
+and fence lines that are broken (one missing, twice, out of order) are refused rather than guessed. Running it again with
+nothing new writes nothing. No hook runs it, and Monomem never writes these files any other way.
+
+Limits: it looks at the 1,000 most recently changed notes of the namespace; the block is a copy, so it is only as fresh as
+the last run.
+
 ## Writer record (1.5.0)
 
 `monomem trust` (and `monomem trust --json`, field `writer_record_30d`) shows, per writer, what happened to its writes in the

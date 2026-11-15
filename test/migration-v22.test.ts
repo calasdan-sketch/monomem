@@ -31,6 +31,7 @@ describe("schema v22", () => {
     assert.ok(names(db, "table").includes("note_flags"));
     assert.ok(names(db, "table").includes("note_client_keys"));
     assert.ok(names(db, "table").includes("writer_events"));
+    assert.ok(names(db, "table").includes("code_anchors"));
     const idx = names(db, "index");
     assert.ok(idx.includes("idx_notes_live_kind"), "(archived_at, kind) index");
     assert.ok(!idx.includes("idx_note_edges_note_id"), "prefix of the note_edges primary key: dropped");
@@ -44,7 +45,9 @@ describe("schema v22", () => {
     const now = new Date().toISOString();
     db.prepare("INSERT INTO note_flags (note_id, note_rev, flagged_by, reason, at) VALUES (?, 1, 'stdio:x', 'r', ?)").run(n.id, now);
     db.prepare("INSERT INTO note_client_keys (writer, key_hash, note_id, at) VALUES ('stdio:x', 'h', ?, ?)").run(n.id, now);
+    db.prepare("INSERT INTO code_anchors (note_id, path, blob, commit_sha, repo_root, at) VALUES (?, 'a.ts', 'b', 'c', '/r', ?)").run(n.id, now);
     s.delete(n.id);
+    assert.equal((db.prepare("SELECT count(*) AS c FROM code_anchors").get() as { c: number }).c, 0);
     assert.equal((db.prepare("SELECT count(*) AS c FROM note_flags").get() as { c: number }).c, 0);
     assert.equal((db.prepare("SELECT count(*) AS c FROM note_client_keys").get() as { c: number }).c, 0);
     s.close();
@@ -66,6 +69,7 @@ describe("schema v22", () => {
         assert.equal(Store.peekSchemaVersion(path + ".pre-v22-backup"), 21);
         assert.deepEqual(s.list({ namespace: "work", limit: 10 }).notes.map((n) => n.id).sort(), [a.id, b.id].sort());
         assert.ok(names(s.captureDb() as unknown as DatabaseSync, "table").includes("note_flags"));
+        assert.ok(names(s.captureDb() as unknown as DatabaseSync, "table").includes("code_anchors"));
       } finally {
         s.close();
       }

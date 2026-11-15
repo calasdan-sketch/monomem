@@ -73,6 +73,7 @@ export function encryptionSurfaces(s: Store, o: { dataDir: string; dbPath: strin
     counted("capture spool", spoolSealed, spoolPlain, `${SPOOL_FILE} lines waiting to be stored; plain lines are from before the key or before 1.5.0`),
     counted("captured titles and tags", capturedFixed, capturedWords, key ? "sealed here = a fixed title and no word tags; older captured notes keep their words" : "no key: captured titles and tags use the words of the session"),
     never("captured file paths and folders", n("SELECT COUNT(*) AS c FROM note_files") + n("SELECT COUNT(*) AS c FROM sessions WHERE cwd <> ''"), "never encrypted: a secret in a file or folder name stays readable"),
+    never("code anchors", n("SELECT COUNT(*) AS c FROM code_anchors"), "files a note was written about (state_write files): repository path, file path and git ids, never encrypted"),
     never("search index", notes, plainBodies ? `every title and tag, and the bodies of the ${plainBodies} plain notes` : "every title and tag; sealed bodies are not indexed"),
     never("change feed log", n("SELECT COUNT(*) AS c FROM change_log"), "titles of recent changes, kept for the change feed"),
     never("embeddings", n("SELECT COUNT(*) AS c FROM note_vectors"), "vectors are never encrypted; with embeddings on, the decrypted body is sent to your embeddings endpoint"),

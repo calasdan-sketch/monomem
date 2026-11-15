@@ -138,7 +138,7 @@ const INTERNAL_OPT_IN: Record<string, number> = {
 };
 
 /** SQL on a table the trust rules read or write: notes, their history, held writes, distrust/attester state, _meta (trust settings), confirmations, links. */
-const GATED_SQL_RE = /\b(?:FROM|JOIN|UPDATE|INTO)\s+(notes|note_history|quarantine|trust_distrust|trust_attesters|trust_log|_meta|confirmations|note_links|note_flags|note_client_keys)\b/gi;
+const GATED_SQL_RE = /\b(?:FROM|JOIN|UPDATE|INTO)\s+(notes|note_history|quarantine|trust_distrust|trust_attesters|trust_log|_meta|confirmations|note_links|note_flags|note_client_keys|code_anchors)\b/gi;
 /** Files outside the gate that touch a gated table directly, with the tables, each reviewed. */
 const SQL_ALLOWED: Record<string, string[]> = {
   // backup.ts counts the notes of the COPY it just made and strips local-only _meta keys from that copy.

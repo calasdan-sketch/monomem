@@ -2,8 +2,10 @@
 
 Monomem keeps to two places on its own: **its data folder** and **the config files of the apps you connect with
 `monomem setup`**. It never writes into your project folders unless you ask for it with a command that names the
-folder (`setup --project`, `export --dir`, `export --out`, `backup --out`, `sync --git`). It writes no `CLAUDE.md` or
-`AGENTS.md` anywhere, runs no background service you did not start, and every queue it keeps has a size or retry limit.
+folder (`setup --project`, `export --dir`, `export --out`, `backup --out`, `sync --git`). It never writes a `CLAUDE.md` or
+`AGENTS.md` unless you run `monomem project-rules` (1.5.0) in that repository at a terminal and type yes; then it writes
+only between its own `<!-- monomem:begin v1 -->` and `<!-- monomem:end -->` lines (delete those lines and what is between
+them to remove it). It runs no background service you did not start, and every queue it keeps has a size or retry limit.
 
 To take it all out: `monomem uninstall` (configs) or `monomem uninstall --purge` (configs and data, after a final
 backup). Both show the plan first and change nothing until you type `y`; `--dry-run` only shows it.

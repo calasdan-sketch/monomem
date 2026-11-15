@@ -50,6 +50,7 @@ import { waitForChanges, parseWait, WAIT_MAX_SECONDS, WAIT_RECOMMENDED_SECONDS }
 import { type Scope, PACKAGE_VERSION } from "./config.js";
 export { PACKAGE_VERSION };
 import { ADMIN_SCOPE_NEEDED, scopeAllows, UNTRUSTED_BANNER, provenanceBanner, audit, printableWords } from "./security.js";
+import { checkFilesInput } from "./code-anchor.js";
 import { runSearch, runSearchExplained, semanticNotice, parseMode, maybeEmbed, runRelevantSearch, roundRobin, describeWhen, bestPassage, SEARCH_MODES, type SearchOpts, type RelevantOpts, type ExplainedHit } from "./search-service.js";
 import {
   type ServerNamespaceOpts,
@@ -841,9 +842,14 @@ export function createMcpServer(
           .string()
           .optional()
           .describe("Idempotency key for creating (any unique string you invent, e.g. a UUID): a retry with the same key returns the note the first write made (deduplicated:true) instead of a duplicate."),
+        files: z
+          .array(z.string())
+          .max(20)
+          .optional()
+          .describe("When creating: the files in this git repository the note is about (at most 20, e.g. [\"src/auth.ts\"], tracked by git). When one of them changes in a later commit, reads label the note `[code changed since this was written: ...]` until a person checks it."),
       },
     },
-    async ({ id, namespace, title: givenTitle, body, tags: plainTags, facts, source, if_rev, forget_after, confidence, sensitivity, outside, derived_from, client_key }) => {
+    async ({ id, namespace, title: givenTitle, body, tags: plainTags, facts, source, if_rev, forget_after, confidence, sensitivity, outside, derived_from, client_key, files }) => {
       const warnings: LintFinding[] = [];
       let title = givenTitle;
       let tags = plainTags;
@@ -861,6 +867,8 @@ export function createMcpServer(
           assertReviewedTag(tags, undefined, false);
         }
         if (id !== undefined && client_key !== undefined) return errorResult("client_key applies to creating a note; use if_rev to guard an update");
+        if (id !== undefined && files !== undefined) return errorResult("files applies to creating a note; a person refreshes an existing note's files with monomem review keep <id>");
+        const anchorFiles = checkFilesInput(files);
         if (id !== undefined) {
           // When namespace resolution is active the model-supplied namespace
           // is dropped entirely (the note keeps its existing namespace), and
@@ -901,7 +909,7 @@ export function createMcpServer(
             ? { namespace: ownNs, title, body, tags, source, forget_after, sensitivity, outside, derived_from, ...(typeof confidence === "number" ? { confidence } : {}) }
             : { namespace, title, body, tags, source, forget_after, sensitivity, outside, derived_from, ...(typeof confidence === "number" ? { confidence } : {}) },
           client_key,
-          { lintWarnings: warnings }
+          { lintWarnings: warnings, ...(anchorFiles ? { files: anchorFiles } : {}) }
         );
         const receipt = withReceipt();
         // R2-04: a retry with a known key wrote nothing; the reply is the note the first write made.
