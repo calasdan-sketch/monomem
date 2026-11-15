@@ -3127,7 +3127,14 @@ async function reviewCmd(args: string[]): Promise<void> {
     const heldLine = held ? `${held >= 500 ? "500 or more held writes wait" : held === 1 ? "1 held write waits" : `${held} held writes wait`} for your decision: monomem quarantine` : "";
     if (flags.step === true) {
       if (heldLine && flags.json !== true) console.log(heldLine);
-      if (!items.length) return void (heldLine || console.log("Nothing waits for review."));
+      // --step walks the review list only; flagged and code-changed notes are named here, so it never gives a false all-clear.
+      const scope = ns !== undefined ? [ns] : undefined;
+      const nFlagged = store.flaggedList(scope).length;
+      const nCode = store.codeChangedList(scope).length;
+      const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
+      if (nFlagged) console.log(`${plural(nFlagged, "flagged note waits", "flagged notes wait")}: monomem review`);
+      if (nCode) console.log(`${plural(nCode, "note waits", "notes wait")} because the code it describes changed: monomem review`);
+      if (!items.length) return void (heldLine || nFlagged || nCode || console.log("Nothing waits for review."));
       await requireOperator(`review ${items.length} note${items.length === 1 ? "" : "s"} one at a time: each y`, undefined, "person-confirm");
       const readline = await import("node:readline/promises");
       const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
