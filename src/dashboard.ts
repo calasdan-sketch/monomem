@@ -226,6 +226,7 @@ export const DASHBOARD_HTML = `<!doctype html>
   <p id="who" role="status"></p>
   <div id="insights" class="card" style="display:none" aria-live="polite"></div>
   <div id="msg" class="msg" role="status" aria-live="polite"></div>
+  <span id="armhint" class="sr" role="status" aria-live="polite"></span>
   <div id="runner" class="card err" style="display:none"></div>
   <button id="heldstrip" class="strip" onclick="loadHeld()" hidden></button>
   <div id="list"></div>
@@ -292,19 +293,21 @@ function fail(e){ say(e && e.message ? e.message : String(e), true); }
 function failList(e){ $("list").innerHTML = "<p class='err'>"+esc(e.message)+"</p>"; }
 function empty(text){ return "<p class='muted empty'>"+text+"</p>"; }
 
-// Inline confirm: the first click turns the button into "Confirm <label>?" for a few seconds; a second click runs fn.
+// Inline confirm: the first click turns the button into "Confirm <label>?" for 10 seconds; a second click runs fn.
 // R1-19: a note from outside content without a person's confirm for this version can't be pinned (mirrors needsHumanConfirm).
 function needsPerson(n){ return (n.tags||[]).some(function(t){ return String(t).indexOf("obs.origin:") === 0; }) && !(n.confirmed_kind === "human" && n.confirmed_rev === n.rev); }
 function arm(btn, fn){
   var al = btn.getAttribute("aria-label");
-  if(btn.getAttribute("data-armed")){ clearTimeout(btn._t); btn.removeAttribute("data-armed"); if(al){ btn.setAttribute("aria-label", al.replace(/^confirm /, "")); } fn(); return; }
+  if(btn.getAttribute("data-armed")){ clearTimeout(btn._t); btn.removeAttribute("data-armed"); if(al){ btn.setAttribute("aria-label", al.replace(/^confirm /, "")); } var h = $("armhint"); if(h){ h.textContent = ""; } fn(); return; }
   var was = btn.textContent;
   btn.setAttribute("data-armed", "1");
   btn.textContent = btn.getAttribute("data-confirm") || ("Confirm " + was.toLowerCase() + "?");
   if(al){ btn.setAttribute("aria-label", "confirm " + al); }
-  var m = $("msg"); if(m){ m.className = "msg"; m.textContent = "Press " + was + " again within 4 seconds to confirm."; }
+  // U-06: the hint goes to a visually hidden live region, not the status line above the cards: a message there pushed every
+  // card down a line, so the second click missed the button. 10 s, not 4: enough time for keyboard and screen-reader users (WCAG 2.2.1).
+  var m = $("armhint"); if(m){ m.textContent = "Press " + was + " again within 10 seconds to confirm."; }
   var hint = m ? m.textContent : "";
-  btn._t = setTimeout(function(){ btn.removeAttribute("data-armed"); btn.textContent = was; if(al){ btn.setAttribute("aria-label", al); } if(m && m.textContent === hint) m.textContent = ""; }, 4000);
+  btn._t = setTimeout(function(){ btn.removeAttribute("data-armed"); btn.textContent = was; if(al){ btn.setAttribute("aria-label", al); } if(m && m.textContent === hint) m.textContent = ""; }, 10000);
 }
 // Longer confirm with a server-written warning (supersede preview): text plus Confirm / Cancel on the status line.
 function ask(text, okLabel, fn){
