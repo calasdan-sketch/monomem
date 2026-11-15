@@ -1429,11 +1429,13 @@ export function createApiServer(
               return;
             }
             const kept = store.keepQuarantineAsHistory(id, by);
-            sendJson(res, 200, { kept_as_history: id, note: kept.note, superseded_by: kept.superseded_by });
+            await maybeEmbed(store, kept.note);
+            // 1.5.0 (S-01): ids only, as over MCP: approving must not echo the flagged text back.
+            sendJson(res, 200, { kept_as_history: id, note_id: kept.note.id, superseded_by: kept.superseded_by });
           } else {
             const note = store.approveQuarantine(id);
             await maybeEmbed(store, note);
-            sendJson(res, 200, { approved: id, note });
+            sendJson(res, 200, { approved: id, note_id: note.id });
           }
         } catch (e) {
           sendError(res, e);

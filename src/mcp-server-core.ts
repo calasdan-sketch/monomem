@@ -2264,6 +2264,7 @@ export function createMcpServer(
         }
         if (action === "keep_history") {
           const kept = store.keepQuarantineAsHistory(id, by);
+          await maybeEmbed(store, kept.note); // S-01: the kept note is searchable by meaning on every surface, as from the CLI
           return textResult({ kept_as_history: id, note_id: kept.note.id, superseded_by: kept.superseded_by });
         }
         const note = store.approveQuarantine(id);
