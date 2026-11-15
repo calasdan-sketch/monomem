@@ -19,10 +19,7 @@ import { checkSizes, checkNames, audit, ADMIN_SCOPE_NEEDED } from "./security.js
 import { chmodQuiet } from "./config.js";
 import { SECRET_ASSIGN_LABEL } from "./security.js";
 import { lintContent, lintPolicy, describeFindings, type LintFinding, type LintAction, type LintCategory } from "./lint.js";
-// Reuses consolidate.ts's zero-dependency text similarity for the note
-// similarity graph. This is a module cycle (consolidate.ts imports Store
-// from here), but a safe one: both modules only touch the other's bindings
-// inside function bodies at runtime, never during module evaluation.
+// The zero-dependency text similarity for the note similarity graph (shared with consolidate.ts).
 import {
   precomputeTfMaps,
   computeDocFreqs,
@@ -32,7 +29,7 @@ import {
   termFreq,
   tokenize,
   MIN_SHARED_TOKENS_FOR_EDGE,
-} from "./consolidate.js";
+} from "./text-sim.js";
 // No module cycle: staleness.ts imports config.ts at runtime and store.ts
 // only as a type (erased at compile), so store -> staleness -> config is
 // acyclic.
