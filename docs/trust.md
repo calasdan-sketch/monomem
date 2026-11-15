@@ -349,6 +349,29 @@ the local `git` program only (no network, short timeout, the repository's fsmoni
   for approval drops its files, captured observations are not anchored, and anchors are not exported or synced (a backup
   copy of the database keeps them). The file paths are stored plain, also with encryption on (docs/encryption-retention.md).
 
+## Confirmed notes in AGENTS.md / CLAUDE.md (1.5.0)
+
+`monomem project-rules [--file AGENTS.md|CLAUDE.md] [--ns <namespace>] [--dry-run]` copies notes into a fenced block of the
+current git repository's rules file, for apps that read only rules files. A rules file is read as instructions, so the gate
+is stricter than session start. A note goes in only when **a person** confirmed its current version (`monomem confirm` at a
+terminal) or pinned it, and none of these holds:
+
+- it is outside content no person confirmed (a pin alone does not let it in), or built on a distrusted writer's note;
+- its writer is on the distrust list, it is `private`, an agent flagged it, it is disputed by another note's fact, or a file
+  it is about changed in git since;
+- it is held back from session start (for example past its re-confirmation date with `confirm-mode enforce`);
+- its line fails the memory linter when checked again now.
+
+An admin key's confirm and an agent's corroboration do not count. Each note becomes one line, `- <title>: <text> (om:#12)`,
+cut to 300 characters. The command prints what goes in, what is left out and why, and the change to the block; then a
+person types yes at a terminal (a script, a pipe or an agent's shell tool is refused, and there is no `--yes`). Only the
+text between `<!-- monomem:begin v1 -->` and `<!-- monomem:end -->` is replaced; the rest of the file is kept byte for byte,
+and fence lines that are broken (one missing, twice, out of order) are refused rather than guessed. Running it again with
+nothing new writes nothing. No hook runs it, and Monomem never writes these files any other way.
+
+Limits: it looks at the 1,000 most recently changed notes of the namespace; the block is a copy, so it is only as fresh as
+the last run.
+
 ## Writer record (1.5.0)
 
 `monomem trust` (and `monomem trust --json`, field `writer_record_30d`) shows, per writer, what happened to its writes in the

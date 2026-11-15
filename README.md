@@ -595,7 +595,8 @@ recall@1 on it. See [docs/encryption-retention.md](./docs/encryption-retention.m
 
 Monomem writes to its data folder (`~/.monomem`) and, through `monomem setup`, to the one `monomem` entry in each
 app's config, with a backup beside it. Nothing lands in your projects unless you name the folder (`--project`, `--dir`,
-`--out`, `sync --git`), no `CLAUDE.md` is ever written, and every retry has a limit. `monomem uninstall` takes it out
+`--out`, `sync --git`), a `CLAUDE.md` or `AGENTS.md` is never written unless you run `monomem project-rules` (and then only inside its fenced
+block), and every retry has a limit. `monomem uninstall` takes it out
 of every app (byte for byte where it can), `--purge` also deletes the data after a final backup. Every file, and how to
 remove it: [docs/footprint.md](./docs/footprint.md).
 

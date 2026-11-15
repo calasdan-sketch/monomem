@@ -19,7 +19,7 @@ const COMMANDS = [
   "consolidate", "rebuild-edges", "relevant", "search", "token", "changes", "backup", "runner-status", "watch", "export", "import", "trust",
   "quarantine", "approve-first", "access", "flood", "resume", "decay", "archive", "restore", "delete", "quality", "conflicts", "facts", "fact",
   "encrypt", "meter", "receipts", "why", "never-show", "supersede", "history", "pin", "unpin", "rollback", "bench", "drill", "health", "audit", "verify-receipt",
-  "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet", "confirm", "review", "taint", "config", "service", "stale",
+  "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet", "confirm", "review", "taint", "config", "service", "stale", "project-rules",
   "help", "--help", "-h", "--version", "-v", "version",
 ];
 
@@ -96,6 +96,8 @@ function shortUsage(): void {
       "  quarantine              Review writes that were held (by the linter or an approve-first namespace)",
       "  confirm <id> [--source \"what you checked\"]   Confirm a note from outside content after checking it (asks you to type yes)",
       "  review                  List notes waiting for a person: unconfirmed outside content and notes past re-confirmation",
+      "  stale --code            Notes about files that changed in git since they were written",
+      "  project-rules [--dry-run]   Copy notes a person confirmed or pinned into this repo's AGENTS.md block (asks first)",
       "  config                  Show or change settings kept in the store (re-confirmation expiry)",
       "  approve-first           Hold every agent write to a namespace until you approve it",
       "  trust                   Distrust a writer; decide which other servers' exports to believe",
@@ -282,6 +284,11 @@ function usage(all = false): void {
       "  stale --code [--ns <namespace>] [--json]",
       "            Notes written about files (state_write files) that a later commit changed, with the files and the commit",
       "            each note was written against. Compares with the committed code (HEAD), on this computer only.",
+      "  project-rules [--file AGENTS.md|CLAUDE.md] [--ns <namespace>] [--dry-run]",
+      "            Copy the notes a person confirmed or pinned into a fenced block of this repository's AGENTS.md (or",
+      "            CLAUDE.md), for apps that read only rules files. Left out: anything unconfirmed, admin- or agent-confirmed,",
+      "            distrusted, disputed, flagged, about changed code, private, or flagged by the linter. Shows the change and asks",
+      "            you to type yes at a terminal; only the block is ever written. Monomem never writes these files otherwise.",
       "  taint clear [--all | --session <id> | --here]",
       "            Ends the open outside-content windows (a hooked session read the web: local apps' notes written meanwhile are",
       "            marked). Run it in a terminal and type yes. Marks already written stay; nothing is deleted.",
@@ -2929,6 +2936,76 @@ function printFlagged(list: Array<{ id: number; namespace: string; title: string
   console.log('  Keep one as it is: monomem review keep <id>. Replace it: monomem supersede --old <id> --title "..." --body "..." (shows what changes, then asks).\n');
 }
 
+/**
+ * R2-07 `monomem project-rules [--file AGENTS.md|CLAUDE.md] [--ns <ns>] [--dry-run]`: the person-confirmed notes into a fenced
+ * block of this repository's rules file. Shows the diff, then a typed yes at a terminal (requireOperator); --dry-run only shows.
+ */
+async function projectRulesCmd(args: string[]): Promise<void> {
+  const { flags, rest } = parseFlags(args, { values: ["file", "ns", "namespace"], bools: ["dry-run"] });
+  const { RULES_FILES, planProjectRules, currentBlock, FENCE_BEGIN } = await import("./project-rules.js");
+  const file = typeof flags.file === "string" ? flags.file : "AGENTS.md";
+  if (rest.length || !(RULES_FILES as readonly string[]).includes(file)) {
+    console.error(`Usage: monomem project-rules [--file ${RULES_FILES.join("|")}] [--ns <namespace>] [--dry-run]   (writes only in this repository's top folder)`);
+    process.exit(1);
+  }
+  const { execFileSync } = await import("node:child_process");
+  let root = "";
+  try {
+    root = execFileSync("git", ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=", "rev-parse", "--show-toplevel"], { encoding: "utf8", timeout: 5000, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {
+    /* not a repository */
+  }
+  if (!root) {
+    console.error("Refused: run project-rules inside a git repository; it writes that repository's rules file and nothing else.");
+    process.exit(1);
+  }
+  let ns = typeof flags.ns === "string" ? flags.ns : typeof flags.namespace === "string" ? flags.namespace : undefined;
+  if (ns === undefined) {
+    const { resolveRecallNamespace } = await import("./recall.js");
+    const res = await resolveRecallNamespace(process.cwd());
+    if (res.kind === "unresolvable") {
+      console.error("Refused: this folder's namespace could not be worked out (see the message above). Name one with --ns.");
+      process.exit(1);
+    }
+    if (res.kind === "resolved") ns = res.namespace;
+  }
+  const { join } = await import("node:path");
+  const path = join(root, file);
+  const { DB_PATH } = await import("./config.js");
+  const { Store } = await import("./store.js");
+  const store = new Store(DB_PATH);
+  let plan: ReturnType<typeof planProjectRules>;
+  try {
+    plan = planProjectRules(store, path, ns);
+  } catch (e) {
+    console.error(`Refused: ${(e as Error).message}`);
+    process.exit(1);
+  } finally {
+    store.close();
+  }
+  const { lineDiff } = await import("./line-diff.js");
+  const show = (): void => {
+    console.log(`${plan.lines.length} note${plan.lines.length === 1 ? "" : "s"} go into ${path}${ns !== undefined ? ` (namespace ${printable(ns, 60)})` : ""}; ${plan.left.length} left out.`);
+    for (const l of plan.left.slice(0, 20)) console.log(`  left out #${l.id}: ${l.why}`);
+    for (const l of lineDiff(currentBlock(plan.before), currentBlock(plan.after), 200)) console.log(`  ${l}`);
+  };
+  if (plan.after === plan.before) return void console.log(`${file} is already up to date. Nothing changed.`);
+  if (!plan.lines.length && !(plan.before ?? "").includes(FENCE_BEGIN)) {
+    return void console.log("No note qualifies yet (a person confirms one with monomem confirm <id>, or pins it). Nothing written.");
+  }
+  if (flags["dry-run"] === true) return void show();
+  await requireOperator(`write ${plan.lines.length} note${plan.lines.length === 1 ? "" : "s"} into the Monomem block of ${path}`, show);
+  const { writeFileSync, renameSync, existsSync, readFileSync } = await import("node:fs");
+  if ((existsSync(path) ? readFileSync(path, "utf8") : null) !== plan.before) {
+    console.error(`Refused: ${path} changed while you were reading the diff. Nothing written; run it again.`);
+    process.exit(1);
+  }
+  const tmp = `${path}.monomem-${process.pid}.tmp`;
+  writeFileSync(tmp, plan.after);
+  renameSync(tmp, path);
+  console.log(`Wrote the Monomem block in ${path}. Text outside the block is unchanged. Run it again after confirming or changing notes.`);
+}
+
 /** R2-03: notes whose files changed in git since they were written (the operator reads this at a terminal). */
 function printCodeChanged(list: Array<{ id: number; namespace: string; title: string; writer: string; pinned: boolean; changed: Array<{ path: string; since_commit: string }> }>): void {
   console.log(`${list.length} note${list.length === 1 ? "" : "s"} written about code that has changed since:`);
@@ -3835,6 +3912,9 @@ async function main(): Promise<void> {
       break;
     case "review":
       await reviewCmd(process.argv.slice(3));
+      break;
+    case "project-rules":
+      await projectRulesCmd(process.argv.slice(3));
       break;
     case "stale": {
       // R2-03: notes whose anchored files changed in git since they were written.

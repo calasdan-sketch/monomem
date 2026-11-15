@@ -113,6 +113,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   hidden, and a pinned one stays pinned. `monomem stale --code` and `monomem review` list them; `review keep <id>` marks them
   checked. Compares with committed code only, using local git once per new commit. No git: nothing changes. Files cannot be
   added to an existing note yet (docs/trust.md).
+- **`monomem project-rules` copies the notes a person stands behind into AGENTS.md or CLAUDE.md.** Opt-in, for apps that
+  read only rules files. Only notes a person confirmed (this version) or pinned go in; unconfirmed, admin- or agent-confirmed,
+  distrusted, private, flagged, disputed, code-changed and linter-flagged notes stay out, and the command says why. It shows
+  the change and needs a typed yes at a terminal; it writes only inside its `<!-- monomem:begin v1 -->` block and a rerun with
+  nothing new writes nothing. The README promise is now "never written unless you run project-rules" (docs/trust.md).
 - `/health` returns the version and schema; `doctor` warns when the running server is older than the CLI.
 - Pins travel through file sync (a file never unpins, and never pins an unconfirmed outside note).
 - Clearer everyday commands: a mistyped writer name gets "did you mean `stdio:…`" instead of an empty plan or a useless
