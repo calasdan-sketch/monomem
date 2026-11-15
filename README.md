@@ -499,7 +499,7 @@ It has five suites, as plain JSON scenario files you can extend in [`bench/scena
 
 | Suite | Scenarios | What it checks | Headline number |
 |---|---|---|---|
-| A  Stale memory | 32 | a fact updated, replaced, deleted, aged: is the current value first and the old one never shown (or flagged)? Includes the two-step replace (preview writes nothing; the code is single-use, expires, and is bound to one caller) | `stale-hit-rate@1/@5`, `current-recall@1` |
+| A  Stale memory | 34 | a fact updated, replaced, deleted, aged: is the current value first and the old one never shown (or flagged)? Includes the obsolete-fact test (an update in different words, with and without a replace) and the two-step replace (preview writes nothing; the code is single-use, expires, and is bound to one caller) | `stale-hit-rate@1/@5`, `current-recall@1` |
 | B  Contradiction recovery | 31 | writer A vs writer B, then a trusted correction; distrusting the bad writer; weak overwrite of a trusted note; restoring the trusted text from history; the trust guard on replacing | resolved to the correction, loser stays visible, overwrite protected |
 | C  Permission isolation | 27 | cross-tenant read/write/search/export/import/merge/sweep, token scopes, admin-only flags, signed imports, and that one tenant cannot read another's history, preview, undo or reuse a confirmation code | `leakage-count` (must be 0), `unexpected-denials` |
 | D  Provenance retention | 19 | source, writer, creator, timestamps, deletion deadline, confidence after export, import, merge, update | `fields-lost` |
@@ -531,7 +531,9 @@ writing a small adapter (write, update, delete, search, plus the actor: writer a
 stop appearing in search, then a confirm with the preview's one-time code. Nothing is deleted, undo is one command, and every
 edit keeps the text it replaces. See [docs/replacing-memories.md](./docs/replacing-memories.md).
 
-**Known gaps in the benchmark:** none open. Scenarios for behaviour Monomem lacks are kept and marked rather than deleted, and the history
+**Known gaps in the benchmark:** one open, `GAP-OBSOLETE-UNREPLACED` (scenario A33): when a later note updates a fact in
+different words and nobody replaces the old note, search can rank the old note first. Replacing it (preview, then confirm) fixes
+it. Scenarios for behaviour Monomem lacks are kept and marked rather than deleted, and the history
 of each one and how it was fixed is in [docs/BENCHMARK.md](./docs/BENCHMARK.md#known-gaps-history), with the provenance-field breakdown.
 
 Limits no scenario can show (what the benchmark cannot see) are listed next, under Known limits.

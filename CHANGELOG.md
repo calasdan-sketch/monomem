@@ -73,6 +73,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `monomem bench --longmemeval | --locomo --encrypted` runs the same retrieval benchmark on encrypted stores. Measured: keyword
   recall falls from 96.8 to 0.0 R@5 on LongMemEval-S (titles there are session ids, and keyword search covers only title and
   tags while encryption is on). The in-memory body index that would fix this is written up in docs/BENCHMARK.md, not built.
+- **133 deterministic scenarios** (was 131): A 34, B 31, C 27, D 19, E 22. Obsolete-fact scenarios A33 and A34 in `monomem bench`. With the replace step the old value never reaches the agent (A34
+  passes). Without it, search ranks the outdated note above its update (A33): recorded as the open known gap
+  `GAP-OBSOLETE-UNREPLACED`, not hidden. MemoryAgentBench was not run (docs/BENCHMARK.md says why).
 - `/health` returns the version and schema; `doctor` warns when the running server is older than the CLI.
 - Pins travel through file sync (a file never unpins, and never pins an unconfirmed outside note).
 - Clearer everyday commands: a mistyped writer name gets "did you mean `stdio:…`" instead of an empty plan or a useless
