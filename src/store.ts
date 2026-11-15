@@ -5425,63 +5425,61 @@ export class Store {
       withTagPrefix?: string;
       /** v16: newest-created first or oldest-created first, instead of last-updated first (timelines). */
       order?: "created_desc" | "created_asc";
+      /** 1.5.0 F-01: false skips the COUNT(*); `total` is then just the page size. Default true. */
+      count?: boolean;
     } & RangeOpts = {}
   ): {
     notes: NoteRecord[];
     total: number;
   } {
-    const limit = clampInt(opts.limit, 50, 1, 500);
-    const offset = clampInt(opts.offset, 0, 0, Number.MAX_SAFE_INTEGER);
-    const range = this.rangeFor(opts, opts.namespaces ?? (opts.namespace ? [opts.namespace] : undefined));
-    const tagF = tagClause(opts.withTags, opts.withoutTags, opts.withTagPrefix);
+    if (opts.namespaces && opts.namespaces.length === 0) return { notes: [], total: 0 };
+    const q = this.listQuery(opts, "*");
+    const rows = q.rows as unknown as NoteRow[];
+    // 1.5.0 F-01: callers that ignore `total` (session start) skip the COUNT, a row scan when a tag filter is set.
+    const total = opts.count === false ? rows.length : q.count();
+    const out = rows.filter(q.exact).map((r) => this.rec(r));
+    return { notes: opts.includeDistrusted ? this.markDistrusted(out) : out, total };
+  }
+
+  /** The ids list() would return (same filters, order, paging), without reading or decrypting bodies. 1.5.0 F-02. */
+  listIds(opts: Parameters<Store["list"]>[0] = {}): number[] {
+    if (opts.namespaces && opts.namespaces.length === 0) return [];
+    const q = this.listQuery(opts, "id, tags");
+    return (q.rows as unknown as Array<{ id: number; tags: string }>).filter(q.exact).map((r) => r.id);
+  }
+
+  /** Shared by list() and listIds(): the page of `cols` plus what the COUNT needs. */
+  private listQuery(opts: Parameters<Store["list"]>[0], cols: string) {
+    const o = opts ?? {};
+    const limit = clampInt(o.limit, 50, 1, 500);
+    const offset = clampInt(o.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+    const range = this.rangeFor(o, o.namespaces ?? (o.namespace ? [o.namespace] : undefined));
+    const tagF = tagClause(o.withTags, o.withoutTags, o.withTagPrefix);
     // Archived filter: default hides archived; archivedOnly inverts it.
-    const archSql = archivedClause(opts.includeArchived, opts.archivedOnly, opts.includeSuperseded, opts.supersededOnly);
+    const archSql = archivedClause(o.includeArchived, o.archivedOnly, o.includeSuperseded, o.supersededOnly);
     const extra = [...range.params, ...tagF.params];
     // SQL LIKE is only a prefilter (tags are a JSON array string); the exact
     // match is re-checked below so a tag never matches inside another value.
-    const exact = (r: NoteRow): boolean => tagsMatch(r.tags, opts.withTags, opts.withoutTags, opts.withTagPrefix);
-    const orderSql = opts.order === "created_asc" ? "created_at ASC, id ASC" : opts.order === "created_desc" ? "created_at DESC, id DESC" : "updated_at DESC, id DESC";
-
-    let rows: NoteRow[];
-    let total: number;
-
-    if (opts.namespaces) {
-      if (opts.namespaces.length === 0) return { notes: [], total: 0 };
-      const inList = `namespace IN (${opts.namespaces.map(() => "?").join(",")})`;
-      rows = this.db
-        .prepare(
-          `SELECT * FROM notes WHERE ${inList}${archSql}${range.sql}${tagF.sql} ORDER BY ${orderSql} LIMIT ? OFFSET ?`
-        )
-        .all(...opts.namespaces, ...extra, limit, offset) as unknown as NoteRow[];
-      total = (
-        this.db
-          .prepare(`SELECT COUNT(*) as c FROM notes WHERE ${inList}${archSql}${range.sql}${tagF.sql}`)
-          .get(...opts.namespaces, ...extra) as { c: number }
-      ).c;
-    } else if (opts.namespace) {
-      rows = this.db
-        .prepare(
-          `SELECT * FROM notes WHERE namespace = ?${archSql}${range.sql}${tagF.sql} ORDER BY ${orderSql} LIMIT ? OFFSET ?`
-        )
-        .all(opts.namespace, ...extra, limit, offset) as unknown as NoteRow[];
-      total = (
-        this.db
-          .prepare(`SELECT COUNT(*) as c FROM notes WHERE namespace = ?${archSql}${range.sql}${tagF.sql}`)
-          .get(opts.namespace, ...extra) as { c: number }
-      ).c;
+    const exact = (r: { tags: string }): boolean => tagsMatch(r.tags, o.withTags, o.withoutTags, o.withTagPrefix);
+    const orderSql = o.order === "created_asc" ? "created_at ASC, id ASC" : o.order === "created_desc" ? "created_at DESC, id DESC" : "updated_at DESC, id DESC";
+    let scope: string;
+    let scopeArgs: Array<string | number>;
+    if (o.namespaces) {
+      scope = `namespace IN (${o.namespaces.map(() => "?").join(",")})`;
+      scopeArgs = o.namespaces;
+    } else if (o.namespace) {
+      scope = "namespace = ?";
+      scopeArgs = [o.namespace];
     } else {
-      rows = this.db
-        .prepare(
-          `SELECT * FROM notes WHERE 1 = 1${archSql}${range.sql}${tagF.sql} ORDER BY ${orderSql} LIMIT ? OFFSET ?`
-        )
-        .all(...extra, limit, offset) as unknown as NoteRow[];
-      total = (
-        this.db.prepare(`SELECT COUNT(*) as c FROM notes WHERE 1 = 1${archSql}${range.sql}${tagF.sql}`).get(...extra) as { c: number }
-      ).c;
+      scope = "1 = 1";
+      scopeArgs = [];
     }
-
-    const out = rows.filter(exact).map((r) => this.rec(r));
-    return { notes: opts.includeDistrusted ? this.markDistrusted(out) : out, total };
+    const where = `${scope}${archSql}${range.sql}${tagF.sql}`;
+    const rows = this.db
+      .prepare(`SELECT ${cols} FROM notes WHERE ${where} ORDER BY ${orderSql} LIMIT ? OFFSET ?`)
+      .all(...scopeArgs, ...extra, limit, offset);
+    const count = (): number => (this.db.prepare(`SELECT COUNT(*) as c FROM notes WHERE ${where}`).get(...scopeArgs, ...extra) as { c: number }).c;
+    return { rows, exact, count };
   }
 
   /**
