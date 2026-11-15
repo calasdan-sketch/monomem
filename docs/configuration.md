@@ -66,6 +66,7 @@ All environment variables are optional. This table lists **every** `MONOMEM_*` v
 | `MONOMEM_EMBED_TIMEOUT_MS` | `30000` (`5000` with `MONOMEM_EMBEDDINGS=auto`) | Timeout per embedding call; raise if a local model's first (cold) call is slow |
 | `MONOMEM_SCAN_CACHE_SECONDS` | `60` | How long the dashboard reuses its quality and health scans (they read every note). `0` = never reuse. |
 | `MONOMEM_ALLOWED_HOSTS` | unset | Comma-separated host names this server may be reached under (ports ignored; `*` allows any). Without it, `localhost` and any IP address are accepted and a request under any other name is refused (403) as a guard against DNS rebinding. Forwarding headers (`X-Forwarded-For`, `X-Real-IP`) are not trusted, because a caller can send them itself. **Behind a tunnel or reverse proxy, set this to the public name** (the 403 message tells you the exact value). Set it to turn the check strict: then only `localhost` and the listed names pass. Example for a custom name on your network: `MONOMEM_ALLOWED_HOSTS=mynas.local` |
+| `MONOMEM_NO_SERVER_PROBE` | unset | `1` stops `monomem doctor` from asking the server on `127.0.0.1:<MONOMEM_PORT>/health` which version it runs (the test suite sets it) |
 | `MONOMEM_MAX_CONNECTIONS` | `512` | Most connections each server (API, MCP) holds open at once |
 | `MONOMEM_HEADERS_TIMEOUT_MS` | `20000` | How long a client has to send its request headers |
 | `MONOMEM_REQUEST_TIMEOUT_MS` | `300000` | How long a client has to send a whole request (a large `/import` over a slow link needs this) |

@@ -11,7 +11,7 @@ const ALLOWED = new Map([
   ["src/hook.ts", 1],
   ["src/runner-sign.ts", 1],
   ["src/dashboard.ts", 2], // browser-side fetches to the server that served the page (the API calls, and the one-time sign-in code)
-  ["src/cli.ts", 2], // `monomem open` and `monomem restore`: is my own server up? (127.0.0.1 only)
+  ["src/cli.ts", 3], // `monomem open`, `monomem restore` and `monomem doctor` (its version): is my own server up? (127.0.0.1 only)
 ]);
 const CALL = /\bfetch\(|\bhttps?\.(?:request|get)\(|new WebSocket\(|\bnet\.connect\(|\btls\.connect\(/g;
 

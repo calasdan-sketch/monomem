@@ -68,6 +68,7 @@ Monomem part. An entry setup did not add (one you wrote by hand) is listed, not 
 | Dashboard page (`src/dashboard.ts`) | opening the dashboard | the Monomem server that served the page (API calls, and the one-time sign-in code that `monomem open` hands over) |
 | `monomem open` (`src/cli.ts`) | running the command | `http://127.0.0.1:<api port>/health`, to see whether your own server is up |
 | `monomem restore` (`src/cli.ts`) | running the command | `http://127.0.0.1:<api port>/health`, only to print a hint when something answers there (whether the database is in use is judged by its lock) |
+| `monomem doctor` (`src/cli.ts`) | running the command | `http://127.0.0.1:<api port>/health`, to warn when the server running there is older than the CLI (`MONOMEM_NO_SERVER_PROBE=1` skips it) |
 
 Not Monomem's own calls: `npx monomem` downloads the package from npm, and `sync --git` runs `git`, which pushes where your
 repository's remote points.
