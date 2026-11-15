@@ -421,7 +421,7 @@ monomem backup [--out dir] [--include-approval-key] [--include-attest-key]   # h
 monomem export --format md --dir ~/memory     monomem import --dir ~/memory
 monomem export --format json [--attest] --out a.json     monomem import --file a.json [--require-attestation]
 monomem supersede --old 12 --title "..." --body "..."   # replace a note: shows what you would lose, asks you to type the count
-monomem supersede undo <id>     monomem history <id> | restore <id> <version> | purge <id>
+monomem supersede undo <id>     monomem history <id>     monomem history restore <id> <version>     monomem history purge <id>
 monomem quarantine [list | approve <id> | reject <id>]
 monomem approve-first [<namespace> on|off | --all on|off]   # hold every agent write (one namespace, or all) for your approval
 monomem pin [<id>]     monomem unpin <id>     # agents can read a pinned note; only this CLI can change it

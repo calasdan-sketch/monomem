@@ -3190,6 +3190,16 @@ async function archiveCmd(action: "archive" | "restore"): Promise<void> {
     console.error(`Usage: monomem ${action} <id>`);
     process.exit(1);
   }
+  // `restore <id> <version>` is how people guess "put back an older text". That is `history restore`; this command only
+  // brings back an archived note. Do nothing and name the right one.
+  const version = process.argv[4];
+  if (action === "restore" && version !== undefined && /^\d+$/.test(version)) {
+    console.error(
+      `monomem restore <id> brings back an archived note; it takes no version, so nothing was changed.\n` +
+        `To put back version ${version} of note #${id}: monomem history restore ${id} ${version}   (see the versions: monomem history ${id})`
+    );
+    process.exit(1);
+  }
   const store = new Store(DB_PATH);
   try {
     const before = store.read(id); // gate-ok: local shell command (archive/restore): the operator owns the database file

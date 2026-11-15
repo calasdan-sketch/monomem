@@ -253,3 +253,14 @@ describe("U-05 a held write that looks like an injection is reported as one, eve
     store.close();
   });
 });
+
+describe("U-07 restore <id> <version> points to history restore", () => {
+  test("a second number changes nothing and prints the history restore command", () =>
+    withDir((dir) => {
+      assert.equal(run(dir, ["add", "port is 8080", "--ns", "work"]).status, 0);
+      const r = run(dir, ["restore", "1", "1"]);
+      assert.equal(r.status, 1, r.stdout);
+      assert.match(r.stderr, /To put back version 1 of note #1: monomem history restore 1 1/);
+      assert.doesNotMatch(r.stderr, /is not archived/);
+    }));
+});
