@@ -259,6 +259,17 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
           const d = describeDbFailure(dbPath, new Error(damaged));
           add("database", "Database", "fail", `${d.problem}. ${d.fix}`);
         } else {
+          // A3: a damaged trust setting is read in its strictest form; say so and how to reset it.
+          const bad = s.damagedTrustSettings();
+          if (bad.length) {
+            const how: Record<string, string> = {
+              approve_first: "every namespace is approve-first until you set it again: monomem approve-first <namespace> on|off",
+              flood_paused: "every agent writer is paused until you resume one: monomem resume <writer>",
+              revoked_attester_keys: "no attester key is believed until the list is rewritten: monomem trust attester-revoke <key>",
+              confirm_mode: "expiry runs in enforce mode until you set it: monomem config set confirm-mode label",
+            };
+            add("trust-settings", "Trust settings", "warn", `damaged stored setting${bad.length === 1 ? "" : "s"}, read in the strictest form: ${bad.map((k) => `${k} (${how[k]})`).join("; ")}`);
+          }
           // Each count on its own: one that fails is a warning of its own and lowers the grade, the others still run.
           const step = (id: string, label: string, f: () => void): void => {
             try {

@@ -1559,6 +1559,16 @@ export interface DecayCandidate {
   idleDays: number;
 }
 
+/** A3 shape checks for trust settings kept as JSON in _meta. */
+const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
+const isPlainObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+/** A3: the revocation set used when the stored list is damaged: every key reads as revoked. */
+class AllRevoked extends Set<string> {
+  override has(_k: string): boolean {
+    return true;
+  }
+}
+
 /**
  * SQL fragment filtering by archive state.
  *
@@ -7856,6 +7866,7 @@ export class Store {
    * (unlike `not_after`, which only expires trust). Kept in the database, so it survives restarts and backups.
    */
   revokedKeys(): Set<string> {
+    if (this.metaJson("revoked_attester_keys", isPlainObject).damaged) return new AllRevoked();
     return new Set(Object.keys(this.revocations()));
   }
 
@@ -7865,14 +7876,12 @@ export class Store {
   }
 
   private revocations(): Record<string, { at: string; by: string; reason: string }> {
-    const raw = this.getMeta("revoked_attester_keys");
-    if (!raw) return {};
-    try {
-      const v = JSON.parse(raw) as unknown;
-      return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, { at: string; by: string; reason: string }>) : {};
-    } catch {
-      return {};
-    }
+    return (this.metaJson("revoked_attester_keys", isPlainObject).v ?? {}) as Record<string, { at: string; by: string; reason: string }>;
+  }
+
+  /** A3: true when this key id is revoked, or the revocation list is damaged (then no attester key is believed). */
+  isKeyRevoked(keyId: string): boolean {
+    return this.revokedKeys().has(keyId);
   }
 
   /** Revoke a key (any attester's, or one of this server's retired keys). Refuses this server's CURRENT key (rotate first). */
@@ -7921,6 +7930,32 @@ export class Store {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * 1.5.0 (A3): a trust setting stored as JSON. `damaged` = present but unparsable or the wrong shape: the readers then fail
+   * CLOSED (approve-first everywhere, every agent paused, every attester key revoked), never open. Missing = not damaged.
+   */
+  private metaJson<T>(key: string, ok: (v: unknown) => v is T): { v: T | null; damaged: boolean } {
+    const raw = this.getMeta(key);
+    if (raw === null) return { v: null, damaged: false };
+    try {
+      const v = JSON.parse(raw) as unknown;
+      return ok(v) ? { v, damaged: false } : { v: null, damaged: true };
+    } catch {
+      return { v: null, damaged: true };
+    }
+  }
+
+  /** 1.5.0 (A3): the trust settings whose stored value is damaged (doctor reports them). */
+  damagedTrustSettings(): string[] {
+    const out: string[] = [];
+    if (this.metaJson("approve_first", isStringArray).damaged) out.push("approve_first");
+    if (this.metaJson("flood_paused", isStringArray).damaged) out.push("flood_paused");
+    if (this.metaJson("revoked_attester_keys", isPlainObject).damaged) out.push("revoked_attester_keys");
+    const m = this.getMeta("confirm_mode");
+    if (m !== null && !(CONFIRM_MODES as readonly string[]).includes(m)) out.push("confirm_mode");
+    return out;
   }
 
   /** Upsert a _meta value. Internal keys only -- never caller-chosen. */
@@ -8040,21 +8075,24 @@ export class Store {
 
   /** Writer identities the flood guard paused (sorted). */
   pausedWriters(): string[] {
-    try {
-      const v = JSON.parse(this.getMeta("flood_paused") ?? "[]") as unknown;
-      return Array.isArray(v) ? v.filter((n): n is string => typeof n === "string").sort() : [];
-    } catch {
-      return [];
-    }
+    return [...(this.metaJson("flood_paused", isStringArray).v ?? [])].sort();
+  }
+
+  /** A3: a damaged pause list pauses every writer the flood guard counts (the operator is never counted). */
+  private isPaused(w: string): boolean {
+    const p = this.metaJson("flood_paused", isStringArray);
+    return p.damaged || (p.v ?? []).includes(w);
   }
 
   /** Lift a pause and clear that writer's count. Returns false when the writer was not paused. */
   resumeWriter(label: string): boolean {
     const w = cleanWriter(label);
     if (!w) throw new ValidationError("writer label is required");
+    // A3: a damaged list cannot say who else was paused: the operator's resume resets it (audited below).
+    const damaged = this.metaJson("flood_paused", isStringArray).damaged;
     const all = this.pausedWriters();
-    if (!all.includes(w)) return false;
-    this.setMeta("flood_paused", JSON.stringify(all.filter((x) => x !== w)));
+    if (!damaged && !all.includes(w)) return false;
+    this.setMeta("flood_paused", JSON.stringify(damaged ? [] : all.filter((x) => x !== w)));
     // A fresh hour: otherwise its very next write would trip the guard again on the old count.
     this.db.prepare("DELETE FROM write_rate WHERE writer = ?").run(w);
     this.audit({ op: "flood-resume", label: w });
@@ -8070,7 +8108,7 @@ export class Store {
   /** archive / restore: refused for a paused writer (they are not counted). */
   private refusePaused(): void {
     const w = this.floodSubject("full");
-    if (w !== null && this.pausedWriters().includes(w)) throw this.pausedError(w);
+    if (w !== null && this.isPaused(w)) throw this.pausedError(w);
   }
 
   private pausedError(w: string): WriterPausedError {
@@ -8091,7 +8129,7 @@ export class Store {
   private floodGate(mode: LintMode, count = true): void {
     const w = this.floodSubject(mode);
     if (w === null) return;
-    if (this.pausedWriters().includes(w)) throw this.pausedError(w);
+    if (this.isPaused(w)) throw this.pausedError(w);
     const limit = floodWritesPerHour();
     if (limit === 0 || !count) return;
     const now = Date.now();
@@ -8152,12 +8190,7 @@ export class Store {
 
   /** Namespaces whose agent writes wait in the quarantine queue for an operator (sorted). */
   approveFirstNamespaces(): string[] {
-    try {
-      const v = JSON.parse(this.getMeta("approve_first") ?? "[]") as unknown;
-      return Array.isArray(v) ? v.filter((n): n is string => typeof n === "string").sort() : [];
-    } catch {
-      return [];
-    }
+    return [...(this.metaJson("approve_first", isStringArray).v ?? [])].sort();
   }
 
   /** True when approve-first is on for every namespace, including ones created later. */
@@ -8166,7 +8199,8 @@ export class Store {
   }
 
   isApproveFirst(namespace: string): boolean {
-    return this.approveFirstAll() || this.approveFirstNamespaces().includes(namespace);
+    // A3: a damaged list cannot say which namespaces were approve-first: all of them are.
+    return this.approveFirstAll() || this.metaJson("approve_first", isStringArray).damaged || this.approveFirstNamespaces().includes(namespace);
   }
 
   /** Turn approve-first on or off for every namespace at once. Operator-only, like the per-namespace switch. */
@@ -8500,7 +8534,8 @@ export class Store {
     const d = Number(this.getMeta("confirm_days"));
     const setAt = this.getMeta("confirm_mode_set_at");
     const v: ConfirmSettings = {
-      mode: (CONFIRM_MODES as readonly string[]).includes(m ?? "") ? (m as ConfirmMode) : "label",
+      // A3: unset = the default (label); set but unknown = damaged, so the strictest mode (enforce).
+      mode: m === null ? "label" : (CONFIRM_MODES as readonly string[]).includes(m) ? (m as ConfirmMode) : "enforce",
       days: Number.isInteger(d) && d >= 1 && d <= MAX_CONFIRM_DAYS ? d : DEFAULT_CONFIRM_DAYS,
       ...(setAt ? { set_at: setAt } : {}),
     };
