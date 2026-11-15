@@ -1553,6 +1553,9 @@ function dropFromIndex(idx: NsEdgeIndex, id: number): void {
 
 let warnedEnvAttesters = "";
 
+/** trust_attesters label for this server's own rotated-out keys (reserved: only key rotation writes it). */
+export const RETIRED_OWN_KEY_LABEL = "retired key of this server";
+
 export class Store {
   /** @internal */ db: DatabaseSync;
   private readonly dbPath: string;
@@ -7737,7 +7740,7 @@ export class Store {
             `INSERT INTO trust_attesters (key_id, public_key, server_id, label, added_at, added_by, not_after) VALUES (?, ?, ?, ?, ?, ?, '')
              ON CONFLICT(key_id) DO NOTHING`
           )
-          .run(old.keyId, old.publicKey, this.serverId(), "retired key of this server", new Date().toISOString(), this.trustActor());
+          .run(old.keyId, old.publicKey, this.serverId(), RETIRED_OWN_KEY_LABEL, new Date().toISOString(), this.trustActor());
         recordedNow = Number(r.changes) > 0;
       });
     }
@@ -7751,7 +7754,7 @@ export class Store {
     } catch (e) {
       if (old && recordedNow) {
         try {
-          this.db.prepare("DELETE FROM trust_attesters WHERE key_id = ? AND label = 'retired key of this server'").run(old.keyId);
+          this.db.prepare("DELETE FROM trust_attesters WHERE key_id = ? AND label = ?").run(old.keyId, RETIRED_OWN_KEY_LABEL);
         } catch {
           /* harmless: the current key listed as trusted */
         }
@@ -7890,6 +7893,11 @@ export class Store {
     if (key_id === this.identity().key_id) throw new ValidationError("that is this server's own current key: it is always trusted for this server's own exports");
     if (this.revokedKeys().has(key_id)) throw new ValidationError(`key ${key_id} is on the revocation list; run \`monomem trust attester-unrevoke ${key_id}\` first if you really want to trust it again`);
     const label = cleanWriter(input.label ?? "").slice(0, 100);
+    // Reserved: ownKeyring() (audit verify, verify-receipt) trusts rows with this label as this server's own retired keys.
+    // Only rotateSigningKey writes it; an admin adding a key under it could sign receipts the server never gave.
+    if (label.trim().toLowerCase() === RETIRED_OWN_KEY_LABEL) {
+      throw new ValidationError(`"${RETIRED_OWN_KEY_LABEL}" is reserved for keys this server rotated out itself; choose another label`);
+    }
     let replaced: { server_id: string; not_after: string } | undefined;
     this.transaction(() => {
       const prev = this.db.prepare("SELECT server_id, not_after FROM trust_attesters WHERE key_id = ?").get(key_id) as { server_id: string; not_after: string } | undefined;
@@ -8265,7 +8273,7 @@ export class Store {
   /** The current key and every retired own key (key id -> public key): what `audit verify` and `verify-receipt` trust. */
   ownKeyring(): Record<string, string> {
     const ring: Record<string, string> = {};
-    for (const a of this.attesterList()) if (a.label === "retired key of this server" && a.server_id === this.serverId()) ring[a.key_id] = a.public_key;
+    for (const a of this.attesterList()) if (a.label === RETIRED_OWN_KEY_LABEL && a.server_id === this.serverId()) ring[a.key_id] = a.public_key;
     const cur = this.peekIdentity();
     if (cur.key_id && cur.public_key) ring[cur.key_id] = cur.public_key;
     return ring;

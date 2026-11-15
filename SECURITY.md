@@ -95,7 +95,11 @@ To check your own setup, run `monomem drill` (replays 20 known memory-poisoning 
   `seq` / `chain_hash`. With the log: that line is still there, unchanged, in an unbroken chain. **Anything before a
   receipt or checkpoint you hold cannot later be edited or removed undetected, even by someone with the key:** your copy
   is evidence they cannot recall. Someone who can write `audit.log` but cannot read `.attest-key` (a different OS user, a
-  copy of the log synced elsewhere, a tool that only reaches that file) cannot forge or edit any line.
+  copy of the log synced elsewhere, a tool that only reaches that file) cannot forge or edit any line. That holds only
+  while the key stays out of their reach: with `MONOMEM_AUDIT_LOG` in another folder, a copy of the private key sits beside
+  the log (on Windows with that folder's permissions, not 0600), so a log folder that is synced or shared shares the key
+  too. Keep `MONOMEM_AUDIT_LOG` in a private folder. The trust label `retired key of this server` is reserved for keys
+  this server rotated out itself: an admin cannot add a key under it, so an admin token cannot mint receipts.
 
   **What it does not prove:**
   - Anything against **you or anything running as you**. An agent with a shell tool can read `.attest-key` (0600 stops
