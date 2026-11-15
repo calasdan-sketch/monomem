@@ -474,7 +474,9 @@ Details and limits: [docs/provenance.md](./docs/provenance.md).
 writer on a per-namespace **distrust list** (`monomem trust distrust <writer> --namespace work`, the
 `trust_policy` MCP tool, `/trust` REST): its notes, tasks, handoffs and feed entries are then left out of every
 read path unless an **admin** passes `include_distrusted`, they stay hidden after anyone else edits them, and a
-distrusted command task is never run. A JSON export made with `--attest` (`?attest=1`) carries a per-note Ed25519
+distrusted command task is never run. `monomem ls` and `monomem search` say how many notes they left out this way,
+and `--include-distrusted` shows them, marked. A local app's notes are written by `stdio:<app>` (`stdio:cursor`, not
+`cursor`); `monomem show <id>` prints a note's writer, and `trust distrust cursor` refuses and suggests the right name. A JSON export made with `--attest` (`?attest=1`) carries a per-note Ed25519
 **attestation**; an import that trusts the exporting server's key keeps the original author as `attested_writer`,
 otherwise it marks the note `imported_unverified`. (Attestations are **experimental**.) What that proves and what it
 does not: [docs/trust.md](./docs/trust.md).

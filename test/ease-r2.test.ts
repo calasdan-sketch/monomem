@@ -94,3 +94,41 @@ describe("U-01 writer names", () => {
       assert.doesNotMatch(r.stdout, /recall --include-distrusted/);
     }));
 });
+
+describe("U-02 notes hidden by distrust are counted, and --include-distrusted works on ls and search", () => {
+  test("ls says how many notes are hidden instead of 'No notes yet'; --include-distrusted shows them marked", () =>
+    withDir((dir) => {
+      cursorStore(join(dir, "t.db"));
+      assert.equal(run(dir, ["trust", "distrust", "stdio:cursor", "--namespace", "*"]).status, 0);
+      const ls = run(dir, ["ls"]);
+      assert.equal(ls.status, 0, ls.stderr);
+      assert.match(ls.stdout, /#3 /);
+      assert.match(ls.stdout, /2 notes hidden because their writer is distrusted/);
+      assert.match(ls.stdout, /ls --include-distrusted/);
+      const all = run(dir, ["ls", "--include-distrusted"]);
+      assert.equal(all.status, 0, all.stderr);
+      assert.match(all.stdout, /#1 .*DISTRUSTED WRITER/);
+      assert.doesNotMatch(all.stdout, /hidden because/);
+      // Only distrusted notes left: never "No notes yet".
+      const s = new Store(join(dir, "t.db"));
+      s.captureDb().prepare("UPDATE notes SET archived_at = ? WHERE id = 3").run(new Date().toISOString());
+      s.close();
+      const empty = run(dir, ["ls"]);
+      assert.doesNotMatch(empty.stdout, /No notes yet/);
+      assert.match(empty.stdout, /2 notes hidden/);
+      // search with no words lists through ls and takes the same option.
+      assert.match(run(dir, ["search", "--include-distrusted"]).stdout, /#2 /);
+    }));
+
+  test("search says how many matching notes were hidden", () =>
+    withDir((dir) => {
+      cursorStore(join(dir, "t.db"));
+      assert.equal(run(dir, ["trust", "distrust", "stdio:cursor", "--namespace", "*"]).status, 0);
+      const r = run(dir, ["search", "Fridays", "deploy"]);
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stdout, /1 matching note hidden because its writer is distrusted/);
+      assert.match(r.stdout, /--include-distrusted/);
+      const all = run(dir, ["search", "Fridays", "deploy", "--include-distrusted"]);
+      assert.match(all.stdout, /#1 .*DISTRUSTED WRITER/);
+    }));
+});

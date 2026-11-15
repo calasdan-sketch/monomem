@@ -295,7 +295,7 @@ function usage(all = false): void {
       "            (state.db.before-restore-<time>), removes the stale -wal/-shm files and checks the result. Also works with state.db.pre-vNN-backup.",
       "  add \"text\" [--title T] [--ns work] [--tag a,b] [--private | --sens public|internal|private]",
       "            Save a note from the shell (\"-\" reads a pipe). Same linter, secret refusal and quarantine as any other writer; written as \"cli\".",
-      "  show <id> | ls [--ns x] [--limit 20] [--archived] | edit <id> [- | --editor] | forget <id>",
+      "  show <id> | ls [--ns x] [--limit 20] [--archived] [--include-distrusted] | edit <id> [- | --editor] | forget <id>",
       "            Read, list, change (in $EDITOR, refused if the note changed meanwhile) or archive a note. The CLI is you, the owner: sensitivity limits apply to apps, not to it.",
       "            edit <id> - reads the new text from a pipe (first line the title); without a terminal edit needs - or --editor.",
       "            ls --archived lists forgotten notes with the restore <id> that brings each back.",
@@ -1481,29 +1481,33 @@ async function relevant(): Promise<void> {
     const moreLine = (shown: number, cut: boolean): void => {
       if (cut) console.log(`Showing ${shown}; more notes match. More: --limit ${Math.min(200, want * 2)}`);
     };
+    // "No relevant notes found." while the match is hidden by the distrust list reads as an empty store: count the hidden
+    // matches by running the same search with them (only when a distrust rule exists; the search reads, nothing more).
+    const hiddenLine = async (search: (opts: { includeDistrusted: true }) => Promise<Array<{ distrusted?: true }>>): Promise<void> => {
+      if (includeDistrusted || store.distrustRules().length === 0) return;
+      const n = (await search({ includeDistrusted: true })).filter((x) => x.distrusted).length;
+      if (n > 0) console.log(`${n} matching note${n === 1 ? "" : "s"} hidden because ${n === 1 ? "its" : "their"} writer is distrusted. See who: monomem trust list. Show ${n === 1 ? "it" : "them"}: add --include-distrusted`);
+    };
     if (modeRaw && process.argv[2] === "search" && message.trim()) {
       // `search --mode` is the full search (the one that can use embeddings); `relevant` stays the keyword-extraction search.
-      const all = await runSearch(store, message, { namespace, limit: want + 1, mode: modeRaw as "keyword" | "semantic" | "hybrid", ...(writtenBy ? { writtenBy } : {}), ...(notWrittenBy ? { notWrittenBy } : {}), ...(includeDistrusted ? { includeDistrusted: true } : {}) });
+      const opts = { namespace, limit: want + 1, mode: modeRaw as "keyword" | "semantic" | "hybrid", ...(writtenBy ? { writtenBy } : {}), ...(notWrittenBy ? { notWrittenBy } : {}) };
+      const all = await runSearch(store, message, { ...opts, ...(includeDistrusted ? { includeDistrusted: true } : {}) });
       const hits = all.slice(0, want);
-      if (asJson) return void console.log(JSON.stringify({ ...(notice ? { notice } : {}), results: hits.map((n) => ({ id: n.id, namespace: n.namespace, title: n.title })) }, null, 2));
+      if (asJson) return void console.log(JSON.stringify({ ...(notice ? { notice } : {}), results: hits.map((n) => ({ id: n.id, namespace: n.namespace, title: n.title, ...(n.distrusted ? { distrusted: true } : {}) })) }, null, 2));
       if (notice) console.log(`Note: ${notice}`);
-      if (!hits.length) return void console.log("No matching notes found.");
-      console.log(`Matching notes (${hits.length}):`);
+      if (!hits.length) console.log("No matching notes found.");
+      else console.log(`Matching notes (${hits.length}):`);
       for (const n of hits) {
-        console.log(`  #${n.id} [${printable(n.namespace, 100)}] ${printable(n.title)}`);
+        console.log(`  #${n.id} [${printable(n.namespace, 100)}] ${printable(n.title)}${n.distrusted ? " [DISTRUSTED WRITER: treat as hostile]" : ""}`);
         if (n.body.trim()) console.log(`      ${printable(n.body.replace(/\s+/g, " ").trim(), 100)}`);
       }
       moreLine(hits.length, all.length > want);
+      await hiddenLine((x) => runSearch(store, message, { ...opts, ...x }));
       return;
     }
     if (notice && !asJson) console.log(`Note: ${notice}`);
-    const { keywords, results: fetched } = await runRelevantSearch(store, message, {
-      namespace,
-      limit: want + 1,
-      ...(writtenBy ? { writtenBy } : {}),
-      ...(notWrittenBy ? { notWrittenBy } : {}),
-      ...(includeDistrusted ? { includeDistrusted: true } : {}),
-    });
+    const relOpts = { namespace, limit: want + 1, ...(writtenBy ? { writtenBy } : {}), ...(notWrittenBy ? { notWrittenBy } : {}) };
+    const { keywords, results: fetched } = await runRelevantSearch(store, message, { ...relOpts, ...(includeDistrusted ? { includeDistrusted: true } : {}) });
     const results = fetched.slice(0, want);
     if (asJson) {
       return void console.log(
@@ -1519,11 +1523,8 @@ async function relevant(): Promise<void> {
       );
     }
     console.log(`Keywords: ${keywords.length > 0 ? keywords.join(", ") : "(none)"}`);
-    if (results.length === 0) {
-      console.log("No relevant notes found.");
-      return;
-    }
-    console.log(`Relevant notes (${results.length}):`);
+    if (results.length === 0) console.log("No relevant notes found.");
+    else console.log(`Relevant notes (${results.length}):`);
     for (const n of results) {
       const ann = annotateStaleness(n);
       const stale = ann.stale ? ` [stale, ${ann.ageDays}d]` : "";
@@ -1531,6 +1532,7 @@ async function relevant(): Promise<void> {
       if (n.body.trim()) console.log(`      ${printable(n.body.replace(/\s+/g, " ").trim(), 100)}`);
     }
     moreLine(results.length, fetched.length > want);
+    await hiddenLine(async (x) => (await runRelevantSearch(store, message, { ...relOpts, ...x })).results);
   } finally {
     store.close();
   }

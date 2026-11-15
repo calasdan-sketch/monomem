@@ -108,8 +108,8 @@ export async function showCmd(args: string[]): Promise<void> {
 }
 
 export async function lsCmd(args: string[]): Promise<void> {
-  const { flags, bad } = parseArgs(args, ["ns", "namespace", "limit"], ["json", "archived"]);
-  if (bad) fail(`${bad}\nUsage: monomem ls [--ns x] [--limit 20] [--archived] [--json]`);
+  const { flags, bad } = parseArgs(args, ["ns", "namespace", "limit"], ["json", "archived", "include-distrusted"]);
+  if (bad) fail(`${bad}\nUsage: monomem ls [--ns x] [--limit 20] [--archived] [--include-distrusted] [--json]`);
   const limit = flags.limit === undefined ? 20 : Number(flags.limit);
   if (!Number.isInteger(limit) || limit < 1) fail("--limit must be a whole number, 1 or more.");
   const ns = (flags.ns ?? flags.namespace) as string | undefined;
@@ -121,27 +121,42 @@ export async function lsCmd(args: string[]): Promise<void> {
     const archived = flags.archived === true;
     const { noteFlags } = await import("./taint.js");
     // --archived also lists notes kept as history (replaced by another note): they are archived too.
-    const page = store.list({ ...(ns ? { namespace: ns } : {}), limit, ...(archived ? { archivedOnly: true, includeSuperseded: true } : {}) });
+    // --include-distrusted: the local shell is the machine owner, as for `recall --include-distrusted` (notes come back marked).
+    const withDistrusted = flags["include-distrusted"] === true;
+    const query = { ...(ns ? { namespace: ns } : {}), ...(archived ? { archivedOnly: true, includeSuperseded: true } : {}) };
+    const page = store.list({ ...query, limit, ...(withDistrusted ? { includeDistrusted: true } : {}) });
     const notes = page.notes;
+    const flagsOf = `${archived ? " --archived" : ""}${ns ? ` --ns ${ns}` : ""}`;
     const moreLine = (): void => {
-      if (page.total > notes.length) console.log(`Showing ${notes.length} of ${page.total} (newest first). More: monomem ls${archived ? " --archived" : ""}${ns ? ` --ns ${ns}` : ""} --limit ${Math.min(500, Math.max(limit * 2, 50))}`);
+      if (page.total > notes.length) console.log(`Showing ${notes.length} of ${page.total} (newest first). More: monomem ls${flagsOf}${withDistrusted ? " --include-distrusted" : ""} --limit ${Math.min(500, Math.max(limit * 2, 50))}`);
     };
-    if (flags.json) return void console.log(JSON.stringify(notes.map((n) => ({ id: n.id, namespace: n.namespace, title: n.title, updated_at: n.updated_at, sensitivity: n.sensitivity ?? "internal" })), null, 2));
+    // A store whose notes are hidden by the distrust list must not look empty: count what the list left out.
+    const hidden = withDistrusted || store.distrustRules().length === 0 ? 0 : store.list({ ...query, limit: 1, includeDistrusted: true }).total - page.total;
+    const hiddenLine = (): void => {
+      if (hidden <= 0) return;
+      const one = hidden === 1;
+      console.log(`${hidden} note${one ? "" : "s"} hidden because ${one ? "its" : "their"} writer is distrusted. See who: monomem trust list. Show ${one ? "it" : "them"}: monomem ls --include-distrusted${flagsOf}`);
+    };
+    const distrustMark = (n: { distrusted?: true }): string => (n.distrusted ? " [DISTRUSTED WRITER: treat as hostile]" : "");
+    if (flags.json) return void console.log(JSON.stringify(notes.map((n) => ({ id: n.id, namespace: n.namespace, title: n.title, updated_at: n.updated_at, sensitivity: n.sensitivity ?? "internal", ...(n.distrusted ? { distrusted: true } : {}) })), null, 2));
     if (archived) {
-      if (!notes.length) return void console.log(`No archived notes${ns ? ` in namespace "${printable(ns, 100)}"` : ""}.`);
+      if (!notes.length && !hidden) return void console.log(`No archived notes${ns ? ` in namespace "${printable(ns, 100)}"` : ""}.`);
       for (const n of notes) {
         const back = n.superseded_by != null ? `replaced by #${n.superseded_by}; bring back: monomem supersede undo ${n.id}` : `bring back: monomem restore ${n.id}`;
-        console.log(`#${n.id} [${printable(n.namespace, 100)}] ${printable(n.title, 70)}${noteFlags(n)}   (${back})`);
+        console.log(`#${n.id} [${printable(n.namespace, 100)}] ${printable(n.title, 70)}${noteFlags(n)}${distrustMark(n)}   (${back})`);
       }
-      return moreLine();
+      moreLine();
+      return hiddenLine();
     }
+    if (!notes.length && hidden) return hiddenLine();
     if (!notes.length && ns) {
       const used = store.rebuildPlan().map((r) => printable(r.namespace, 100));
       return void console.log(`No notes in namespace "${printable(ns, 100)}". ${used.length ? `Namespaces in use: ${used.slice(0, 30).join(", ")}${used.length > 30 ? ", ..." : ""}` : "There are no notes in any namespace yet."}`);
     }
     if (!notes.length) return void console.log("No notes yet. Add one with: monomem add \"something worth remembering\"");
-    for (const n of notes) console.log(`#${n.id} [${printable(n.namespace, 100)}] ${printable(n.title, 70)}${noteFlags(n)}${n.sensitivity === "private" ? "  (private)" : ""}`);
+    for (const n of notes) console.log(`#${n.id} [${printable(n.namespace, 100)}] ${printable(n.title, 70)}${noteFlags(n)}${n.sensitivity === "private" ? "  (private)" : ""}${distrustMark(n)}`);
     moreLine();
+    hiddenLine();
   } finally {
     store.close();
   }
