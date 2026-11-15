@@ -108,6 +108,15 @@ describe("the real programs honour CLAUDE_BRIDGE_DB_PATH", () => {
     assert.equal(existsSync(db + `.pre-v${SCHEMA_VERSION}-backup`), false, "the old database was not opened");
   });
 
+  test("doctor names the old program each mapped setting came from", () => {
+    const { dir } = oldDb();
+    const r = run(["doctor"], { HOME: join(dir, "home"), ONEMEMORY_HOME: join(dir, "om"), CLAUDE_BRIDGE_PORT: "18999" });
+    const out = r.stdout + r.stderr;
+    assert.match(out, /ONEMEMORY_HOME \(from OneMemory\)/);
+    assert.match(out, /CLAUDE_BRIDGE_PORT \(from claude-bridge\)/);
+    assert.doesNotMatch(out, /ONEMEMORY_HOME \(from claude-bridge\)/);
+  });
+
   test("the recall hook with --db reads that database and does not upgrade an older one", () => {
     const { dir, db } = oldDb();
     const r = run(["recall", "--db", db], { HOME: join(dir, "home") });

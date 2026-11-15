@@ -384,15 +384,16 @@ function usage(all = false): void {
       "  rollback --writer <name> --since <iso|30m|2h|7d> [--include-conflicts] [--yes] [--json]",
       "            Undo what one writer did since then: archive notes it created, put back the text of notes it changed.",
       "            Shows the plan first; notes others changed later are skipped unless --include-conflicts. \"stdio\" = every local app.",
-      "  bench [--json] [--suite name] [--only id] [--seed n] [--dir folder] [--strict-gaps] [--verbose]",
+      "  bench [--json] [--suite stale|contradiction|isolation|provenance|poison] [--only id] [--seed n] [--dir folder] [--strict-gaps] [--verbose]",
       "            Run the provenance benchmark on a throwaway store: stale memory, contradiction recovery,",
-      "            permission isolation, provenance retention. Offline, deterministic, exits 1 on a failure.",
+      "            permission isolation, provenance retention, memory poisoning. Offline, deterministic, exits 1 on a failure.",
       "            Your own data is never touched. See docs/BENCHMARK.md.",
       "  bench --scale 10k [--json]",
       "            Speed on a synthetic store (temp folder): session start, search and write p50/p95, plain and",
       "            encrypted. Exits 1 at 10k+ notes when encrypted session start p50 is 50 ms or more.",
-      "  bench --longmemeval | --locomo [--data file] [--limit n] [--mode keyword|hybrid] [--granularity session|turn] [--encrypted] [--json]",
+      "  bench --longmemeval | --locomo [--data file] [--limit n] [--mode keyword|hybrid] [--granularity session|turn] [--encrypted] [--split a|b] [--json]",
       "            Retrieval benchmark (recall@k, nDCG, MRR) on a public dataset, in a temp folder. No LLM.",
+      "            --split a|b runs half the questions (by a hash of the question id): tune on one half, check on the other.",
       "  drill [--json]",
       "            Replay known memory-poisoning attacks on a copy of your store and your settings; your data is not changed.",
       "            With no store yet it says so (run setup first).",
@@ -517,7 +518,7 @@ async function doctor(): Promise<void> {
   const { MAPPED_LEGACY_ENV } = await import("./legacy-env.js");
   if (MAPPED_LEGACY_ENV.length) {
     warn(
-      `old-style setting(s) ${MAPPED_LEGACY_ENV.join(", ")} (from claude-bridge) are being read as MONOMEM_*; they still work. ` +
+      `old-style setting(s) ${MAPPED_LEGACY_ENV.map((k) => `${k} (from ${k.startsWith("ONEMEMORY_") ? "OneMemory" : "claude-bridge"})`).join(", ")} are being read as MONOMEM_*; they still work. ` +
         "Rename them to MONOMEM_* when convenient (`monomem setup` does this for an old claude-bridge entry)."
     );
   }
