@@ -1,0 +1,66 @@
+{
+  "id": "A38",
+  "suite": "stale",
+  "title": "An unconfirmed outside-content restatement does not reorder",
+  "what": "A guard of the restated-note rule (A33). Alice records a fact, then later writes the update while declaring it came from outside content (a web page) that nobody has confirmed. Outside text must not be able to push a note back, even through the same writer: the order stays as the search ranks it and nothing is labelled as restated.",
+  "actors": {
+    "alice": {
+      "scope": "write"
+    }
+  },
+  "needs": [
+    "recall"
+  ],
+  "distractors": 10,
+  "steps": [
+    {
+      "op": "write",
+      "as": "alice",
+      "ref": "old",
+      "title": "{{proj}} build server",
+      "body": "The {{proj}} build server is {{v1}}.",
+      "tags": ["fact:build_server={{v1}}"]
+    },
+    {
+      "op": "write",
+      "as": "alice",
+      "ref": "new",
+      "title": "{{proj}} build server moved",
+      "body": "Update: {{proj}} builds moved off the old box; the build server is now {{v2}}.",
+      "tags": ["fact:build_server={{v2}}"],
+      "outside": true
+    },
+    {
+      "op": "search",
+      "as": "alice",
+      "q": "{{proj}} build server",
+      "id": "s"
+    },
+    {
+      "op": "recall",
+      "as": "alice",
+      "q": "which build server does {{proj}} use?",
+      "id": "r"
+    }
+  ],
+  "expect": [
+    {
+      "check": "top",
+      "step": "s",
+      "ref": "old",
+      "desc": "search keeps the note first: unconfirmed outside content never moves it"
+    },
+    {
+      "check": "top",
+      "step": "r",
+      "ref": "old",
+      "desc": "the 'what is relevant' lookup keeps it first"
+    },
+    {
+      "check": "no_text",
+      "step": "s",
+      "text": "restated_by",
+      "desc": "no note is labelled as restated"
+    }
+  ]
+}

@@ -4,6 +4,11 @@ Plain version: when a note is out of date, you can **replace** it with a newer o
 quietly. It first shows you exactly what would stop appearing in search, you say yes, and only then does it
 happen. Nothing is deleted, and you can undo it.
 
+**Without the replace step (1.5.0).** When the same writer later restates a fact (the same fact key with another value, or a
+very similar note) and the two match a search about equally well, the newer note now ranks first in search, the "what is relevant"
+lookup and session start. The older note is still returned right behind it, labelled `restated_by`. This never happens for a
+different writer (both notes are shown with a dispute label instead) or over a note a person confirmed. To retire the old note, replace it.
+
 ## Replacing a memory is always two steps
 
 1. **Preview.** Changes nothing. It shows a warning headed **ARE YOU SURE YOU WANT TO REPLACE THIS?** with, for each

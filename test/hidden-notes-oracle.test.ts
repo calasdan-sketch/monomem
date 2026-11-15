@@ -182,6 +182,73 @@ describe("R2-01 ceiling-leak probe: a dispute marker never shows a note the read
   });
 });
 
+describe("GAP-OBSOLETE-UNREPLACED probe: a hidden note never restates (reorders or labels) a visible one", () => {
+  // Two worlds that differ only in whether a newer note by the SAME writer, above the reader's ceiling, restates the visible one.
+  function world(restates: boolean) {
+    const store = new Store(":memory:");
+    setProcessWriter("cli");
+    const visible = store.create({ namespace: "pa", title: "zebra build server", body: "The zebra build server is kalmuth.", tags: ["fact:build_server=kalmuth"] });
+    // A different writer's note on the same words: never a restater, it only makes the result list longer.
+    setProcessWriter("stdio:other");
+    const other = store.create({ namespace: "pa", title: "zebra build server notes", body: "The zebra build server notes, longer text about other things." });
+    setProcessWriter("cli");
+    const hidden = store.create({
+      namespace: "pa",
+      title: "zebra build server moved",
+      body: "Update: the zebra build server is now prendal.",
+      sensitivity: "private",
+      tags: restates ? ["fact:build_server=prendal"] : ["x"],
+    });
+    setProcessWriter("");
+    // Written in this order, a day apart, so the hidden note is the newer one.
+    const day = (d: number) => new Date(Date.now() - d * 86_400_000).toISOString();
+    for (const [id, d] of [[visible.id, 3], [other.id, 2], [hidden.id, 1]] as const) raw(store).prepare("UPDATE notes SET created_at = ?, updated_at = ?, content_at = ? WHERE id = ?").run(day(d), day(d), day(d), id);
+    return { store, visible, hidden };
+  }
+  test("REST and MCP searches answer the same with and without the hidden restating note", async () => {
+    const replies: string[][] = [];
+    for (const restates of [true, false]) {
+      const { store } = world(restates);
+      const http = createApiServer(store, [P]);
+      await new Promise<void>((r) => http.listen(0, "127.0.0.1", () => r()));
+      const base = `http://127.0.0.1:${(http.address() as AddressInfo).port}`;
+      const req = async (m: string, p: string, b?: unknown) =>
+        norm(0, await (await fetch(base + p, { method: m, headers: { authorization: `Bearer ${P.token}`, "content-type": "application/json" }, body: b === undefined ? undefined : JSON.stringify(b) })).text());
+      const server = createMcpServer(store, "write", { tools: "all", namespace: "pa" } as any, { label: "pinned-app", authed: true, maxSensitivity: "internal" } as any);
+      const [c1, c2] = InMemoryTransport.createLinkedPair();
+      const client = new Client({ name: "t", version: "1" });
+      await Promise.all([client.connect(c1), server.connect(c2)]);
+      const mcp = async (name: string, args: Record<string, unknown>) => norm(0, JSON.stringify(await client.callTool({ name, arguments: args })));
+      try {
+        const out = [
+          await req("GET", "/search?q=zebra%20build%20server"),
+          await req("GET", "/search?q=zebra%20build%20server&explain=1"),
+          await req("POST", "/relevant", { message: "which build server does zebra use?" }),
+          await mcp("state_search", { query: "zebra build server" }),
+          await mcp("state_search", { query: "zebra build server", explain: true }),
+          await mcp("state_relevant", { message: "which build server does zebra use?" }),
+        ];
+        for (const o of out) assert.ok(!/restated|prendal|Kept behind/i.test(o), `a hidden note restated a visible one: ${o.slice(0, 300)}`);
+        replies.push(out.map((o) => o.replace(/writer_id[^,]*/g, "").replace(/"(last_accessed|access_count)[^,]*/g, "")));
+      } finally {
+        await client.close();
+        http.closeAllConnections();
+        await new Promise<void>((r) => http.close(() => r()));
+        store.close();
+      }
+    }
+    assert.deepEqual(replies[0], replies[1]);
+  });
+
+  test("control: an unrestricted reader does see the restatement", async () => {
+    const { store, visible, hidden } = world(true);
+    const { runSearch } = await import("../src/search-service.js");
+    const r = (await runSearch(store, "zebra build server", { mode: "keyword" })) as Array<{ id: number; restated_by?: number }>;
+    assert.equal(r.find((n) => n.id === visible.id)?.restated_by, hidden.id);
+    store.close();
+  });
+});
+
 describe("R1-12 deleting a note leaves no orphans", () => {
   test("note_links (either column) and confirmations of a deleted note are removed", () => {
     const s = new Store(":memory:");

@@ -371,18 +371,20 @@ describe("against Monomem", () => {
     for (const s of first.scenarios.filter((x) => x.status === "known_gap")) assert.ok(s.known_gap && gaps[s.known_gap], s.id);
   });
 
-  // 1.5.0 C-07 opened GAP-OBSOLETE-UNREPLACED (A33): a measured ranking gap, recorded instead of hidden. It is the only open one.
-  test("the four gaps found in 1.5.0 are recorded as fixed in 1.6.0, the poison one in 2.0.0, and only the obsolete-fact one is open", () => {
+  // 1.5.0 C-07 opened GAP-OBSOLETE-UNREPLACED (A33), and the restated-twin rule closed it in the same release: no gap is open.
+  test("the four gaps found in 1.5.0 are recorded as fixed in 1.6.0, the poison one in 2.0.0, the obsolete-fact one in 1.5.0; none is open", () => {
     for (const id of ["GAP-SUPERSEDE", "GAP-RECENCY", "GAP-HISTORY", "GAP-CONFIDENCE"]) {
       assert.equal(gaps[id].status, "fixed", id);
       assert.equal(gaps[id].fixed_in, "1.6.0", id);
     }
     assert.equal(gaps["GAP-POISON-MDLINK"].status, "fixed");
     assert.equal(gaps["GAP-POISON-MDLINK"].fixed_in, "2.0.0");
-    assert.deepEqual(first.known_gaps.map((g) => g.id), ["GAP-OBSOLETE-UNREPLACED"]);
-    assert.equal(first.summary.known_gap, 1);
-    assert.deepEqual(first.scenarios.filter((s) => s.known_gap !== undefined).map((s) => s.id), ["A33"]);
-    assert.equal(first.scenarios.find((s) => s.id === "A34")?.status, "pass");
+    assert.equal(gaps["GAP-OBSOLETE-UNREPLACED"].status, "fixed");
+    assert.equal(gaps["GAP-OBSOLETE-UNREPLACED"].fixed_in, "1.5.0");
+    assert.deepEqual(first.known_gaps.map((g) => g.id), []);
+    assert.equal(first.summary.known_gap, 0);
+    assert.deepEqual(first.scenarios.filter((s) => s.known_gap !== undefined).map((s) => s.id), []);
+    for (const id of ["A33", "A34", "A35", "A36", "A37", "A38"]) assert.equal(first.scenarios.find((s) => s.id === id)?.status, "pass", id);
     assert.equal(first.scenarios.find((s) => s.id === "E11")?.status, "pass");
   });
 

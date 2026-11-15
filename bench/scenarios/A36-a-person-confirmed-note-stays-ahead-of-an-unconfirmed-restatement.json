@@ -1,0 +1,79 @@
+{
+  "id": "A36",
+  "suite": "stale",
+  "title": "A person-confirmed note stays ahead of an unconfirmed restatement",
+  "what": "A guard of the restated-note rule (A33). Alice records a fact and a person (an admin) confirms it. Later Alice writes a note that gives the same fact key another value, and nobody confirms that one. Even from the same writer, an unconfirmed note never moves a confirmed one back: the confirmed note stays first and nothing is labelled as restated.",
+  "actors": {
+    "alice": {
+      "scope": "write"
+    },
+    "boss": {
+      "scope": "admin"
+    }
+  },
+  "needs": [
+    "recall"
+  ],
+  "distractors": 10,
+  "steps": [
+    {
+      "op": "write",
+      "as": "alice",
+      "ref": "old",
+      "title": "{{proj}} build server",
+      "body": "The {{proj}} build server is {{v1}}.",
+      "tags": ["fact:build_server={{v1}}"]
+    },
+    {
+      "op": "confirm",
+      "as": "boss",
+      "ref": "old"
+    },
+    {
+      "op": "write",
+      "as": "alice",
+      "ref": "new",
+      "title": "{{proj}} build server moved",
+      "body": "Update: {{proj}} builds moved off the old box; the build server is now {{v2}}.",
+      "tags": ["fact:build_server={{v2}}"]
+    },
+    {
+      "op": "search",
+      "as": "alice",
+      "q": "{{proj}} build server",
+      "id": "s"
+    },
+    {
+      "op": "recall",
+      "as": "alice",
+      "q": "which build server does {{proj}} use?",
+      "id": "r"
+    }
+  ],
+  "expect": [
+    {
+      "check": "outcome",
+      "step": "confirm:old",
+      "is": "ok",
+      "desc": "the person's confirm counts"
+    },
+    {
+      "check": "top",
+      "step": "s",
+      "ref": "old",
+      "desc": "search keeps the confirmed note first"
+    },
+    {
+      "check": "top",
+      "step": "r",
+      "ref": "old",
+      "desc": "the 'what is relevant' lookup keeps the confirmed note first"
+    },
+    {
+      "check": "no_text",
+      "step": "s",
+      "text": "restated_by",
+      "desc": "the confirmed note is not labelled as restated"
+    }
+  ]
+}

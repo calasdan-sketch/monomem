@@ -15,7 +15,8 @@ import { embed, embeddingsEnabled, embeddingsConfig, noteEmbeddingText } from ".
 import { filterByTimeRange, parseTimePhrase, type TimeRange } from "./time-parse.js";
 import { TIME_ZONE } from "./config.js";
 import { extractKeywords } from "./keywords.js";
-import { UNCONFIRMED_FACTOR } from "./taint.js";
+import { UNCONFIRMED_FACTOR, heldFromSessionStart } from "./taint.js";
+import { factClash } from "./facts.js";
 import {
   stalenessConfig,
   stalePenaltyFactor,
@@ -336,6 +337,80 @@ function demoteStaleTwins(
   return { ranked: out, behind };
 }
 
+/** Restated-twin rule: the similarity edge that counts as "the same subject" (the edge floor is 0.25). */
+export const RESTATE_MIN_SIM = 0.6;
+/** ... and only a near tie moves: the older note's score is at most this many times the newer one's. */
+export const RESTATE_MAX_RATIO = 1.5;
+/** A note a person confirmed (at the CLI or as an admin) for its current version. */
+const personConfirmed = (n: NoteRecord): boolean => (n.confirmed_kind === "human" || n.confirmed_kind === "admin") && n.confirmed_rev === n.rev;
+const sameWriter = (a: NoteRecord, b: NoteRecord): boolean => a.written_by === b.written_by && (a.writer_id ?? "") === (b.writer_id ?? "");
+
+/**
+ * The stale-twin pass, plus the restated-twin rule (1.5.0, GAP-OBSOLETE-UNREPLACED). An older hit O moves to just behind a newer
+ * hit N when ALL of these hold: same namespace, both plain notes; N was written after O last changed; the SAME server-stamped
+ * writer (that writer could already edit O in place, so the reorder gives it nothing new; a different writer gets the dispute
+ * label only, never a reorder, so one agent cannot bury another's note); the same subject (a fact key with another value, or a
+ * similarity edge >= RESTATE_MIN_SIM); a near tie (O <= RESTATE_MAX_RATIO x N, after boosts and penalties); N inside the first
+ * `limit` results; O not confirmed by a person unless N is too; N not held (unconfirmed outside content, flagged, built on a
+ * distrusted writer, expired in enforce mode), not replaced and not distrusted; O not read clearly more than N. Nothing is
+ * dropped: O stays in the results, labelled `restated_by`.
+ */
+function demoteTwins(
+  store: Store,
+  ranked: Array<{ note: NoteRecord; score: number }>,
+  cfg: StalenessConfig,
+  limit = ranked.length
+): { ranked: Array<{ note: NoteRecord; score: number }>; behind: Map<number, number>; restated: Map<number, number> } {
+  const stale = demoteStaleTwins(store, ranked, cfg);
+  const restated = new Map<number, number>();
+  if (stale.ranked.length < 2) return { ...stale, restated };
+  const out = [...stale.ranked];
+  const enforce = expiryEnforced(store);
+  const isNote = (n: NoteRecord): boolean => (n.kind ?? "note") === "note";
+  for (const oid of out.map((h) => h.note.id)) {
+    if (stale.behind.has(oid)) continue; // already placed behind a newer twin
+    const oi = out.findIndex((h) => h.note.id === oid);
+    const o = out[oi];
+    if (!isNote(o.note)) continue;
+    const oBoost = accessBoostFactor(o.note.access_count, o.note.last_accessed);
+    let sims: Map<number, number> | undefined; // read only when a cheap candidate exists
+    let anchor = -1;
+    for (let i = oi + 1; i < Math.min(out.length, limit); i++) {
+      const n = out[i];
+      if (!isNote(n.note) || n.note.namespace !== o.note.namespace || !sameWriter(n.note, o.note)) continue;
+      if (!(Date.parse(n.note.created_at) > Date.parse(o.note.updated_at))) continue;
+      if (!(n.score > 0) || o.score > RESTATE_MAX_RATIO * n.score) continue;
+      if (personConfirmed(o.note) && !personConfirmed(n.note)) continue;
+      // O keeps its place when it is read clearly MORE than N. Not an absolute read count as in the stale pass: both notes come
+      // back together, so both gain reads, and an absolute bar would undo the order after about nine searches.
+      if (oBoost >= STALE_TWIN_ACTIVE_BOOST * accessBoostFactor(n.note.access_count, n.note.last_accessed)) continue;
+      if (n.note.superseded_by || n.note.distrusted || heldFromSessionStart(n.note, enforce)) continue;
+      const sameSubject = factClash(o.note.tags ?? [], n.note.tags ?? []) || ((sims ??= store.neighbourScores(oid)).get(n.note.id) ?? 0) >= RESTATE_MIN_SIM;
+      if (!sameSubject) continue;
+      if (typeof store.isDistrusted === "function" && store.isDistrusted(n.note)) continue; // an admin's include_distrusted read
+      anchor = i;
+    }
+    if (anchor > oi) {
+      out.splice(oi, 1);
+      out.splice(anchor, 0, o);
+      restated.set(oid, out[anchor - 1].note.id);
+    }
+  }
+  return { ranked: out, behind: stale.behind, restated };
+}
+
+/** What a restated note carries: the newer note's id and a fixed label (no note text). */
+export type RestatedNote = NoteRecord & { restated_by?: number; restated_label?: string };
+export const restatedLabel = (id: number): string =>
+  `[restated by newer note #${id} from the same writer; not replaced: memory_supersede_preview retires this one]`;
+const withRestated = (n: NoteRecord, by: number | undefined): RestatedNote =>
+  by === undefined ? n : { ...n, restated_by: by, restated_label: restatedLabel(by) };
+/** The label for a CLI result line (" [restated by ...]"), or "". */
+export const restatedFlag = (n: NoteRecord): string => {
+  const by = (n as RestatedNote).restated_by;
+  return by === undefined ? "" : ` ${restatedLabel(by)}`;
+};
+
 /**
  * Bump access counters for notes *returned* to the caller (the top N), never
  * for every note the scorer scanned. Importance weighting should reflect
@@ -373,7 +448,7 @@ function finalizeResults(
   staleCfg: StalenessConfig,
   spread = false
 ): NoteRecord[] {
-  const ranked = rankHits(store, hits, staleCfg);
+  const ranked = rankHits(store, hits, staleCfg, limit);
   const notes = (spread ? capPerSession(ranked) : ranked).slice(0, limit);
   bumpAccess(store, notes);
   return notes;
@@ -416,14 +491,13 @@ export function describeWhen(created: string, now: Date = new Date(), relativeTo
 }
 
 /**
- * The ranking half of finalizeResults (access boost, staleness penalty, stale-twin demotion) without the truncation and
+ * The ranking half of finalizeResults (access boost, staleness penalty, stale- and restated-twin demotion) without the truncation and
  * the access bump: the session-start context ranks its own pool and decides itself what it shows (context-inject.ts).
  */
-export function rankHits(store: Store, hits: Array<{ note: NoteRecord; score: number }>, staleCfg: StalenessConfig = stalenessConfig()): NoteRecord[] {
-  const ranked = accessRerankEnabled()
-    ? demoteStaleTwins(store, applyStalePenalty(boostAndRank(hits), staleCfg, expiryEnforced(store)), staleCfg).ranked
-    : [...hits].sort((a, b) => b.score - a.score); // native relevance only (stable)
-  return ranked.map((h) => h.note);
+export function rankHits(store: Store, hits: Array<{ note: NoteRecord; score: number }>, staleCfg: StalenessConfig = stalenessConfig(), limit?: number): RestatedNote[] {
+  if (!accessRerankEnabled()) return [...hits].sort((a, b) => b.score - a.score).map((h) => h.note); // native relevance only (stable)
+  const d = demoteTwins(store, applyStalePenalty(boostAndRank(hits), staleCfg, expiryEnforced(store)), staleCfg, limit);
+  return d.ranked.map((h) => withRestated(h.note, d.restated.get(h.note.id)));
 }
 
 // ---- Retrieval visibility --------------------------------------------------
@@ -511,8 +585,8 @@ function finalizeExplained(
   // report the true base rather than the post-boost score.
   const baseById = new Map<number, number>(hits.map((h) => [h.note.id, h.score]));
   const demoted = accessRerankEnabled()
-    ? demoteStaleTwins(store, applyStalePenalty(boostAndRank(hits), staleCfg, expiryEnforced(store)), staleCfg)
-    : { ranked: [...hits].sort((a, b) => b.score - a.score), behind: new Map<number, number>() };
+    ? demoteTwins(store, applyStalePenalty(boostAndRank(hits), staleCfg, expiryEnforced(store)), staleCfg, limit)
+    : { ranked: [...hits].sort((a, b) => b.score - a.score), behind: new Map<number, number>(), restated: new Map<number, number>() };
   const ranked = demoted.ranked;
   const top = (spread ? capPerSessionBy(ranked, (h) => h.note) : ranked).slice(0, limit);
   bumpAccess(store, top.map((h) => h.note));
@@ -535,8 +609,12 @@ function finalizeExplained(
       stale: staleInfo.stale,
     };
     const behindId = demoted.behind.get(h.note.id);
-    const explanation = describeBreakdown(partial) + (behindId !== undefined ? ` Kept behind the newer note #${behindId} on the same topic.` : "");
-    return { note: h.note, breakdown: { ...partial, explanation } };
+    const restatedBy = demoted.restated.get(h.note.id);
+    const explanation =
+      describeBreakdown(partial) +
+      (behindId !== undefined ? ` Kept behind the newer note #${behindId} on the same topic.` : "") +
+      (restatedBy !== undefined ? ` Kept behind #${restatedBy}, a newer note by the same writer on the same subject. Not replaced: to retire this one, use memory_supersede_preview.` : "");
+    return { note: withRestated(h.note, restatedBy), breakdown: { ...partial, explanation } };
   });
 }
 

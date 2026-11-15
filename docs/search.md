@@ -117,6 +117,15 @@ placed right behind the lowest-ranked of its fresh newer twins. It is still retu
 A stale note that people keep reading (a clearly active read signal) keeps the place its reads earned. Notes that are not similar to anything are
 untouched. To remove an out-of-date note from search entirely, replace it ([replacing-memories.md](./replacing-memories.md)).
 
+**A restated note goes behind the newer one (1.5.0).** The same pass handles fresh notes too. An older note moves right behind a newer one
+when the **same writer** wrote both, the newer one was written after the older one last changed, they are about the same subject (a fact key
+with another value, or a similarity link of at least 0.6), they match the query about equally well (the older score is at most 1.5 times the
+newer one), and the newer note is in the results you get. The older note is still returned, with `restated_by: <id>` and `restated_label`;
+`explain` adds "Kept behind #N, a newer note by the same writer on the same subject. Not replaced: to retire this one, use
+memory_supersede_preview." It never happens for a different writer (both notes show a dispute label instead), over a note a person
+confirmed (unless the newer one is confirmed too), behind unconfirmed outside content or a flagged, replaced or distrusted note, or when the
+older note is read clearly more than the newer one. Applies to search, `state_relevant` / `POST /relevant` and session start.
+
 Thresholds (env vars, read live — no restart needed to retune):
 
 | Variable | Default | Meaning |

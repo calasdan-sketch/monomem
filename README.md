@@ -506,7 +506,7 @@ It has five suites, as plain JSON scenario files you can extend in [`bench/scena
 
 | Suite | Scenarios | What it checks | Headline number |
 |---|---|---|---|
-| A  Stale memory | 34 | a fact updated, replaced, deleted, aged: is the current value first and the old one never shown (or flagged)? Includes the obsolete-fact test (an update in different words, with and without a replace) and the two-step replace (preview writes nothing; the code is single-use, expires, and is bound to one caller) | `stale-hit-rate@1/@5`, `current-recall@1` |
+| A  Stale memory | 38 | a fact updated, replaced, deleted, aged: is the current value first and the old one never shown (or flagged)? Includes the obsolete-fact test (an update in different words, with and without a replace, and the guards: another writer, a confirmed note, another subject, outside content) and the two-step replace (preview writes nothing; the code is single-use, expires, and is bound to one caller) | `stale-hit-rate@1/@5`, `current-recall@1` |
 | B  Contradiction recovery | 31 | writer A vs writer B, then a trusted correction; distrusting the bad writer; weak overwrite of a trusted note; restoring the trusted text from history; the trust guard on replacing | resolved to the correction, loser stays visible, overwrite protected |
 | C  Permission isolation | 27 | cross-tenant read/write/search/export/import/merge/sweep, token scopes, admin-only flags, signed imports, and that one tenant cannot read another's history, preview, undo or reuse a confirmation code | `leakage-count` (must be 0), `unexpected-denials` |
 | D  Provenance retention | 19 | source, writer, creator, timestamps, deletion deadline, confidence after export, import, merge, update | `fields-lost` |
@@ -538,9 +538,11 @@ writing a small adapter (write, update, delete, search, plus the actor: writer a
 stop appearing in search, then a confirm with the preview's one-time code. Nothing is deleted, undo is one command, and every
 edit keeps the text it replaces. See [docs/replacing-memories.md](./docs/replacing-memories.md).
 
-**Known gaps in the benchmark:** one open, `GAP-OBSOLETE-UNREPLACED` (scenario A33): when a later note updates a fact in
-different words and nobody replaces the old note, search can rank the old note first. Replacing it (preview, then confirm) fixes
-it. Scenarios for behaviour Monomem lacks are kept and marked rather than deleted, and the history
+**Known gaps in the benchmark:** none open. The last one, `GAP-OBSOLETE-UNREPLACED` (scenario A33), is fixed in 1.5.0: when the
+same writer later restates a fact in different words and nobody replaces the old note, the newer note now ranks first in search,
+the "what is relevant" lookup and session start, and the old note comes right behind it, labelled `restated_by`. It is not
+reordered for a different writer, over a note a person confirmed, or for unconfirmed outside content (A35 to A38); replacing the
+old note (preview, then confirm) still removes the old value everywhere. Scenarios for behaviour Monomem lacks are kept and marked rather than deleted, and the history
 of each one and how it was fixed is in [docs/BENCHMARK.md](./docs/BENCHMARK.md#known-gaps-history), with the provenance-field breakdown.
 
 Limits no scenario can show (what the benchmark cannot see) are listed next, under Known limits.
@@ -552,6 +554,9 @@ Limits no scenario can show (what the benchmark cannot see) are listed next, und
 - Local apps connected over stdio have no key, so a limit on other apps does not apply to them. A note marked `private` is hidden from
   apps given a limit; apps with no limit (including your main Claude connection) still see it.
 - The writer name of a local app comes from its config file: it tells your apps apart, but it is not proof.
+- A later note by the same writer on the same subject ranks ahead of the older one (labelled `restated_by`, both returned). "Same
+  subject" is a shared fact key with another value, or a close similarity link; two notes with neither (a bulk import builds no
+  links) are left in search order. Replace the old note to retire it for good.
 - Notes are marked as from outside content only when Monomem sees the outside read. `Read`, `Bash` (`curl`) and apps
   without the hooks are not seen, and a confirm's stated source is a claim Monomem does not check.
 - With encryption on (`monomem encrypt enable`), keyword search sees titles and tags only: words that are only in a note's body are not found. Measured on LongMemEval-S, recall at 5 fell from 96.8 to 0.0, because every title there is a session id ([BENCHMARK.md](https://github.com/calasdan-sketch/monomem/blob/main/docs/BENCHMARK.md)).

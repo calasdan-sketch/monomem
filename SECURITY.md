@@ -236,6 +236,11 @@ CLI itself, so none of them stops an agent that can run commands.**
   self-declared, so this stops runaway loops, not a hostile app that changes its label.
 - **Rollback by writer** (`monomem rollback`): undoes what one writer label created or changed; it does not undo tag
   edits, archives, replacements or deletes, and it relies on the same self-declared label.
+- **Restated notes** (1.5.0): a later note by the same writer on the same subject ranks ahead of the older one (both returned,
+  the older labelled `restated_by`). It relies on the stamped writer, which for a local stdio app is the same self-declared label: a
+  local process can claim to be "alice" and so move alice's note back one place. That process could already edit alice's note in
+  place (audited, kept in history), so this does not widen what it can do. A different writer never reorders, and an unconfirmed
+  note never moves one a person confirmed.
 - **Read access log** (`monomem access`): records which writer read what (query preview, counts, no note text), kept
   30 days by default.
 

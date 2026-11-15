@@ -35,7 +35,7 @@ interface ActorHandle {
   namespace?: string;
 }
 
-const CAPS: Capability[] = ["read", "list", "restore", "retire", "trust", "export_import", "attestation", "merge", "recall", "changes", "tenants", "cas", "supersede", "history", "capture", "session_start", "pin"];
+const CAPS: Capability[] = ["read", "list", "restore", "retire", "trust", "export_import", "attestation", "merge", "recall", "changes", "tenants", "cas", "supersede", "history", "capture", "session_start", "pin", "confirm"];
 
 function toOutcome(status: number): Outcome {
   if (status === 200 || status === 201) return "ok";
@@ -378,6 +378,13 @@ export class MonomemAdapter implements MemoryAdapter {
   async pin(actor: string, id: string): Promise<OpResult> {
     const r = await this.http(actor, "PUT", "/pinned", { id: Number(id), pinned: true });
     return r.status === 200 ? { outcome: "ok" } : this.fail(r.status, r.json);
+  }
+
+  /** POST /notes/:id/confirm. An admin token's confirm counts as a person's (kind `admin`, what the dashboard sends). */
+  async confirm(actor: string, id: string): Promise<OpResult> {
+    const r = await this.http(actor, "POST", `/notes/${encodeURIComponent(id)}/confirm`, {});
+    if (r.status !== 200) return this.fail(r.status, r.json);
+    return r.json.counted === true ? { outcome: "ok", data: { kind: r.json.kind } } : { outcome: "invalid", detail: `confirm not counted (${String(r.json.reason ?? r.json.kind)})` };
   }
 
   async sweep(actor: string): Promise<OpResult> {
