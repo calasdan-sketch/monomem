@@ -67,3 +67,17 @@ describe("rarity-weighted coverage", () => {
     }
   });
 });
+
+test("prefixDocFreqs reuses its counts for small changes and refreshes once the store size moves past the tolerance", () => {
+  const store = new Store(":memory:");
+  try {
+    store.create({ title: "a", body: "zebra" }, { skipEdges: true, lint: "none" });
+    assert.equal(store.prefixDocFreqs(["zebra"]).df.get("zebra"), 1);
+    store.create({ title: "b", body: "zebra" }, { skipEdges: true, lint: "none" });
+    assert.equal(store.prefixDocFreqs(["zebra"]).df.get("zebra"), 1, "within tolerance: the cached weight is reused");
+    for (let i = 0; i < 12; i++) store.create({ title: `c${i}`, body: "zebra" }, { skipEdges: true, lint: "none" });
+    assert.equal(store.prefixDocFreqs(["zebra"]).df.get("zebra"), 14, "past the tolerance: counted again");
+  } finally {
+    store.close();
+  }
+});

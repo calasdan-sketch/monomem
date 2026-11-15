@@ -5553,14 +5553,32 @@ export class Store {
       const schema = table === "notes_fts" ? "main" : "bodyidx";
       this.db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS temp.om_vocab_${schema} USING fts5vocab(${schema}, ${table}, 'row')`);
       const n = this.liveNoteTotal();
-      const st = this.db.prepare(`SELECT COALESCE(SUM(doc), 0) AS d FROM temp.om_vocab_${schema} WHERE term >= ? AND term < ?`);
-      for (const p of prefixes) df.set(p, Math.min(n, Number((st.get(p, p + "\uffff") as { d: number }).d)));
+      // A vocab 'row' read walks every posting under the prefix (tens of ms for a common word at 100k notes), and the counts
+      // are only a weight: reuse them until the store grows or shrinks by more than 1 % (or 10 minutes pass).
+      // ponytail: tolerance-based staleness; exact per-write invalidation if a weight ever needs to be exact.
+      const c = this.dfCache;
+      const fresh = c !== null && c.table === table && Math.abs(n - c.n) <= Math.max(10, c.n * 0.01) && Date.now() - c.at < 600_000;
+      const cache = fresh ? c.df : new Map<string, number>();
+      if (!fresh) this.dfCache = { table, n, at: Date.now(), df: cache };
+      let st: { get: (...a: string[]) => unknown } | null = null;
+      for (const p of prefixes) {
+        let d = cache.get(p);
+        if (d === undefined) {
+          st ??= this.db.prepare(`SELECT COALESCE(SUM(doc), 0) AS d FROM temp.om_vocab_${schema} WHERE term >= ? AND term < ?`);
+          d = Number((st.get(p, p + "\uffff") as { d: number }).d);
+          if (cache.size < 5000) cache.set(p, d);
+        }
+        df.set(p, Math.min(n, d));
+      }
       return { n, df };
     } catch {
       // No readable vocabulary (an old SQLite without fts5vocab, a closed store): every keyword weighs the same.
       return { n: 0, df: new Map() };
     }
   }
+
+  /** prefixDocFreqs' counts per prefix, for one search table and store size (see the tolerance there). */
+  private dfCache: { table: string; n: number; at: number; df: Map<string, number> } | null = null;
 
   /** Live notes in the whole store, reused while nothing changed (same key as unconfirmedRows): a search must not add a scan. */
   private liveTotalCache: { key: string; n: number } | null = null;
