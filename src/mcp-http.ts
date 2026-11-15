@@ -25,7 +25,7 @@ import { actorStore, currentWriter } from "./actor.js";
 import { originAllowed, hostAllowed, hostRefusal, RateLimiter, AuthTarpit, clientKey, tokenKey, authenticateEntry } from "./security.js";
 import { type TokenEntry, tokenId } from "./config.js";
 import { type ServerNamespaceOpts, resolveRequestNamespace } from "./namespace.js";
-import { PayloadTooLargeError, readBody, normalizeTokens, exitOnListenError, applyServerLimits } from "./http-common.js";
+import { PayloadTooLargeError, readBody, normalizeTokens, exitOnListenError, applyServerLimits, healthBody } from "./http-common.js";
 
 // Small JSON writer that never writes to an already-finished response.
 function sendJson(res: ServerResponse, status: number, payload: unknown): void {
@@ -71,7 +71,7 @@ export function createMcpHttpServer(
     const url = new URL(req.url ?? "/", "http://localhost");
 
     if (req.method === "GET" && url.pathname === "/health") {
-      sendJson(res, 200, { status: "ok" });
+      sendJson(res, 200, healthBody());
       return;
     }
 

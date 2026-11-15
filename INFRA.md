@@ -125,7 +125,7 @@ cloudflared tunnel run monomem
 ```
 
 Leave it running, then from another machine (or your phone off wifi) hit
-`https://<TUNNEL_HOSTNAME>/health` and confirm you get `{"status":"ok"}`,
+`https://<TUNNEL_HOSTNAME>/health` and confirm you get `{"status":"ok",...}` (it also names the version and schema the server runs),
 not a Cloudflare error page. Ctrl+C to stop once confirmed.
 
 ### Step 7 — Restart-on-boot
@@ -594,7 +594,7 @@ or a service manager and were not run.
 node -v                                  # (verified) must print v22.16 or newer
 npm install -g monomem                 # (not verified here: needs the npm registry)
 monomem start                          # (verified) creates ~/.monomem/.token and state.db, API :8790, MCP :8791
-curl localhost:8790/health               # (verified) {"status":"ok"}
+curl localhost:8790/health               # {"status":"ok","version":"1.5.0","schema":21}
 T=$(cat ~/.monomem/.token)             # (verified)
 curl -s -H "Authorization: Bearer $T" "localhost:8790/changes?since=last&consumer=pc&wait=25"   # (verified) parks, then returns timedOut:true
 curl -s -H "Authorization: Bearer $T" -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \

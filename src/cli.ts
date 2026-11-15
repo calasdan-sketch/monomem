@@ -366,6 +366,14 @@ async function doctorSecurityChecks(dataDir: string, bindHost: string, warn: (m:
   for (const f of await securityFindings(dataDir, bindHost)) if (f.status !== "info") warn(f.detail);
 }
 
+/** True when version `a` (x.y.z, a pre-release tag ignored) is below `b`. */
+function versionBelow(a: string, b: string): boolean {
+  const n = (v: string): number[] => v.split("-")[0].split(".").map((x) => Number(x) || 0);
+  const [x, y] = [n(a), n(b)];
+  for (let i = 0; i < 3; i++) if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) < (y[i] ?? 0);
+  return false;
+}
+
 async function doctor(): Promise<void> {
   const {
     DB_PATH,
@@ -859,6 +867,28 @@ async function doctor(): Promise<void> {
     }
   } catch (e) {
     warn("capture status unavailable: " + (e as Error).message);
+  }
+
+  // 1.5.0 (U-10): a server still running the build from before an upgrade keeps writing in the old shape. Ask it which it is.
+  try {
+    const { PACKAGE_VERSION } = await import("./config.js");
+    const { SCHEMA_VERSION: BUILD } = await import("./store.js");
+    const res = await fetch(`http://127.0.0.1:${API_PORT}/health`, { signal: AbortSignal.timeout(1000) });
+    const h = (await res.json()) as { status?: unknown; version?: unknown; schema?: unknown };
+    if (h?.status === "ok") {
+      const v = typeof h.version === "string" ? h.version : null;
+      const older = v === null || versionBelow(v, PACKAGE_VERSION) || (typeof h.schema === "number" && h.schema < BUILD);
+      if (older) {
+        warn(
+          `the Monomem server on port ${API_PORT} (${v ? `${v}, schema v${h.schema}` : "1.4 or older"}) is older than this CLI (${PACKAGE_VERSION}, schema v${BUILD}): restart it.`,
+          "Stop the server (or the app that started it) and start it again, so it runs this version."
+        );
+      } else {
+        ok(`server on port ${API_PORT} runs ${v}${versionBelow(PACKAGE_VERSION, v!) ? ` (newer than this CLI ${PACKAGE_VERSION}: update the CLI)` : ""}`);
+      }
+    }
+  } catch {
+    /* no server running here, or not a Monomem one: nothing to compare */
   }
 
   console.log(`\n  bind ${BIND_HOST}   api :${API_PORT}   mcp :${MCP_HTTP_PORT}`);

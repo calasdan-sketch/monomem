@@ -62,7 +62,7 @@ function signAsset(file: string): string | null {
   return signCache.get(file) ?? null;
 }
 import { runnerStatus } from "./liveness.js";
-import { PayloadTooLargeError, readBody, normalizeTokens, IMPORT_BODY_BYTES, applyServerLimits } from "./http-common.js";
+import { PayloadTooLargeError, readBody, normalizeTokens, IMPORT_BODY_BYTES, applyServerLimits, healthBody } from "./http-common.js";
 
 /**
  * Import size above which the similarity-graph rebuild is DEFERRED rather
@@ -489,7 +489,7 @@ export function createApiServer(
       // Health check is intentionally unauthenticated so infra (tunnel,
       // uptime monitor) can probe liveness without a credential.
       if (req.method === "GET" && path === "/health") {
-        sendJson(res, 200, { status: "ok" });
+        sendJson(res, 200, healthBody());
         return;
       }
 
