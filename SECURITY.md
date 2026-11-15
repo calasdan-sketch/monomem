@@ -19,7 +19,10 @@ To check your own setup, run `monomem drill` (replays 20 known memory-poisoning 
   defense); browser origins are blocked unless listed in
   `MONOMEM_ALLOWED_ORIGINS`.
 - **Auth:** a bearer token is required on every route except `/health` and
-  `/ready`, and the static pages `/`, `/ui`, `/dashboard.js` and `/favicon.ico`, which hold no notes. Each token is compared in constant time (a minor side-channel on
+  `/ready`, and the static pages `/`, `/ui`, `/dashboard.js` and `/favicon.ico`, which hold no notes. `/health` (on the
+  API and on the MCP port) answers before the host check and the rate limiter, and its reply names the exact Monomem
+  version and database schema (`{"status":"ok","version":...,"schema":...}`): anyone who can reach the port can learn
+  which version runs. It carries no note text and no key. Each token is compared in constant time (a minor side-channel on
   token length/count is not fully eliminated, which is immaterial for the
   high-entropy tokens this uses behind a tunnel). Tokens are never placed in
   URLs and are never logged. The primary token file is created `0600` and is
