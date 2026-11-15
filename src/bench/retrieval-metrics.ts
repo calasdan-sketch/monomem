@@ -43,6 +43,8 @@ export function percentile(xs: number[], p: number): number {
 
 export interface QuestionScore {
   r5: number;
+  /** Strict: every gold id in the top 5 (agentmemory's "recall-all@5"). */
+  rAll5: number;
   r10: number;
   rAll10: number;
   ndcg10: number;
@@ -52,6 +54,7 @@ export interface QuestionScore {
 export function scoreQuestion(ranked: string[], gold: Set<string>): QuestionScore {
   return {
     r5: recallAny(ranked, gold, 5),
+    rAll5: recallAll(ranked, gold, 5),
     r10: recallAny(ranked, gold, 10),
     rAll10: recallAll(ranked, gold, 10),
     ndcg10: ndcg(ranked, gold, 10),
@@ -72,7 +75,7 @@ export function aggregate(scores: Array<{ type: string; score: QuestionScore }>)
   const out: Record<string, MetricRow> = {};
   for (const [g, xs] of groups) {
     const mean = (f: keyof QuestionScore): number => xs.reduce((a, x) => a + x[f], 0) / xs.length;
-    out[g] = { n: xs.length, r5: mean("r5"), r10: mean("r10"), rAll10: mean("rAll10"), ndcg10: mean("ndcg10"), mrr: mean("mrr") };
+    out[g] = { n: xs.length, r5: mean("r5"), rAll5: mean("rAll5"), r10: mean("r10"), rAll10: mean("rAll10"), ndcg10: mean("ndcg10"), mrr: mean("mrr") };
   }
   return out;
 }

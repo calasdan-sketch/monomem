@@ -68,7 +68,11 @@ scenario starts to pass, the run **fails** with "known gap now PASSES": remove t
 `fixed`. The current list is in the README's "Benchmark" section.
 
 **1.6.0 closed every gap 1.5.0 recorded** (`GAP-SUPERSEDE`, `GAP-RECENCY`, `GAP-HISTORY`, `GAP-CONFIDENCE`, all now `fixed`), so no
-shipped scenario carries a marker any more. The mechanism stays for the next gap. Two honest notes on what "closed" means here:
+shipped scenario carried a marker until 1.5.0 (this release) added **`GAP-OBSOLETE-UNREPLACED`** (scenario A33, open): when a later
+note updates a fact in different words and nobody replaces the old note, keyword search and the "what is relevant" lookup rank the
+**old** note first (it matches the query as well and is shorter, so BM25 scores it higher; newest-first only breaks exact ties). The
+SessionStart injection does carry the new value. With the replace step (A34) the old value is gone from all three. Two honest
+notes on what "closed" means for the earlier gaps:
 
 - Five of the old gap scenarios (A05, A06, A10, A20, B03) now include the replace steps: the agent *replaces* the old note through
   the two-step preview and confirm. Monomem still does **not** guess that a new note replaces an old one and hide the old one by
@@ -217,8 +221,8 @@ reads anything and no judge grades anything: each conversation is written into a
 question is searched, and the returned sessions (or turns) are compared with the dataset's own gold evidence.
 
 ```
-monomem bench --longmemeval [--data file] [--limit N] [--mode keyword|hybrid] [--granularity session|turn] [--json]
-monomem bench --locomo      [--data file] [--limit N] [--mode keyword|hybrid] [--granularity turn|session] [--json]
+monomem bench --longmemeval [--data file] [--limit N] [--mode keyword|hybrid] [--granularity session|turn] [--encrypted] [--json]
+monomem bench --locomo      [--data file] [--limit N] [--mode keyword|hybrid] [--granularity turn|session] [--encrypted] [--json]
 ```
 
 - **Data.** LongMemEval-S, cleaned release ([`xiaowu0162/longmemeval-cleaned`](https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned),
@@ -247,9 +251,107 @@ monomem bench --locomo      [--data file] [--limit N] [--mode keyword|hybrid] [-
   per-keyword BM25 rankings fused with RRF; the keyword fallback used the same). `--mode hybrid` also scores
   `runSearch(mode: "hybrid")` (BM25 + embeddings; since 2026-11-04 a 0.5 / 0.5 blend of min-max-scaled scores, before
   that RRF) when an embedding server answers; otherwise it is reported as skipped.
-- **Metrics.** `R@5`, `R@10`: any gold session (or turn) in the top k. `Rall@10`: every gold one in the top 10.
+- **Metrics.** `R@5`, `R@10`: any gold session (or turn) in the top k. `Rall@5`, `Rall@10`: every gold one in the top 5 / 10
+  (strict; `R@k` is the generous any-hit variant). In `--json`: `rAll5`, `rAll10`.
   `nDCG@10` with binary relevance. `MRR` over the top 50. Search latency p50/p95 per query; indexing time per
   haystack (single process, SQLite in a temp folder).
+
+### Results, 2026-11-14 (1.5.0 work; measured, not yet published)
+
+Measured on 2026-11-14 on the development PC: Windows 11 Home, AMD Ryzen 7 9800X3D (8 cores / 16 threads), 31 GB RAM, NVMe,
+Node v24.18.0, feat/1.5.0 code. Other build agents were running on the same PC at the same time, so the search times here are
+higher than the 2026-11-09 ones (same ranking code) and should be read as "loaded machine", not as a regression. Keyword-only
+(no embedding server), the commands exactly as above.
+
+**Strict recall-all@5 (`Rall@5`), new in this round.** `R@5` counts a question as found when any one gold session is in the
+top 5; `Rall@5` needs every gold session there. Questions with one gold session score the same on both, so the gap is all in
+multi-session questions.
+
+| Run | search | R@5 | **Rall@5** | R@10 | Rall@10 | nDCG@10 | MRR | search p50 / p95 |
+|---|---|---|---|---|---|---|---|---|
+| LongMemEval-S session (470) | keyword | 96.8 | **84.0** | 98.3 | 90.2 | 89.7 | 91.0 | 5.0 / 34.0 ms |
+| LongMemEval-S session (470) | relevant | 96.8 | **84.0** | 98.3 | 90.2 | 89.7 | 90.9 | 3.6 / 16.3 ms |
+| LoCoMo-10 turn (1,982) | keyword | 57.8 | **49.8** | 65.2 | 56.2 | 48.0 | 46.6 | 2.6 / 13.2 ms |
+| LoCoMo-10 turn (1,982) | relevant | 57.9 | **49.9** | 65.3 | 56.3 | 48.0 | 46.7 | 2.8 / 13.5 ms |
+| LoCoMo-10 session (1,982) | keyword | 90.4 | **81.5** | 95.5 | 87.7 | 80.3 | 78.6 | 2.1 / 5.6 ms |
+| LoCoMo-10 session (1,982) | relevant | 90.5 | **81.6** | 95.5 | 87.7 | 80.5 | 78.8 | 1.6 / 5.6 ms |
+
+The honest headline for LongMemEval-S is therefore **84.0 strict / 96.8 any-hit at k = 5**. agentmemory 0.9.31 reports 84.7
+strict recall-all@5 with BM25 (its own figure, not re-run here), so on the strict metric the two are level, not the 12-point gap
+the any-hit number suggests.
+
+**Speed at 10,000 notes (`monomem bench --scale 10k`), new in this round.** A synthetic store in a temp folder: 10,000 notes
+(10,200 after the timed writes) in 5 namespaces, made-up Zipf-distributed words, bodies 80 % 200-600 characters, 15 % 1.5-3k,
+5 % 8-20k (the corpus shape of the round-2 performance seat). Built twice from the same seed: once plain, once with a key file
+beside the database (at-rest encryption on). Session start is `injectContext` for one namespace (2,000 notes), 30 runs on an
+open store after one warm-up; "open + session start" opens a new `Store` each time (a hook process, minus Node start-up).
+Search is a 2-word keyword query in one namespace, 150 runs. Write is `create` with similarity edges and the linter on, 200 runs
+on the full store. Three back-to-back runs, ms p50 / p95 (the third run overlapped heavier load from other agents):
+
+| Path | plain, run 1 / 2 / 3 | encrypted, run 1 / 2 / 3 |
+|---|---|---|
+| Session start (`injectContext`) | 8.8/10.1, 8.7/9.9, 9.8/15.6 | **12.5/15.6, 12.3/17.1, 18.2/42.0** |
+| Open store + session start | 23.2/32.2, 23.2/34.8, 24.6/32.8 | 28.6/54.7, 24.9/29.4, 39.3/115.7 |
+| Keyword search, 2 words | 6.9/10.4, 6.0/8.7, 6.8/10.4 | 3.3/4.9, 2.9/4.6, 5.7/14.2 (title + tags only, see below) |
+| Write (`create`, edges on) | 5.7/10.7, 5.9/11.7, 6.6/12.3 | 6.0/9.7, 5.7/9.9, 9.0/31.9 |
+| Build 10k (one transaction per 1,000, no edges) | 10.8 s, 10.4 s, 10.6 s | 14.0 s, 12.9 s, 25.1 s |
+
+**Release gate (10k encrypted session start p50 < 50 ms): PASS** in all three runs (12.3-18.2 ms; with a fresh store open each
+time 24.9-39.3 ms, also under 50). Limits of this measurement: the bulk build skips similarity edges, so the database is 31 MB
+instead of the about 57-60 MB the performance seat's fully-edged 10k store had (edges are 43 % of that file); session start does
+not read edges, but a smaller file caches better. The time for a whole `monomem recall` hook process (Node start-up included,
+657-760 ms in the performance seat's before table) was not re-measured. Encrypted search is faster only because it searches less
+text (next section). 1,000 notes for comparison: session start 5.3 / 8.8 ms plain / encrypted p50.
+
+**Recall with encryption on vs off (`--encrypted`), new in this round.** The same commands with `--encrypted`, which puts a key
+file beside every throwaway database before the notes are written; same corpus, same questions, keyword-only:
+
+| Run | plain R@5 / Rall@5 / R@10 / MRR | encrypted R@5 / Rall@5 / R@10 / MRR | encrypted search p50 |
+|---|---|---|---|
+| LongMemEval-S session (470), keyword | 96.8 / 84.0 / 98.3 / 91.0 | **0.0 / 0.0 / 0.0 / 0.0** | 0.7 ms |
+| LongMemEval-S session (470), relevant | 96.8 / 84.0 / 98.3 / 90.9 | **0.0 / 0.0 / 0.0 / 0.0** | 0.2 ms |
+| LoCoMo-10 turn (1,982), keyword | 57.8 / 49.8 / 65.2 / 46.6 | **0.1 / 0.1 / 0.1 / 0.1** | 0.3 ms |
+| LoCoMo-10 session (1,982), keyword | 90.4 / 81.5 / 95.5 / 78.6 | **0.0 / 0.0 / 0.0 / 0.0** | 0.3 ms |
+
+(`relevant` matched `keyword` to within 0.1 in every encrypted run.) **Recall drops to about zero.** The cause is the documented
+limit, not a bug: while encryption is on, the body is stored only as ciphertext (`body_enc`), so the full-text index has the
+title and tags but no body words, and keyword search covers title + tags only (SECURITY.md, docs/encryption-retention.md). In
+these datasets every title is a session or dialog id and there are no tags, so nothing a question says can match. This is the
+worst case: a real store whose titles carry words still finds notes by those words, but any fact that lives only in a body is
+invisible to keyword search when encrypted. Indexing was faster encrypted (LongMemEval-S 24.1 s total vs 47.0 s plain,
+because there is less to index; not a speed claim). Hybrid search (embeddings are still computed from the decrypted text and
+stored unencrypted) would likely recover much of this, but could not be measured: the local Ollama on 127.0.0.1:11434 has
+`nomic-embed-text` installed but did not answer an embedding request within 120 s during this round (it was not restarted,
+since other work was using it).
+
+**Proposal, not built (C-06).** Keep a body index in memory only while an encrypted store is open: a `TEMP` FTS5 table (with
+`PRAGMA temp_store = MEMORY` so SQLite never spills it to a temp file) filled from the decrypted bodies at open, kept in step by
+the write paths (create, update, edit, archive, restore, delete, supersede, import, purge), and queried by the two
+`notes_fts MATCH` sites in store.ts in place of the on-disk body column. Why it was not built now: it is not small. The on-disk
+index is external-content and kept in sync by SQL triggers, which cannot decrypt, so every write path needs an app-level
+hook; the open cost is one decryption per note (to be measured at 100k); ranking must give the same bm25 weights across two
+tables; and it puts decrypted text in process memory for the life of the process (no worse than a decrypted read, but a
+security-review item). Until then the honest statement stays: encryption costs keyword recall on body text, and the size of
+that cost depends on how much of what you look for is in titles and tags.
+
+**Obsolete-fact test (C-07), new in this round.** arXiv 2610.36308 reports that an outdated statement in the retrieved context
+drops answer accuracy from 100 % to 44.6 %. Two provenance scenarios measure it here, in the stale suite: A33 writes a fact and a
+later update in different words (10 unrelated notes around them) and does **not** replace the old note; A34 does the same and then
+replaces it (preview, confirm). Both check search, the "what is relevant" lookup and the SessionStart injection. Result: **A34
+passes** (current value first everywhere, obsolete value absent from all three); **A33 fails and is recorded as a known gap**: the
+obsolete note is ranked **first** by both search and the lookup, and the SessionStart text carries the current value but the old
+note too. So without the replace step, the answer to "does recall return the current value first?" is **no** in this case.
+Full `monomem bench` after adding them: 132 passed, 1 known gap (A33), 0 failed; stale-hit-rate@5 2/16, current-recall@1 15/15.
+
+**MemoryAgentBench (C-07): skipped, not run.** What its README (github.com/HUST-AI-HYZ/MemoryAgentBench, read 2026-11-14)
+says: the accurate-retrieval and FactConsolidation splits are scored by substring match, not by a judge, but the answer that is
+scored is written by a reader LLM from the retrieved context, and the setup expects `OPENAI_API_KEY` in a `.env` (Anthropic and
+Google keys optional); local models (Ollama, vLLM) are not mentioned. The datasets download from Hugging Face
+(`ai-hyz/MemoryAgentBench`), and the environment is a Python 3.10 conda env with torch and the full requirements list. A free
+local reader through Ollama on 127.0.0.1:11434 would have been allowed, but (1) the harness does not document a local-model
+route, so it would mean patching it, (2) the local Ollama did not answer even an embedding request within 120 s during this
+round, and (3) a run with a substituted local reader would not be comparable with the published leaderboard (BM25 60.5 on
+accurate retrieval used its authors' hosted reader models). So no MemoryAgentBench number is reported; nothing was sent anywhere.
 
 ### Results, 2026-11-09 (expert round 4)
 

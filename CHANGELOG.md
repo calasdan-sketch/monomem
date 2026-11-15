@@ -65,6 +65,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Line-by-line diff of what changes in `supersede preview`, `quarantine show` and the dashboard.
 - `monomem service install | status | uninstall` (Windows Task Scheduler, macOS LaunchAgent, Linux systemd user unit; never
   run by setup) and `start --log` writing a rotated `server.log`.
+- `monomem bench --longmemeval | --locomo` prints strict recall-all@5 (`Rall@5`, every gold session in the top 5) next to
+  the any-hit `R@5`. LongMemEval-S keyword: 96.8 any-hit, 84.0 strict (docs/BENCHMARK.md).
+- `monomem bench --scale 10k`: session start, search and write p50/p95 on a synthetic store in a temp folder, plain and
+  encrypted, with the 50 ms encrypted session-start gate (exit 1 when it fails). On the development PC at 10k notes:
+  encrypted session start 12-18 ms p50, plain 9-10 ms (docs/BENCHMARK.md).
+- `monomem bench --longmemeval | --locomo --encrypted` runs the same retrieval benchmark on encrypted stores. Measured: keyword
+  recall falls from 96.8 to 0.0 R@5 on LongMemEval-S (titles there are session ids, and keyword search covers only title and
+  tags while encryption is on). The in-memory body index that would fix this is written up in docs/BENCHMARK.md, not built.
+- **133 deterministic scenarios** (was 131): A 34, B 31, C 27, D 19, E 22. Obsolete-fact scenarios A33 and A34 in `monomem bench`. With the replace step the old value never reaches the agent (A34
+  passes). Without it, search ranks the outdated note above its update (A33): recorded as the open known gap
+  `GAP-OBSOLETE-UNREPLACED`, not hidden. MemoryAgentBench was not run (docs/BENCHMARK.md says why).
 - `/health` returns the version and schema; `doctor` warns when the running server is older than the CLI.
 - Pins travel through file sync (a file never unpins, and never pins an unconfirmed outside note).
 - Clearer everyday commands: a mistyped writer name gets "did you mean `stdio:…`" instead of an empty plan or a useless

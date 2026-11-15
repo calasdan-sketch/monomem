@@ -1,0 +1,70 @@
+{
+  "id": "A33",
+  "suite": "stale",
+  "known_gap": "GAP-OBSOLETE-UNREPLACED",
+  "title": "Obsolete fact, not replaced: the update comes first everywhere",
+  "what": "The obsolete-fact test (an outdated statement in the retrieved context; arXiv 2610.36308). A fact is written, then a later note says it changed, in different words, and nobody replaces or edits the old note. Search, the 'what is relevant' lookup and the SessionStart injection must all put the current value in front of the agent, and search must rank it first. The old note is still there (Monomem never hides a note by guessing), so this scenario does not check that the old value is absent; A34 does, with the replace step.",
+  "actors": {
+    "alice": {
+      "scope": "write"
+    }
+  },
+  "needs": [
+    "recall",
+    "session_start"
+  ],
+  "distractors": 10,
+  "steps": [
+    {
+      "op": "write",
+      "as": "alice",
+      "ref": "old",
+      "title": "{{proj}} build server",
+      "body": "The {{proj}} build server is {{v1}}."
+    },
+    {
+      "op": "write",
+      "as": "alice",
+      "ref": "new",
+      "title": "{{proj}} build server moved",
+      "body": "Update: {{proj}} builds moved off the old box; the build server is now {{v2}}."
+    },
+    {
+      "op": "search",
+      "as": "alice",
+      "q": "{{proj}} build server",
+      "id": "s"
+    },
+    {
+      "op": "recall",
+      "as": "alice",
+      "q": "which build server does {{proj}} use?",
+      "id": "r"
+    },
+    {
+      "op": "session_start",
+      "as": "alice",
+      "id": "ss"
+    }
+  ],
+  "expect": [
+    {
+      "check": "top",
+      "step": "s",
+      "ref": "new",
+      "desc": "search ranks the update above the obsolete note"
+    },
+    {
+      "check": "top",
+      "step": "r",
+      "ref": "new",
+      "desc": "the 'what is relevant' lookup ranks the update first"
+    },
+    {
+      "check": "contains_text",
+      "step": "ss",
+      "text": "{{v2}}",
+      "desc": "the SessionStart injection carries the current value"
+    }
+  ]
+}

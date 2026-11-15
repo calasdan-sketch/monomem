@@ -1,0 +1,100 @@
+{
+  "id": "A34",
+  "suite": "stale",
+  "title": "Obsolete fact, replaced: the old value never reaches the agent",
+  "what": "The obsolete-fact test with Monomem's fix applied: the same old fact and later update as A33, then the agent replaces the old note with the update (preview, then confirm). Now the outdated value must be gone from search, from the 'what is relevant' lookup and from the SessionStart injection, while the current value is in all three.",
+  "actors": {
+    "alice": {
+      "scope": "write"
+    }
+  },
+  "needs": [
+    "recall",
+    "session_start",
+    "supersede"
+  ],
+  "distractors": 10,
+  "steps": [
+    {
+      "op": "write",
+      "as": "alice",
+      "ref": "old",
+      "title": "{{proj}} build server",
+      "body": "The {{proj}} build server is {{v1}}."
+    },
+    {
+      "op": "write",
+      "as": "alice",
+      "ref": "new",
+      "title": "{{proj}} build server moved",
+      "body": "Update: {{proj}} builds moved off the old box; the build server is now {{v2}}."
+    },
+    {
+      "op": "supersede_preview",
+      "as": "alice",
+      "id": "pv",
+      "old": [
+        "old"
+      ],
+      "new_ref": "new"
+    },
+    {
+      "op": "supersede_confirm",
+      "as": "alice",
+      "id": "cf",
+      "from": "pv"
+    },
+    {
+      "op": "search",
+      "as": "alice",
+      "q": "{{proj}} build server",
+      "id": "s"
+    },
+    {
+      "op": "recall",
+      "as": "alice",
+      "q": "which build server does {{proj}} use?",
+      "id": "r"
+    },
+    {
+      "op": "session_start",
+      "as": "alice",
+      "id": "ss"
+    }
+  ],
+  "expect": [
+    {
+      "check": "fresh_answer",
+      "step": "s",
+      "desc": "search: current value first, the obsolete value not in the top five",
+      "current": "new",
+      "stale_text": [
+        "{{v1}}"
+      ]
+    },
+    {
+      "check": "top",
+      "step": "r",
+      "ref": "new",
+      "desc": "the 'what is relevant' lookup ranks the update first"
+    },
+    {
+      "check": "no_text",
+      "step": "r",
+      "text": "{{v1}}",
+      "desc": "the 'what is relevant' lookup does not return the obsolete value"
+    },
+    {
+      "check": "contains_text",
+      "step": "ss",
+      "text": "{{v2}}",
+      "desc": "the SessionStart injection carries the current value"
+    },
+    {
+      "check": "no_text",
+      "step": "ss",
+      "text": "{{v1}}",
+      "desc": "the SessionStart injection does not carry the obsolete value"
+    }
+  ]
+}

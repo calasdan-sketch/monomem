@@ -1,6 +1,6 @@
 // `monomem bench --longmemeval | --locomo`: a retrieval benchmark on public long-conversation datasets.
 // No LLM, no judge: each conversation is loaded into a fresh throwaway Store, the question is searched, and the
-// retrieved sessions/turns are scored against the dataset's gold evidence (recall@k, nDCG@10, MRR).
+// retrieved sessions/turns are scored against the dataset's gold evidence (recall@k, strict recall-all@k, nDCG@10, MRR).
 import { BENCH_HOME } from "./retrieval-env.js"; // first: isolate MONOMEM_HOME before config.js loads
 import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
@@ -9,6 +9,7 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { DATA_DIR, DB_PATH } from "../config.js";
 import { Store } from "../store.js";
+import { ensureKey } from "../crypto.js";
 import { LIMITS } from "../security.js";
 import { embed, embeddingsEnabled } from "../embeddings.js";
 import { maybeEmbed, runRelevantSearch, runSearch } from "../search-service.js";
@@ -159,6 +160,8 @@ export interface RetrievalOptions {
   limit?: number;
   mode: "keyword" | "hybrid";
   granularity: Granularity;
+  /** C-06: write every haystack into an encrypted store (a key file beside the database) to measure what encryption costs. */
+  encrypted?: boolean;
 }
 
 interface ModeResult {
@@ -169,6 +172,7 @@ interface ModeResult {
 export interface RetrievalReport {
   dataset: string;
   granularity: Granularity;
+  encrypted: boolean;
   questions: number;
   haystacks: number;
   notes: number;
@@ -215,6 +219,7 @@ export async function runRetrieval(o: RetrievalOptions): Promise<RetrievalReport
   let nq = 0;
   for (const [i, h] of stacks.entries()) {
     const dir = join(BENCH_HOME, `h${i}`);
+    if (o.encrypted) ensureKey(dir);
     const store = new Store(join(dir, "state.db"));
     try {
       const unitOf = new Map<number, string>();
@@ -262,6 +267,7 @@ export async function runRetrieval(o: RetrievalOptions): Promise<RetrievalReport
   return {
     dataset: o.dataset === "longmemeval" ? "LongMemEval-S (cleaned)" : "LoCoMo-10",
     granularity: o.granularity,
+    encrypted: o.encrypted === true,
     questions: nq,
     haystacks: stacks.length,
     notes,
@@ -279,17 +285,17 @@ const pct = (x: number): string => (x * 100).toFixed(1).padStart(6);
 
 export function renderRetrieval(r: RetrievalReport): string {
   const lines = [
-    `${r.dataset}, ${r.granularity} granularity: ${r.questions} questions over ${r.haystacks} haystacks, ${r.notes} notes` +
+    `${r.dataset}, ${r.granularity} granularity${r.encrypted ? ", ENCRYPTED store (key file on)" : ""}: ${r.questions} questions over ${r.haystacks} haystacks, ${r.notes} notes` +
       (r.truncatedBodies ? ` (${r.truncatedBodies} bodies cut to ${LIMITS.body} chars)` : ""),
     `indexing: ${(r.indexMs.total / 1000).toFixed(1)} s total, p50 ${r.indexMs.p50PerHaystack.toFixed(1)} ms per haystack`,
   ];
   const table = (name: string, m: ModeResult): void => {
     lines.push("", `${name} (search p50 ${m.latencyMs.p50.toFixed(2)} ms, p95 ${m.latencyMs.p95.toFixed(2)} ms)`);
-    lines.push(`${"type".padEnd(28)}${"n".padStart(5)}    R@5   R@10 Rall@10 nDCG@10    MRR`);
+    lines.push(`${"type".padEnd(28)}${"n".padStart(5)}    R@5 Rall@5   R@10 Rall@10 nDCG@10    MRR`);
     const keys = ["all", ...Object.keys(m.metrics).filter((k) => k !== "all").sort()];
     for (const k of keys) {
       const x = m.metrics[k];
-      lines.push(`${k.padEnd(28)}${String(x.n).padStart(5)} ${pct(x.r5)} ${pct(x.r10)}  ${pct(x.rAll10)}  ${pct(x.ndcg10)} ${pct(x.mrr)}`);
+      lines.push(`${k.padEnd(28)}${String(x.n).padStart(5)} ${pct(x.r5)} ${pct(x.rAll5)} ${pct(x.r10)}  ${pct(x.rAll10)}  ${pct(x.ndcg10)} ${pct(x.mrr)}`);
     }
   };
   table("keyword (runSearch mode=keyword / state_search: BM25, all-terms first, then any-keyword BM25 x keyword coverage)", r.keyword);
@@ -314,6 +320,7 @@ export async function retrievalMain(argv: string[], out: (s: string) => void = c
       const a = argv[i];
       if (a === "--longmemeval" || a === "--locomo" || a === "--") continue;
       else if (a === "--json") json = true;
+      else if (a === "--encrypted") o.encrypted = true;
       else if (a === "--data") o.data = resolve(take(i++, a));
       else if (a === "--limit") {
         const n = Number(take(i++, a));
