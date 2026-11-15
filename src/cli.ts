@@ -2996,7 +2996,11 @@ async function projectRulesCmd(args: string[]): Promise<void> {
   }
   const { lineDiff } = await import("./line-diff.js");
   const show = (): void => {
-    console.log(`${plan.lines.length} note${plan.lines.length === 1 ? "" : "s"} go into ${path}${ns !== undefined ? ` (namespace ${printable(ns, 60)})` : ""}; ${plan.left.length} left out.`);
+    console.log(`${plan.lines.length} note${plan.lines.length === 1 ? " goes" : "s go"} into ${path}${ns !== undefined ? ` (namespace ${printable(ns, 60)})` : ""}; ${plan.left.length} left out.`);
+    // No namespace is set for this folder, so every namespace's confirmed notes qualify: name them, and say how to narrow it.
+    if (ns === undefined && plan.namespaces.length) {
+      console.log(`  Drawn from every namespace (no namespace is set for this folder): ${plan.namespaces.map((n) => printable(n, 60)).join(", ")}. Keep it to one: --ns <namespace>`);
+    }
     for (const l of plan.left.slice(0, 20)) console.log(`  left out #${l.id}: ${l.why}`);
     for (const l of lineDiff(currentBlock(plan.before), currentBlock(plan.after), 200)) console.log(`  ${l}`);
   };
@@ -3004,7 +3008,10 @@ async function projectRulesCmd(args: string[]): Promise<void> {
   if (!plan.lines.length && !(plan.before ?? "").includes(FENCE_BEGIN)) {
     return void console.log("No note qualifies yet (a person confirms one with monomem confirm <id>, or pins it). Nothing written.");
   }
-  if (flags["dry-run"] === true) return void show();
+  if (flags["dry-run"] === true) {
+    show();
+    return void console.log("Dry run: nothing was written.");
+  }
   await requireOperator(`write ${plan.lines.length} note${plan.lines.length === 1 ? "" : "s"} into the Monomem block of ${path}`, show);
   const { writeFileSync, renameSync, existsSync, readFileSync } = await import("node:fs");
   if ((existsSync(path) ? readFileSync(path, "utf8") : null) !== plan.before) {

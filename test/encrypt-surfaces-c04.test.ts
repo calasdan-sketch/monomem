@@ -45,6 +45,10 @@ describe("C-04 encrypt status --surfaces", () => {
       assert.equal(by(rows, "exports").encrypted, "no");
       assert.equal(by(rows, "backups").encrypted, "not checked");
       assert.equal(by(rows, "sync files").encrypted, "not checked");
+      // Final security panel item 5: two more places decrypted note text lands.
+      assert.equal(by(rows, "sync conflicts").encrypted, "nothing stored");
+      assert.equal(by(rows, "project rules files").encrypted, "no");
+      assert.match(by(rows, "project rules files").detail, /AGENTS\.md/);
     }));
 
   test("key added after some writes: bodies, history, capture and spool are counted sealed vs plain", () =>

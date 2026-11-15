@@ -369,6 +369,10 @@ text between `<!-- monomem:begin v1 -->` and `<!-- monomem:end -->` is replaced;
 and fence lines that are broken (one missing, twice, out of order) are refused rather than guessed. Running it again with
 nothing new writes nothing. No hook runs it, and Monomem never writes these files any other way.
 
+The block holds the notes' **decrypted** text, and a rules file is usually committed, so check which namespaces go in. Without
+a namespace setting for the folder (and without `--ns`), notes from every namespace qualify; the command then names the
+namespaces it drew from and suggests `--ns <namespace>` to keep it to one.
+
 Limits: it looks at the 1,000 most recently changed notes of the namespace; the block is a copy, so it is only as fresh as
 the last run.
 
