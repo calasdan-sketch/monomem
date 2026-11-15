@@ -39,7 +39,7 @@ import {
 import { isStale, stalenessConfig, annotateStaleness } from "./staleness.js";
 // At-rest encryption for note bodies. No module cycle: crypto.ts imports
 // only node: builtins, never store.ts.
-import { encrypt, decryptIfEncrypted, isEncrypted, loadKey, keyPath, noteAad, captureAad } from "./crypto.js";
+import { encrypt, decryptIfEncrypted, isEncrypted, loadKey, keyPath, noteAad, captureAad, encryptV3, decryptV3, ENC_PREFIX_V3 } from "./crypto.js";
 import { currentActor, currentWriter, cleanWriter, currentCeiling, actorStore } from "./actor.js";
 import { redact } from "./redact.js";
 import {
@@ -962,9 +962,19 @@ export { ORIGIN_TOOL_PREFIX };
 const PREMIGRATION_FILE_RE = /-backup(-\d{8}-\d{6}(-\d+)?)?(\.[0-9a-f]+\.partial(-journal|-wal|-shm)?)?$/;
 const PREMIGRATION_PARTIAL_RE = /\.[0-9a-f]+\.partial(-journal|-wal|-shm)?$/;
 
-/** AAD binding a sealed quarantine column to its column name and namespace. */
+/** AAD binding a sealed quarantine column to its column name and namespace (v2, rows sealed before 1.5.0). */
 function quarantineAad(col: string, namespace: string): string {
   return `quarantine|${col}|${namespace}`;
+}
+/**
+ * 1.5.0 S-05: a held write is sealed as v3, bound to its row id too, so one held body moved into another held row (same
+ * namespace) does not open and cannot be approved under that row's writer. v2 rows are still read.
+ */
+function sealQuarantineCol(v: string, key: Buffer, col: string, namespace: string, id: number): string {
+  return encryptV3(v, key, `${quarantineAad(col, namespace)}|${id}`);
+}
+function openQuarantineCol(v: string, key: Buffer | null, col: string, namespace: string, id: number): string {
+  return v.startsWith(ENC_PREFIX_V3) ? decryptV3(v, key, `${quarantineAad(col, namespace)}|${id}`) : decryptIfEncrypted(v, key, quarantineAad(col, namespace));
 }
 
 /** Who is making this write: an internal override, else the connection's server-stamped writer. */
@@ -5116,7 +5126,7 @@ export class Store {
     const upd = this.db.prepare("UPDATE quarantine SET title = ?, body = ?, tags = ?, sealed = 1 WHERE id = ?");
     for (const r of rows) {
       const seal = (col: string, v: string | null): string | null =>
-        v === null ? null : encrypt(v, key, quarantineAad(col, r.namespace));
+        v === null ? null : sealQuarantineCol(v, key, col, r.namespace, r.id);
       upd.run(seal("title", r.title), seal("body", r.body), seal("tags", r.tags), r.id);
     }
   }
@@ -5133,7 +5143,7 @@ export class Store {
     const upd = this.db.prepare("UPDATE quarantine SET title = ?, body = ?, tags = ?, sealed = 0 WHERE id = ?");
     for (const r of rows) {
       const open = (col: string, v: string | null): string | null =>
-        v === null ? null : decryptIfEncrypted(v, key, quarantineAad(col, r.namespace));
+        v === null ? null : openQuarantineCol(v, key, col, r.namespace, r.id);
       upd.run(open("title", r.title), open("body", r.body), open("tags", r.tags), r.id);
     }
   }
@@ -8937,8 +8947,8 @@ export class Store {
     let id: number;
     try {
       const key = this.writeKey();
-      const sealCol = (col: string, v: string | null): string | null =>
-        v === null || !key ? v : encrypt(v, key, quarantineAad(col, q.namespace));
+      // Sealed rows are bound to their id (S-05): inserted with empty columns, sealed below in this same transaction.
+      const sealCol = (col: string, v: string | null): string | null => (v === null || !key ? v : "");
       const res = this.db
         .prepare(
           `INSERT INTO quarantine (op, target_id, if_rev, namespace, title, body, tags, source,
@@ -8967,6 +8977,12 @@ export class Store {
           clears.length ? JSON.stringify(clears) : null
         );
       id = Number(res.lastInsertRowid);
+      if (key) {
+        const seal = (col: string, v: string | null): string | null => (v === null ? null : sealQuarantineCol(v, key, col, q.namespace, id));
+        this.db
+          .prepare("UPDATE quarantine SET title = ?, body = ?, tags = ? WHERE id = ?")
+          .run(seal("title", q.title ?? null), seal("body", q.body ?? null), seal("tags", q.tags === undefined ? null : JSON.stringify(q.tags)), id);
+      }
       if (q.importedUnverified || q.syncIdentity) {
         this.db
           .prepare("UPDATE quarantine SET imported_unverified = ?, sync_origin = ?, sync_origin_id = ? WHERE id = ?")
@@ -8993,7 +9009,7 @@ export class Store {
       const key = this.readKey();
       const ns = String(row.namespace);
       for (const col of ["title", "body", "tags"]) {
-        if (typeof row[col] === "string") row[col] = decryptIfEncrypted(row[col] as string, key, quarantineAad(col, ns));
+        if (typeof row[col] === "string") row[col] = openQuarantineCol(row[col] as string, key, col, ns, Number(row.id));
       }
     }
     let reasons: LintFinding[] = [];

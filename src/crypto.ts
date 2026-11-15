@@ -59,6 +59,19 @@ export function captureAad(seq: number, sessionId: string, field: "output" | "in
   return `${field === "input" ? "capture-input" : "capture"}|${seq}|${sessionId}`;
 }
 
+/**
+ * v3 (1.5.0 S-05): the same envelope as v2, with a prefix that says the AAD includes the row id (quarantine rows). A v3
+ * body relabelled v2 does not open under the older, id-less AAD: the AAD itself differs.
+ */
+export const ENC_PREFIX_V3 = "v3:";
+export function encryptV3(plaintext: string, key: Buffer, aad: string): string {
+  return ENC_PREFIX_V3 + encrypt(plaintext, key, aad).slice(ENC_PREFIX_V2.length);
+}
+export function decryptV3(envelope: string, key: Buffer | null, aad: string): string {
+  if (!key) throw new Error("monomem: this held write is encrypted but no key file is present. Restore the key.");
+  return decrypt(ENC_PREFIX_V2 + envelope.slice(ENC_PREFIX_V3.length), key, aad);
+}
+
 /** The AAD that binds a sealed capture-spool line (capture.ts) to its spool id, so a line moved under another id does not open. */
 export function spoolAad(spoolId: string): string {
   return `spool|${spoolId}`;
