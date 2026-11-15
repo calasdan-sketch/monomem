@@ -12,8 +12,7 @@ import type { ContextSignals } from "./context-inject.js";
 import { actorStore } from "./actor.js";
 import { noteFlags } from "./taint.js";
 import { recallCeilingFromEnv, SENSITIVITY_HELP } from "./sensitivity.js";
-import { randomBytes, timingSafeEqual } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { UNTRUSTED_BANNER, describeWriter } from "./security.js";
 import {
   namespaceConfigSource,
@@ -211,25 +210,13 @@ export async function askServerForBodyHits(
   keywords: string[],
   o: { namespace?: string; writtenBy?: string; notWrittenBy?: string; includeDistrusted?: boolean } = {}
 ): Promise<number[] | null> {
-  const { TOKEN_FILE, sha256Hex } = await import("./config.js");
-  const { serverProof } = await import("./http-common.js");
-  let key = process.env.MONOMEM_TOKEN?.trim() ?? "";
-  try {
-    if (!key) key = readFileSync(TOKEN_FILE, "utf8").trim(); // read only: the hook never creates the key file
-  } catch {
-    return null;
-  }
-  if (!key || !keywords.length) return null;
+  if (!keywords.length) return null;
+  const { provenLocalServer } = await import("./local-server.js");
   const signal = AbortSignal.timeout(SERVER_ASK_MS);
-  const base = `http://127.0.0.1:${port}`;
   try {
-    const nonce = randomBytes(16).toString("hex");
-    const p = await fetch(`${base}/proof?nonce=${nonce}`, { signal });
-    if (!p.ok) return null;
-    const proof = ((await p.json()) as { proof?: unknown }).proof;
-    const want = Buffer.from(serverProof(sha256Hex(key), nonce, storeId), "hex");
-    const got = typeof proof === "string" && /^[0-9a-f]{64}$/.test(proof) ? Buffer.from(proof, "hex") : Buffer.alloc(0);
-    if (got.length !== want.length || !timingSafeEqual(got, want)) return null;
+    const server = await provenLocalServer(port, storeId, signal);
+    if (!server) return null;
+    const { base, key } = server;
     const r = await fetch(`${base}/relevant`, {
       method: "POST",
       headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },

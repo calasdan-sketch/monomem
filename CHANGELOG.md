@@ -135,6 +135,10 @@ upgrading from 1.3.x takes one step (docs/upgrading.md).
   off. **Security change:** while a server runs, every body's words are in its memory, which the system can page to swap or a
   hibernation file or write into a crash dump; use whole-disk encryption too (SECURITY.md, docs/encryption-retention.md,
   `encrypt status --surfaces` lists it). A search that finds nothing says bodies were not searched only when that is true.
+  A search that runs on titles and tags only while bodies are sealed (over the cap, inside a write before the index is
+  built, or after a failed build) is never silent: REST `/search` and `/relevant` and MCP replies carry a `body_search`
+  notice with the reason, every one is counted, and the new admin-only `GET /status` and `monomem doctor` (for a server it
+  has verified is this store's) show the index state, unreadable bodies and the fallback count. `/health` is unchanged.
 - **137 deterministic scenarios** (was 131): A 38, B 31, C 27, D 19, E 22. Obsolete-fact scenarios A33 and A34 in `monomem bench`. With the replace step the old value never reaches the agent (A34
   passes). Without it, search used to rank the outdated note above its update (A33): first recorded as the known gap
   `GAP-OBSOLETE-UNREPLACED`, now fixed (below). **0 known gaps are open.** MemoryAgentBench was not run (docs/BENCHMARK.md says why).

@@ -155,6 +155,7 @@ function requiredScope(method: string | undefined, path: string): Scope {
   if (path === "/trust" || path.startsWith("/trust/")) return "admin";
   // A full-store dump is admin-only; a read token can still page /notes.
   if (method === "GET" && path === "/export") return "admin";
+  if (path === "/status") return "admin";
   // /relevant is a read despite the POST method (the message is a JSON body,
   // not a query string, because it can be long) -- same class as /search.
   if (method === "POST" && path === "/relevant") return "read";
@@ -739,6 +740,13 @@ export function createApiServer(
         return;
       }
       lastUsed.set(principal.label, new Date().toISOString());
+
+      // GET /status (admin) -> this server's build and the state of its in-memory body index (C-06): what /health leaves out
+      // for unauthenticated callers. `monomem doctor` reads it from a server it has verified (local-server.ts).
+      if (req.method === "GET" && path === "/status") {
+        sendJson(res, 200, { ...healthBody(), body_index: store.bodyIndexInfo() });
+        return;
+      }
 
       // Apps that may connect (admin only, and only an administrator with no ceiling and no namespace pin: it would otherwise
       // be a way to hand out wider access than it has itself). Secrets are never returned except the new one, once.
@@ -1596,7 +1604,12 @@ export function createApiServer(
           return;
         }
         const semNotice = semanticNotice(modeRaw);
-        const sendJsonN = (r: ServerResponse, code: number, body: Record<string, unknown>): void => sendJson(r, code, semNotice ? { ...body, notice: semNotice } : body);
+        // C-06: a search that could not read sealed bodies says so (body_search), never an empty-looking answer alone.
+        const fb0 = store.bodyIndexFallbacks();
+        const sendJsonN = (r: ServerResponse, code: number, body: Record<string, unknown>): void => {
+          const bodyNote = store.bodySearchNotice(fb0);
+          sendJson(r, code, { ...body, ...(semNotice ? { notice: semNotice } : {}), ...(bodyNote ? { body_search: bodyNote } : {}) });
+        };
         const whenRaw = url.searchParams.get("when") ?? undefined;
         // Retrieval visibility: ?explain=1 swaps the plain search for the
         // explained twin and attaches a `breakdown` to each result, so the
@@ -1719,6 +1732,11 @@ export function createApiServer(
       // search. Namespace gating matches GET /search exactly.
       if (req.method === "POST" && path === "/relevant") {
         const raw = await readBody(req);
+        const fb0 = store.bodyIndexFallbacks(); // C-06: see /search
+        const withBodyNote = (body: Record<string, unknown>): Record<string, unknown> => {
+          const bodyNote = store.bodySearchNotice(fb0);
+          return bodyNote ? { ...body, body_search: bodyNote } : body;
+        };
         let parsed: { message?: unknown; limit?: unknown; namespace?: unknown; written_by?: unknown; not_written_by?: unknown; include_distrusted?: unknown };
         try {
           parsed = JSON.parse(raw || "{}");
@@ -1777,10 +1795,10 @@ export function createApiServer(
               limit: relLimit,
               ...rwf,
             });
-            sendJson(res, 200, {
+            sendJson(res, 200, withBodyNote({
               ...withStaleness(out),
               searchedNamespaces: [hint],
-            });
+            }));
             return;
           }
           const lists: NoteRecord[][] = [];
@@ -1795,11 +1813,11 @@ export function createApiServer(
             lists.push(r.results);
           }
           const lim = clampInt(relLimit, 10, 1, 200);
-          sendJson(res, 200, {
+          sendJson(res, 200, withBodyNote({
             keywords,
             results: roundRobin(lists, lim).map((n) => annotRead(n)),
             searchedNamespaces: readable(nsCtx),
-          });
+          }));
           return;
         }
         const out = await runRelevantSearch(store, parsed.message, {
@@ -1807,10 +1825,10 @@ export function createApiServer(
           limit: relLimit,
           ...rwf,
         });
-        sendJson(res, 200, {
+        sendJson(res, 200, withBodyNote({
           ...withStaleness(out),
           searchedNamespaces: relNs ? [relNs] : [],
-        });
+        }));
         return;
       }
 

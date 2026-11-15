@@ -31,6 +31,10 @@ export interface BodyIndexInfo {
   builds: number;
   /** Duration of the last full build. */
   buildMs: number;
+  /** Searches that ran on titles and tags only while bodies are sealed (too large, inside a write before the build, a failed build). */
+  fallbacks: number;
+  /** Why the last of those fell back (null when none has). */
+  lastFallback: string | null;
 }
 
 export class BodyIndex {
@@ -42,11 +46,31 @@ export class BodyIndex {
   private errors = 0;
   private builds = 0;
   private buildMs = 0;
+  private fallbacks = 0;
+  private lastFallback: string | null = null;
 
   constructor(
     private readonly s: Store,
-    private readonly enabled: boolean
+    private readonly enabled: boolean,
+    private readonly maxNotes = BODY_INDEX_MAX_NOTES
   ) {}
+
+  /** A search that must use title-and-tag search while bodies are sealed: counted, with the reason (bodySearchNotice). */
+  private fallBack(why: string): string {
+    this.fallbacks++;
+    this.lastFallback = why;
+    return "notes_fts";
+  }
+
+  /** Searches that fell back so far (a caller compares it before and after its own search). */
+  fallbackCount(): number {
+    return this.fallbacks;
+  }
+
+  /** The plain-words notice for a reply when a search fell back after the caller's mark (`since` = fallbackCount() before). */
+  notice(since: number): string | null {
+    return this.fallbacks > since ? `encrypted note bodies were not searched, only titles and tags: ${this.lastFallback}` : null;
+  }
 
   /** The FTS table search should read right now: the memory index when encryption is on and it can be made current. */
   table(): string {
@@ -61,22 +85,24 @@ export class BodyIndex {
       if (this.attached) this.teardown(); // `encrypt disable`: bodies are plain again, notes_fts covers them
       return "notes_fts";
     }
-    if (this.tooLarge) return "notes_fts";
+    const tooLarge = (): string => this.fallBack(`the in-memory body index is not built above ${this.maxNotes.toLocaleString("en-US")} notes`);
+    if (this.tooLarge) return tooLarge();
     try {
-      return (this.ready ? this.catchUp() : this.build()) ? TABLE : "notes_fts";
+      if (this.ready ? this.catchUp() : this.build()) return TABLE;
+      return this.tooLarge ? tooLarge() : this.fallBack("the search ran inside a write, before the body index was built; the next search builds it");
     } catch (e) {
-      // ponytail: a failed build or catch-up falls back to title-and-tag search for this query (and the CLI says bodies
-      // were not searched); the next search tries again from scratch.
+      // A failed build or catch-up falls back to title-and-tag search for this query, counted and said in the reply
+      // (notice); the next search tries again from scratch.
       process.stderr.write(`monomem: body search index unavailable (${(e as Error).message}); searching titles and tags\n`);
       this.teardown();
-      return "notes_fts";
+      return this.fallBack(`the body index could not be built (${(e as Error).message}); the next search tries again`);
     }
   }
 
   info(): BodyIndexInfo {
     const state = !this.enabled ? "off" : this.tooLarge ? "too large" : this.ready ? "ready" : "not built";
     const notes = this.ready ? Number((this.s.db.prepare(`SELECT COUNT(*) AS c FROM ${TABLE}`).get() as { c: number }).c) : 0;
-    return { state, notes, errors: this.errors, builds: this.builds, buildMs: this.buildMs };
+    return { state, notes, errors: this.errors, builds: this.builds, buildMs: this.buildMs, fallbacks: this.fallbacks, lastFallback: this.lastFallback };
   }
 
   /** The plaintext of a body for the index. Never throws: a failure returns "" and is counted, so no write is aborted. */
@@ -102,7 +128,7 @@ export class BodyIndex {
     const db = this.s.db;
     if (db.isTransaction) return false;
     const count = Number((db.prepare("SELECT COUNT(*) AS c FROM notes").get() as { c: number }).c);
-    if (count > BODY_INDEX_MAX_NOTES) {
+    if (count > this.maxNotes) {
       this.tooLarge = true;
       return false;
     }

@@ -10,6 +10,12 @@ import { join } from "node:path";
 import { Store, type RankedHit } from "../src/store.js";
 import { ensureKey } from "../src/crypto.js";
 import { actorStore } from "../src/actor.js";
+import { supersedePreview, supersedeConfirm, supersedeUndo } from "../src/supersede.js";
+import { createApiServer } from "../src/api.js";
+import { createMcpServer } from "../src/mcp-server-core.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import type { AddressInfo } from "node:net";
 
 function withDirs<T>(fn: (plain: string, enc: string) => T): T {
   const plain = mkdtempSync(join(tmpdir(), "om-bi-plain-"));
@@ -260,6 +266,128 @@ describe("C-06 encrypted body search (in-memory index)", () => {
         delete process.env.MONOMEM_BODY_INDEX;
       }
     }));
+});
+
+describe("C-06 gaps: other write paths, and a fallback is never silent", () => {
+  const asAdmin = <T>(fn: () => T): T => actorStore.run({ label: "cli", authed: true }, fn);
+
+  test("supersede and its undo keep the index current", () =>
+    withDirs((pd, ed) => {
+      const p = new Store(join(pd, "state.db"));
+      const e = encStore(ed);
+      try {
+        e.searchRanked("warm");
+        const caller = { scope: "admin" as const, writer: "cli" };
+        for (const s of [p, e]) {
+          const old = asAdmin(() => s.create({ title: "rotation", body: "rotates on tuesday with a kestrel", tags: [] }));
+          const new_note = { title: "rotation now", body: "rotates on monday with a falcon" };
+          const pv = asAdmin(() => supersedePreview(s, caller, { old_ids: [old.id], new_note }));
+          asAdmin(() => supersedeConfirm(s, caller, { token: pv.token, new_note }));
+        }
+        for (const q of ["kestrel", "falcon"]) assert.deepEqual(ids(e, q), ids(p, q), `after supersede: ${q}`);
+        assert.equal(ids(e, "falcon").length, 1);
+        for (const s of [p, e]) asAdmin(() => supersedeUndo(s, caller, 1));
+        for (const q of ["kestrel", "falcon"]) assert.deepEqual(ids(e, q), ids(p, q), `after undo: ${q}`);
+        assert.equal(ids(e, "kestrel").length, 1, "the old note is found again");
+      } finally {
+        p.close();
+        e.close();
+      }
+    }));
+
+  test("delete, history purge and the scrub (VACUUM) keep the index current", () =>
+    withDirs((_pd, ed) => {
+      const s = encStore(ed);
+      try {
+        const a = s.create({ title: "keep", body: "an ibis wades", tags: [] });
+        const b = s.create({ title: "drop", body: "a heron waits", tags: [] });
+        s.update(a.id, { body: "an ibis wades and a stork flies" });
+        assert.equal(ids(s, "stork").length, 1);
+        s.delete(b.id);
+        s.purgeHistory(a.id);
+        s.scrubPlaintext({ maxVacuumBytes: Number.MAX_SAFE_INTEGER });
+        assert.deepEqual(ids(s, "heron"), [], "a deleted note is gone from the index");
+        assert.deepEqual(ids(s, "stork"), [a.id], "after the VACUUM the index still answers");
+        const c = s.create({ title: "after", body: "a crane dances", tags: [] });
+        assert.deepEqual(ids(s, "crane"), [c.id], "and still follows new writes");
+      } finally {
+        s.close();
+      }
+    }));
+
+  test("an import (restore) is searchable by body word, also from another process", async () => {
+    const ed = mkdtempSync(join(tmpdir(), "om-bi-imp-"));
+    ensureKey(ed);
+    const s1 = new Store(join(ed, "state.db"));
+    const s2 = new Store(join(ed, "state.db"));
+    try {
+      s1.searchRanked("warm");
+      const r1 = await s1.importNotes([{ namespace: "default", title: "imported one", body: "a puffin nests", tags: [] }]);
+      assert.equal(r1.length, 1, "imported");
+      assert.equal(ids(s1, "puffin").length, 1, "this process's import");
+      await s2.importNotes([{ namespace: "default", title: "imported two", body: "a gannet dives", tags: [] }]);
+      assert.equal(ids(s1, "gannet").length, 1, "another process's import");
+    } finally {
+      s1.close();
+      s2.close();
+      rmSync(ed, { recursive: true, force: true });
+    }
+  });
+
+  test("a search inside a write before the index exists falls back, and says so: counted, with the reason", () =>
+    withDirs((_pd, ed) => {
+      const s = encStore(ed);
+      try {
+        s.create({ title: "in tx", body: "a toucan calls", tags: [] });
+        const found = s.transaction(() => ids(s, "toucan"));
+        assert.deepEqual(found, [], "titles and tags only inside the write");
+        const info = s.bodyIndexInfo();
+        assert.equal(info.fallbacks, 1);
+        assert.match(info.lastFallback ?? "", /inside a write/);
+        assert.match(s.bodySearchNotice(0) ?? "", /bodies were not searched/);
+        assert.equal(s.bodySearchNotice(1), null, "nothing new since the caller's mark");
+        assert.equal(ids(s, "toucan").length, 1, "the next search builds it");
+      } finally {
+        s.close();
+      }
+    }));
+
+  test("over the (injectable) size cap: state 'too large', every search counted, and REST and MCP replies carry the notice", async () => {
+    const ed = mkdtempSync(join(tmpdir(), "om-bi-cap-"));
+    ensureKey(ed);
+    const s = new Store(join(ed, "state.db"), { bodyIndexMaxNotes: 2 });
+    const srv = createApiServer(s, "body-index-cap-token-0123456789abcdef");
+    try {
+      for (const w of ["one", "two", "three"]) s.create({ title: `cap ${w}`, body: `a ${w} flamingo`, tags: [] });
+      assert.deepEqual(ids(s, "flamingo"), []);
+      assert.equal(s.bodyIndexInfo().state, "too large");
+      assert.equal(s.bodyIndexInfo().fallbacks, 1);
+      await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+      const base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+      const h = { authorization: "Bearer body-index-cap-token-0123456789abcdef", "content-type": "application/json" };
+      const search = await (await fetch(`${base}/search?q=flamingo`, { headers: h })).json();
+      assert.match(String(search.body_search), /bodies were not searched.*100|not built above 2/, JSON.stringify(search));
+      const rel = await (await fetch(`${base}/relevant`, { method: "POST", headers: h, body: JSON.stringify({ message: "any flamingo?" }) })).json();
+      assert.match(String(rel.body_search), /bodies were not searched/, JSON.stringify(rel));
+      const status = await (await fetch(`${base}/status`, { headers: h })).json();
+      assert.equal(status.body_index.state, "too large");
+      assert.ok(status.body_index.fallbacks >= 3, JSON.stringify(status));
+      assert.equal((await fetch(`${base}/status`)).status, 401, "the detail needs a key");
+      const health = await (await fetch(`${base}/health`)).json();
+      assert.deepEqual(Object.keys(health).sort(), ["schema", "status", "version"], "/health stays minimal");
+      const mcp = createMcpServer(s, "admin");
+      const [c, t] = InMemoryTransport.createLinkedPair();
+      const client = new Client({ name: "t", version: "1.0.0" });
+      await Promise.all([mcp.connect(t), client.connect(c)]);
+      const r = (await client.callTool({ name: "state_search", arguments: { query: "flamingo" } })) as { content: Array<{ text: string }> };
+      assert.match(r.content[0].text, /"body_search":"[^"]*bodies were not searched/, r.content[0].text);
+      await client.close();
+    } finally {
+      await new Promise<void>((r) => srv.close(() => r()));
+      s.close();
+      rmSync(ed, { recursive: true, force: true });
+    }
+  });
 });
 
 const ROOT = join(import.meta.dirname, "..", "..");

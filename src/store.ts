@@ -1619,10 +1619,10 @@ export class Store {
    * is refused with a SchemaMismatchError instead (the hook then spools the event). `opts.busyTimeoutMs` shortens the lock
    * wait for callers that would rather give up fast than block an agent.
    */
-  constructor(dbPath: string, opts: { noMigrate?: boolean; busyTimeoutMs?: number; bodyIndex?: "lazy" | "off" } = {}) {
+  constructor(dbPath: string, opts: { noMigrate?: boolean; busyTimeoutMs?: number; bodyIndex?: "lazy" | "off"; /** Test hook: the body index's note cap. */ bodyIndexMaxNotes?: number } = {}) {
     this.dbPath = dbPath;
     // C-06: hooks pass "off" (one prompt's life is too short to build it); MONOMEM_BODY_INDEX=off turns it off everywhere.
-    this.bodyIndex = new BodyIndex(this, opts.bodyIndex !== "off" && (process.env.MONOMEM_BODY_INDEX ?? "").trim().toLowerCase() !== "off");
+    this.bodyIndex = new BodyIndex(this, opts.bodyIndex !== "off" && (process.env.MONOMEM_BODY_INDEX ?? "").trim().toLowerCase() !== "off", opts.bodyIndexMaxNotes);
     this.noMigrate = opts.noMigrate === true;
     this.busyTimeoutMs = Math.floor(opts.busyTimeoutMs ?? Store.BUSY_TIMEOUT_MS);
     if (dbPath !== ":memory:") {
@@ -5535,6 +5535,16 @@ export class Store {
   /** C-06: the in-memory body index's state in this process (encrypt status, the CLI search notice, tests). */
   bodyIndexInfo(): BodyIndexInfo {
     return this.bodyIndex.info();
+  }
+
+  /** C-06: searches so far that ran on titles and tags only while bodies are sealed (take it before a search, for bodySearchNotice). */
+  bodyIndexFallbacks(): number {
+    return this.bodyIndex.fallbackCount();
+  }
+
+  /** C-06: the reply notice when a search since `since` (bodyIndexFallbacks() before it) did not search sealed bodies; else null. */
+  bodySearchNotice(since: number): string | null {
+    return this.bodyIndex.notice(since);
   }
 
   /** C-06: build the body index now (servers call this just after start-up, so the first agent search does not wait). Never throws. */
