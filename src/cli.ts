@@ -337,13 +337,17 @@ function usage(all = false): void {
       "            ls --archived lists forgotten notes with the restore <id> that brings each back.",
       "  audit [--since 24h] [--op create|update|delete|...] [--label <key name>] [--limit n] [--json]",
       "            Who changed what: the change log in plain words (never note text).",
-      "  audit verify [--expect <head-hash>]",
-      "            Walk the audit log's hash chain and report the first broken line (edits/deletions inside the chain).",
-      "            Keep the printed head hash off this machine (a git commit, a password manager). --expect <hash> exits 1 if",
-      "            that line is no longer in the log (rewritten or cut off); the log growing past it is fine. Usage errors exit 2.",
-      "  verify-receipt <seq> <chain_hash>",
-      "            Check the receipt a write returned (accepted, held or refused) is still a line of the audit log, in an",
-      "            unbroken chain. Exits 1 naming the first broken line, or when the line is gone; usage errors exit 2. Not signed.",
+      "  audit verify [--expect <head-hash> | --checkpoint <file>] [--all-signatures] [--strict]",
+      "            Walk the audit log's hash chain and its Ed25519 signatures (the store key, .attest-key) and report the first",
+      "            broken line or bad signature. Keep the printed head hash off this machine (a git commit, a password manager).",
+      "            --expect <hash> / --checkpoint <file> exit 1 if that line is no longer in the log (rewritten or cut off); the",
+      "            log growing past it is fine. --all-signatures checks every line (default: the newest, the anchor and key",
+      "            hand-overs); --strict also fails on unsigned lines after signing began. Usage errors exit 2.",
+      "  audit checkpoint [--out <file>]   The log head as a signed checkpoint: keep it off this machine.",
+      "  verify-receipt <seq> <chain_hash>  |  verify-receipt --file <receipt.json> [--pubkey <file|base64url>] [--note <id>]",
+      "            Check the signed receipt a write returned (accepted, held or refused). With --pubkey: the signature only,",
+      "            offline, no store needed. Without: also that its line is still in the unbroken, signed audit log. --note:",
+      "            whether the note still has the content the receipt names. Exits 1 when it does not verify; usage errors 2.",
       "  scrub [--yes] [--out <dir>]   (also: purge-deleted)",
       "            Remove the text of long-deleted notes from the database file (rebuilds the search index and compacts it).",
       "            Without --yes it only explains. With --yes it takes a backup first, then shows the size before and after.",
@@ -4043,65 +4047,22 @@ async function main(): Promise<void> {
       await deleteCmd();
       break;
     case "audit": {
-      // `audit verify` is the hash-chain check; anything else is the plain-words viewer of who changed what.
-      if (process.argv[3]?.startsWith("--") && process.argv[3] !== "--expect") {
-        await (await import("./phase-b-cli.js")).auditCmd();
-        break;
-      }
-      const usage = "Usage: monomem audit verify [--expect <head-hash>]   |   monomem audit --since 24h [--op create|update|delete] [--label <key>] [--limit n] [--json]";
-      const rest = process.argv.slice(4);
-      const ei = rest.indexOf("--expect");
-      const expect = ei >= 0 ? rest[ei + 1]?.trim().toLowerCase() : undefined;
-      const extraArgs = rest.filter((_, k) => k !== ei && k !== ei + 1 || ei < 0);
-      if (process.argv[3] !== "verify" || extraArgs.length > 0 || (ei >= 0 && !/^[0-9a-f]{64}$/.test(expect ?? ""))) {
-        console.error(usage + (ei >= 0 ? " (the head hash is 64 hex characters, as printed by `monomem audit verify`)" : ""));
+      // `audit verify` is the signed hash-chain check, `audit checkpoint` its portable anchor; anything else is the
+      // plain-words viewer of who changed what.
+      const sub = process.argv[3];
+      if (sub === "verify") await (await import("./audit-cli.js")).auditVerifyCmd(process.argv.slice(4));
+      else if (sub === "checkpoint") await (await import("./audit-cli.js")).auditCheckpointCmd(process.argv.slice(4));
+      else if (sub?.startsWith("--") && sub !== "--expect") await (await import("./phase-b-cli.js")).auditCmd();
+      else {
+        console.error("Usage: monomem audit verify [--expect <head-hash>] [--checkpoint <file>] [--all-signatures] [--strict]   |   monomem audit checkpoint [--out <file>]   |   monomem audit --since 24h [--op create|update|delete] [--label <key>] [--limit n] [--json]");
         process.exit(2);
-      }
-      const { verifyAuditChain } = await import("./security.js");
-      const r = verifyAuditChain(undefined, expect);
-      const extra = `${r.forks} fork(s) (two processes writing at once, or a line inserted), ${r.unchained} line(s) from before the chain`;
-      if (!r.ok) {
-        console.error(`Audit chain BROKEN: ${r.breaks} break(s), first at line ${r.brokenLine} of ${r.file} (it follows from none of the lines before it). ${extra}.`);
-        process.exit(1);
-      }
-      console.log(`Audit chain intact: ${r.lines} line(s), ${extra}.`);
-      console.log(`Head ${r.head ?? "(empty)"}: keep it somewhere that is not this machine (a git commit, a password manager), then check later with: monomem audit verify --expect <head>.`);
-      console.log("Detects lines edited or removed inside the chain. Not: a line inserted (it looks like a fork), rotated files deleted, or a full rewrite by anyone who can write the file. Without a saved head it also cannot see the newest lines cut off.");
-      if (r.anchor) {
-        if (!r.anchor.found) {
-          console.error("Anchor NOT FOUND: no line in the log has the hash you gave. The log was rewritten or cut off before that point (or the hash is from another log).");
-          process.exit(1);
-        }
-        console.log(r.anchor.linesAfter === 0 ? "Anchor OK: the hash you gave is the current head." : `Anchor OK: the line you noted is still in the chain, ${r.anchor.linesAfter} line(s) older than the head (the log has grown since).`);
       }
       break;
     }
-    case "verify-receipt": {
-      // R2-06: a write's receipt {seq, chain_hash} is a line of the audit log; check it is still there, in an unbroken chain.
-      const [seqRaw, hashRaw] = process.argv.slice(3);
-      const hash = hashRaw?.trim().toLowerCase();
-      if (!/^\d{1,15}$/.test(seqRaw ?? "") || !/^[0-9a-f]{64}$/.test(hash ?? "") || process.argv.length > 5) {
-        console.error("Usage: monomem verify-receipt <seq> <chain_hash>   (both from the `receipt` a write returned)");
-        process.exit(2);
-      }
-      const { verifyAuditChain } = await import("./security.js");
-      const r = verifyAuditChain(undefined, hash);
-      if (!r.ok) {
-        console.error(`Receipt NOT verified: the audit chain is BROKEN at line ${r.brokenLine} of ${r.file} (it follows from none of the lines before it: a line was edited or removed). ${r.breaks} break(s) in all.`);
-        process.exit(1);
-      }
-      if (!r.anchor?.found) {
-        console.error("Receipt NOT verified: no line in the audit log has that hash. The line was edited or removed, the log was cut off or rotated past it, or the receipt is from another store.");
-        process.exit(1);
-      }
-      if (r.anchor.seq !== Number(seqRaw)) {
-        console.error(`Receipt NOT verified: the line with that hash has seq ${r.anchor.seq || "(none)"}, not ${seqRaw}.`);
-        process.exit(1);
-      }
-      console.log(`Receipt OK: seq ${seqRaw} is line ${r.anchor.line} of the audit log, in an unbroken chain of ${r.lines} line(s) (${r.anchor.linesAfter} written after it).`);
-      console.log("This shows the line was not edited or removed since. It does not prove who wrote the log: the chain is not signed.");
+    case "verify-receipt":
+      // R2-06 + round 3: a write receipt is a signed audit-log line; see audit-cli.ts.
+      await (await import("./audit-cli.js")).verifyReceiptCmd(process.argv.slice(3));
       break;
-    }
     case "quality":
       await qualityCmd();
       break;

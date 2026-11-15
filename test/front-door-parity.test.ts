@@ -17,6 +17,8 @@ import { actorStore } from "../src/actor.js";
 import { createApiServer } from "../src/api.js";
 import { createMcpServer } from "../src/mcp-server-core.js";
 import type { Scope } from "../src/config.js";
+import { loadOrCreateSigningKey } from "../src/attest.js";
+import { verifyReceipt, type WriteReceipt } from "../src/store/write-receipt.js";
 
 const as = <T>(label: string, fn: () => T): T => actorStore.run({ label, authed: true }, fn);
 
@@ -184,7 +186,7 @@ describe("R2-06: REST and MCP give the same write receipt decision", () => {
     ["writer", { body: "a new body" }, true, "held"], // approve-first: held for a person
     ["writer", { body: "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8" }, false, "refused"], // looks like a GitHub token
   ];
-  const receiptOf = (text: string, mcp: boolean): { decision?: string; chain_hash?: string } | undefined => {
+  const receiptOf = (text: string, mcp: boolean): ({ decision?: string; chain_hash?: string } & Record<string, unknown>) | undefined => {
     const j = JSON.parse(text);
     if (!mcp) return j.receipt;
     const t = j.content[0].text as string;
@@ -195,6 +197,7 @@ describe("R2-06: REST and MCP give the same write receipt decision", () => {
     const save = process.env.MONOMEM_AUDIT_LOG;
     const dir = mkdtempSync(join(tmpdir(), "om-parity-r206-"));
     process.env.MONOMEM_AUDIT_LOG = join(dir, "audit.log"); // an in-memory store audits only with an explicit log
+    const key = loadOrCreateSigningKey(dir); // round 3: the key beside the log signs its lines and the receipts
     try {
       for (const [who, patch, approveFirst, want] of rows) {
         const w = seed();
@@ -207,6 +210,9 @@ describe("R2-06: REST and MCP give the same write receipt decision", () => {
           assert.equal(r?.decision, want, `REST ${label}`);
           assert.equal(m?.decision, want, `MCP ${label}`);
           assert.notEqual(r?.chain_hash, m?.chain_hash, `${label}: two writes, two lines`);
+          // Signed receipt v2: the same fields on both surfaces, and both verify with the public key alone.
+          assert.deepEqual(Object.keys(r ?? {}).sort(), Object.keys(m ?? {}).sort(), `${label}: same receipt shape`);
+          assert.ok(verifyReceipt(r as unknown as WriteReceipt, key.publicKey) && verifyReceipt(m as unknown as WriteReceipt, key.publicKey), `${label}: both signed`);
         } finally {
           await io.close();
         }

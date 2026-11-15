@@ -453,8 +453,8 @@ safe, and it loses the information. An attestation brings it back **for servers 
 ### How it works
 
 - Each database has one Ed25519 key pair. The private key is the file `.attest-key` beside the
-  database (mode 0600, re-tightened at every start, created on first signed export or
-  `monomem trust identity`, written atomically; `MONOMEM_ATTEST_KEY_FILE` overrides the path).
+  database (mode 0600, re-tightened at every start, created on the first note write (1.5.0: it signs the audit log),
+  the first signed export or `monomem trust identity`, written atomically; `MONOMEM_ATTEST_KEY_FILE` overrides the path).
   It is **never** exported or sent anywhere. `monomem trust list` never creates one. A corrupt key
   file is an error, never silently replaced by a new identity, and it does not break an import of
   unsigned notes. (Two databases in one directory share a key file; use one directory per database.)
@@ -570,6 +570,40 @@ The same pair as an environment variable on B: `MONOMEM_TRUSTED_ATTESTERS=<A's s
   somewhere safe). `export-key` refuses to write through an existing file or a symlink (also a dangling one).
 - A restored database that imports its **own** earlier export verifies it with its own key, for its
   own server id only.
+
+## Signed audit log and write receipts (1.5.0)
+
+The same `.attest-key` signs the audit log and the write receipts. There is no second key and no second rotation command.
+
+- **Each audit line** carries `kid` and `sig`: an Ed25519 signature over the line, which includes `prev`, the hash of the
+  line before it. The first signed line of a log is `sign-start` (it names the public key and the head of the unsigned
+  lines before it). `trust rotate` first writes a `key-rotate` line signed by the old key that names the new public key;
+  the next lines are signed by the new key. A line signed by a retired key, or by a key no `key-rotate` line handed over
+  to, is a bad signature. A process that cannot read the key writes an unsigned line, as before 1.5.0.
+- **Each write receipt** (accepted, held or refused, from MCP `state_write` and REST `POST`/`PUT /notes`, same shape on
+  both) is signed too and carries `note_id`, `rev` and `content_hash` (the hash of the exact title, body and tags). The
+  content hash is only in the receipt, never in the log.
+- **Check a receipt offline** with only the public key: `monomem verify-receipt --file r.json --pubkey <key or file>`, or
+  without Monomem: `node verify-receipt.mjs r.json <key>` (the 30-line script is
+  [docs/verify-receipt.mjs](https://github.com/calasdan-sketch/monomem/blob/main/docs/verify-receipt.mjs), plain
+  `node:crypto`). `monomem trust identity` prints the public key; keep a copy of it with the receipts. A receipt signed
+  before a rotation verifies with the old public key (`monomem trust list` shows it as a retired key of this server).
+- **Against the log:** `monomem verify-receipt --file r.json` (no `--pubkey`) also checks the line is still in the
+  unbroken, signed log. `--note <id>` prints "unchanged since the receipt" or "changed later (rev N)".
+- **Checkpoints:** `monomem audit checkpoint --out cp.json` signs the current head. Keep it off the machine (a git commit, a
+  password manager, an email to yourself) and check later with `monomem audit verify --checkpoint cp.json`. Every receipt
+  you hold works as a checkpoint too.
+- `monomem audit verify` reports signed lines, bad signatures and unsigned lines before and after signing began.
+  `--all-signatures` checks every line (about 0.1 ms each); by default it checks the newest line, the anchor and the key
+  hand-overs, because the newest signature covers everything before it through `prev`. `--strict` fails on unsigned
+  lines after signing began.
+
+**What it proves and what it does not.** Anything before a receipt or checkpoint someone holds cannot later be edited
+or removed undetected, even by someone with the key, and a process that can write `audit.log` but cannot read
+`.attest-key` cannot forge or edit a line. It does **not** protect against you or anything running as you: a program
+running as the store's user can read `.attest-key`, then rewrite and re-sign everything after the last receipt or
+checkpoint someone else holds, or cut the newest lines off (the shorter log still verifies). It does not prove the content
+is true or who a stdio writer was. The full list is in SECURITY.md.
 
 ## Upgrading and rolling back
 

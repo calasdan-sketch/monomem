@@ -575,7 +575,12 @@ Limits no scenario can show (what the benchmark cannot see) are listed next, und
 Loopback by default and fail-closed: it refuses to bind a public interface
 without an explicit `MONOMEM_TOKEN`. Constant-time bearer auth on every
 data route, scoped tokens, DNS-rebinding Origin checks, per-client rate
-limits, size caps, an append-only audit log without note content, a read access log (who read
+limits, size caps, an append-only audit log without note content (hash-chained and, since 1.5.0, Ed25519-signed with
+the store's key; every note write, including a held or refused one, answers with a signed receipt you can check
+offline with only the public key, using `monomem verify-receipt --pubkey` or the standalone
+[docs/verify-receipt.mjs](https://github.com/calasdan-sketch/monomem/blob/main/docs/verify-receipt.mjs); a program
+running as you can still read the key and rewrite everything after the last receipt or checkpoint someone else holds,
+so keep a `monomem audit checkpoint` off the machine), a read access log (who read
 what, with a redacted query preview and never note text) and a per-writer flood guard, the
 write-time linter above, and an untrusted-data banner on every MCP read (REST responses do not
 carry it) so agents treat note content as data, not instructions. Optional AES-256-GCM

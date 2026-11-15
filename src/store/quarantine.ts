@@ -8,6 +8,7 @@ import { StaleWriteError, ValidationError, heldHandled } from "../errors.js";
 import type { LintFinding } from "../lint.js";
 import { DEFAULT_SENSITIVITY } from "../sensitivity.js";
 import { contentHash as syncContentHash } from "../sync-hash.js";
+import { contentHash as attestContentHash } from "../attest.js";
 import { isTainted } from "../taint.js";
 import { tokenize } from "../text-sim.js";
 import { clampInt, isoOrNull, openQuarantineCol, parseTags, sealQuarantineCol } from "./rows.js";
@@ -105,7 +106,8 @@ export function quarantineWrite(s: Store, q: {
     throw e;
   }
   // Audit records the decision, never the content.
-  s.audit({ op: "quarantine", id, namespace: q.namespace, bytes: (q.body ?? "").length });
+  // The receipt (never the line) carries the hash of what was held, and the note it would change.
+  s.audit({ op: "quarantine", id, namespace: q.namespace, bytes: (q.body ?? "").length }, { ...(q.targetId !== undefined ? { note_id: q.targetId } : {}), content_hash: attestContentHash(q.title ?? "", q.body ?? "", q.tags ?? []) });
   return id;
 }
 

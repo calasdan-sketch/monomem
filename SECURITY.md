@@ -57,21 +57,57 @@ To check your own setup, run `monomem drill` (replays 20 known memory-poisoning 
   `prev`; verify counts that as a fork, not a break, and keeps going. This is **tamper-evident, not
   tamper-proof**: it detects lines edited or removed *inside* the chain. A forged line inserted with a valid `prev`
   also looks like a fork, and after a real race the line nobody points to can be edited or removed unseen; forks are
-  reported, so a count you did not expect is worth a look. The hashes are not keyed, so any program
-  running as you with a shell or file access (including an agent with a shell tool) can rewrite the whole chain or cut
-  off its newest lines, and deleting rotated files is not detected. `audit verify` prints the head hash: note it
-  somewhere else to catch a later rewrite. Lines written before this was added have no `prev` and are counted as
-  unchained. Archive through MCP `state_delete` currently writes two lines (one from the store, one
+  reported, so a count you did not expect is worth a look. Since 1.5.0 every line is also signed (next item), but a
+  program running as you can read the key, so it can still rewrite the chain after the last anchor someone else holds.
+  `audit verify` prints the head hash: note it somewhere else to catch a later rewrite. Lines written before this was
+  added have no `prev` and are counted as unchained. Archive through MCP `state_delete` currently writes two lines (one from the store, one
   from the tool, which names the caller).
-- **Write receipts (1.5.0):** a note write through MCP `state_write` or REST `POST`/`PUT /notes` answers with
-  `receipt: {seq, chain_hash, decision}`: the audit line that recorded it, and whether it was `accepted`, `held` (waiting
-  for a person) or `refused` (by the store's checks: linter, secret guard, paused writer, stale `if_rev`, tag rules; the
-  refusal line names the error type, never the note text). `monomem verify-receipt <seq> <chain_hash>` checks that line
-  is still in the log in an unbroken chain, and names the first broken line when it is not. The same limits as the chain
-  apply: it is not signed, so it shows a line was not edited or removed later, not who wrote the log. `seq` counts from the
-  first line written by 1.5.0, and two apps writing at the same moment can give two lines the same `seq` (the hash tells
-  them apart). No receipt comes back when nothing was written (an unchanged update), for a request refused before it
-  reached the store (wrong key scope, malformed request), or when the audit log could not be written.
+- **Signed audit log and signed write receipts (1.5.0).** Every audit line carries `kid` and an Ed25519 `sig` over the
+  line (so over its `prev` chain hash too), made with the store's own key: the same `.attest-key` (mode 0600) that signs
+  exports; there is no new key file. The first note write of a store makes the key if it has none; the audit code itself
+  never creates one, so a process that cannot read the key writes an unsigned line, as before. The first signed line of a
+  log is a `sign-start` line naming the key and the head of the unsigned history before it: from then on that history
+  cannot change without breaking the signed line after it. It proves nothing about edits made before the upgrade.
+  `monomem trust rotate` writes a `key-rotate` line signed by the OLD key naming the new public key. A key is valid only
+  up to the line that retires it, and a key change without such a line counts as a bad signature.
+
+  A note write through MCP `state_write` or REST `POST`/`PUT /notes` answers with a signed receipt, the same shape on
+  both: `{v: 2, seq, chain_hash, decision, ts, server_id, note_id?, rev?, content_hash?, key_id, sig}`, for an `accepted`,
+  `held` (waiting for a person) or `refused` write (by the store's checks: linter, secret guard, paused writer, stale
+  `if_rev`, tag rules; the refusal line names the error type, never the note text). `content_hash` is the hash of the exact
+  title, body and tags accepted or held; a refused write has none. **The hash is in the receipt only, never in the audit
+  log:** the log stays free of anything derived from note text, so a reader of the log cannot confirm a guess at a short
+  note. `monomem verify-receipt --file r.json --pubkey <key>` checks a receipt offline with only the public key (`monomem
+  trust identity` prints it); [docs/verify-receipt.mjs](https://github.com/calasdan-sketch/monomem/blob/main/docs/verify-receipt.mjs)
+  does the same with plain Node and no Monomem install. Without `--pubkey` it also checks that the line is still in the
+  unbroken, signed log, and `--note <id>` says whether the note is unchanged since. `monomem verify-receipt <seq>
+  <chain_hash>` still works. `monomem audit checkpoint --out <file>` writes the log head as a signed checkpoint, and
+  `monomem audit verify --checkpoint <file>` checks it later. `seq` counts from the first line written by 1.5.0, and two
+  apps writing at the same moment can give two lines the same `seq` (the hash tells them apart). No receipt comes back
+  when nothing was written (an unchanged update), for a request refused before it reached the store (wrong key scope,
+  malformed request), or when the audit log could not be written. A store with no key beside its log gives unsigned
+  receipts.
+
+  **What it proves:** a receipt was issued by the holder of the store's key, and anyone with the public key can check
+  that offline. The store accepted, held or refused a write of exactly this content (`content_hash`), as audit line
+  `seq` / `chain_hash`. With the log: that line is still there, unchanged, in an unbroken chain. **Anything before a
+  receipt or checkpoint you hold cannot later be edited or removed undetected, even by someone with the key:** your copy
+  is evidence they cannot recall. Someone who can write `audit.log` but cannot read `.attest-key` (a different OS user, a
+  copy of the log synced elsewhere, a tool that only reaches that file) cannot forge or edit any line.
+
+  **What it does not prove:**
+  - Anything against **you or anything running as you**. An agent with a shell tool can read `.attest-key` (0600 stops
+    other users, not your own processes). It can then rewrite and re-sign the whole log, or cut off its newest lines,
+    after the last receipt or checkpoint anyone else holds.
+  - That the log is complete. Cutting off the newest lines leaves a validly signed shorter chain; only an anchor newer
+    than the cut shows it.
+  - That deleted rotated files existed.
+  - That the content is true, or who a stdio writer really was (stdio writer names are declared by the caller).
+  - With a leaked key, nothing beyond the anchors held before the leak. Rotate (`trust rotate`), then
+    `trust attester-revoke <old key id>`.
+
+  An unsigned line after signing began (an older Monomem, a process that could not read the key, or a stripped
+  signature) is a warning in `audit verify`; `--strict` fails on it. Keep a checkpoint off this machine.
 - **Supply chain:** committed lockfile + `npm ci`, Dependabot, `npm audit` in
   CI, and MIT-licensed with only two production dependencies.
 

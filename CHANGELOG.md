@@ -68,10 +68,22 @@ upgrading from 1.3.x takes one step (docs/upgrading.md).
 - **Search shows the part of a long note that matched.** When `state_search` cuts a body to 600 characters, it now shows the
   600 characters with the most of your query words instead of the first 600, and `body_offset` says where they start. It
   works on encrypted notes too. `state_list` and short notes are unchanged (docs/search.md).
-- **Write receipts.** `state_write` and REST `POST`/`PUT /notes` answer with `receipt: {seq, chain_hash, decision}` for an
-  accepted, held or refused write: the audit-log line that recorded the decision. `monomem verify-receipt <seq> <hash>`
-  checks that line is still in an unbroken audit chain and names the first broken line if not. It is not signed: it shows
-  the line was not changed later, not who wrote the log (SECURITY.md). Audit lines now carry a `seq` number.
+- **Write receipts.** `state_write` and REST `POST`/`PUT /notes` answer with a `receipt` for an accepted, held or refused
+  write: the audit-log line that recorded the decision. `monomem verify-receipt <seq> <hash>` checks that line is still in
+  an unbroken audit chain and names the first broken line if not. Audit lines now carry a `seq` number.
+- **Signed audit log and signed receipts.** Every audit line and every write receipt is Ed25519-signed by the store's own
+  key (the existing `.attest-key`; the first note write creates it if missing). Receipts (`v: 2`) carry `note_id`, `rev`
+  and `content_hash`, the hash of the exact content accepted or held; a refused write gets a signed receipt with no
+  content hash. The content hash is in the receipt only, never in the audit log. `monomem verify-receipt --file r.json
+  --pubkey <key>` checks a receipt offline with only the public key, `--note <id>` says whether the note is unchanged
+  since, and docs/verify-receipt.mjs does the check with plain Node, no install. `monomem audit checkpoint` prints a signed
+  head to keep elsewhere; `audit verify --checkpoint <file>` checks it, `--all-signatures` checks every line and `--strict`
+  fails on unsigned lines after signing began. An upgraded log gets a `sign-start` line that freezes the unsigned history
+  before it; `trust rotate` writes a `key-rotate` line signed by the old key, and a key change without one is a bad
+  signature. **What it does not prove:** a program running as you can read the key and rewrite everything after the last
+  receipt or checkpoint someone else holds, or cut the newest lines off; keep a checkpoint off the machine (SECURITY.md has
+  the full list). Compared with an unsigned hash chain and unsigned receipts, this adds signatures, offline checking and
+  content binding. Measured on one Windows PC (1,000 creates, p50): 3.20 ms before, 3.33 ms after.
 - **Claude Code `PreCompact` hook.** `monomem hook pre-compact` saves the session so far as its summary note before the
   context is compacted (same redaction, stamps and spool as the other capture hooks). `setup --capture` adds it for
   Claude Code only; `setup --undo` removes it. Run `setup --capture` again to add it to an existing install.
