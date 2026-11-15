@@ -25,3 +25,29 @@ test("S-04 after another program moves the file to a newer schema, writes are re
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("S-04 (final-security SF2): delete, archive, restore and pin are refused too", () => {
+  const dir = mkdtempSync(join(tmpdir(), "om-s04b-"));
+  const path = join(dir, "state.db");
+  const a = new Store(path);
+  try {
+    const n = a.create({ title: "keep" });
+    const gone = a.create({ title: "archived" });
+    a.archive(gone.id);
+    const other = new DatabaseSync(path);
+    other.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`);
+    other.close();
+    const newer = (e: unknown) => e instanceof SchemaNewerError;
+    assert.throws(() => a.delete(n.id), newer, "delete");
+    assert.throws(() => a.archive(n.id), newer, "archive");
+    assert.throws(() => a.restore(gone.id), newer, "restore");
+    assert.throws(() => a.setPinned(n.id, false), newer, "unpin");
+    const live = a.captureDb().prepare("SELECT archived_at FROM notes WHERE id = ?").get(n.id) as { archived_at: string | null } | undefined;
+    assert.ok(live && live.archived_at === null, "the note is still there and live");
+    const g = a.captureDb().prepare("SELECT archived_at FROM notes WHERE id = ?").get(gone.id) as { archived_at: string | null };
+    assert.ok(g.archived_at !== null, "the archived note stays archived");
+  } finally {
+    a.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
