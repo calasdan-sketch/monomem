@@ -67,8 +67,9 @@ function rng(seed: number): () => number {
 // Pronounceable made-up words; Zipf-ish pick (rank ~ 1/u) so a few words are common and most are rare.
 const SYL = ["ka", "lo", "mi", "ra", "ten", "vos", "pel", "dri", "un", "sor", "gan", "fi", "zu", "ber", "nol", "qua"];
 const VOCAB = Array.from({ length: 3000 }, (_, i) => SYL[i % 16] + SYL[(i >> 4) % 16] + SYL[(i >> 8) % 16]);
-function word(r: () => number): string {
-  return VOCAB[Math.min(VOCAB.length - 1, Math.floor(1 / (r() + 1 / VOCAB.length)) - 1 + Math.floor(r() * 3))];
+export function word(r: () => number): string {
+  // Clamped both ways: r() near 1 gives rank 0, and 0 - 1 + 0 would be index -1 (undefined; crashed runs from about 20k notes).
+  return VOCAB[Math.max(0, Math.min(VOCAB.length - 1, Math.floor(1 / (r() + 1 / VOCAB.length)) - 1 + Math.floor(r() * 3)))];
 }
 const words = (r: () => number, n: number): string => Array.from({ length: n }, () => word(r)).join(" ");
 

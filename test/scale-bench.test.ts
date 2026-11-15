@@ -29,3 +29,10 @@ test("runScale reports plain and encrypted timings, seals bodies, and only gates
   assert.equal(typeof r.encrypted.bodyIndex.rssMb, "number");
   assert.equal(r.plain.bodyIndex, undefined);
 });
+
+test("word() never returns undefined, even when the first draw is near 1 and the second near 0", async () => {
+  const { word } = await import("../src/bench/scale.js");
+  const draws = [0.99999, 0];
+  let i = 0;
+  assert.equal(typeof word(() => draws[i++ % 2]), "string");
+});
