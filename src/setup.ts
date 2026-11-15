@@ -1902,22 +1902,32 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
             // deletes the one note it writes below, by its id. The old ones are named, never touched.
             const old = s.list({ limit: 50, withTags: ["setup-check"] }).notes;
             if (old.length) io.out(`Database ${d}: an earlier installer left ${old.map((n) => `#${n.id} "${n.title}"`).join(", ")}; I left ${old.length === 1 ? "it" : "them"} as ${old.length === 1 ? "it is" : "they are"} (archive with  monomem forget <id>  if you do not want ${old.length === 1 ? "it" : "them"}).`);
-            {
-              const note = s.create({
+            // A store with no notes at all checks in a scratch copy beside it (same folder, same SQLite), so the person's
+            // first note is #1 and not #2: ids are never reused, and a deleted #1 leaves change-log and sync records behind.
+            const fresh = s.list({ limit: 1, includeArchived: true, includeSuperseded: true, includeDistrusted: true }).total === 0;
+            const scratch = fresh ? join(dirname(d), `.setup-check-${randomBytes(4).toString("hex")}.db`) : "";
+            const t = fresh ? new Store(scratch) : s;
+            try {
+              const note = t.create({
                 title: "Monomem is connected",
                 body: "This note was written by `monomem setup` to check that writing and reading work. You can delete it any time.",
                 tags: ["setup-check"],
                 source: "monomem setup",
               });
-              const back = s.read(note.id); // gate-ok: setup reads back the test note it wrote a moment ago
+              const back = t.read(note.id); // gate-ok: setup reads back the test note it wrote a moment ago
               if (!back || back.title !== note.title || back.body !== note.body) throw new Error("the test note was written but did not read back the same");
               // Then remove it, so a brand-new store starts empty. Leaving it
               // behind made the installer's own note a permanent memory (1 of
               // the 13 notes in the maintainer's own store), and it was the
               // first thing a user ever searched for. Deleting it also proves
               // one more operation works than the old check did.
-              if (!s.delete(note.id)) throw new Error("the test note was written and read back, but could not be deleted");
-              io.out(`Database ${d}: test note written, read back and cleaned up.`);
+              if (!t.delete(note.id)) throw new Error("the test note was written and read back, but could not be deleted");
+              io.out(`Database ${d}: test note written, read back and cleaned up${fresh ? " (in a scratch copy beside it, so your first note is #1)" : ""}.`);
+            } finally {
+              if (fresh) {
+                t.close();
+                for (const f of [scratch, `${scratch}-wal`, `${scratch}-shm`]) rmSync(f, { force: true });
+              }
             }
           } else io.out(`Database ${d}: opens fine.`);
         } finally {

@@ -13,6 +13,8 @@ export interface HealthInput {
   tokensWithoutCeiling: number;
   /** Days since the last backup; null = none found. */
   backupAgeDays: number | null;
+  /** Notes in the store (any state). With none there is nothing a backup could save, so a missing backup costs nothing. */
+  noteCount?: number;
 }
 
 export interface Deduction {
@@ -41,7 +43,7 @@ export const HEALTH_FORMULA = [
   "Start at 100. Take off points per finding, each category has its own cap:",
   ...RULES.map((r) => `  ${r.category}: ${r.each} per finding (${r.what}), at most ${r.cap}`),
   "  keys without a limit: 5 per key that is not an administrator and sees everything, at most 15",
-  "  backup: 10 if none was found or it is over 30 days old, 5 if over 7 days old",
+  "  backup: 10 if none was found or it is over 30 days old, 5 if over 7 days old (not counted while the store has no notes)",
   "The score never goes below 0.",
 ];
 
@@ -52,7 +54,9 @@ export function computeHealth(i: HealthInput): Health {
     if (n > 0) deductions.push({ category: r.category, points: Math.min(r.cap, n * r.each), cap: r.cap, detail: `${r.what} (${n})` });
   }
   if (i.tokensWithoutCeiling > 0) deductions.push({ category: "keys without a limit", points: Math.min(15, i.tokensWithoutCeiling * 5), cap: 15, detail: `${i.tokensWithoutCeiling} key(s) that see everything` });
-  if (i.backupAgeDays === null) deductions.push({ category: "backup", points: 10, cap: 10, detail: "no backup found" });
+  if (i.noteCount === 0) {
+    /* a brand-new store: a first run should not read "81 / 100" */
+  } else if (i.backupAgeDays === null) deductions.push({ category: "backup", points: 10, cap: 10, detail: "no backup found" });
   else if (i.backupAgeDays > 30) deductions.push({ category: "backup", points: 10, cap: 10, detail: `last backup ${Math.floor(i.backupAgeDays)} days ago` });
   else if (i.backupAgeDays > 7) deductions.push({ category: "backup", points: 5, cap: 10, detail: `last backup ${Math.floor(i.backupAgeDays)} days ago` });
   const score = Math.max(0, 100 - deductions.reduce((a, d) => a + d.points, 0));
@@ -90,7 +94,7 @@ export interface Insights {
 
 export async function insights(store: Store, tokensWithoutCeiling: number, dataDir: string, namespaces?: string[]): Promise<Insights> {
   const report = await qualityReport(store, namespaces);
-  return { health: computeHealth({ counts: report.counts, tokensWithoutCeiling, backupAgeDays: backupAgeDays(dataDir) }), report };
+  return { health: computeHealth({ counts: report.counts, tokensWithoutCeiling, backupAgeDays: backupAgeDays(dataDir), noteCount: store.list({ limit: 1, includeArchived: true, includeSuperseded: true, includeDistrusted: true }).total }), report };
 }
 
 // ---- digest -------------------------------------------------------------------------------------------------------

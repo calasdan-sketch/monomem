@@ -2,7 +2,8 @@
 import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
 import { test, describe, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { computeHealth } from "../src/digest.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -137,9 +138,8 @@ describe("U-02 notes hidden by distrust are counted, and --include-distrusted wo
     }));
 });
 
-describe("U-03 setup says plainly whether the start-of-session hook was installed", () => {
-  // A fake Claude Code home in a temp dir: the real ~/.claude is never read or written.
-  function sandbox(): { e: SetupEnv; settings: string; db: string; root: string } {
+// A fake Claude Code home in a temp dir: the real ~/.claude is never read or written.
+function sandbox(): { e: SetupEnv; settings: string; db: string; root: string } {
     const root = mkdtempSync(join(tmpdir(), "om-ease-setup-"));
     const home = join(root, "home");
     mkdirSync(join(home, ".claude"), { recursive: true });
@@ -158,6 +158,8 @@ describe("U-03 setup says plainly whether the start-of-session hook was installe
   }
   const sopts = (o: Partial<SetupOptions>): SetupOptions => ({ ...DEFAULT_OPTIONS, noDoctor: true, noTestNote: true, ...o });
   const settingsOf = (p: string): any => JSON.parse(readFileSync(p, "utf8"));
+
+describe("U-03 setup says plainly whether the start-of-session hook was installed", () => {
 
   test("--yes installs the start-of-session hook and says how to skip or remove it", async () => {
     const s = sandbox();
@@ -303,11 +305,51 @@ describe("U-14 plain words", () => {
     assert.doesNotMatch(quarantineCasNote("update"), /compare-and-swap/);
   });
 
-  test("doctor's read-taint line says what happens in plain words", () => {
+  test("doctor's read-taint line says what happens in plain words (U-14)", () => {
     const s = new Store(":memory:");
     const lines = s.confirmRuleLines().join("\n");
     assert.doesNotMatch(lines, /Read-taint/);
     assert.match(lines, /Reading unconfirmed notes marks later writes/);
     s.close();
   });
+});
+
+describe("U-15 the first run looks right", () => {
+  test("memory tidiness is 100 on an empty store (no backup to miss yet)", () => {
+    const counts = { duplicate: 0, stale_twin: 0, quarantined: 0, lint: 0, pii: 0 } as any;
+    assert.equal(computeHealth({ counts, tokensWithoutCeiling: 0, backupAgeDays: null, noteCount: 0 }).score, 100);
+    assert.equal(computeHealth({ counts, tokensWithoutCeiling: 0, backupAgeDays: null, noteCount: 1 }).score, 90);
+  });
+
+  test("the first note added after setup on a new store is #1", async () => {
+    const s = sandbox();
+    try {
+      const out = sio();
+      assert.equal(await runSetup(s.e, out, sopts({ yes: true, hook: "no", db: s.db, noTestNote: false })), 0, out.all());
+      assert.match(out.all(), /test note written, read back and cleaned up/);
+      const st = new Store(s.db);
+      try {
+        assert.equal(st.create({ title: "my first note", body: "x" }).id, 1);
+      } finally {
+        st.close();
+      }
+      assert.deepEqual(readdirSync(join(s.root, "data")).filter((f) => f.includes("setup-check")), [], "the scratch copy is gone");
+    } finally {
+      rmSync(s.root, { recursive: true, force: true });
+    }
+  });
+
+  test("doctor gives one data-folder access warning with one icacls command (Windows)", { skip: process.platform !== "win32" }, () =>
+    withDir((dir) => {
+      // The data folder (a temp dir) sits outside this fake user folder, and temp dirs inherit BUILTIN\Administrators.
+      const profile = mkdtempSync(join(tmpdir(), "om-ease-profile-"));
+      try {
+        const r = run(dir, ["doctor"], { USERPROFILE: profile, HOME: profile });
+        const out = r.stdout + r.stderr;
+        assert.equal(out.match(/icacls "/g)?.length, 1, out);
+        assert.doesNotMatch(out, /%USERNAME%/);
+      } finally {
+        rmSync(profile, { recursive: true, force: true });
+      }
+    }));
 });

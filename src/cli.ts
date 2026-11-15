@@ -477,20 +477,6 @@ async function doctor(): Promise<void> {
       fail(`Monomem cannot write to its data folder (${DATA_DIR}).`, "This is a permissions problem. Make the folder writable for your user (or run Monomem as the user who owns it), or point MONOMEM_HOME at a folder you can write to.");
     }
   }
-  // On Windows the token file and database get the folder's inherited permissions (chmod does nothing
-  // there). Inside the user profile that means "this user only"; elsewhere (D:\, a shared folder) often not.
-  // Changing ACLs automatically could break backup or indexing tools, so this says how instead of doing it.
-  if (process.platform === "win32") {
-    const { homedir } = await import("node:os");
-    const { resolve } = await import("node:path");
-    const home = resolve(homedir()).toLowerCase();
-    if (!resolve(DATA_DIR).toLowerCase().startsWith(home + "\\")) {
-      warn(
-        `data dir is outside your user folder, so other accounts on this PC may be able to read the token and notes. ` +
-          `To limit it to you: icacls "${DATA_DIR}" /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F" /grant:r "SYSTEM:(OI)(CI)F"`
-      );
-    }
-  }
   const { MAPPED_LEGACY_ENV } = await import("./legacy-env.js");
   if (MAPPED_LEGACY_ENV.length) {
     warn(
@@ -594,14 +580,28 @@ async function doctor(): Promise<void> {
     const files = [resolvePath(DATA_DIR, ".token"), resolvePath(DATA_DIR, "tokens.json"), ...appKeyFiles(realEnv("", process.argv[1] ?? ""))].filter((f) => existsSync(f));
     if (process.platform === "win32") {
       // 1.5.0 (R1-11): an existing data folder may be open to other accounts on this PC. Read once, here; never on the hot path.
+      // On Windows the token file and database get the folder's inherited permissions (chmod does nothing there). Inside
+      // the user profile that means "this user only"; elsewhere (D:\, a shared folder) often not. Changing ACLs
+      // automatically could break backup or indexing tools, so this says how instead of doing it. One warning, one command
+      // (1.5.0 U-15): what icacls reports decides; "outside your user folder" is only the fallback when it cannot be read.
+      const { homedir } = await import("node:os");
+      const outside = !resolvePath(DATA_DIR).toLowerCase().startsWith(resolvePath(homedir()).toLowerCase() + "\\");
+      let checked = false;
       try {
         const { execFileSync } = await import("node:child_process");
         const { wideAccessGroups, lockdownArgs } = await import("./config.js");
         const wide = wideAccessGroups(execFileSync("icacls", [DATA_DIR], { encoding: "utf8", timeout: 15_000, windowsHide: true }));
+        checked = true;
         const args = lockdownArgs(DATA_DIR);
-        if (wide.length) warn(`the data folder is also open to ${wide.join(", ")} (other accounts on this PC). This does not stop programs running as you.`, args ? `To limit it to you and SYSTEM, run:  icacls "${DATA_DIR}" ${args.slice(1).map((x) => `"${x}"`).join(" ")}` : "Limit the folder's permissions to your own account in its Security tab.");
+        if (wide.length) warn(`the data folder${outside ? " is outside your user folder and" : ""} is also open to ${wide.join(", ")} (other accounts on this PC), so they may be able to read the keys and notes. This does not stop programs running as you.`, args ? `To limit it to you and SYSTEM, run:  icacls "${DATA_DIR}" ${args.slice(1).map((x) => `"${x}"`).join(" ")}` : "Limit the folder's permissions to your own account in its Security tab.");
       } catch {
-        /* icacls missing or the folder unreadable: say nothing */
+        /* icacls missing or the folder unreadable: the fallback below */
+      }
+      if (!checked && outside) {
+        warn(
+          "the data folder is outside your user folder, so other accounts on this PC may be able to read the keys and notes.",
+          `To limit it to you: icacls "${DATA_DIR}" /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F" /grant:r "SYSTEM:(OI)(CI)F"`
+        );
       }
     }
     const plainKeys = (await import("./tokens-admin.js")).plainKeyCount();
