@@ -140,6 +140,8 @@ const GATED_SQL_RE = /\b(?:FROM|JOIN|UPDATE|INTO)\s+(notes|note_history|quaranti
 const SQL_ALLOWED: Record<string, string[]> = {
   // backup.ts counts the notes of the COPY it just made and strips local-only _meta keys from that copy.
   "backup.ts": ["_meta", "notes"],
+  // bench/scale.ts counts sealed bodies (body_enc IS NOT NULL, a COUNT only) in the synthetic temp-folder store it just built.
+  "bench/scale.ts": ["notes"],
   // health.ts keeps its own "audit lines seen" marker in _meta (health_audit_seen); it reads no trust setting.
   "health.ts": ["_meta"],
   // restore.ts counts (and checks for encryption) the BACKUP FILE it is about to put in place, before any store opens it.
