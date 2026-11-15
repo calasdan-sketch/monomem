@@ -30,6 +30,8 @@ This is the part most tools omit, so read it before enabling:
 | **Tags**, timestamps, namespace | No | Same: filtering, search and isolation read them directly |
 | Access counters | No | Ranking input; not sensitive |
 | **Embeddings** (`note_vectors`) | No | Vectors are stored unencrypted, and with `MONOMEM_EMBEDDINGS=on` the **decrypted body is sent to your embeddings endpoint** when a note is embedded. Leave semantic search off if that matters |
+| **Captured session titles and tags** (automatic capture) | No | Monomem writes these itself from the session: a "Decision: ..." or "Session: ..." title can repeat words from your prompt, `obs.concept:<word>` tags are words from it, and edited file paths are kept as they are. A secret you paste into a prompt is redacted only when it has a known secret shape. Turn capture off (`monomem setup --no-capture`) if your prompts carry sensitive text |
+| **Capture spool** (`capture-spool.jsonl` in the data folder) | No | Hook events wait there in plain JSON until the server takes them in |
 | **The FTS search index** | No — and **body text is not indexed at all** when encryption is on | See below |
 
 **The search tradeoff, stated plainly.** `notes_fts` is a SQLite
