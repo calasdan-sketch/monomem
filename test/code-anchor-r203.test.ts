@@ -132,6 +132,23 @@ describe("R2-03 code anchors", () => {
     assert.deepEqual(list.map((x) => [x.id, x.changed[0].path]), [[n.id, "src/cli-case.ts"]]);
   });
 
+  test("final-architecture SF-1: a repository whose .git went away does not spawn git on every read", () => {
+    const repo2 = join(root, "repo2");
+    mkdirSync(repo2);
+    const g2 = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { cwd: repo2, stdio: "pipe" });
+    g2("init", "-q");
+    writeFileSync(join(repo2, "a.ts"), "a\n");
+    g2("add", "--", "a.ts");
+    g2("commit", "-q", "-m", "a");
+    const s = new Store(":memory:");
+    const n = at(repo2, () => s.create({ title: "about a", body: "b" }, { files: ["a.ts"] }));
+    rmSync(join(repo2, ".git"), { recursive: true, force: true });
+    const before = gitStats.revParse;
+    for (let i = 0; i < 5; i++) assert.equal(s.read(n.id)!.code_changed, undefined);
+    assert.ok(gitStats.revParse - before <= 1, `git rev-parse ran ${gitStats.revParse - before} times for 5 reads`);
+    s.close();
+  });
+
   test("outside a git repository: the note is written as before, with no anchors and no label", () => {
     const s = new Store(":memory:");
     const n = at(outside, () => s.create({ title: "plain", body: "b" }, { files: ["secret.txt"] }));
