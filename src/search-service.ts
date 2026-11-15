@@ -927,6 +927,63 @@ export function keywordCoverage(note: NoteRecord, keywords: string[]): number {
   return hit / bare.length;
 }
 
+/** `fold` per character, so offsets in the result line up with the original text (a character whose fold changes length is kept as is). */
+function foldSameLength(s: string): string {
+  if (/^[\x00-\x7f]*$/.test(s)) return s.toLowerCase();
+  let out = "";
+  for (const ch of s) {
+    const f = fold(ch);
+    out += f.length === ch.length ? f : ch;
+  }
+  return out;
+}
+
+/**
+ * C-01: the `size`-character window of `body` with the most query-word hits (word-start prefix match, accents folded,
+ * the query's keywords as extractKeywords picks them), so a long search hit shows the part that matched rather than its
+ * opening. Ties go to the earliest window; a window no better than the opening one keeps the opening (start 0). Reads only
+ * the one body it is given: what it returns is always a slice of that body.
+ */
+export function bestPassage(body: string, query: string, size: number): { start: number; text: string } {
+  if (body.length <= size) return { start: 0, text: body };
+  const terms = [...new Set(extractKeywords(query).map((k) => fold(k.replace(/^#/, ""))).filter(Boolean))];
+  const text = foldSameLength(body);
+  const hits: Array<{ at: number; end: number; term: number }> = [];
+  terms.forEach((k, term) => {
+    for (let i = text.indexOf(k); i !== -1; i = text.indexOf(k, i + 1)) {
+      if (i === 0 || !WORD_CHAR.test(text[i - 1])) hits.push({ at: i, end: i + k.length, term });
+    }
+  });
+  if (hits.length === 0) return { start: 0, text: body.slice(0, size) };
+  hits.sort((a, b) => a.at - b.at);
+  // Score = distinct query words first, then total hits, over the hits that fit in a window opening at hit i
+  // (two pointers with per-word counts: linear in the number of hits).
+  const count = new Array<number>(terms.length).fill(0);
+  let distinct = 0;
+  const add = (h: { term: number }, d: 1 | -1): void => {
+    if (d === 1 && count[h.term]++ === 0) distinct++;
+    if (d === -1 && --count[h.term] === 0) distinct--;
+  };
+  let best = { score: -1, from: 0, to: 0 };
+  for (let i = 0, j = 0; i < hits.length; i++) {
+    if (j < i) j = i;
+    while (j < hits.length && hits[j].end <= hits[i].at + size) add(hits[j++], 1);
+    const sc = distinct * 1e6 + (j - i);
+    if (sc > best.score) best = { score: sc, from: i, to: j };
+    if (j > i) add(hits[i], -1);
+  }
+  const opening = hits.filter((h) => h.end <= size);
+  if (new Set(opening.map((h) => h.term)).size * 1e6 + opening.length >= best.score) return { start: 0, text: body.slice(0, size) };
+  // Centre the matched span in the window, then back up to a word start (within 40 characters) so the passage opens cleanly.
+  const first = hits[best.from].at;
+  const span = hits[best.to - 1].end - first;
+  let start = Math.max(0, Math.min(body.length - size, first - Math.floor((size - span) / 2)));
+  const ws = body.lastIndexOf(" ", start);
+  if (start > 0 && ws >= 0 && start - ws <= 40 && ws + 1 <= first) start = ws + 1;
+  if (start > 0 && /[\udc00-\udfff]/.test(body[start])) start++; // never open on half a surrogate pair
+  return { start, text: body.slice(start, start + size) };
+}
+
 // The public entry points. A caller that opted in with includeDistrusted gets
 // notes whose writer the admin distrusts back flagged `distrusted: true`, so no
 // surface can show one without the mark.

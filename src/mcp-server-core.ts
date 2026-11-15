@@ -50,7 +50,7 @@ import { waitForChanges, parseWait, WAIT_MAX_SECONDS, WAIT_RECOMMENDED_SECONDS }
 import { type Scope, PACKAGE_VERSION } from "./config.js";
 export { PACKAGE_VERSION };
 import { ADMIN_SCOPE_NEEDED, scopeAllows, UNTRUSTED_BANNER, provenanceBanner, audit, printableWords } from "./security.js";
-import { runSearch, runSearchExplained, semanticNotice, parseMode, maybeEmbed, runRelevantSearch, roundRobin, describeWhen, SEARCH_MODES, type SearchOpts, type RelevantOpts, type ExplainedHit } from "./search-service.js";
+import { runSearch, runSearchExplained, semanticNotice, parseMode, maybeEmbed, runRelevantSearch, roundRobin, describeWhen, bestPassage, SEARCH_MODES, type SearchOpts, type RelevantOpts, type ExplainedHit } from "./search-service.js";
 import {
   type ServerNamespaceOpts,
   canRead,
@@ -111,14 +111,18 @@ const zFacts = () =>
 const READ_MAX_CHARS = 40_000;
 /** state_read ids: at most this many notes per call. */
 const MULTI_READ_MAX = 10;
-const CUT_NOTE = `Long bodies are cut to ${LIST_BODY_CHARS} characters (body_truncated, body_chars); state_read id=N for the full text.`;
+const CUT_NOTE = `Long bodies are cut to ${LIST_BODY_CHARS} characters (body_truncated, body_chars); a search shows the part with the most query words, and body_offset says where it starts. state_read id=N for the full text.`;
 /** The same payload with each note body in `results` / `notes` cut to LIST_BODY_CHARS (a host caps how much tool output it shows). */
-function cutBodies(payload: Record<string, unknown>): Record<string, unknown> {
+function cutBodies(payload: Record<string, unknown>, query?: string): Record<string, unknown> {
+  // A search (query given) shows the window with the most query hits (C-01); body_offset says where it starts, so
+  // state_read offset=N continues from there. The window is a slice of that note's own body: nothing else is read.
   const cut = (v: unknown): unknown =>
     Array.isArray(v)
       ? v.map((n) => {
           const b = (n as { body?: unknown } | null)?.body;
-          return typeof b === "string" && b.length > LIST_BODY_CHARS ? { ...(n as object), body: b.slice(0, LIST_BODY_CHARS), body_truncated: true, body_chars: b.length } : n;
+          if (typeof b !== "string" || b.length <= LIST_BODY_CHARS) return n;
+          const p = query ? bestPassage(b, query, LIST_BODY_CHARS) : { start: 0, text: b.slice(0, LIST_BODY_CHARS) };
+          return { ...(n as object), body: p.text, body_truncated: true, body_chars: b.length, ...(p.start > 0 ? { body_offset: p.start } : {}) };
         })
       : v;
   return { ...payload, ...("results" in payload ? { results: cut(payload.results) } : {}), ...("notes" in payload ? { notes: cut(payload.notes) } : {}) };
@@ -128,8 +132,8 @@ function noBody<T extends { body?: unknown }>(n: T): Omit<T, "body"> {
   const { body: _body, ...rest } = n;
   return rest;
 }
-function untrustedResultCut(payload: Record<string, unknown>) {
-  return untrustedResult(cutBodies(payload));
+function untrustedResultCut(payload: Record<string, unknown>, query?: string) {
+  return untrustedResult(cutBodies(payload, query));
 }
 
 /** False only for a payload with a results / notes / recent list and no record anywhere (every list empty or plain strings): no stored text is in it. */
@@ -1072,7 +1076,7 @@ export function createMcpServer(
             archived_then: view.archivedThen,
             results: hits.map((h) => asOfFields(h, withWhen)),
             searchedNamespaces: spaces ?? [],
-          });
+          }, query);
         }
         if (mode === "relevant") {
           if (when !== undefined || explain !== undefined || include_superseded !== undefined) {
@@ -1100,7 +1104,7 @@ export function createMcpServer(
         const untrustedResultN = (p: Record<string, unknown>) => {
           const n = Array.isArray(p.results) ? p.results.length : 0;
           const q = { ...p, ...(limit !== undefined && limit > 200 ? { limit_capped: 200 } : {}), ...(n >= effLimit ? { more: true } : {}) };
-          return untrustedResultCut(semNotice ? { ...q, notice: semNotice } : q);
+          return untrustedResultCut(semNotice ? { ...q, notice: semNotice } : q, query);
         };
         const wf = { ...writerFilterArgs(written_by, not_written_by, include_distrusted), ...supersededArg(include_superseded) };
         if (explain === true && currentCeiling() === undefined) {
@@ -1229,7 +1233,7 @@ export function createMcpServer(
     /** Cut long bodies (state_search mode "relevant"); state_relevant keeps them whole as before. */
     cut?: boolean;
   }) {
-    const out$ = cut ? untrustedResultCut : untrustedResult;
+    const out$ = cut ? (p: Record<string, unknown>) => untrustedResultCut(p, message) : untrustedResult;
     try {
       const denied = denyIfUnder("read");
       if (denied) return errorResult(denied);

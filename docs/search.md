@@ -67,6 +67,16 @@ What it cannot do, and says so:
 - Only text changes make history. Tag or source edits are not reconstructed, and a note whose only later change was such an edit has no recorded writer for the old text. If history was switched off (`MONOMEM_HISTORY_VERSIONS=0`), an edited note is "not kept".
 - Search at a past time scores the rebuilt notes with the keyword scorer (share of your words found, newest first on ties). It does not use the search index, which only holds today's text, and has no semantic ranking, time phrases or writer filters.
 
+## Long notes in search results (1.5.0)
+
+`state_search` and `state_list` cut a body longer than 600 characters (`body_truncated: true`, `body_chars` = the full
+length). In a **search** the 600 characters shown are the part of the note with the most of your query words (counted at
+word starts, accents ignored, like the index), not simply its opening; `body_offset` says where that part starts, so
+`state_read` with `offset` continues from there. When no part beats the opening, or the call is `state_list` (no query),
+you get the first 600 characters as before. Encrypted notes work the same way: the part is chosen from the body after it
+is decrypted in memory for the result, and only from that one note's own text. REST `/search` and `state_read` return
+whole bodies and are unchanged.
+
 ## Relevant-memory search
 
 Don't know the exact wording? `state_search` with `mode: "relevant"` (or the
