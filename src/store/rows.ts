@@ -1,7 +1,8 @@
-// Pure row helpers shared by store.ts and the src/store/* modules (1.5.0 store split). Imports only the pure taint.ts and
-// crypto.ts and types, so every user stays out of import cycles.
+// Pure row helpers shared by store.ts and the src/store/* modules (1.5.0 store split). Imports only the pure actor.ts,
+// taint.ts and crypto.ts, and types, so every user stays out of import cycles.
 
-import type { NoteRecord } from "../store.js";
+import type { LintMode, NoteRecord } from "../store.js";
+import { currentWriter } from "../actor.js";
 import { isTainted } from "../taint.js";
 import { encryptV3, decryptV3, decryptIfEncrypted, ENC_PREFIX_V3 } from "../crypto.js";
 
@@ -100,3 +101,29 @@ export function clampInt(v: number | undefined, def: number, min: number, max: n
   const n = typeof v === "number" && Number.isFinite(v) ? Math.floor(v) : def;
   return Math.min(Math.max(n, min), max);
 }
+
+/** Env knob: a non-negative number, or `dflt` when unset, empty or unusable. */
+export function envCount(name: string, dflt: number): number {
+  const raw = process.env[name]?.trim();
+  const n = raw ? Number(raw) : NaN;
+  return Number.isFinite(n) && n >= 0 ? n : dflt;
+}
+
+/** Writes one writer may make in a rolling hour before it is paused (MONOMEM_FLOOD_WRITES_PER_HOUR, default 500; 0 = off). */
+export const floodWritesPerHour = (): number => Math.floor(envCount("MONOMEM_FLOOD_WRITES_PER_HOUR", 500));
+
+/**
+ * Approve-first namespaces hold every write that is not the operator's. The operator is the local
+ * `monomem` CLI (writer marker `cli`, no token behind the call) plus the internal lint modes: "none"
+ * is an approved quarantine replay, "trusted" is consolidation re-writing stored notes. Everything
+ * else counts as an agent: MCP over stdio or HTTP, every REST call (an admin token included -- REST
+ * has no separate operator login), the server's own jobs, the runner, capture hooks, library callers.
+ */
+export function isOperatorWrite(mode: LintMode): boolean {
+  return mode !== "full" || currentWriter() === "cli";
+}
+
+/** A3 shape checks for trust settings kept as JSON in _meta. */
+export const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
+
+export const isPlainObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);

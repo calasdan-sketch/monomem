@@ -130,12 +130,13 @@ import {
   WriterPausedError,
   heldHandled,
 } from "./errors.js";
+import * as gateOps from "./store/gates.js";
 import * as trustOps from "./store/trust.js";
 import * as quarantineOps from "./store/quarantine.js";
 import * as confirmOps from "./store/confirm.js";
 import * as taintOps from "./store/taint.js";
-import { SESSION_IDLE_MS, tagsToStorage, parseTags, CONFIRM_RANK, rankSql, dueBase, needsHumanConfirm, type DueRow, quarantineAad, sealQuarantineCol, openQuarantineCol, isoOrNull, clampInt } from "./store/rows.js";
-export { dueBase, needsHumanConfirm, clampInt };
+import { SESSION_IDLE_MS, tagsToStorage, parseTags, CONFIRM_RANK, rankSql, dueBase, needsHumanConfirm, type DueRow, quarantineAad, sealQuarantineCol, openQuarantineCol, isoOrNull, clampInt, envCount, floodWritesPerHour, isOperatorWrite, isStringArray, isPlainObject } from "./store/rows.js";
+export { dueBase, needsHumanConfirm, clampInt, floodWritesPerHour };
 export { ValidationError, NoteUnreadableError, StaleWriteError, RebuildBusyError, CandidateScanError, QuarantinedError, WriterPausedError };
 
 /**
@@ -236,16 +237,8 @@ function historyAad(hid: number): string {
   return `history|${hid}`;
 }
 
-/** Env knob: a non-negative number, or `dflt` when unset, empty or unusable. */
-function envCount(name: string, dflt: number): number {
-  const raw = process.env[name]?.trim();
-  const n = raw ? Number(raw) : NaN;
-  return Number.isFinite(n) && n >= 0 ? n : dflt;
-}
 /** Days of read-access log kept (MONOMEM_ACCESS_LOG_DAYS, default 30; 0 = the log is off). */
 export const accessLogDays = (): number => envCount("MONOMEM_ACCESS_LOG_DAYS", 30);
-/** Writes one writer may make in a rolling hour before it is paused (MONOMEM_FLOOD_WRITES_PER_HOUR, default 500; 0 = off). */
-export const floodWritesPerHour = (): number => Math.floor(envCount("MONOMEM_FLOOD_WRITES_PER_HOUR", 500));
 /** Longest query preview kept in the access log. */
 export const ACCESS_PREVIEW_MAX = 120;
 const ACCESS_AAD = "access_log";
@@ -336,17 +329,6 @@ function lintFor(
 /** bm25 column weights for notes_fts(title, body, tags). */
 const FTS_WEIGHTS = "5, 1, 2";
 const APPROVAL_FINDING: LintFinding = { category: "approval", label: "namespace requires approval", field: "namespace" };
-
-/**
- * Approve-first namespaces hold every write that is not the operator's. The operator is the local
- * `monomem` CLI (writer marker `cli`, no token behind the call) plus the internal lint modes: "none"
- * is an approved quarantine replay, "trusted" is consolidation re-writing stored notes. Everything
- * else counts as an agent: MCP over stdio or HTTP, every REST call (an admin token included -- REST
- * has no separate operator login), the server's own jobs, the runner, capture hooks, library callers.
- */
-function isOperatorWrite(mode: LintMode): boolean {
-  return mode !== "full" || currentWriter() === "cli";
-}
 
 /**
  * Archive, restore and supersede change what agents see but cannot wait in the quarantine queue (it
@@ -1454,9 +1436,6 @@ interface EdgeRow {
 /** _meta key: this database was checked for pre-1.2.1 (v1) ciphertext with a key present (P2). */
 const V1_CHECKED = "v1_envelopes_checked";
 
-/** A3 shape checks for trust settings kept as JSON in _meta. */
-const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
-const isPlainObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 /** A3: the revocation set used when the stored list is damaged: every key reads as revoked. */
 class AllRevoked extends Set<string> {
   override has(_k: string): boolean {
@@ -7832,30 +7811,13 @@ export class Store {
     }
   }
 
-  /**
-   * 1.5.0 (A3): a trust setting stored as JSON. `damaged` = present but unparsable or the wrong shape: the readers then fail
-   * CLOSED (approve-first everywhere, every agent paused, every attester key revoked), never open. Missing = not damaged.
-   */
-  private metaJson<T>(key: string, ok: (v: unknown) => v is T): { v: T | null; damaged: boolean } {
-    const raw = this.getMeta(key);
-    if (raw === null) return { v: null, damaged: false };
-    try {
-      const v = JSON.parse(raw) as unknown;
-      return ok(v) ? { v, damaged: false } : { v: null, damaged: true };
-    } catch {
-      return { v: null, damaged: true };
-    }
+  /** @internal */ metaJson<T>(key: string, ok: (v: unknown) => v is T): { v: T | null; damaged: boolean } {
+    return gateOps.metaJson(this, key, ok);
   }
 
   /** 1.5.0 (A3): the trust settings whose stored value is damaged (doctor reports them). */
   damagedTrustSettings(): string[] {
-    const out: string[] = [];
-    if (this.metaJson("approve_first", isStringArray).damaged) out.push("approve_first");
-    if (this.metaJson("flood_paused", isStringArray).damaged) out.push("flood_paused");
-    if (this.metaJson("revoked_attester_keys", isPlainObject).damaged) out.push("revoked_attester_keys");
-    const m = this.getMeta("confirm_mode");
-    if (m !== null && !(CONFIRM_MODES as readonly string[]).includes(m)) out.push("confirm_mode");
-    return out;
+    return gateOps.damagedTrustSettings(this);
   }
 
   /** Upsert a _meta value. Internal keys only -- never caller-chosen. */
@@ -7975,47 +7937,28 @@ export class Store {
 
   /** Writer identities the flood guard paused (sorted). */
   pausedWriters(): string[] {
-    return [...(this.metaJson("flood_paused", isStringArray).v ?? [])].sort();
+    return gateOps.pausedWriters(this);
   }
 
-  /** A3: a damaged pause list pauses every writer the flood guard counts (the operator is never counted). */
-  private isPaused(w: string): boolean {
-    const p = this.metaJson("flood_paused", isStringArray);
-    return p.damaged || (p.v ?? []).includes(w);
+  /** @internal */ isPaused(w: string): boolean {
+    return gateOps.isPaused(this, w);
   }
 
   /** Lift a pause and clear that writer's count. Returns false when the writer was not paused. */
   resumeWriter(label: string): boolean {
-    const w = cleanWriter(label);
-    if (!w) throw new ValidationError("writer label is required");
-    // A3: a damaged list cannot say who else was paused: the operator's resume resets it (audited below).
-    const damaged = this.metaJson("flood_paused", isStringArray).damaged;
-    const all = this.pausedWriters();
-    if (!damaged && !all.includes(w)) return false;
-    this.setMeta("flood_paused", JSON.stringify(damaged ? [] : all.filter((x) => x !== w)));
-    // A fresh hour: otherwise its very next write would trip the guard again on the old count.
-    this.db.prepare("DELETE FROM write_rate WHERE writer = ?").run(w);
-    this.audit({ op: "flood-resume", label: w });
-    return true;
+    return gateOps.resumeWriter(this, label);
   }
 
-  /** The identity the flood guard counts, or null for writes it leaves alone: see floodGate. */
-  private floodSubject(mode: LintMode): string | null {
-    const w = currentWriter();
-    return isOperatorWrite(mode) || w === "" || w === "server" ? null : w;
+  /** @internal */ floodSubject(mode: LintMode): string | null {
+    return gateOps.floodSubject(this, mode);
   }
 
-  /** archive / restore: refused for a paused writer (they are not counted). */
   private refusePaused(): void {
-    const w = this.floodSubject("full");
-    if (w !== null && this.isPaused(w)) throw this.pausedError(w);
+    return gateOps.refusePaused(this);
   }
 
-  private pausedError(w: string): WriterPausedError {
-    return new WriterPausedError(
-      `writer "${w}" is paused by the flood guard (more than ${floodWritesPerHour()} writes in an hour). ` +
-        `Its writes are refused until an operator runs: monomem resume ${w}`
-    );
+  /** @internal */ pausedError(w: string): WriterPausedError {
+    return gateOps.pausedError(this, w);
   }
 
   /**
@@ -8027,26 +7970,7 @@ export class Store {
    * and importNotes (a restore).
    */
   /** @internal */ floodGate(mode: LintMode, count = true): void {
-    const w = this.floodSubject(mode);
-    if (w === null) return;
-    if (this.isPaused(w)) throw this.pausedError(w);
-    const limit = floodWritesPerHour();
-    if (limit === 0 || !count) return;
-    const now = Date.now();
-    // ponytail: count-then-insert is not atomic across processes; concurrent writers can overshoot by a few.
-    const n = Number(
-      (this.db.prepare("SELECT COUNT(*) AS n FROM write_rate WHERE writer = ? AND at >= ?").get(w, new Date(now - 3_600_000).toISOString()) as { n: number }).n
-    );
-    if (n >= limit) {
-      // One statement, no transaction: a write can run inside a caller's transaction (which this throw rolls back, pause
-      // included; the count stays, so the next write pauses it again).
-      this.setMeta("flood_paused", JSON.stringify([...new Set([...this.pausedWriters(), w])].sort()));
-      this.audit({ op: "flood-pause", label: w, detail: `${n} writes in the last hour (limit ${limit})` });
-      console.error(`[monomem] flood guard: paused writer "${w}" after ${n} writes in an hour. Resume with: monomem resume ${w}`);
-      throw this.pausedError(w);
-    }
-    this.db.prepare("INSERT INTO write_rate (writer, at) VALUES (?, ?)").run(w, new Date(now).toISOString());
-    this.bookkeepingChanges += 1;
+    return gateOps.floodGate(this, mode, count);
   }
 
   /** Audit lines written inside a transaction wait here until it commits; a rollback drops them. */
@@ -8090,34 +8014,26 @@ export class Store {
 
   /** Namespaces whose agent writes wait in the quarantine queue for an operator (sorted). */
   approveFirstNamespaces(): string[] {
-    return [...(this.metaJson("approve_first", isStringArray).v ?? [])].sort();
+    return gateOps.approveFirstNamespaces(this);
   }
 
   /** True when approve-first is on for every namespace, including ones created later. */
   approveFirstAll(): boolean {
-    return this.getMeta("approve_first_all") === "1";
+    return gateOps.approveFirstAll(this);
   }
 
   isApproveFirst(namespace: string): boolean {
-    // A3: a damaged list cannot say which namespaces were approve-first: all of them are.
-    return this.approveFirstAll() || this.metaJson("approve_first", isStringArray).damaged || this.approveFirstNamespaces().includes(namespace);
+    return gateOps.isApproveFirst(this, namespace);
   }
 
   /** Turn approve-first on or off for every namespace at once. Operator-only, like the per-namespace switch. */
   setApproveFirstAll(on: boolean): void {
-    this.setMeta("approve_first_all", on ? "1" : "0");
-    this.audit({ op: on ? "approve-first-all-on" : "approve-first-all-off" });
+    return gateOps.setApproveFirstAll(this, on);
   }
 
   /** Turn approve-first on or off for a namespace. Writes already held stay in the queue either way. */
   setApproveFirst(namespace: string, on: boolean): void {
-    const ns = typeof namespace === "string" ? namespace.trim() : "";
-    if (!ns) throw new ValidationError("namespace is required");
-    this.transaction(() => {
-      const rest = this.approveFirstNamespaces().filter((n) => n !== ns);
-      this.setMeta("approve_first", JSON.stringify(on ? [...rest, ns].sort() : rest));
-    });
-    this.audit({ op: on ? "approve-first-on" : "approve-first-off", namespace: ns });
+    return gateOps.setApproveFirst(this, namespace, on);
   }
 
   // --- Pinned notes (v18) ----------------------------------------------------
@@ -8130,29 +8046,12 @@ export class Store {
    * token included), the server's own jobs, library callers. Reading is not affected.
    */
   refuseAgentOnPinned(id: number, what: string): void {
-    if (currentWriter() === "cli") return;
-    const r = this.db.prepare("SELECT pinned FROM notes WHERE id = ?").get(id) as { pinned: number } | undefined;
-    if (r && Number(r.pinned) === 1) {
-      throw new ValidationError(`note ${id} is pinned by the operator: ${what} is done by the operator (monomem CLI), not by an agent. It can still be read.`);
-    }
+    return gateOps.refuseAgentOnPinned(this, id, what);
   }
 
   /** Pin or unpin a note. False when there is no such note. Not a content change: rev, written_by and the change feed are untouched. */
   setPinned(id: number, on: boolean, namespaces?: string[]): boolean {
-    if (namespaces && namespaces.length === 0) return false;
-    // One transaction: the operator's pass recorded as the human confirm and the pin land together or not at all.
-    const ok = this.transaction(() => {
-      if (on) {
-        const ns = (this.db.prepare("SELECT namespace FROM notes WHERE id = ?").get(id) as { namespace: string } | undefined)?.namespace;
-        if (ns === undefined || (namespaces && !namespaces.includes(ns))) return false; // a note outside the caller's namespaces reads as missing
-        this.requireHumanConfirm(id, "pin");
-      }
-      const where = namespaces ? ` AND namespace IN (${namespaces.map(() => "?").join(",")})` : "";
-      const res = this.db.prepare(`UPDATE notes SET pinned = ? WHERE id = ?${where}`).run(on ? 1 : 0, id, ...(namespaces ?? []));
-      return Number(res.changes) > 0;
-    });
-    if (ok) this.audit({ op: on ? "pin" : "unpin", id });
-    return ok;
+    return gateOps.setPinned(this, id, on, namespaces);
   }
 
   // --- Outside-content taint and confirms (1.4.0, taint.ts) -------------------------------------------
@@ -8327,13 +8226,7 @@ export class Store {
 
   /** Pinned notes (id, namespace, title), oldest first; `namespaces` limits it to those. */
   pinnedNotes(namespaces?: string[]): Array<{ id: number; namespace: string; title: string }> {
-    if (namespaces && namespaces.length === 0) return [];
-    const where = namespaces ? ` AND namespace IN (${namespaces.map(() => "?").join(",")})` : "";
-    return this.db.prepare(`SELECT id, namespace, title FROM notes WHERE pinned = 1${where}${this.ceilingSql()} ORDER BY id`).all(...(namespaces ?? [])) as unknown as Array<{
-      id: number;
-      namespace: string;
-      title: string;
-    }>;
+    return gateOps.pinnedNotes(this, namespaces);
   }
 
   // --- Rollback by writer (v18) ------------------------------------------------
