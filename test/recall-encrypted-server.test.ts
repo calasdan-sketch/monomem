@@ -52,11 +52,13 @@ describe("session start on an encrypted store asks a local server for body match
     try {
       const port = await listen(srv);
       const ctx = contextOf(await runRecall({ dbPath: db, cwd: dir, signals, serverPort: port }));
+      // An empty context means session start's 5 s cap fired (a loaded machine), not a wrong match: say so plainly.
+      assert.notEqual(ctx, "", "session start returned no context: its 5 s cap fired before the notes were read");
       assert.match(ctx, new RegExp(`#${target}\\b[^\\n]*Old deploy notes[^\\n]*\\{[^}]*kw`), ctx);
     } finally {
       await close(srv);
       serverStore.close();
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
     }
   });
 
@@ -72,7 +74,7 @@ describe("session start on an encrypted store asks a local server for body match
       assert.doesNotMatch(ctx, new RegExp(`#${target}\\b`), "the body-only note is not found without the server");
       assert.match(ctx, /filler/, "the rest of session start is unchanged");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
     }
   });
 
@@ -92,7 +94,7 @@ describe("session start on an encrypted store asks a local server for body match
     } finally {
       hang.closeAllConnections();
       await close(hang);
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
     }
   });
 
@@ -120,8 +122,8 @@ describe("session start on an encrypted store asks a local server for body match
       await close(fake);
       await close(otherSrv);
       other.close();
-      rmSync(dir, { recursive: true, force: true });
-      rmSync(otherDir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+      rmSync(otherDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
     }
   });
 });
