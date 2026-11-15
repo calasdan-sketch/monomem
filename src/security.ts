@@ -11,6 +11,7 @@ import type { IncomingMessage } from "node:http";
 import { DATA_DIR, envNum, isLoopback, sha256Hex, type Scope, type TokenEntry } from "./config.js";
 import { isWriterMarker, MARKER_DESCRIPTIONS } from "./actor.js";
 import { ORIGIN_TOOL_PREFIX } from "./reserved-tags.js";
+import { AUDIT_DOMAIN, keyFileStamp, keyIdOf, peekSigningKey, signBytes, verifyBytes, type SigningKey } from "./attest.js";
 
 // ---- Untrusted-data banner --------------------------------------------------
 // Note contents are returned to autonomous agents, which makes a stored note a
@@ -683,7 +684,7 @@ function lineSeq(line: string): number {
 }
 
 /** sha256 and seq of the last line of `path` (or of path.1 right after a rotation); GENESIS / 0 when there is none. */
-function lastAuditLine(path: string): { hash: string; seq: number } {
+function lastAuditLine(path: string): { hash: string; seq: number; signed: boolean } {
   for (const p of [path, `${path}.1`]) {
     try {
       const size = statSync(p).size;
@@ -697,12 +698,62 @@ function lastAuditLine(path: string): { hash: string; seq: number } {
         closeSync(fd);
       }
       const lines = buf.toString("utf8").split("\n").filter(Boolean);
-      if (lines.length) return { hash: sha(lines[lines.length - 1]), seq: lineSeq(lines[lines.length - 1]) };
+      const l = lines[lines.length - 1];
+      if (lines.length) return { hash: sha(l), seq: lineSeq(l), signed: SIG_TAIL.test(l) };
     } catch {
       /* missing file: try the next */
     }
   }
-  return { hash: GENESIS, seq: 0 };
+  return { hash: GENESIS, seq: 0, signed: false };
+}
+
+/** Hash and seq of the newest line of the log (what a checkpoint signs); undefined for an empty log. */
+export function auditHead(path: string = auditPath()): { hash: string; seq: number } | undefined {
+  const l = lastAuditLine(path);
+  return l.hash === GENESIS ? undefined : { hash: l.hash, seq: l.seq };
+}
+
+/** The signature a signed line ends with; removing it gives back exactly the bytes that were signed. */
+const SIG_TAIL = /,"sig":"([A-Za-z0-9_-]+)"\}$/;
+
+/** A signed audit line: `kid` goes into the body, the signature over AUDIT_DOMAIN + body is appended as the last field. */
+function signLine(rec: Record<string, unknown>, key: SigningKey): string {
+  const body = JSON.stringify({ ...rec, kid: key.keyId });
+  return body.slice(0, -1) + `,"sig":"${signBytes(key, AUDIT_DOMAIN + body)}"}`;
+}
+
+/**
+ * The store key beside the log (or MONOMEM_ATTEST_KEY_FILE), re-read only when the key file changes (one stat per line,
+ * so a `trust rotate` from another process is picked up at the next line). Never creates a key: no key, or one this
+ * process cannot read, means an unsigned line, exactly as before 1.5.0.
+ */
+let signerCache: { dir: string; stamp: string; key: SigningKey | null } | null = null;
+function auditSigner(path: string): SigningKey | null {
+  const dir = dirname(path);
+  const stamp = keyFileStamp(dir);
+  if (stamp === "") return null;
+  if (signerCache && signerCache.dir === dir && signerCache.stamp === stamp) return signerCache.key;
+  const key = peekSigningKey(dir);
+  signerCache = { dir, stamp, key };
+  return key;
+}
+
+/** How many unsigned lines end the log (newest file first, back through the rotated ones): what a sign-start line freezes. */
+function unsignedTail(path: string): number {
+  let n = 0;
+  for (let i = 0; i === 0 || existsSync(`${path}.${i}`); i++) {
+    let lines: string[];
+    try {
+      lines = readFileSync(i === 0 ? path : `${path}.${i}`, "utf8").split("\n").filter(Boolean);
+    } catch {
+      continue;
+    }
+    for (let j = lines.length - 1; j >= 0; j--) {
+      if (SIG_TAIL.test(lines[j])) return n;
+      n++;
+    }
+  }
+  return n;
 }
 
 /**
@@ -710,13 +761,24 @@ function lastAuditLine(path: string): { hash: string; seq: number } {
  * server), and one can read the last line's hash just before another appends, so its `prev` names an earlier line:
  * a concurrent fork. A `prev` that matches one of the last FORK_WINDOW lines is counted as a fork, not a break. A
  * `prev` that matches none of them is a break: a line was edited or removed. Every break is counted, not just the
- * first. Limits: it cannot see truncation of the newest lines, deleted rotated files, or a full rewrite by someone
- * who can write the file (the hashes are not keyed); a forged line INSERTED with a valid `prev` looks like a fork; an
- * edited or removed line that only a fork pointed past can go unseen.
- * Lines written before the chain existed (no `prev`) are counted as unchained.
+ * first. Lines written before the chain existed (no `prev`) are counted as unchained.
+ *
+ * 1.5.0 signatures: a signed line is valid only under the key active at that point of the log. A "sign-start" line
+ * names its key (`pub`); a "key-rotate" line, signed by the active key, hands over to `new_pub`; a line under any other
+ * key is a bad signature. By default only the newest signed line, the anchor line and the sign-start / key-rotate lines
+ * have their signatures checked (through `prev`, the newest signature covers every line before it); `allSignatures`
+ * checks them all. With `keys` (key id -> public key, the keys the caller trusts) the newest signed line must be under a
+ * trusted key, or one a trusted key handed over to. Limits: it cannot see the newest lines cut off (only an anchor newer
+ * than the cut can), deleted rotated files, or a rewrite by someone who holds the key; a line INSERTED with a valid
+ * `prev` and a good signature looks like a fork; an unsigned line after signing began (an older binary, a process
+ * without the key, or a stripped signature) is only counted, unless `strict`.
  */
 const FORK_WINDOW = 16;
-export function verifyAuditChain(path: string = auditPath(), expect?: string): {
+export function verifyAuditChain(
+  path: string = auditPath(),
+  expect?: string,
+  opts: { keys?: Record<string, string>; allSignatures?: boolean; strict?: boolean } = {}
+): {
   ok: boolean;
   /** Only with `expect`: the line whose hash is `expect` is still in the log, and how many lines follow it (0 = it is the head). */
   anchor?: { found: boolean; linesAfter: number; line?: number; seq?: number };
@@ -727,10 +789,25 @@ export function verifyAuditChain(path: string = auditPath(), expect?: string): {
   forks: number;
   unchained: number;
   head?: string;
+  signed: number;
+  bad_signature: number;
+  /** First line with a bad signature. */
+  badSignatureLine?: number;
+  unsigned_before_signing: number;
+  unsigned_after_signing: number;
+  /** Signed lines that should have been checked but whose key is not known here (not in `keys`, never named in the log). */
+  unknown_key: number;
+  /** Key id of the newest signed line, and whether its signature is good (absent: the key is unknown here). */
+  head_key_id?: string;
+  head_signature_ok?: boolean;
+  /** Only with `keys`: the newest signed line is under a trusted key, or one a trusted key handed over to. */
+  head_key_trusted?: boolean;
 } {
   const files: string[] = [];
   for (let i = 1; existsSync(`${path}.${i}`); i++) files.unshift(`${path}.${i}`);
   if (existsSync(path)) files.push(path);
+  const trusted = opts.keys;
+  const known = new Map<string, string>(Object.entries(trusted ?? {}));
   const recent: string[] = []; // hashes of the last FORK_WINDOW lines, newest last
   let n = 0;
   let breaks = 0;
@@ -741,11 +818,29 @@ export function verifyAuditChain(path: string = auditPath(), expect?: string): {
   let file: string | undefined;
   let anchorAt = -1; // line number whose hash equals `expect`
   let anchorSeq = 0;
+  let signed = 0;
+  let bad = 0;
+  let badLine: number | undefined;
+  let before = 0;
+  let after = 0;
+  let unknown = 0;
+  let active: string | undefined; // the key id allowed to sign the next line
+  let activeTrusted = false;
+  let head: { kid: string; data: string; sig: string } | undefined;
+  const markBad = () => {
+    bad++;
+    if (badLine === undefined) badLine = n;
+  };
+  /** One signature check; undefined when the key is not known here. */
+  const check = (kid: string, data: string, sig: string): boolean | undefined => {
+    const pub = known.get(kid);
+    return pub ? verifyBytes(pub, data, sig) : undefined;
+  };
   for (const f of files) {
     for (const line of readFileSync(f, "utf8").split("\n")) {
       if (!line) continue;
       n++;
-      let rec: { prev?: unknown } | undefined;
+      let rec: { prev?: unknown; op?: unknown; kid?: unknown; pub?: unknown; new_pub?: unknown } | undefined;
       try {
         rec = JSON.parse(line);
       } catch {
@@ -770,9 +865,77 @@ export function verifyAuditChain(path: string = auditPath(), expect?: string): {
       if (expect !== undefined && h === expect) [anchorAt, anchorSeq] = [n, lineSeq(line)];
       recent.push(h);
       if (recent.length > FORK_WINDOW) recent.shift();
+      const m = rec ? SIG_TAIL.exec(line) : null;
+      if (!rec || !m) {
+        if (rec) {
+          if (signed) after++;
+          else before++;
+        }
+        continue;
+      }
+      signed++;
+      const data = AUDIT_DOMAIN + line.slice(0, m.index) + "}";
+      const kid = typeof rec.kid === "string" ? rec.kid : "";
+      if (rec.op === "sign-start" && typeof rec.pub === "string") {
+        // A sign-start names its own key; once signing began it may only repeat the active key (signing resumed).
+        if (keyIdOf(rec.pub) !== kid || (active !== undefined && active !== kid) || !verifyBytes(rec.pub, data, m[1])) {
+          markBad();
+          continue;
+        }
+        if (active === undefined) activeTrusted = !!trusted && kid in trusted;
+        known.set(kid, rec.pub);
+        active = kid;
+      } else {
+        if (active === undefined) [active, activeTrusted] = [kid, !!trusted && kid in trusted]; // the oldest file was rotated away
+        if (kid !== active) {
+          markBad(); // a retired key, or one the log never handed over to
+          continue;
+        }
+        if (rec.op === "key-rotate" || opts.allSignatures || h === expect) {
+          const good = check(kid, data, m[1]);
+          if (good === false) {
+            markBad();
+            continue;
+          }
+          if (good === undefined) unknown++;
+        }
+        if (rec.op === "key-rotate" && typeof rec.new_pub === "string" && known.has(kid)) {
+          const next = keyIdOf(rec.new_pub);
+          known.set(next, rec.new_pub);
+          activeTrusted = activeTrusted || (!!trusted && next in trusted);
+          active = next;
+        }
+      }
+      head = { kid, data, sig: m[1] };
     }
   }
-  return { ok: breaks === 0, lines: n, ...(expect !== undefined ? { anchor: { found: anchorAt > 0, linesAfter: anchorAt > 0 ? n - anchorAt : 0, ...(anchorAt > 0 ? { line: anchorAt, seq: anchorSeq } : {}) } } : {}), breaks, forks, unchained, ...(brokenLine !== undefined ? { brokenLine, file } : {}), ...(recent.length ? { head: recent[recent.length - 1] } : {}) };
+  let headOk: boolean | undefined;
+  let headTrusted: boolean | undefined;
+  if (head) {
+    headOk = check(head.kid, head.data, head.sig);
+    if (headOk === false) markBad();
+    if (headOk === undefined) unknown++;
+    if (trusted) headTrusted = activeTrusted && headOk === true;
+  }
+  return {
+    ok: breaks === 0 && bad === 0 && headTrusted !== false && !(opts.strict && after > 0),
+    lines: n,
+    ...(expect !== undefined ? { anchor: { found: anchorAt > 0, linesAfter: anchorAt > 0 ? n - anchorAt : 0, ...(anchorAt > 0 ? { line: anchorAt, seq: anchorSeq } : {}) } } : {}),
+    breaks,
+    forks,
+    unchained,
+    ...(brokenLine !== undefined ? { brokenLine, file } : {}),
+    ...(recent.length ? { head: recent[recent.length - 1] } : {}),
+    signed,
+    bad_signature: bad,
+    ...(badLine !== undefined ? { badSignatureLine: badLine } : {}),
+    unsigned_before_signing: before,
+    unsigned_after_signing: after,
+    unknown_key: unknown,
+    ...(head ? { head_key_id: head.kid } : {}),
+    ...(headOk !== undefined ? { head_signature_ok: headOk } : {}),
+    ...(headTrusted !== undefined ? { head_key_trusted: headTrusted } : {}),
+  };
 }
 
 /** The refusal for a call that needs the admin scope (state_delete, a forget date on someone else's note). */
@@ -790,7 +953,9 @@ export function audit(entry: {
   kind?: string;
   /** Short free text (a consumer label, "replay", ...); never note content. */
   detail?: string;
-}): { seq: number; chain_hash: string } | undefined {
+  /** key-rotate only: the new public key this line (signed by the old key) hands over to. */
+  new_pub?: string;
+}): { seq: number; chain_hash: string; ts: string; signer?: SigningKey } | undefined {
   try {
     const path = auditPath();
     if (auditDirMade !== path) {
@@ -816,15 +981,27 @@ export function audit(entry: {
       const last = tail && tail.path === path && tail.size === size && tail.mtime === mtime && tailStillOurs(fd, tail) ? tail : lastAuditLine(path);
       // R2-06: `seq` counts on from the line before (1 after a log from before 1.5.0). Two processes appending at once can
       // write the same seq (a fork); a receipt is found by its hash, the seq is checked against that line.
-      const seq = last.seq + 1;
-      const line = JSON.stringify({ ts: new Date().toISOString(), prev: last.hash, seq, ...entry });
-      writeSync(fd, line + "\n");
+      let seq = last.seq + 1;
+      let prev = last.hash;
+      const ts = new Date().toISOString();
+      // 1.5.0 signed log: with the store key at hand, every line is signed. The first signed line after unsigned ones (an
+      // upgrade, a fresh log, or lines from an older binary) is a "sign-start" naming the key and the head it freezes.
+      const signer = auditSigner(path);
+      let out = "";
+      if (signer && !last.signed) {
+        const start = signLine({ ts, prev, seq, op: "sign-start", detail: `${unsignedTail(path)} unsigned lines before; head ${prev}`, pub: signer.publicKey }, signer);
+        out = start + "\n";
+        [prev, seq] = [sha(start), seq + 1];
+      }
+      const line = signer ? signLine({ ts, prev, seq, ...entry }, signer) : JSON.stringify({ ts, prev, seq, ...entry });
+      out += line + "\n";
+      writeSync(fd, out);
       // Cache only when the file is exactly what we left (another process appending right now means: re-read next time).
       const after = fstatSync(fd);
       const hash = sha(line);
       const len = Buffer.byteLength(line);
-      auditTail = after.size === size + len + 1 ? { path, size: after.size, mtime: after.mtimeMs, hash, seq, len } : null;
-      return { seq, chain_hash: hash };
+      auditTail = after.size === size + Buffer.byteLength(out) ? { path, size: after.size, mtime: after.mtimeMs, hash, seq, len, signed: !!signer } : null;
+      return { seq, chain_hash: hash, ts, ...(signer ? { signer } : {}) };
     } finally {
       closeSync(fd);
     }
@@ -844,7 +1021,7 @@ export function audit(entry: {
 let auditFailures = 0;
 /** F-03: the directory is made once per path; size, mtime and hash of the last line this process wrote. */
 let auditDirMade: string | undefined;
-let auditTail: { path: string; size: number; mtime: number; hash: string; seq: number; len: number } | null = null;
+let auditTail: { path: string; size: number; mtime: number; hash: string; seq: number; len: number; signed: boolean } | null = null;
 /**
  * The cached last line is still the one on disk. Size and mtime alone miss a same-size rewrite inside one mtime tick
  * (a racing writer, a restore); re-reading just that one line (a few hundred bytes) and comparing its hash catches it.

@@ -14,8 +14,8 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, statSync, statfsSync, readdirSync, renameSync, linkSync, existsSync, unlinkSync } from "node:fs";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { dirname, basename, join } from "node:path";
-import { checkSizes, checkNames, audit, ADMIN_SCOPE_NEEDED } from "./security.js";
+import { dirname, basename, join, resolve } from "node:path";
+import { checkSizes, checkNames, audit, auditHead, auditPath, ADMIN_SCOPE_NEEDED } from "./security.js";
 import { chmodQuiet } from "./config.js";
 import { SECRET_ASSIGN_LABEL } from "./security.js";
 import { lintContent, lintPolicy, describeFindings, type LintFinding, type LintAction, type LintCategory } from "./lint.js";
@@ -3266,8 +3266,9 @@ export class Store {
       throw e;
     }
     if (!nested) this.announceChange();
-    this.audit({ op: "create", id, namespace, bytes: body.length });
-    return this.read(id)!;
+    const created = this.read(id)!;
+    this.audit({ op: "create", id, namespace, bytes: body.length }, receiptOps.receiptContent(created));
+    return created;
   }
 
   read(id: number, opts: ReadOpts = {}): (NoteRecord & { neighbors?: NeighborEntry[] }) | null {
@@ -4188,8 +4189,9 @@ export class Store {
     }
 
     if (!nested) this.announceChange();
-    this.audit({ op: "update", id, namespace, bytes: body.length });
-    return this.read(id);
+    const updated = this.read(id);
+    this.audit({ op: "update", id, namespace, bytes: body.length }, updated ? receiptOps.receiptContent(updated) : { note_id: id });
+    return updated;
   }
 
   delete(id: number): boolean {
@@ -7663,7 +7665,10 @@ export class Store {
     }
     let k!: SigningKey;
     try {
-      k = replaceSigningKey(this.keyDir, oldFile ?? undefined);
+      // The signed audit log hands over to the new key: a key-rotate line signed by the OLD key (the file is not swapped
+      // yet), naming the new public key. Only when the log beside this store is the one this key signs.
+      const handOver = old && resolve(dirname(auditPath())) === resolve(this.keyDir);
+      k = replaceSigningKey(this.keyDir, oldFile ?? undefined, handOver ? (next) => this.audit({ op: "key-rotate", detail: `${old.keyId} -> ${next.keyId}`, new_pub: next.publicKey }) : undefined);
     } catch (e) {
       if (old && recordedNow) {
         try {
@@ -8105,28 +8110,66 @@ export class Store {
   }
 
   /** Audit lines written inside a transaction wait here until it commits; a rollback drops them. */
-  private pendingAudit: Array<Parameters<typeof audit>[0]> = [];
+  private pendingAudit: Array<[Parameters<typeof audit>[0], receiptOps.ReceiptContent | undefined]> = [];
 
-  /** Audit line, except from an in-memory store with no MONOMEM_AUDIT_LOG: that must never touch the owner's real log. */
-  /** @internal */ audit(entry: Parameters<typeof audit>[0]): void {
+  /**
+   * Audit line, except from an in-memory store with no MONOMEM_AUDIT_LOG: that must never touch the owner's real log.
+   * `receipt` (note id, rev, content hash) goes only into the write's receipt, never into the line.
+   */
+  /** @internal */ audit(entry: Parameters<typeof audit>[0], receipt?: receiptOps.ReceiptContent): void {
     if (this.dbPath === ":memory:" && !process.env.MONOMEM_AUDIT_LOG) return;
+    if (receipt) this.ensureAuditKey();
     // Name the key that made the change (a label, never the key itself) so `monomem audit` can say who did what.
     const who = actorStore.getStore()?.label;
     const e = entry.label === undefined && who ? { ...entry, label: who } : entry;
     // Inside a transaction the write may still be rolled back: the line is written only once it commits (commitTx).
-    if (this.db.isTransaction) return void this.pendingAudit.push(e);
+    if (this.db.isTransaction) return void this.pendingAudit.push([e, receipt]);
     this.flushAudit();
-    receiptOps.noteAudited(this, e.op, audit(e));
+    receiptOps.noteAudited(this, e.op, audit(e), receipt);
   }
 
   private flushAudit(): void {
     const q = this.pendingAudit;
     this.pendingAudit = [];
-    for (const e of q) receiptOps.noteAudited(this, e.op, audit(e));
+    for (const [e, r] of q) receiptOps.noteAudited(this, e.op, audit(e), r);
+  }
+
+  /**
+   * 1.5.0 signed log: the first note write of a file store whose audit log sits beside it makes the store key (the same
+   * .attest-key exports sign with), so its lines and receipts are signed from then on. audit() itself never creates a key.
+   */
+  private auditKeyChecked = false;
+  private ensureAuditKey(): void {
+    if (this.auditKeyChecked || this.dbPath === ":memory:") return;
+    this.auditKeyChecked = true;
+    if (resolve(dirname(auditPath())) !== resolve(this.keyDir)) return; // a log elsewhere is signed by the key beside it, if any
+    try {
+      this.signing();
+    } catch (e) {
+      console.error(`[monomem] audit lines stay unsigned: could not create the signing key (${(e as Error).message})`);
+    }
+  }
+
+  /** The current key and every retired own key (key id -> public key): what `audit verify` and `verify-receipt` trust. */
+  ownKeyring(): Record<string, string> {
+    const ring: Record<string, string> = {};
+    for (const a of this.attesterList()) if (a.label === "retired key of this server" && a.server_id === this.serverId()) ring[a.key_id] = a.public_key;
+    const cur = this.peekIdentity();
+    if (cur.key_id && cur.public_key) ring[cur.key_id] = cur.public_key;
+    return ring;
+  }
+
+  /** `monomem audit checkpoint`: the log's head as a signed receipt (decision "checkpoint") to keep off this machine. */
+  auditCheckpoint(): receiptOps.WriteReceipt {
+    const key = peekSigningKey(dirname(auditPath()));
+    if (!key) throw new ValidationError("no signing key beside the audit log, so a checkpoint cannot be signed (`monomem trust identity` creates one)");
+    const head = auditHead();
+    if (!head) throw new ValidationError("the audit log is empty: nothing to checkpoint yet");
+    return receiptOps.makeReceipt({ seq: head.seq, chain_hash: head.hash, decision: "checkpoint", ts: new Date().toISOString(), server_id: this.serverId() }, key);
   }
 
   /** @internal R2-06: the newest write decision this store audited, until a surface takes it (store/write-receipt.ts). */
-  lastWriteReceipt: receiptOps.WriteReceipt | undefined;
+  lastWriteReceipt: receiptOps.PendingReceipt | undefined;
 
   /** R2-06: the receipt `{seq, chain_hash, decision}` of the write that just ran, cleared as it is read. */
   takeWriteReceipt(): receiptOps.WriteReceipt | undefined {
