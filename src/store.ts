@@ -5549,7 +5549,7 @@ export class Store {
       const table = this.bodyIndex.currentTable();
       const schema = table === "notes_fts" ? "main" : "bodyidx";
       this.db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS temp.om_vocab_${schema} USING fts5vocab(${schema}, ${table}, 'row')`);
-      const n = Number((this.db.prepare(`SELECT COUNT(*) AS c FROM notes WHERE archived_at IS NULL`).get() as { c: number }).c);
+      const n = this.liveNoteTotal();
       const st = this.db.prepare(`SELECT COALESCE(SUM(doc), 0) AS d FROM temp.om_vocab_${schema} WHERE term >= ? AND term < ?`);
       for (const p of prefixes) df.set(p, Math.min(n, Number((st.get(p, p + "￿") as { d: number }).d)));
       return { n, df };
@@ -5557,6 +5557,17 @@ export class Store {
       // No readable vocabulary (an old SQLite without fts5vocab, a closed store): every keyword weighs the same.
       return { n: 0, df: new Map() };
     }
+  }
+
+  /** Live notes in the whole store, reused while nothing changed (same key as unconfirmedRows): a search must not add a scan. */
+  private liveTotalCache: { key: string; n: number } | null = null;
+  private liveNoteTotal(): number {
+    const t = (this.db.prepare("SELECT total_changes() AS t").get() as { t: number }).t - this.bookkeepingChanges;
+    const key = `${t}:${this.dataVersion()}`;
+    if (this.liveTotalCache?.key === key) return this.liveTotalCache.n;
+    const n = Number((this.db.prepare("SELECT COUNT(*) AS c FROM notes WHERE archived_at IS NULL").get() as { c: number }).c);
+    this.liveTotalCache = { key, n };
+    return n;
   }
 
   /** C-06: the in-memory body index's state in this process (encrypt status, the CLI search notice, tests). */

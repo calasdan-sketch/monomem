@@ -944,7 +944,8 @@ export function anyKeywordHits(
   // The FTS query uses suffix-trimmed stems ("camping" -> camp*), so other forms of a word match too.
   const stems = [...new Set(keywords.map(searchStem))];
   const hits = store.searchRanked(stems.join(" "), { ...opts, limit, anyTerm: true });
-  const cover = rarityCoverage(store, stems);
+  // Coverage counts the keywords as typed, so a note with the exact form outranks one with only another form of it.
+  const cover = rarityCoverage(store, keywords);
   return hits
     // Floor the coverage: an FTS match the text scan misses (an odd tokenisation) still counts as one keyword.
     .map((h) => ({ note: h.note, score: h.score * Math.max(cover(h.note), 1 / keywords.length) }))
