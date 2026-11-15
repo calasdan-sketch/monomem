@@ -189,6 +189,17 @@ upgrading from 1.3.x takes one step (docs/upgrading.md).
 
 ### Fixed
 
+- Final ease-of-use panel: a missing encryption key file is named first ("the key file <path> is missing, so note N
+  cannot be read") and `doctor`'s Fix says to restore that key file from your backup (a database backup is sealed with
+  the same key); `doctor` lists `.key` and `.attest-key` under "keys are kept in"; `doctor` with no data folder says
+  "not set up: monomem setup" and creates nothing; held-write reasons read "namespace requires approval" (no
+  "in namespace"); `changes` counts a note born in the window under the writer who created it and drops "claims X" when X
+  is the writer; `why` lists a replaced version before "version N is current" and names `encrypt enable` / `disable`
+  instead of "metadata changed by unknown"; `encrypt status`, `encrypt enable` and docs/encryption-retention.md give the
+  same sentence about the session-start hook and encrypted bodies; `service status` with no service installed prints
+  only "Not installed" (exit 1, as before); `trust distrust` refuses a near-miss writer name with "Did you mean"
+  (`--force` saves it as typed); `setup --yes` lists the start-of-session hook as a step; write receipts (MCP and REST)
+  come with a `receipt_check` line naming `monomem verify-receipt`.
 - Messages: the missing-key error no longer starts with "monomem: monomem:"; the "database is newer than this build" error
   gives the same steps as docs/upgrading.md (close apps, `monomem restore <file> --yes`, install the older version);
   `why` and `receipts` say why times are local, what the offset means and which end comes first; `doctor` prints

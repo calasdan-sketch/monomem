@@ -2,6 +2,7 @@
 // secret-looking text, doctor, per-command help, safety-report privacy, scrub wording.
 import { test, describe, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import { privateDir } from "../src/config.js";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -371,6 +372,7 @@ describe("R3-9: doctor", () => {
   test("a healthy fresh machine gets a plain all-clear and no stray lines; Claude Code absent means no hook warning", () => {
     const home = mk("om-r3-doc-");
     try {
+      privateDir(join(home, "data")); // the owner-only data folder setup makes: doctor no longer creates a missing one (1.5.0 final panel)
       const r = cli(home, "doctor");
       const out = String(r.stdout);
       assert.equal(r.status, 0, out + String(r.stderr));

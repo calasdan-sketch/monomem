@@ -18,13 +18,37 @@ export class ValidationError extends Error {}
  * instead of a bare "internal error", and never hangs a stream.
  */
 export class NoteUnreadableError extends Error {
+  /** The key file's path when the cause is that it is missing (not a wrong key or altered data). */
+  public readonly missingKey?: string;
   constructor(
     public readonly noteId: number,
-    detail: string
+    detail: string,
+    cause?: unknown
   ) {
-    super(`note ${noteId} cannot be decrypted (wrong key file, or the stored data was altered): ${detail}`);
+    // A missing key file is the likely cause and the one the person can fix: lead with it (1.5.0 final panel).
+    super(
+      cause instanceof MissingKeyError
+        ? `the key file ${cause.keyFile} is missing, so note ${noteId} cannot be read. ${cause.fix}`
+        : `note ${noteId} cannot be decrypted (wrong key file, or the stored data was altered): ${detail}`
+    );
+    if (cause instanceof MissingKeyError) this.missingKey = cause.keyFile;
   }
 }
+
+/** The database holds sealed bodies but the key file is gone. `fix` is the next step in plain words. */
+export class MissingKeyError extends Error {
+  constructor(
+    public readonly keyFile: string,
+    public readonly fix: string,
+    message: string
+  ) {
+    super(message);
+  }
+}
+
+/** The missing key file's path when `e` is (or wraps) a missing-key error, else undefined. */
+export const missingKeyFile = (e: unknown): string | undefined =>
+  e instanceof MissingKeyError ? e.keyFile : e instanceof NoteUnreadableError ? e.missingKey : undefined;
 
 /**
  * A compare-and-swap update was refused because the note moved on since the caller read it

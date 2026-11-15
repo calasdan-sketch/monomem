@@ -65,6 +65,7 @@ import { annotateStaleness } from "./staleness.js";
 const withWhenBase = (n: NoteRecord) => ({ ...annotateStaleness(n), when: describeWhen(n.created_at) });
 import { meterStats } from "./meter.js";
 import { receiptList, receiptGet } from "./receipts.js";
+import { RECEIPT_CHECK } from "./store/write-receipt.js";
 import { noteWhy } from "./why.js";
 import {
   findCandidatesGuarded,
@@ -866,7 +867,7 @@ export function createMcpServer(
       let title = givenTitle;
       let tags = plainTags;
       // R2-06: the audit line of this write's decision (accepted, held, refused) comes back as `receipt`.
-      const withReceipt = (r = store.takeWriteReceipt()) => (r ? { receipt: r } : {});
+      const withReceipt = (r = store.takeWriteReceipt()) => (r ? { receipt: r, receipt_check: RECEIPT_CHECK } : {});
       try {
         const denied = denyIfUnder("write");
         if (denied) return errorResult(denied);

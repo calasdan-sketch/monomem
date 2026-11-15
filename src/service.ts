@@ -192,6 +192,11 @@ export function serviceCmd(action: string | undefined, print: boolean, e: Servic
       } catch (err) {
         // The service manager's own words ("cannot find the file specified") read like a Monomem fault: say what it means.
         const said = (((err as { stderr?: string }).stderr ?? "") || (err as Error).message).trim().split("\n")[0];
+        // Simply absent: the plain words are the whole story (same answer and exit code as the no-file case above).
+        if (/cannot find|could not (be )?find|could not be found|not found|does not exist|no such/i.test(said)) {
+          console.log("Not installed. Install it: monomem service install");
+          return 1;
+        }
         console.log(`The background service is not installed or not running (${shown(c)} said: ${said}). Install it: monomem service install`);
         return 1;
       }

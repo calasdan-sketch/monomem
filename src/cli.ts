@@ -424,6 +424,32 @@ function versionBelow(a: string, b: string): boolean {
   return false;
 }
 
+/** The stamped writer closest to a mistyped name ("curser" -> stdio:cursor) that has notes in `ns`, for a "Did you mean". */
+function nearWriter(store: InstanceType<typeof import("./store.js").Store>, ns: string, writer: string): { writer: string; notes: number } | undefined {
+  const known = store.writerNames();
+  // A local app is known by its bare name too: "curser" is near "cursor", which is stamped stdio:cursor.
+  const byName = new Map<string, string>(known.map((w) => [w, w]));
+  for (const w of known) if (w.startsWith("stdio:") && !byName.has(w.slice(6))) byName.set(w.slice(6), w);
+  const guess = didYouMean(writer, [...byName.keys()]);
+  const stamped = guess === null ? undefined : byName.get(guess);
+  if (!stamped || stamped === writer) return undefined;
+  const notes = store.distrustMatchCount(ns, stamped);
+  return notes > 0 ? { writer: stamped, notes } : undefined;
+}
+
+/** No data folder, no database and no 1.0.x data to move in: say "not set up" (exit 1) instead of creating a fresh store. */
+async function notSetUp(): Promise<boolean> {
+  const { DATA_DIR, DB_PATH, LEGACY_DATA_DIR } = await import("./config.js");
+  const { existsSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  if (existsSync(DATA_DIR) || existsSync(DB_PATH) || existsSync(join(LEGACY_DATA_DIR, "state.db"))) return false;
+  console.log("monomem doctor\n");
+  console.log(`Monomem is not set up here: there is no data folder at ${DATA_DIR}. Set it up with: monomem setup`);
+  console.log("(doctor created nothing.)");
+  process.exitCode = 1;
+  return true;
+}
+
 async function doctor(): Promise<void> {
   const {
     DB_PATH,
@@ -570,7 +596,7 @@ async function doctor(): Promise<void> {
       const sealed = s.encryptedCount();
       sealedNotes = sealed;
       if (sealed > 0 && !existsSync(kp)) {
-        fail(`${sealed} note${sealed === 1 ? " is" : "s are"} encrypted, but the key is missing at ${kp}`, "Put the key file back (from the computer or backup it came from). Without it those notes cannot be read.");
+        fail(`${sealed} note${sealed === 1 ? " is" : "s are"} encrypted, but the key is missing at ${kp}`, `Restore the key file ${kp} from your backup (or copy it from the computer it came from). Without it those notes cannot be read; a database backup alone will not help, it is sealed with the same key.`);
       } else if (existsSync(kp)) {
         const plain = s.plaintextBodyCount();
         if (plain > 0) warn(`${plain} note bod${plain === 1 ? "y is" : "ies are"} not encrypted although a key file exists (new notes are sealed; these older ones are still plain text)`, "Seal them: monomem encrypt enable");
@@ -623,7 +649,11 @@ async function doctor(): Promise<void> {
   {
     // 1.5.0 (R1-09): where an app key sits on this machine. Said once, plainly; SECURITY.md has the full list.
     const { appKeyFiles, realEnv } = await import("./setup.js");
-    const files = [resolvePath(DATA_DIR, ".token"), resolvePath(DATA_DIR, "tokens.json"), ...appKeyFiles(realEnv("", process.argv[1] ?? ""))].filter((f) => existsSync(f));
+    // Every key file that exists: the app keys, the encryption key and the signing key (1.5.0 final panel).
+    const keyDir = (await import("node:path")).dirname(DB_PATH);
+    const { keyPath } = await import("./crypto.js");
+    const { attestKeyPath } = await import("./attest.js");
+    const files = [...new Set([resolvePath(DATA_DIR, ".token"), resolvePath(DATA_DIR, "tokens.json"), resolvePath(keyPath(keyDir)), resolvePath(attestKeyPath(keyDir)), ...appKeyFiles(realEnv("", process.argv[1] ?? ""))])].filter((f) => existsSync(f));
     if (process.platform === "win32") {
       // 1.5.0 (R1-11): an existing data folder may be open to other accounts on this PC. Read once, here; never on the hot path.
       // On Windows the token file and database get the folder's inherited permissions (chmod does nothing there). Inside
@@ -994,6 +1024,7 @@ async function doctor(): Promise<void> {
 }
 
 
+import { describeFindings } from "./lint.js";
 import { didYouMean } from "./suggest.js";
 const CONNECT_APPS = ["claude-code", "claude-desktop", "cursor", "codex", "gemini", "muse", "vscode", "zed", "windsurf"] as const;
 const APP_ALIASES: Record<string, string> = { claude: "claude-code", "claudecode": "claude-code", desktop: "claude-desktop", "claude desktop": "claude-desktop", code: "vscode", "vs-code": "vscode", "visual-studio-code": "vscode", gemini_cli: "gemini", "codex-cli": "codex" };
@@ -2132,9 +2163,11 @@ async function changes(): Promise<void> {
         // A note born in the window and changed since is reported once, as created, with its LAST writer: say so, or a person's
         // note an agent edited reads as the agent creating it and claiming the person's source.
         const later = e.kind === "created" && (e.rev ?? 1) > 1;
+        // The claimed source adds nothing when it is the stamped writer's own name ("by cli, claims cli").
+        const sameAsWriter = !!e.source && (e.source === e.written_by || `stdio:${e.source}` === e.written_by);
         const by = later
           ? `, new in this window and changed since; last by ${printable(e.written_by || "unknown", 100)}${e.source ? `, source "${printable(e.source, 100)}"` : ""}`
-          : `${e.written_by ? `, by ${printable(e.written_by, 100)}` : ""}${e.source ? `, claims "${printable(e.source, 100)}"` : ""}`;
+          : `${e.written_by ? `, by ${printable(e.written_by, 100)}` : ""}${e.source && !sameAsWriter ? `, claims "${printable(e.source, 100)}"` : ""}`;
         console.log(`${mark} #${e.id} [${printable(e.namespace, 100)}] ${printable(e.title)}  (${e.at}${by})${e.distrusted ? " [DISTRUSTED WRITER]" : ""}`);
       }
       if (!page.nextCursor) break;
@@ -2534,7 +2567,8 @@ function trustHelp(): void {
       "",
       "  trust [list] [--json]                    the distrust list, trusted attesters, recent changes, this server's id",
       "  trust identity [--json]                  this server's id and public key (creates the signing key if needed)",
-      "  trust distrust <writer> --namespace <ns|'*'>     leave a writer's notes out of every read and never run them",
+      "  trust distrust <writer> --namespace <ns|'*'> [--force]     leave a writer's notes out of every read and never run them",
+      "        A name with no notes that is close to one that has some is refused with a 'Did you mean'; --force saves it as typed.",
       "  trust undistrust <writer> --namespace <ns|'*'>",
       "        <writer> is a token label, or a writer id <server_id>/<label>. Quote the star: --namespace '*'.",
       "  trust attester-add <public-key> --server-id <id> [--label text] [--not-after <ISO time>] [--any-server]",
@@ -2577,7 +2611,7 @@ async function trustCmd(): Promise<void> {
   const { Store, ValidationError } = await import("./store.js");
   const { flags, rest } = parseFlags(args, {
     values: ["namespace", "server-id", "label", "public-key", "writer", "key-id", "not-after", "out", "reason"],
-    bools: ["json", "any-server", "keep-old-private"],
+    bools: ["json", "any-server", "keep-old-private", "force"],
   });
   const action = rest[0] ?? "list";
   const known = ["list", "identity", "distrust", "undistrust", "attester-add", "attester-remove", "attester-revoke", "attester-unrevoke", "export-key", "rotate"];
@@ -2681,14 +2715,15 @@ async function trustCmd(): Promise<void> {
         if (action === "distrust") {
           // "cursor" matches nothing while its notes say "stdio:cursor": refuse and suggest, never widen on our own
           // (a saved rule that hides nothing would leave the person believing the app is distrusted).
-          if (store.distrustMatchCount(ns!, writer) === 0) {
+          // A near miss ("curser" for stdio:cursor) is refused the same way, like rollback's hint; --force saves it as typed.
+          if (store.distrustMatchCount(ns!, writer) === 0 && !flags.force) {
             const { suggestWriter } = await import("./trust.js");
-            const hint = suggestWriter(writer.trim(), (w) => store.distrustMatchCount(ns!, w));
+            const hint = suggestWriter(writer.trim(), (w) => store.distrustMatchCount(ns!, w)) ?? nearWriter(store, ns!, writer.trim());
             if (hint) {
               console.error(
                 `No notes are written by "${printable(writer, 60)}", so nothing was saved. Did you mean "${hint.writer}" (${hint.notes} note${hint.notes === 1 ? "" : "s"})?\n` +
                   `Writer names must match exactly; \`monomem show <id>\` prints a note's "written by:".\n` +
-                  `Run: monomem trust distrust ${hint.writer} --namespace ${ns === "*" ? "'*'" : printable(ns!, 100)}`
+                  `Run: monomem trust distrust ${hint.writer} --namespace ${ns === "*" ? "'*'" : printable(ns!, 100)}   (or add --force to save "${printable(writer, 60)}" as typed)`
               );
               process.exit(1);
             }
@@ -2855,7 +2890,7 @@ async function quarantineCmd(): Promise<void> {
       for (const q of items) {
         const what = q.op === "update" ? `update of #${q.target_id}` : "new note";
         console.log(`#${q.id} [${printable(q.namespace, 100)}] ${what}: ${q.title == null ? "(title unchanged)" : printable(q.title)}  (${q.created_at})`);
-        console.log(`    reasons: ${q.reasons.map((r) => `${r.label} in ${r.field}`).join("; ")}`);
+        console.log(`    reasons: ${describeFindings(q.reasons)}`);
         if (q.body) {
           const preview = q.body.length > 200 ? q.body.slice(0, 200) + "…" : q.body;
           console.log(`    body: ${preview.replace(/\n/g, "\n          ")}`);
@@ -2937,7 +2972,7 @@ function showHeld(store: import("./store.js").Store, id: number, casNote: (op: "
   const what = q.op === "update" ? `update of #${q.target_id}` : "new note";
   console.log(`#${q.id} [${printable(q.namespace, 100)}] ${what}: ${q.title == null ? "(title unchanged)" : printable(q.title)}`);
   console.log(`    written ${q.created_at}${q.written_by ? ` by ${printable(q.written_by, 100)}` : ""}`);
-  console.log(`    reasons: ${q.reasons.map((r) => `${r.label} in ${r.field}`).join("; ")}`);
+  console.log(`    reasons: ${describeFindings(q.reasons)}`);
   if (q.body) console.log(`    body: ${q.body.replace(/\n/g, "\n          ")}`);
   const diff = heldEditDiff(store, q);
   if (diff.length) console.log(`    Change, line by line (- note #${q.target_id} now, + held edit):\n${diff.map((l) => "      " + l).join("\n")}`);
@@ -3567,6 +3602,8 @@ async function qualityCmd(): Promise<void> {
  * Both open the store AFTER touching the key file, so the Store constructor
  * picks up the new encryption state. See docs/encryption-retention.md.
  */
+/** One sentence, the same in `encrypt status`, `encrypt enable` and docs/encryption-retention.md (recall.ts askServerForBodyHits). */
+const HOOK_BODY_INDEX = "The session-start hook never builds the body index; it uses a running Monomem server's index for this store if there is one, else it matches titles and tags.";
 async function encryptCmd(): Promise<void> {
   const { DB_PATH } = await import("./config.js");
   const { Store } = await import("./store.js");
@@ -3613,8 +3650,7 @@ async function encryptCmd(): Promise<void> {
       if (enabled) {
         console.log(
           "note: the on-disk search index holds titles and tags only. Body search uses an index kept in memory by each Monomem " +
-            "process that searches (servers build it at start; the hooks never do, so session-start context is chosen by " +
-            "titles and tags). The system can page that memory to swap or a hibernation file: use whole-disk encryption too. " +
+            "process that searches (servers build it at start). " + HOOK_BODY_INDEX + " The system can page that memory to swap or a hibernation file: use whole-disk encryption too. " +
             "MONOMEM_BODY_INDEX=off turns it off. Details: monomem encrypt status --surfaces"
         );
       }
@@ -3638,7 +3674,7 @@ async function encryptCmd(): Promise<void> {
       console.log(`Enabled at-rest encryption. Encrypted ${n} note ${n === 1 ? "body" : "bodies"}.`);
       console.log(`Key file: ${crypto.keyPath(keyDir)} -- back it up; losing it loses the bodies.`);
       console.log(
-        "Body search keeps working from an index held in memory only (never on disk); the session-start hook matches titles and tags, plus body words when a Monomem server for this store is running. " +
+        "Body search keeps working from an index held in memory only (never on disk). " + HOOK_BODY_INDEX + " " +
           "That memory can reach swap or a hibernation file: use whole-disk encryption too (monomem encrypt status --surfaces)."
       );
       const copies = Store.preMigrationBackups(DB_PATH);
@@ -3918,6 +3954,8 @@ async function main(): Promise<void> {
   // A dry run of `import --claude` / `import --from` or `sync` must not create anything, not even the data folder.
   const dry = process.argv.includes("--dry-run") && ((cmd === "import" && (process.argv.includes("--claude") || process.argv.includes("--from") || process.argv.includes("--rules"))) || cmd === "sync");
   // The capture hooks (`hook`) never move or create data folders: they run on every tool call and must stay quick and quiet.
+  // doctor on a machine with no data folder (never set up, or after uninstall --purge) says so and creates nothing.
+  if (cmd === "doctor" && (await notSetUp())) return;
   if (!dry && !["help", "--help", "-h", "init", "bench", "demo", "snippet", "setup", "uninstall", "hook"].includes(cmd)) {
     (await import("./config.js")).prepareDataDir();
     printable = (await import("./security.js")).printable;

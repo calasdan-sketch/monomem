@@ -4,7 +4,7 @@ import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file r
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../src/store.js";
@@ -153,6 +153,7 @@ describe("doctor security warnings", () => {
       assert.match(bad, /\[warn\] MONOMEM_STDIO_ADMIN_TOOLS=1/);
       assert.match(bad, /\[warn\] MONOMEM_BIND=0\.0\.0\.0/);
       const sync = join(home, "OneDrive", "memory");
+    mkdirSync(sync, { recursive: true }); // set up there: doctor no longer creates a missing data folder (1.5.0 final panel)
       const synced = cli(sync, ["doctor"]);
       assert.match(synced.stdout, /inside a cloud-sync folder/);
     } finally {

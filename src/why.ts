@@ -2,7 +2,7 @@
 // supersede log, held writes, receipts, distrust list, pin flag). Nothing new is recorded for it.
 // Text rule: titles only (printed through printable()); a body only when the operator passes --body on the CLI.
 import { isWriterMarker } from "./actor.js";
-import { accessLogDays, type NoteRecord, type Store } from "./store.js";
+import { accessLogDays, ENCRYPT_ACTOR, type NoteRecord, type Store } from "./store.js";
 import { printable, printableWords } from "./security.js";
 import { localTime, timeLegend, whyText } from "./receipts.js";
 
@@ -95,12 +95,21 @@ export function noteWhy(store: Store, note: NoteRecord, opts: { namespaces?: str
   }
   const dropped = store.historyDropped(id).reduce((a, d) => a + Number(d.count), 0);
   if (dropped) tl.push({ at: note.updated_at, what: `${dropped} older version${dropped === 1 ? "" : "s"} no longer kept` });
-  if (note.rev > 1 || hist.length) tl.push({ at: note.updated_at, what: `version ${note.rev} is current, last written by ${who(note.written_by)}` });
+  // The history row is stamped a moment after the note row it replaces: "current" must not sort before "replaced".
+  const currentAt = hist.reduce((m, h) => (h.saved_at > m ? h.saved_at : m), note.updated_at);
+  if (note.rev > 1 || hist.length) tl.push({ at: currentAt, what: `version ${note.rev} is current, last written by ${who(note.written_by)}` });
 
   // Metadata-only changes (tags, archive, move): change-log rows whose revision did not move.
   const log = db.prepare("SELECT kind, rev, changed_at, actor FROM change_log WHERE note_id = ? ORDER BY seq").all(id) as Array<{ kind: string; rev: number | null; changed_at: string; actor: string }>;
   log.forEach((r, i) => {
-    if (r.kind === "updated" && i > 0 && r.rev === log[i - 1].rev) tl.push({ at: r.changed_at, what: `metadata changed (tags, archive or move) by ${p(r.actor || "unknown")}` });
+    if (!(r.kind === "updated" && i > 0 && r.rev === log[i - 1].rev)) return;
+    const what =
+      r.actor === ENCRYPT_ACTOR.enable
+        ? "body encrypted at rest by monomem encrypt enable (content unchanged)"
+        : r.actor === ENCRYPT_ACTOR.disable
+          ? "body decrypted at rest by monomem encrypt disable (content unchanged)"
+          : `metadata changed (tags, archive or move) by ${p(r.actor || "unknown")}`;
+    tl.push({ at: r.changed_at, what });
   });
 
   const sup = db.prepare("SELECT at, actor, action, old_id, new_id FROM supersede_log WHERE old_id = ? OR new_id = ? ORDER BY seq").all(id, id) as Array<{ at: string; actor: string; action: string; old_id: number; new_id: number | null }>;

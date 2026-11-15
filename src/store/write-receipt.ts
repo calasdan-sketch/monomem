@@ -9,6 +9,8 @@ import type { Store } from "../store.js";
 import { QuarantinedError, ValidationError, WriterPausedError } from "../errors.js";
 import { RECEIPT_DOMAIN, contentHash, keyIdOf, signBytes, verifyBytes, type SigningKey } from "../attest.js";
 
+/** Sent beside every write receipt (MCP and REST), so a person who sees one knows how to check it (1.5.0 final panel). */
+export const RECEIPT_CHECK = "To check this receipt later, save it as a JSON file and run: monomem verify-receipt --file <receipt.json>";
 /** "checkpoint": a signed head of the log (`monomem audit checkpoint`), same shape and same check as a write receipt. */
 export type WriteDecision = "accepted" | "held" | "refused" | "checkpoint";
 export interface WriteReceipt {
