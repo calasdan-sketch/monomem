@@ -125,6 +125,7 @@ let scanIds = 0;
 import { SupersedeError, supersedePreview, supersedeConfirm, supersedeUndo, noteHistory, restoreVersion, purgeNoteHistory, type Caller } from "./supersede.js";
 import { withFacts, factFeedback } from "./facts.js";
 import { isBusyError } from "./restore.js";
+import { heldEditDiff } from "./line-diff.js";
 import { assertPlainWriteTags, assertReviewedTag } from "./reserved-tags.js";
 import { ORIGIN_DECLARED, ReadTaint, taintRegistryFor, unconfirmedIdsIn } from "./taint.js";
 import { waitForChanges, parseWait, WaitBusyError } from "./change-wait.js";
@@ -1397,7 +1398,8 @@ export function createApiServer(
           sendJson(res, 404, { error: `no quarantined write with id ${id}` });
           return;
         }
-        sendJson(res, 200, { ...ctx, note: QUARANTINE_CAS_NOTE });
+        const diff = heldEditDiff(store, entry!);
+        sendJson(res, 200, { ...ctx, ...(diff.length ? { diff } : {}), note: QUARANTINE_CAS_NOTE });
         return;
       }
 

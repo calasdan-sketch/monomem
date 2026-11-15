@@ -11,6 +11,9 @@ happen. Nothing is deleted, and you can undo it.
    very similar to it, and how many tasks depend on it. It also says what you lose (the old note stops showing up in
    search, lists and "what is relevant" lookups), what you do **not** lose (nothing is deleted; the old note keeps its
    text, writer, dates and tags and can be brought back), and, if it applies, a **RED FLAG** (see below).
+   When one note is replaced, it also shows the change line by line (`- ` old, `+ ` new; the `diff` field over REST and
+   MCP). It compares only the first 600 characters of each text, the same text the preview already carries, with
+   control characters replaced and at most 40 lines.
    It returns a one-time **confirmation code**.
 2. **Confirm.** The only step that changes anything. It needs that code. The code
    - works **once**,

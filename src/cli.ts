@@ -2698,7 +2698,7 @@ async function quarantineCmd(): Promise<void> {
       process.exit(1);
     }
     if (action === "show") {
-      showHeld(store, id, QUARANTINE_CAS_NOTE);
+      showHeld(store, id, QUARANTINE_CAS_NOTE, (await import("./line-diff.js")).heldEditDiff);
       return;
     }
     if (action === "keep-history") {
@@ -2746,7 +2746,7 @@ async function quarantineCmd(): Promise<void> {
 }
 
 /** `monomem quarantine show <id>`: the held write in full, plus what was saved in its namespace since it was held. */
-function showHeld(store: import("./store.js").Store, id: number, casNote: string): void {
+function showHeld(store: import("./store.js").Store, id: number, casNote: string, heldEditDiff: typeof import("./line-diff.js").heldEditDiff): void {
   const q = store.getQuarantine(id);
   const ctx = store.quarantineContext(id);
   if (!q || !ctx) {
@@ -2758,6 +2758,8 @@ function showHeld(store: import("./store.js").Store, id: number, casNote: string
   console.log(`    written ${q.created_at}${q.written_by ? ` by ${printable(q.written_by, 100)}` : ""}`);
   console.log(`    reasons: ${q.reasons.map((r) => `${r.label} in ${r.field}`).join("; ")}`);
   if (q.body) console.log(`    body: ${q.body.replace(/\n/g, "\n          ")}`);
+  const diff = heldEditDiff(store, q);
+  if (diff.length) console.log(`    Change, line by line (- note #${q.target_id} now, + held edit):\n${diff.map((l) => "      " + l).join("\n")}`);
   if (ctx.target_changed) console.log(`    Note #${q.target_id} has changed since this edit was held, so approving it will fail.`);
   if (ctx.clears) console.log(`    Approving it also clears the note's ${ctx.clears.map((c) => (c === "forget_after" ? "forget date" : c)).join(" and ")}.`);
   const n = ctx.notes.length;
