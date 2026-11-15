@@ -3,6 +3,7 @@
 // retrieved sessions/turns are scored against the dataset's gold evidence (recall@k, strict recall-all@k, nDCG@10, MRR).
 import { BENCH_HOME } from "./retrieval-env.js"; // first: isolate MONOMEM_HOME before config.js loads
 import { createHash } from "node:crypto";
+import { chatNotes } from "../chat-import.js";
 import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
@@ -107,10 +108,14 @@ export function locomoHaystacks(data: unknown, g: Granularity): Haystack[] {
       const lines = arr(conv[key]).map((t) => {
         const r = rec(t);
         const cap = str(r.blip_caption);
-        return { dia: str(r.dia_id), text: `${str(r.speaker)}: ${str(r.text)}${cap ? ` [shares image: ${cap}]` : ""}` };
+        return { dia: str(r.dia_id), speaker: str(r.speaker), said: `${str(r.text)}${cap ? ` [shares image: ${cap}]` : ""}` };
       });
-      if (g === "session") docs.push({ unit: sess, title: sess, body: lines.map((l) => l.text).join("\n"), date });
-      else for (const l of lines) if (l.dia) docs.push({ unit: l.dia, title: l.dia, body: l.text, date });
+      if (g === "session") docs.push({ unit: sess, title: sess, body: lines.map((l) => `${l.speaker}: ${l.said}`).join("\n"), date });
+      // By turn: the notes `import --from claude-code-chats` stores for a conversation (each with what it replied to).
+      else {
+        const turns = lines.map((l, j) => ({ id: l.dia || `#${j}`, speaker: l.speaker, text: l.said }));
+        for (const n of chatNotes(turns)) if (!n.id.startsWith("#")) docs.push({ unit: n.id, title: n.title, body: n.body, date });
+      }
     }
     const sid = str(sample.sample_id) || `conv${out.length}`;
     // Questions are asked after the conversation: "now" is its last session date.

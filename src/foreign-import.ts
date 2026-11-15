@@ -27,13 +27,16 @@ import { DatabaseSync } from "node:sqlite";
 import { MODEL_WRITTEN_TAG } from "./reserved-tags.js";
 import { chunkBody, looksLikeCredential, MAX_FILE_BYTES, parseFrontmatter, readHeld, writeHeld } from "./claude-import.js";
 import { lintContent } from "./lint.js";
+import { readClaudeCodeChats, type ChatStats } from "./chat-import.js";
 import { LIMITS, printable } from "./security.js";
 import type { SetupEnv, SetupIO } from "./setup.js";
 
-export const FOREIGN_SOURCES = ["claude-mem", "mem0", "basic-memory", "mcp-memory"] as const;
+export const FOREIGN_SOURCES = ["claude-mem", "mem0", "basic-memory", "mcp-memory", "claude-code-chats"] as const;
 export type ForeignSource = (typeof FOREIGN_SOURCES)[number];
 
 const MAX_JSON_BYTES = 256 * 1024 * 1024;
+/** Imported conversations go here unless --namespace says otherwise, so they never crowd the notes your agents start with. */
+export const CHATS_NAMESPACE = "chats";
 const MAX_MD_FILES = 100_000;
 
 export interface Item {
@@ -84,6 +87,7 @@ function jsonList(v: unknown): string[] {
 export function defaultPath(from: ForeignSource, e: Pick<SetupEnv, "home" | "env">): string {
   if (from === "claude-mem") return join(e.env.CLAUDE_MEM_DATA_DIR || join(e.home, ".claude-mem"), "claude-mem.db");
   if (from === "basic-memory") return join(e.home, "basic-memory");
+  if (from === "claude-code-chats") return join(e.env.CLAUDE_CONFIG_DIR || join(e.home, ".claude"), "projects");
   if (from === "mcp-memory") {
     if (e.env.MEMORY_FILE_PATH) return resolve(e.env.MEMORY_FILE_PATH.replace(/^~(?=$|[\\/])/, e.home));
     const found = findMcpMemoryFiles(e);
@@ -384,9 +388,10 @@ export async function runForeignImport(e: Pick<SetupEnv, "home" | "env" | "cwd">
   io.out(`Reading ${from} data from ${path} (read only; nothing leaves this computer):`);
   let items: Item[];
   const mcpStats: McpStats = { relations: 0, badLines: 0 };
+  const chatStats: ChatStats = { sessions: 0, tooBig: 0, badLines: 0 };
   try {
     items =
-      from === "claude-mem" ? readClaudeMem(path) : from === "mem0" ? readMem0(path) : from === "mcp-memory" ? readMcpMemory(path, mcpStats) : readBasicMemory(path);
+      from === "claude-mem" ? readClaudeMem(path) : from === "mem0" ? readMem0(path) : from === "mcp-memory" ? readMcpMemory(path, mcpStats) : from === "claude-code-chats" ? readClaudeCodeChats(path, chatStats) : readBasicMemory(path);
   } catch (err) {
     io.err(`Could not read ${path}: ${(err as Error).message}`);
     return 1;
@@ -426,6 +431,10 @@ export async function runForeignImport(e: Pick<SetupEnv, "home" | "env" | "cwd">
     if (t.x) io.out("  Skipped items are not stored and not shown. Take the secret out at the source (or keep it in a password manager) and run again.");
     if (heldSkipped) io.out(`  ${heldSkipped} item(s) were held by the memory linter on an earlier run and are not queued again (see \`monomem quarantine\`).`);
     if (opts.dryRun && from === "mcp-memory") previewMcp(io, todo, mcpStats);
+    if (from === "claude-code-chats") {
+      io.out(`  Read ${chatStats.sessions} conversation file(s).${chatStats.tooBig ? ` ${chatStats.tooBig} skipped: larger than 256 MB.` : ""}${chatStats.badLines ? ` ${chatStats.badLines} damaged line(s) skipped.` : ""}`);
+      io.out("  These notes go into the \"chats\" namespace (unless --namespace) and are never shown at session start; search finds them.");
+    }
     if (opts.dryRun) {
       io.out("\nDry run: nothing was written.");
       return 0;
@@ -454,7 +463,7 @@ export async function runForeignImport(e: Pick<SetupEnv, "home" | "env" | "cwd">
       try {
         // ponytail: one write per item, no batching transaction; fine for tens of thousands of rows.
         const note = writer.create(
-          { namespace: opts.namespace, title: c.title, body: c.body, tags: c.tags, source: c.source, created_at: it.createdAt },
+          { namespace: opts.namespace || (from === "claude-code-chats" ? CHATS_NAMESPACE : undefined), title: c.title, body: c.body, tags: c.tags, source: c.source, created_at: it.createdAt },
           { writtenBy: writerFor(from), skipEdges: !!it.kind, ...(it.kind ? { kind: it.kind, sessionId: it.sessionId, obsType: it.obsType ?? "" } : {}) }
         );
         if (it.kind) writer.restoreCaptureLinks(note, it.files);

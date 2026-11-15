@@ -311,8 +311,8 @@ Full set, measured one run at a time on an otherwise idle PC (2026-11-15, same h
 |---|---|---|---|---|---|---|---|---|
 | LongMemEval-S session (470) | keyword | 97.2 | **85.7** | 98.7 | 92.1 | 91.0 | 91.8 | 3.9 / 7.7 ms |
 | LongMemEval-S session (470) | relevant | 97.2 | **85.7** | 98.7 | 92.1 | 91.0 | 91.7 | 3.1 / 6.0 ms |
-| LoCoMo-10 turn (1,982) | keyword | 60.8 | **52.2** | 67.7 | 58.3 | 49.6 | 48.0 | 2.2 / 3.6 ms |
-| LoCoMo-10 turn (1,982) | relevant | 60.9 | **52.3** | 67.7 | 58.3 | 49.6 | 48.1 | 2.3 / 3.5 ms |
+| LoCoMo-10 turn (1,982) | keyword | 67.4 | **58.4** | 76.3 | 65.8 | 53.0 | 50.0 | 3.2 / 5.6 ms |
+| LoCoMo-10 turn (1,982) | relevant | 67.3 | **58.3** | 76.4 | 65.9 | 53.0 | 50.0 | 3.4 / 5.3 ms |
 | LoCoMo-10 session (1,982) | keyword | 90.9 | **82.4** | 96.0 | 89.0 | 81.0 | 79.1 | 1.6 / 2.2 ms |
 | LoCoMo-10 session (1,982) | relevant | 91.1 | **82.5** | 96.0 | 88.9 | 81.1 | 79.4 | 1.3 / 1.8 ms |
 
@@ -320,6 +320,25 @@ The honest headline for LongMemEval-S is now **85.7 strict / 97.2 any-hit at k =
 above agentmemory 0.9.31's reported 84.7 (its own figure, not re-run here; we score 470 of the 500 questions, dropping the 30
 abstention ones, by session, and did not check that agentmemory's setup matches; 1.0 point is about 5 questions, near the 0.1-0.2
 a re-run can move from ties). LoCoMo-10 by turn is still our weakest number.
+
+**LoCoMo-10 by turn: each turn stored with the turn it replied to (2026-11-15).** The by-turn rows above use the notes
+`monomem import --from claude-code-chats` stores ([switching.md](./switching.md#your-past-claude-code-conversations)): one note
+per message, titled with the speaker and its first line, its body followed by `(replying to <speaker>: <first 400 characters of
+the previous turn>)`. The benchmark calls the same `chatNotes()` as the import, so it scores what a user's imported chats
+look like, not a layout made for the test. Before, each turn was a note on its own (body `Speaker: text`, title the dialog id):
+60.8 / 52.2 / 67.7 / 58.3 / 49.6 / 48.0 on the full set. The reason it helps: the question and its answer usually sit in two
+turns, so the answer's note now also holds the question's words. Checked on the halves before it was kept, keyword R@5 /
+Rall@5 / R@10 / Rall@10:
+
+| LoCoMo-10 turn | before | after |
+|---|---|---|
+| half a (conversations 1-5, tuning) | 62.9 / 54.8 / 70.3 / 61.2 | 70.2 / 61.3 / 79.4 / 69.1 |
+| half b (conversations 6-10, held out) | 58.8 / 49.6 / 65.1 / 55.3 | **64.6 / 55.4 / 73.2 / 62.4** |
+
+The 400-character cut was set once and not tuned. Adding the turn *after* each turn as well was tried on both halves and
+made things worse (half b Rall@5 48.3 with the next turn only, 54.5 with both), so it is not done. LongMemEval-S and LoCoMo
+session are unchanged: their notes are whole sessions. Search time per query rose by about 1 ms (bodies are longer). The
+encrypted store gives the same figures (67.4 / 58.4 / 76.3 / 65.8).
 
 **Speed at 10,000 notes (`monomem bench --scale 10k`), new in this round.** A synthetic store in a temp folder: 10,000 notes
 (10,200 after the timed writes) in 5 namespaces, made-up Zipf-distributed words, bodies 80 % 200-600 characters, 15 % 1.5-3k,
@@ -352,7 +371,7 @@ in-memory body index (C-06, below) was built, 2026-11-15:
 |---|---|---|---|
 | LongMemEval-S session (470), keyword | 97.2 / 85.7 / 98.7 / 91.8 | **97.2 / 85.7 / 98.7 / 91.8** | 3.9 / 13.6 ms (each haystack has one question, so every encrypted search includes the first-search build) |
 | LongMemEval-S session (470), relevant | 97.2 / 85.7 / 98.7 / 91.7 | **97.2 / 85.7 / 98.7 / 91.7** | 3.1 / 4.1 ms |
-| LoCoMo-10 turn (1,982), keyword | 60.8 / 52.2 / 67.7 / 48.0 | **60.8 / 52.2 / 67.7 / 48.0** | 2.2 / 3.3 ms |
+| LoCoMo-10 turn (1,982), keyword (each turn with the one it replied to, see above) | 67.4 / 58.4 / 76.3 / 50.0 | **67.4 / 58.4 / 76.3 / 50.0** | 3.2 / 3.7 ms |
 | LoCoMo-10 session (1,982), keyword | 90.9 / 82.4 / 96.0 / 79.1 | **90.9 / 82.4 / 96.0 / 79.1** | 1.6 / 2.3 ms |
 
 (Re-run 2026-11-15 after the stems and rarity-weighted coverage above; the first C-06 run, before them, was likewise identical

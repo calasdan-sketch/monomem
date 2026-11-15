@@ -89,7 +89,10 @@ test("LoCoMo parsing: evidence split, session mapping, dates", () => {
   ];
   const t = locomoHaystacks(data, "turn");
   assert.equal(t[0].docs.length, 3);
-  assert.equal(t[0].docs[1].body, "B: pic [shares image: a dog]");
+  // By turn the notes are what `import --from claude-code-chats` stores: speaker in the title, the replied-to turn after.
+  assert.equal(t[0].docs[1].title, "B: pic [shares image: a dog]");
+  assert.equal(t[0].docs[1].body, "pic [shares image: a dog]\n\n(replying to A: hello)");
+  assert.equal(t[0].docs[0].body, "hello");
   assert.equal(t[0].questions.length, 1);
   assert.deepEqual([...t[0].questions[0].gold], ["D1:2", "D2:1"]);
   assert.equal(t[0].questions[0].type, "category 2");

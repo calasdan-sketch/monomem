@@ -83,6 +83,16 @@ upgrading from 1.3.x takes one step (docs/upgrading.md).
 
 ### Added
 
+- **Your past Claude Code conversations, searchable: `monomem import --from claude-code-chats`.** Reads
+  `~/.claude/projects/*/*.jsonl` (read only, local) and stores one note per message: what you typed and Claude's written
+  replies, without tool calls, tool output, thinking, subagent turns, slash commands or `<system-reminder>` blocks. Each note
+  also carries the first 400 characters of the message it replied to, so a search for a question finds its answer. Notes go
+  into the `chats` namespace (or `--namespace`), are tagged `imported:claude-code-chats` and `chat.session:<id>`, Claude's carry the model-written
+  label, and **chat notes are never shown at session start or in the "new notes" line**. Same rules as the other imports:
+  dry run first, secrets skipped and never shown, the linter may hold a message, re-runs add only new messages; the dry run
+  also counts files over 256 MB and damaged lines it skipped. The LoCoMo-10 by-turn benchmark now builds its notes with the
+  same code: keyword R@5 / strict Rall@5 / R@10 60.8 / 52.2 / 67.7 -> **67.4 / 58.4 / 76.3** (held-out half b
+  58.8 / 49.6 / 65.1 -> 64.6 / 55.4 / 73.2); LongMemEval-S and LoCoMo by session unchanged; encrypted store identical.
 - **Search shows the part of a long note that matched.** When `state_search` cuts a body to 600 characters, it now shows the
   600 characters with the most of your query words instead of the first 600, and `body_offset` says where they start. It
   works on encrypted notes too. `state_list` and short notes are unchanged (docs/search.md).
@@ -189,6 +199,10 @@ upgrading from 1.3.x takes one step (docs/upgrading.md).
 
 ### Fixed
 
+- `monomem bench --longmemeval` / `--locomo` refused to run ("data path ... is not inside the benchmark temp folder") on any
+  machine that already had a store: a late change made the command line load the settings before the benchmark moved
+  `MONOMEM_HOME` to its temp folder. Nothing was touched (the guard stopped it). A test now fails if that load order comes
+  back. The retrieval benchmark also no longer prints "not replacing the signing key" once per conversation.
 - Final ease-of-use panel: a missing encryption key file is named first ("the key file <path> is missing, so note N
   cannot be read") and `doctor`'s Fix says to restore that key file from your backup (a database backup is sealed with
   the same key); `doctor` lists `.key` and `.attest-key` under "keys are kept in"; `doctor` with no data folder says

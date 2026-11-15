@@ -65,7 +65,9 @@ are. Step by step, with troubleshooting: [docs/live-claude-code.md](./docs/live-
 Already have notes in Claude Code? `monomem import --claude --dry-run` shows what could be brought in from your `CLAUDE.md` files and
 Claude Code's auto memory (secrets are skipped, nothing leaves your computer). Coming from claude-mem, mem0, basic-memory or the official MCP memory server?
 `monomem import --from claude-mem --dry-run` (or `mem0 --path export.json`, `basic-memory`, `mcp-memory`); see [docs/switching.md](./docs/switching.md)
-for the import and a clean uninstall of the old tool.
+for the import and a clean uninstall of the old tool. To make your past Claude Code conversations searchable too:
+`monomem import --from claude-code-chats --dry-run` (one note per message, each with the message it replied to; they go into the
+`chats` namespace and are never pushed into a new session, only found when searched).
 
 In Claude Code you can also install Monomem as a plugin instead of running `setup` ([what the plugin does and does not do](./docs/plugin.md)):
 
@@ -418,6 +420,7 @@ monomem start | mcp | doctor | init
 monomem setup [--dry-run] [--yes] [--only claude-code,claude-desktop,cursor,codex,gemini,muse,vscode,zed] [--hook|--no-hook] [--undo]   # connect your apps; safe, backed up, undoable (--yes also adds the Claude Code start-of-session hook unless --no-hook)
 monomem import --claude [--dry-run] [--update] [--project <folder>]   # bring in CLAUDE.md files and Claude Code auto memory
 monomem import --from claude-mem|mem0|basic-memory|mcp-memory [--path p] [--dry-run]   # switch from another memory tool (docs/switching.md)
+monomem import --from claude-code-chats [--dry-run]   # make past Claude Code conversations searchable (docs/switching.md)
 monomem sync --git ~/my-private-memory-repo [--encrypt]   # keep your computers in step through YOUR private git repository
 monomem changes --since last --consumer laptop
 monomem runner-status                           # is each PC's runner listening? commands waiting?
@@ -520,7 +523,7 @@ and no judge (does the right conversation come back?). On one Windows PC, 2026-1
 |---|---|---|---|---|
 | LongMemEval-S, 470 of 500 questions (the 30 abstention questions have no right answer to find) | 97.2 % | 85.7 % | 98.7 % | 3.9 ms |
 | LoCoMo-10, 1,982 questions, by session | 90.9 % | 82.4 % | 96.0 % | 1.6 ms |
-| LoCoMo-10, 1,982 questions, by turn (the hard one: our weakest number) | 60.8 % | 52.2 % | 67.7 % | 2.2 ms |
+| LoCoMo-10, 1,982 questions, by turn (the hard one: our weakest number), each turn stored with the turn it replied to, as `import --from claude-code-chats` does | 67.4 % | 58.4 % | 76.3 % | 3.2 ms |
 
 The same numbers with encryption on: the search index of decrypted bodies is kept in memory only (see Encryption below).
 The ranking settings were tuned on half the questions and checked on the other half; docs/BENCHMARK.md shows both halves,

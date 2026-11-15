@@ -22,6 +22,7 @@ import { extractKeywords } from "./keywords.js";
 import { rrfScores, rankHits, anyKeywordHits, expiryEnforced } from "./search-service.js";
 import { buildSummary, titleText } from "./recall.js";
 import { TASK_TAG, HANDOFF_TAG, listTasks } from "./tasks.js";
+import { CHAT_TAG } from "./chat-import.js";
 import { NEVER_SHOW_TAG, isModelWritten, originFlag, originTools, originLegend } from "./reserved-tags.js";
 import { disputedLines } from "./facts.js";
 import { enabledToolNames } from "./mcp-server-core.js";
@@ -177,7 +178,7 @@ export function newNotesSince(store: Store, sessionId: string, opts: { namespace
   if (!since) return "";
   // ponytail: looks at the 200 most recently updated notes; "and N more" undercounts past that, memory_since has the rest.
   const fresh = store
-    .list({ namespace: opts.namespace, limit: 200, withoutTags: [NEVER_SHOW_TAG], ...(opts.notWrittenBy ? { notWrittenBy: opts.notWrittenBy } : {}) })
+    .list({ namespace: opts.namespace, limit: 200, withoutTags: [NEVER_SHOW_TAG, CHAT_TAG], ...(opts.notWrittenBy ? { notWrittenBy: opts.notWrittenBy } : {}) })
     .notes.filter((n) => n.updated_at > since && n.session_id !== sessionId && n.written_by !== "capture" && !heldFromSessionStart(n, expiryEnforced(store))); // 1.4.0: not even the title of a held-back note
   if (!fresh.length) return "";
   const on = enabledToolNames();
@@ -209,7 +210,7 @@ export function projectProfile(store: Store, opts: InjectOptions, latestSummary:
     ...(opts.writtenBy ? { writtenBy: opts.writtenBy } : {}),
     ...(opts.notWrittenBy ? { notWrittenBy: opts.notWrittenBy } : {}),
   };
-  const base = { namespace: ns, kinds: NOTE_KINDS, withoutTags: [TASK_TAG, HANDOFF_TAG, NEVER_SHOW_TAG], ...wf };
+  const base = { namespace: ns, kinds: NOTE_KINDS, withoutTags: [TASK_TAG, HANDOFF_TAG, NEVER_SHOW_TAG, CHAT_TAG], ...wf };
   const titles = (notes: NoteRecord[]): string => notes.map((n) => one(n.title).replace(/^Decision:\s*/i, "").slice(0, 90)).join("; ");
   // 1.4.0: unconfirmed outside content is held out of session start, titles included.
   const enforce = expiryEnforced(store);
@@ -250,7 +251,8 @@ export async function rankContext(
     ...(opts.notWrittenBy ? { notWrittenBy: opts.notWrittenBy } : {}),
     ...(opts.includeDistrusted ? { includeDistrusted: true } : {}),
   };
-  const hidden = [TASK_TAG, HANDOFF_TAG, NEVER_SHOW_TAG, ...(opts.skipTags ?? [])];
+  // Imported chat history (import --from claude-code-chats) is for search, not for every session's opening context.
+  const hidden = [TASK_TAG, HANDOFF_TAG, NEVER_SHOW_TAG, CHAT_TAG, ...(opts.skipTags ?? [])];
   const base = { namespace: ns, kinds: NOTE_KINDS, withoutTags: hidden, ...wf };
   // 1.4.0: an unconfirmed note (outside content no one confirmed), a note built on a distrusted writer, and (enforce mode) an
   // expired note are left out entirely; injectContext prints count lines for the first and last.
