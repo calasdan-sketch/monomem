@@ -12,7 +12,7 @@
 // app-level "remember to reindex" step to forget.
 
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, statSync, statfsSync, readdirSync, renameSync, linkSync, existsSync, unlinkSync, copyFileSync } from "node:fs";
+import { mkdirSync, statSync, statfsSync, readdirSync, renameSync, linkSync, existsSync, unlinkSync, copyFileSync, readFileSync } from "node:fs";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { dirname, basename, join, resolve } from "node:path";
 import { checkSizes, checkNames, audit, auditHead, auditPath, beginKeyRotation, ADMIN_SCOPE_NEEDED } from "./security.js";
@@ -8230,7 +8230,7 @@ export class Store {
     this.auditKeyChecked = true;
     try {
       this.signing();
-      this.mirrorKeyToLog();
+      this.mirrorKeyToLog(false);
     } catch (e) {
       console.error(`[monomem] audit lines stay unsigned: could not create the signing key (${(e as Error).message})`);
     }
@@ -8240,12 +8240,21 @@ export class Store {
    * A log elsewhere (MONOMEM_AUDIT_LOG) is signed by the key found beside it, so that folder gets a copy of the store key
    * (mode 0600, written to a temp name and renamed). Rotation refreshes it. An in-memory store never does this.
    */
-  private mirrorKeyToLog(): void {
+  private mirrorKeyToLog(replace = true): void {
     const logDir = dirname(auditPath());
     if (this.dbPath === ":memory:" || resolve(logDir) === resolve(this.keyDir)) return;
     const src = attestKeyPath(this.keyDir);
     const dest = attestKeyPath(logDir);
     if (resolve(src) === resolve(dest)) return; // MONOMEM_ATTEST_KEY_FILE names one file for both
+    // Only key rotation may replace a key already there. On open, a DIFFERENT key beside the log belongs to another store
+    // (a copy opened while the log path still points at the real folder): overwriting it would break that store's signed
+    // log and every receipt it gave. Leave it, and say so.
+    if (!replace && existsSync(dest)) {
+      if (!readFileSync(dest).equals(readFileSync(src))) {
+        console.error(`[monomem] not replacing the signing key beside ${auditPath()}: it belongs to another store`);
+      }
+      return;
+    }
     mkdirSync(logDir, { recursive: true, mode: 0o700 });
     const tmp = `${dest}.${process.pid}.tmp`;
     copyFileSync(src, tmp);

@@ -134,6 +134,8 @@ export async function runDrill(opts: { dbPath: string; dir?: string; seed?: numb
   if (!existsSync(opts.dbPath)) throw new Error(`no store at ${opts.dbPath}`);
   // Embeddings are forced OFF for the drill (and so for `health`): it must never send text to a network endpoint, remote or local.
   const savedEmbeddings = process.env.MONOMEM_EMBEDDINGS;
+  // The copy's audit lines and signing key stay in the temp folder: never append to the real audit.log or touch .attest-key.
+  const savedAuditLog = process.env.MONOMEM_AUDIT_LOG;
   const started = Date.now();
   const tmp = mkdtempSync(join(tmpdir(), "monomem-drill-"));
   const copy = join(tmp, "copy.db");
@@ -148,6 +150,7 @@ export async function runDrill(opts: { dbPath: string; dir?: string; seed?: numb
   process.once("exit", cleanup);
   try {
     process.env.MONOMEM_EMBEDDINGS = "off"; // inside the try so the finally restores it on every path
+    process.env.MONOMEM_AUDIT_LOG = join(tmp, "audit.log");
     copyFileSync(opts.dbPath, copy);
     if (existsSync(opts.dbPath + "-wal")) copyFileSync(opts.dbPath + "-wal", copy + "-wal");
     const realKey = keyPath(dirname(opts.dbPath));
@@ -155,6 +158,9 @@ export async function runDrill(opts: { dbPath: string; dir?: string; seed?: numb
     const flat = new DatabaseSync(copy);
     try {
       flat.exec("PRAGMA busy_timeout = 5000; PRAGMA wal_checkpoint(TRUNCATE);"); // fold the copied -wal into the copy
+      // The copy gets its own throwaway signing key (as the bench adapter does): forget the real key's id, so no
+      // "a NEW attestation key was created" warning fires and nothing points back at the real key.
+      flat.exec("DELETE FROM _meta WHERE key = 'attest_key_id'");
     } finally {
       flat.close();
     }
@@ -182,6 +188,8 @@ export async function runDrill(opts: { dbPath: string; dir?: string; seed?: numb
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
     process.off("exit", cleanup);
+    if (savedAuditLog === undefined) delete process.env.MONOMEM_AUDIT_LOG;
+    else process.env.MONOMEM_AUDIT_LOG = savedAuditLog;
     if (savedEmbeddings === undefined) delete process.env.MONOMEM_EMBEDDINGS;
     else process.env.MONOMEM_EMBEDDINGS = savedEmbeddings;
   }
