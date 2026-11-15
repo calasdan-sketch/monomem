@@ -309,6 +309,35 @@ itself. Links are only ever added: an update adds new ones, and `[]` or leaving 
 Limits: it only works when agents fill it in, it looks one hop back, a held write keeps its mark but loses its links, and
 there is no session-start count line for notes built on a distrusted writer.
 
+## Agent flags (1.5.0)
+
+An agent that thinks a note is wrong or out of date can say so without overwriting it: `memory_flag {id, reason}` (not in
+the default tool set; add it with `MONOMEM_TOOLS`) or REST `POST /notes/:id/flag {reason}`. The reason is one line of at
+most 200 characters. The note itself does not change.
+
+- A flag counts for the version (rev) it was about. Reads show `flagged: [{by, reason, at}]` and the label
+  `[flagged by stdio:codex]`; MCP adds `FLAGGED by "stdio:codex": "reason"` to the "who wrote this" block.
+- A flagged note that no person confirmed for its current version leaves session start (search and lists still show it). A
+  note a person confirmed stays at session start with the label: a poisoned agent cannot erase confirmed memory.
+- The reason is the agent's text: it is shown on reads, never at session start. With encryption on it is sealed at rest.
+- Refused or ignored: flagging your own note (change it instead), flags from a writer on the distrust list (ignored when
+  read, so a later distrust entry also cancels earlier flags), more than 20 flags per writer per day. Each flag counts toward
+  the flood guard. With a namespace-pinned key, only notes in its own namespace can be flagged.
+- A person decides: `monomem review` lists flagged notes with who flagged them and why. `monomem review keep <id>` keeps the
+  note as it is (clears the flags on that version; they stay on record); `monomem supersede --old <id> ...` replaces it.
+
+Limits: an edit that makes a new version leaves the old flags behind (flag again if it is still wrong); flags from a session
+that read outside content are not marked differently yet.
+
+## Writer record (1.5.0)
+
+`monomem trust` (and `monomem trust --json`, field `writer_record_30d`) shows, per writer, what happened to its writes in the
+last 30 days: held by the linter (approve-first holds are not counted: that is the namespace's rule, not the write), rejected
+by a person or admin, rolled back, flags upheld (a flagged version that was then replaced) and replaced by someone else (the
+two-step supersede, which only admin keys and the terminal can do). The numbers are only shown. Monomem does not hold, hide
+or rank anything because of them, and they can only count against a writer, never for it. Counting starts with 1.5.0; older
+events are not reconstructed. Decide yourself whether a writer belongs on the distrust list.
+
 ## The outside-content stamp on session summaries (1.3.5)
 
 Before 1.4.0 only captured session summaries were stamped. That path still works, and is one of the signals above.

@@ -28,7 +28,7 @@ function quietOpen(path: string): Store {
 
 describe("schema v21", () => {
   test("a fresh store has the v21 columns", () => {
-    assert.equal(SCHEMA_VERSION, 21);
+    assert.equal(SCHEMA_VERSION, 22);
     const s = new Store(":memory:");
     const c = cols(s.captureDb() as unknown as DatabaseSync, "notes");
     assert.ok(c.includes("content_at") && c.includes("writer_cwd"));
@@ -55,8 +55,8 @@ describe("schema v21", () => {
       assert.equal(Store.peekSchemaVersion(path), 20);
       const s = quietOpen(path);
       try {
-        assert.equal(Store.peekSchemaVersion(path), 21);
-        assert.equal(Store.peekSchemaVersion(path + ".pre-v21-backup"), 20);
+        assert.equal(Store.peekSchemaVersion(path), 22);
+        assert.equal(Store.peekSchemaVersion(path + ".pre-v22-backup"), 20);
         const all = s.list({ namespace: "work", limit: 100 }).notes.map((n) => n.id).sort();
         assert.deepEqual(all, [stale.id, corro.id, fresh.id, web.id].sort(), "every note still listed");
         assert.deepEqual(expiredNow(s), [stale.id], "same expiry labels as under v20 (the corroborated note was not due)");

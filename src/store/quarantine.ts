@@ -80,6 +80,8 @@ export function quarantineWrite(s: Store, q: {
         clears.length ? JSON.stringify(clears) : null
       );
     id = Number(res.lastInsertRowid);
+    // R2-08: a write the linter held counts against its writer; an approve-first hold is the namespace's policy, not the write's.
+    if (q.findings.some((f) => f.category !== "approval")) s.recordWriterEvent(q.writtenBy !== undefined ? cleanWriter(q.writtenBy) : currentWriter(), "quarantined", null);
     if (key) {
       const seal = (col: string, v: string | null): string | null => (v === null ? null : sealQuarantineCol(v, key, col, q.namespace, id));
       s.db
@@ -367,6 +369,7 @@ export function rejectQuarantine(s: Store, id: number): boolean {
   if (!q) return false;
   // One statement: if another process decided it first, nothing is deleted and nothing is audited.
   if (Number(s.db.prepare("DELETE FROM quarantine WHERE id = ?").run(id).changes) === 0) return false;
+  s.recordWriterEvent(q.written_by, "rejected", null); // R2-08: rejecting a held write is an admin's or a person's decision
   s.audit({ op: "quarantine-reject", id, namespace: q.namespace });
   return true;
 }

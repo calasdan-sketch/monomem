@@ -45,7 +45,7 @@ import { assertPlainWriteTags, assertReviewedTag } from "./reserved-tags.js";
 import { prepareNoteUpdate } from "./note-update.js";
 import { distrustedOptInRefusal } from "./trust.js";
 import { ORIGIN_DECLARED, ReadTaint, unconfirmedIdsIn } from "./taint.js";
-import { withFacts, factFeedback, COMMON_FACT_KEYS, type FactFeedback } from "./facts.js";
+import { withFacts, factFeedback, COMMON_FACT_KEYS, withDisputes, listWithDisputes, type FactFeedback } from "./facts.js";
 import { waitForChanges, parseWait, WAIT_MAX_SECONDS, WAIT_RECOMMENDED_SECONDS } from "./change-wait.js";
 import { type Scope, PACKAGE_VERSION } from "./config.js";
 export { PACKAGE_VERSION };
@@ -61,7 +61,7 @@ import { TIME_ZONE } from "./config.js";
 import { annotateStaleness } from "./staleness.js";
 
 /** Staleness fields plus a compact `when` ("2023-05-08, 5 months ago") so the reader sees the note's date and age. */
-const withWhen = (n: NoteRecord) => ({ ...annotateStaleness(n), when: describeWhen(n.created_at) });
+const withWhenBase = (n: NoteRecord) => ({ ...annotateStaleness(n), when: describeWhen(n.created_at) });
 import { meterStats } from "./meter.js";
 import { receiptList, receiptGet } from "./receipts.js";
 import { noteWhy } from "./why.js";
@@ -523,6 +523,8 @@ export function createMcpServer(
   const connTaint = (): string[] => (conn.readsOutside ? [ORIGIN_DECLARED] : []); // read-taint (via:memory) is decided by the Store from taintedReads
   /** Whether a tool is offered on this server: descriptions name only tools the model was actually given. */
   const has = (name: string): boolean => !enabled || enabled.has(name);
+  /** A note for a read reply: staleness, a readable date and (R2-01) the dispute marker, computed inside the caller's request. */
+  const withWhen = (n: NoteRecord) => withDisputes(store, withWhenBase(n) as NoteRecord);
   const registerRaw = server.registerTool.bind(server) as (...a: unknown[]) => unknown;
   (server as unknown as { registerTool: (...a: unknown[]) => unknown }).registerTool = (name: unknown, cfg: unknown, handler: unknown) => {
     // Every registered tool's name and description is sent to the model on
@@ -742,7 +744,7 @@ export function createMcpServer(
     const annotated = withWhen(note);
     const payload: Record<string, unknown> = note.neighbors
       ? { ...annotated, neighbors: note.neighbors.map((n) => ({ ...n, score: Math.round(n.score * 1000) / 1000 })) }
-      : annotated;
+      : { ...annotated };
     const full = typeof note.body === "string" ? note.body : "";
     if (start > 0 || full.length > max) {
       const end = Math.min(full.length, start + max);
@@ -835,9 +837,13 @@ export function createMcpServer(
           .describe(
             "Ids of the notes this one was built from (at most 20). Links are only ever added, never removed. A note built from an unconfirmed note is marked unconfirmed too."
           ),
+        client_key: z
+          .string()
+          .optional()
+          .describe("Idempotency key for creating (any unique string you invent, e.g. a UUID): a retry with the same key returns the note the first write made (deduplicated:true) instead of a duplicate."),
       },
     },
-    async ({ id, namespace, title: givenTitle, body, tags: plainTags, facts, source, if_rev, forget_after, confidence, sensitivity, outside, derived_from }) => {
+    async ({ id, namespace, title: givenTitle, body, tags: plainTags, facts, source, if_rev, forget_after, confidence, sensitivity, outside, derived_from, client_key }) => {
       const warnings: LintFinding[] = [];
       let title = givenTitle;
       let tags = plainTags;
@@ -854,6 +860,7 @@ export function createMcpServer(
           assertPlainWriteTags(tags, undefined);
           assertReviewedTag(tags, undefined, false);
         }
+        if (id !== undefined && client_key !== undefined) return errorResult("client_key applies to creating a note; use if_rev to guard an update");
         if (id !== undefined) {
           // When namespace resolution is active the model-supplied namespace
           // is dropped entirely (the note keeps its existing namespace), and
@@ -889,13 +896,17 @@ export function createMcpServer(
         // Writes always go to the server-resolved namespace when active; the
         // model-supplied `namespace` is ignored (prompt-injection guard).
         tags = withFacts(plainTags, facts);
-        const created = store.create(
+        const once = store.createOnce(
           nsActive
             ? { namespace: ownNs, title, body, tags, source, forget_after, sensitivity, outside, derived_from, ...(typeof confidence === "number" ? { confidence } : {}) }
             : { namespace, title, body, tags, source, forget_after, sensitivity, outside, derived_from, ...(typeof confidence === "number" ? { confidence } : {}) },
+          client_key,
           { lintWarnings: warnings }
         );
         const receipt = withReceipt();
+        // R2-04: a retry with a known key wrote nothing; the reply is the note the first write made.
+        if (once.deduplicated) return untrustedResult({ note: noBody(once.note), deduplicated: true });
+        const created = once.note;
         await maybeEmbed(store, created);
         const sim = store.similarNote(created.id);
         return untrustedResult(withConflicts(withWarnings({ note: noBody(created), ...receipt, ...(titleGenerated ? { title_generated: `No title was given, so it was made from the body's first line. To change it: state_write id=${created.id} title="..."` } : {}), ...(sim ? { similar_note: { id: sim.id, title: sim.title, hint: `looks similar to #${sim.id} - consider updating it (state_write with id=${sim.id}) if this is the same thing` } } : {}) }, warnings), store, created, facts));
@@ -929,6 +940,34 @@ export function createMcpServer(
         const r = store.confirm(id, { source });
         if (!r) return errorResult(noNote(id));
         return untrustedResult({ counted: r.counted, kind: r.kind, ...(r.reason ? { reason: r.reason } : {}), message: r.message, id: r.id, rev: r.rev });
+      } catch (e) {
+        return errorFor(e);
+      }
+    }
+  );
+
+  // 1.5.0 (R2-02): not in DEFAULT_TOOLS; turn it on with MONOMEM_TOOLS=memory_flag. Same rules as POST /notes/:id/flag.
+  server.registerTool(
+    "memory_flag",
+    {
+      title: "Flag a note that looks wrong",
+      description:
+        "Say that a note looks wrong or out of date, with a one-line reason, instead of overwriting it. The note does not change. Until a person looks at it, a note nobody confirmed is left out of session start; a note a person confirmed stays, labelled. You cannot flag your own note (change it instead); at most 20 flags a day.",
+      inputSchema: {
+        id: zInt().describe("Id of the note that looks wrong."),
+        reason: z.string().describe("One line: what looks wrong and why (at most 200 characters), e.g. \"package.json says pnpm\"."),
+      },
+    },
+    async ({ id, reason }) => {
+      try {
+        const denied = denyIfUnder("write");
+        if (denied) return errorResult(denied);
+        // A flag changes what session start shows in the note's namespace: like an edit, only in this server's own namespace.
+        const probe = store.read(id); // gate-ok: namespace check only; flagNote re-reads through readVisible
+        if (!probe || (nsActive && probe.namespace !== ownNs)) return errorResult(`no note with id ${id}`);
+        const r = store.flagNote(id, reason);
+        if (!r) return errorResult(`no note with id ${id}`);
+        return untrustedResult({ flagged: true, id: r.note_id, rev: r.rev, message: "Flag recorded. The note is unchanged; a person decides in monomem review." });
       } catch (e) {
         return errorFor(e);
       }
@@ -1081,7 +1120,7 @@ export function createMcpServer(
             note: "Reconstructed from note history; hard-deleted notes cannot be shown.",
             not_kept: view.notKept,
             archived_then: view.archivedThen,
-            results: hits.map((h) => asOfFields(h, withWhen)),
+            results: hits.map((h) => asOfFields(h, withWhenBase)),
             searchedNamespaces: spaces ?? [],
           }, query);
         }
@@ -1323,18 +1362,18 @@ export function createMcpServer(
           const hint = trustedHint(namespace);
           if (hint) {
             return untrustedResultCut({
-              ...store.list({ namespace: hint, limit, offset, ...wf }),
+              ...listWithDisputes(store, store.list({ namespace: hint, limit, offset, ...wf })),
               searchedNamespaces: [hint],
             });
           }
           return untrustedResultCut({
-            ...listReadable(limit, offset, wf),
+            ...listWithDisputes(store, listReadable(limit, offset, wf)),
             searchedNamespaces: readable(),
           });
         }
         const result = store.list({ namespace, limit, offset, ...wf });
         return untrustedResultCut({
-          ...result,
+          ...listWithDisputes(store, result),
           searchedNamespaces: namespace ? [namespace] : [],
         });
       } catch (e) {

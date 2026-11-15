@@ -145,9 +145,9 @@ describe("schema migration of an existing database", () => {
       } finally {
         console.error = quiet;
       }
-      assert.equal(SCHEMA_VERSION, 21);
-      assert.equal(Store.peekSchemaVersion(path), 21);
-      assert.ok(existsSync(path + ".pre-v21-backup"));
+      assert.equal(SCHEMA_VERSION, 22);
+      assert.equal(Store.peekSchemaVersion(path), 22);
+      assert.ok(existsSync(path + ".pre-v22-backup"));
       for (const [t, c] of [["notes", "sensitivity"], ["change_log", "note_sensitivity"], ["quarantine", "sensitivity"]] as const) {
         assert.ok(cols(path, t).includes(c), `${t}.${c}`);
       }
@@ -182,7 +182,7 @@ describe("schema migration of an existing database", () => {
     } finally {
       console.error = quiet;
     }
-    const baks = readdirSync(dir).filter((f) => f.includes("pre-v21-backup"));
+    const baks = readdirSync(dir).filter((f) => f.includes("pre-v22-backup"));
     assert.equal(baks.length, 1, baks.join(","));
     const again = new Store(path);
     assert.equal(again.list({}).notes[0].sensitivity, undefined, "the downgrade fixture dropped the label; migration defaulted it to internal");

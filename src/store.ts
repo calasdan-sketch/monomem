@@ -109,6 +109,12 @@ import * as confirmOps from "./store/confirm.js";
 import * as taintOps from "./store/taint.js";
 import * as receiptOps from "./store/write-receipt.js";
 import * as surfaceOps from "./store/surfaces.js";
+import * as clientKeyOps from "./store/client-keys.js";
+import * as flagOps from "./store/flags.js";
+import type { FlaggedItem, NoteFlag } from "./store/flags.js";
+import * as reputationOps from "./store/reputation.js";
+import type { WriterCounts, WriterEvent } from "./store/reputation.js";
+export type { FlaggedItem, NoteFlag, WriterCounts, WriterEvent };
 import { tagsToStorage, parseTags, dueBase, needsHumanConfirm, sealQuarantineCol, openQuarantineCol, isoOrNull, clampInt, envCount, floodWritesPerHour, isOperatorWrite, isPlainObject } from "./store/rows.js";
 export { dueBase, needsHumanConfirm, clampInt, floodWritesPerHour };
 export { ValidationError, NoteUnreadableError, StaleWriteError, RebuildBusyError, CandidateScanError, QuarantinedError, WriterPausedError };
@@ -580,7 +586,7 @@ export const CHANGE_LOG_RETENTION_DAYS = 90;
 const FTS_PREFIX_OPT = "prefix='1'";
 
 /** Current schema version (PRAGMA user_version). See Store.migrate. */
-export const SCHEMA_VERSION = 21;
+export const SCHEMA_VERSION = 22;
 
 /**
  * Notes fetched per page by exportBatch(), which both streaming export
@@ -785,6 +791,9 @@ export interface NoteRecord {
   /** 1.4.0 (1d): one of those notes was written or touched by a distrusted writer (one hop); with its label. */
   built_on_distrusted?: true;
   built_on_distrusted_label?: string;
+  /** 1.5.0 (R2-02): "this looks wrong" flags by other writers on this version (store/flags.ts); with its label. */
+  flagged?: NoteFlag[];
+  flagged_label?: string;
 }
 
 /** The re-confirmation expiry settings (_meta; Store.confirmSettings). `set_at`: when the mode was last changed. */
@@ -811,7 +820,7 @@ export interface ReviewRow {
   updated_at: string;
 }
 
-interface NoteRow {
+export interface NoteRow {
   id: number;
   namespace: string;
   title: string;
@@ -2857,6 +2866,60 @@ export class Store {
       `);
       this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_capture_spool ON capture_events(spool_id) WHERE spool_id IS NOT NULL");
     }
+    if (v < 22) {
+      // v22 (1.5.0, round 2): one more step for the round-2 items (one backup, one transaction). Unreleased: later round-2
+      // items add their tables HERE. To add a table: CREATE it in this exec, add its "DELETE FROM <table> WHERE note_id =
+      // old.id;" line to the notes_links_ad trigger at the end, and drop it in test/legacy-db.ts (the v22 block). Idempotent.
+      //  - F-05: idx_note_edges_note_id is a prefix of note_edges' primary key (pure write cost): dropped. (archived_at, kind)
+      //    makes the unfiltered live COUNT covering.
+      //  - note_flags (R2-02): "this looks wrong" flags. Nothing in the note changes; a flag names the rev it was about.
+      //  - note_client_keys (R2-04): idempotency keys on note writes, per writer, stored hashed (never the raw key).
+      //  - writer_events (R2-08): what happened to a writer's writes (held by the linter, rejected, rolled back, flag upheld,
+      //    replaced), for the counts `monomem trust` shows. Counts only: no row outlives its usefulness by naming content, and
+      //    the rows stay when a note is deleted (the count is about the writer, not the note).
+      this.db.exec(`
+        DROP INDEX IF EXISTS idx_note_edges_note_id;
+        CREATE INDEX IF NOT EXISTS idx_notes_live_kind ON notes(archived_at, kind);
+        CREATE TABLE IF NOT EXISTS note_flags (
+          id INTEGER PRIMARY KEY,
+          note_id INTEGER NOT NULL,
+          note_rev INTEGER NOT NULL,
+          flagged_by TEXT NOT NULL,
+          reason TEXT NOT NULL DEFAULT '',
+          at TEXT NOT NULL,
+          tainted INTEGER NOT NULL DEFAULT 0,
+          cleared_at TEXT,
+          cleared_by TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_note_flags_note ON note_flags(note_id, note_rev);
+        CREATE INDEX IF NOT EXISTS idx_note_flags_by ON note_flags(flagged_by, at);
+        CREATE TABLE IF NOT EXISTS note_client_keys (
+          writer TEXT NOT NULL,
+          key_hash TEXT NOT NULL,
+          note_id INTEGER NOT NULL,
+          at TEXT NOT NULL,
+          PRIMARY KEY (writer, key_hash)
+        );
+        CREATE INDEX IF NOT EXISTS idx_note_client_keys_note ON note_client_keys(note_id);
+        CREATE TABLE IF NOT EXISTS writer_events (
+          id INTEGER PRIMARY KEY,
+          writer TEXT NOT NULL,
+          event TEXT NOT NULL,
+          note_id INTEGER,
+          at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_writer_events ON writer_events(at, writer);
+        DELETE FROM note_flags WHERE note_id NOT IN (SELECT id FROM notes);
+        DELETE FROM note_client_keys WHERE note_id NOT IN (SELECT id FROM notes);
+        DROP TRIGGER IF EXISTS notes_links_ad;
+        CREATE TRIGGER notes_links_ad AFTER DELETE ON notes BEGIN
+          DELETE FROM note_links WHERE note_id = old.id OR derived_from = old.id;
+          DELETE FROM confirmations WHERE note_id = old.id;
+          DELETE FROM note_flags WHERE note_id = old.id;
+          DELETE FROM note_client_keys WHERE note_id = old.id;
+        END;
+      `);
+    }
   }
 
   /** The delete log row also remembers the deleted note's writers (v14). Caller holds the write lock. */
@@ -3012,6 +3075,8 @@ export class Store {
       holdForApproval?: boolean;
       /** Sync of another machine's file: its (origin, id), linked to the note when a held create is approved. */
       syncIdentity?: { origin: string; id: number };
+      /** R2-04: the checked client_key (createOnce passes it); recorded for this writer in the same transaction. */
+      clientKey?: string;
     } & LintOpts = {}
   ): NoteRecord {
     if (!opts.bulkImport) this.floodGate(opts.lint ?? "full");
@@ -3154,6 +3219,7 @@ export class Store {
         const sealed = this.sealBody(body, noteAad(id, namespace));
         this.db.prepare("UPDATE notes SET body = ?, body_enc = ? WHERE id = ?").run(sealed.body, sealed.bodyEnc, id);
       }
+      if (opts.clientKey !== undefined) clientKeyOps.recordClientKey(this, id, writer, opts.clientKey, now);
       this.addLinks(id, derived, writer, now);
       this.stampCliTerminal(id, writer);
       // An archived (restored-as-forgotten) note stays out of the edge graph.
@@ -3431,7 +3497,7 @@ export class Store {
       r.access_count += p.n;
       if (!r.last_accessed || p.at > r.last_accessed) r.last_accessed = p.at;
     }
-    return this.annotateConfirmRules(row, annotateRetention(row, r));
+    return flagOps.annotateFlags(this, row, this.annotateConfirmRules(row, annotateRetention(row, r)));
   }
 
   /**
@@ -4673,9 +4739,16 @@ export class Store {
       input.oldIds.forEach((oid, i) => {
         if (oid === input.newId) throw new ValidationError("a note cannot replace itself");
         this.refuseAgentOnPinned(oid, "replacing it");
+        const before = this.read(oid);
         const res = upd.run(now, input.newId, now, input.actor, oid, input.oldRevs[i], target.namespace);
         if (Number(res.changes) === 0) {
           throw new StaleWriteError(`note ${oid} changed (or was retired, moved or removed) after the preview; nothing was changed`);
+        }
+        // R2-08: replaced by someone else through the two-step supersede (admin keys and the terminal only); a flag on the
+        // version it replaced is upheld.
+        if (before && before.written_by !== currentWriter()) {
+          this.recordWriterEvent(before.written_by, "superseded", oid);
+          if (before.flagged) this.recordWriterEvent(before.written_by, "flags_upheld", oid);
         }
         log.run(now, input.actor, target.namespace, oid, input.newId, input.flags ?? "");
       });
@@ -7911,6 +7984,36 @@ export class Store {
 
   // --- Flood guard (v17) -----------------------------------------------------
   // The paused set is a JSON list in _meta (like approve_first), so a restart does not clear it.
+
+  /** R2-02: flag a note this caller may see as looking wrong (the note does not change). Null = no such note. */
+  flagNote(id: number, reason: unknown): { note_id: number; rev: number; at: string } | null {
+    return flagOps.flagNote(this, id, reason);
+  }
+
+  /** R2-02: live notes with flags that count, for `monomem review`. */
+  flaggedList(namespaces?: string[]): FlaggedItem[] {
+    return flagOps.flaggedList(this, namespaces);
+  }
+
+  /** R2-02: a person keeps a flagged note: the flags on its current version are cleared. Returns how many. */
+  keepFlagged(id: number): number {
+    return flagOps.keepFlagged(this, id);
+  }
+
+  /** R2-08: record what happened to a writer's write (inside the action's own transaction). */
+  /** @internal */ recordWriterEvent(writer: string, event: WriterEvent, noteId: number | null): void {
+    reputationOps.recordWriterEvent(this, writer, event, noteId);
+  }
+
+  /** R2-08: per writer, the last `days` (30) of held, rejected, rolled-back, flag-upheld and replaced writes. Counts only. */
+  writerReputation(days?: number): Record<string, WriterCounts> {
+    return reputationOps.writerReputation(this, days);
+  }
+
+  /** R2-04: create, unless this writer's `clientKey` already made a note (then that note, deduplicated: true, no write). */
+  createOnce(input: NoteInput, clientKey: string | undefined, opts: Parameters<Store["create"]>[1] = {}): { note: NoteRecord; deduplicated?: true } {
+    return clientKeyOps.createOnce(this, input, clientKey, opts);
+  }
 
   /** Writer identities the flood guard paused (sorted). */
   pausedWriters(): string[] {

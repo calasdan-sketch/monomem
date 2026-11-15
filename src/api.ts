@@ -124,7 +124,7 @@ function cachedFor<T>(store: Store, key: string, fn: () => Promise<T>): Promise<
 }
 let scanIds = 0;
 import { SupersedeError, supersedePreview, supersedeConfirm, supersedeUndo, noteHistory, restoreVersion, purgeNoteHistory, type Caller } from "./supersede.js";
-import { withFacts, factFeedback } from "./facts.js";
+import { withFacts, factFeedback, withDisputes, listWithDisputes } from "./facts.js";
 import { isBusyError } from "./restore.js";
 import { heldEditDiff } from "./line-diff.js";
 import { assertPlainWriteTags, assertReviewedTag } from "./reserved-tags.js";
@@ -194,7 +194,7 @@ function requiredScope(method: string | undefined, path: string): Scope {
 // a generic 500 so SQL/internal details never leak to the client.
 // REST note bodies: a field Monomem does not know (a client sent `content` for `body`) used to be dropped, leaving an empty note.
 // written_by / created_by are accepted and ignored: the server stamps the writer from the token.
-const POST_NOTE_FIELDS = ["namespace", "title", "body", "tags", "source", "created_at", "forget_after", "confidence", "facts", "written_by", "created_by", "sensitivity", "outside", "derived_from"];
+const POST_NOTE_FIELDS = ["namespace", "title", "body", "tags", "source", "created_at", "forget_after", "confidence", "facts", "written_by", "created_by", "sensitivity", "outside", "derived_from", "client_key"];
 const PUT_NOTE_FIELDS = ["namespace", "title", "body", "tags", "source", "forget_after", "confidence", "if_rev", "facts", "written_by", "created_by", "sensitivity", "outside", "derived_from"];
 // Fields of a note the server returns. A client that GETs a note and PUTs it back whole sends these; they are ignored (never applied).
 // `rev` is ignored too: use `if_rev` for compare-and-swap.
@@ -203,7 +203,7 @@ const PUT_READ_ONLY_FIELDS = [
   "imported_unverified", "attested_writer", "attested_by", "attested_writer_id", "merged_from_writers", "distrusted", "confidence_claimed_by",
   "status", "superseded_by", "superseded_at", "superseded_by_writer", "access_count", "last_accessed", "expires_at", "archived_at",
   "pinned", "session_id", "obs_type", "stale", "ageDays", "staleWarning", "unreadable", "encrypted", "neighbors", "history", "files", "score", "breakdown",
-  "grandfathered_at", "approved_at", "approved_by", "confirmed_at", "confirmed_by", "confirmed_kind", "confirmed_rev", "unconfirmed", "unconfirmed_label", "expired", "expired_label", "built_on_distrusted", "built_on_distrusted_label",
+  "grandfathered_at", "approved_at", "approved_by", "confirmed_at", "confirmed_by", "confirmed_kind", "confirmed_rev", "unconfirmed", "unconfirmed_label", "expired", "expired_label", "built_on_distrusted", "built_on_distrusted_label", "disputed", "disputed_label", "flagged", "flagged_label",
 ];
 /** A 400 message naming the unknown top-level fields of a note body, or null when there are none. */
 export function unknownNoteFields(body: unknown, allowed: readonly string[], ignored: readonly string[] = []): string | null {
@@ -389,6 +389,8 @@ export function createApiServer(
   opts: ServerNamespaceOpts = {}
 ): Server {
   const tokens = normalizeTokens(token);
+  /** A note for a read reply: staleness and (R2-01) the dispute marker, computed inside the caller's request. */
+  const annotRead = (n: NoteRecord) => withDisputes(store, annotateStaleness(n) as NoteRecord);
   // Two buckets, neither of which lets garbage traffic lock out a valid
   // client sharing its IP (everyone behind one tunnel has the same socket IP):
   //  - authFailures: per client IP, counts FAILED authentications only
@@ -840,10 +842,22 @@ export function createApiServer(
           const { facts } = parsed as { facts?: unknown };
           delete (parsed as { facts?: unknown }).facts;
           parsed.tags = withFacts(parsed.tags, facts);
+          const { client_key: clientKey } = parsed as { client_key?: unknown };
+          delete (parsed as { client_key?: unknown }).client_key;
+          if (clientKey !== undefined && typeof clientKey !== "string") {
+            sendJson(res, 400, { error: "client_key must be a string" });
+            return;
+          }
           const warnings: LintFinding[] = [];
           store.takeWriteReceipt(); // drop a decision left by an earlier call
-          const note = store.create(parsed, { lintWarnings: warnings });
+          const once = store.createOnce(parsed, clientKey, { lintWarnings: warnings });
           const receipt = store.takeWriteReceipt(); // R2-06, read before any await
+          // R2-04: a retry with a known key wrote nothing; 200 with the note the first write made.
+          if (once.deduplicated) {
+            sendJson(res, 200, { note: once.note, deduplicated: true });
+            return;
+          }
+          const note = once.note;
           await maybeEmbed(store, note);
           const sim = store.similarNote(note.id);
           sendJson(res, 201, { note, ...(receipt ? { receipt } : {}), ...(sim ? { similar_note: { id: sim.id, title: sim.title, hint: `looks similar to #${sim.id} - consider updating it (PUT /notes/${sim.id}) if this is the same thing` } } : {}), ...(warnings.length ? { warnings } : {}), ...(facts === undefined ? {} : factFeedback(store, note)) });
@@ -887,7 +901,7 @@ export function createApiServer(
         // Round edge scores to 3 decimals for readability (stored raw in
         // SQLite), mirroring the MCP state_read tool. Neighbor entries
         // already carry their staleness fields (annotated in Store.read).
-        const base = annotateStaleness(note);
+        const base = annotRead(note);
         const outNote = note.neighbors
           ? {
               ...base,
@@ -999,6 +1013,37 @@ export function createApiServer(
           // No title in the reply: to the caller (an agent's key, or the dashboard that already shows it) it is outside text.
           const { title: _title, ...reply } = r;
           sendJson(res, 200, reply);
+        } catch (e) {
+          sendError(res, e);
+        }
+        return;
+      }
+
+      // POST /notes/:id/flag { reason } -> 1.5.0 (R2-02) "this looks wrong". The note does not change. Same rules as the
+      // memory_flag tool: own namespace only, a hidden note is 404 like a missing one.
+      const flagMatch = /^\/notes\/(\d+)\/flag$/.exec(path);
+      if (req.method === "POST" && flagMatch) {
+        const id = Number(flagMatch[1]);
+        let body: { reason?: unknown };
+        try {
+          body = JSON.parse((await readBody(req)) || "{}") as { reason?: unknown };
+        } catch {
+          sendJson(res, 400, { error: "invalid JSON body" });
+          return;
+        }
+        const bad = unknownNoteFields(body, ["reason"]);
+        if (bad) {
+          sendJson(res, 400, { error: bad });
+          return;
+        }
+        try {
+          if (nsCtx.active && !denyUnwritable(nsCtx, res, store.read(id))) return; // gate-ok: namespace probe; flagNote re-reads through readVisible
+          const r = store.flagNote(id, body.reason);
+          if (!r) {
+            sendJson(res, 404, { error: "not found" });
+            return;
+          }
+          sendJson(res, 200, { flagged: true, id: r.note_id, rev: r.rev });
         } catch (e) {
           sendError(res, e);
         }
@@ -1476,18 +1521,18 @@ export function createApiServer(
               archivedOnly,
               ...wf,
             });
-            sendJson(res, 200, { ...result, searchedNamespaces: [hint] });
+            sendJson(res, 200, { ...listWithDisputes(store, result), searchedNamespaces: [hint] });
             return;
           }
           sendJson(res, 200, {
-            ...listReadable(
+            ...listWithDisputes(store, listReadable(
               nsCtx,
               limit,
               offset,
               includeArchived,
               archivedOnly,
               wf
-            ),
+            )),
             searchedNamespaces: readable(nsCtx),
           });
           return;
@@ -1501,7 +1546,7 @@ export function createApiServer(
           ...wf,
         });
         sendJson(res, 200, {
-          ...result,
+          ...listWithDisputes(store, result),
           searchedNamespaces: namespace ? [namespace] : [],
         });
         return;
@@ -1549,7 +1594,7 @@ export function createApiServer(
         // Shape a hit for the wire: staleness annotation always, breakdown
         // only when explain=1. Shared by all three namespace branches.
         const shapeHit = (n: NoteRecord, breakdown?: unknown): Record<string, unknown> => ({
-          ...annotateStaleness(n),
+          ...annotRead(n),
           ...(breakdown !== undefined ? { breakdown } : {}),
         });
         const toResults = (hits: ExplainedHit[]): Record<string, unknown>[] =>
@@ -1580,7 +1625,7 @@ export function createApiServer(
             }
             const results = await runSearch(store, q, { ...searchOpts, namespace: hint });
             sendJsonN(res, 200, {
-              results: results.map((n) => annotateStaleness(n)),
+              results: results.map((n) => annotRead(n)),
               timeRange: timePhrase ? timePhrase.label : null,
               searchedNamespaces: [hint],
             });
@@ -1609,7 +1654,7 @@ export function createApiServer(
             lists.push(await runSearch(store, q, { ...searchOpts, namespace: ns }));
           }
           sendJsonN(res, 200, {
-            results: roundRobin(lists, lim).map((n) => annotateStaleness(n)),
+            results: roundRobin(lists, lim).map((n) => annotRead(n)),
             timeRange: timePhrase ? timePhrase.label : null,
             searchedNamespaces: readable(nsCtx),
           });
@@ -1634,7 +1679,7 @@ export function createApiServer(
         }
         const results = await runSearch(store, q, singleOpts);
         sendJsonN(res, 200, {
-          results: results.map((n) => annotateStaleness(n)),
+          results: results.map((n) => annotRead(n)),
           timeRange: timePhrase ? timePhrase.label : null,
           searchedNamespaces: namespace ? [namespace] : [],
         });
@@ -1690,7 +1735,7 @@ export function createApiServer(
         // vague-message path is the most likely to act on outdated facts).
         const withStaleness = (r: { keywords: string[]; results: NoteRecord[] }) => ({
           keywords: r.keywords,
-          results: r.results.map((n) => annotateStaleness(n)),
+          results: r.results.map((n) => annotRead(n)),
         });
         if (nsCtx.active) {
           // Untrusted hint intersected with the readable set, like GET
@@ -1725,7 +1770,7 @@ export function createApiServer(
           const lim = clampInt(relLimit, 10, 1, 200);
           sendJson(res, 200, {
             keywords,
-            results: roundRobin(lists, lim).map((n) => annotateStaleness(n)),
+            results: roundRobin(lists, lim).map((n) => annotRead(n)),
             searchedNamespaces: readable(nsCtx),
           });
           return;

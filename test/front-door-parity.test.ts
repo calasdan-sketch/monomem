@@ -218,3 +218,85 @@ describe("R2-06: REST and MCP give the same write receipt decision", () => {
     }
   });
 });
+
+describe("R2-01: REST and MCP mark a disputed note the same way", () => {
+  test("GET /notes/:id and state_read carry the same disputed list, for every caller kind", async () => {
+    const w = seed();
+    const a = as("good", () => w.s.create({ namespace: "work", title: "fly", body: "z", tags: ["fact:deploy_target=fly"] })).id;
+    as("other", () => w.s.create({ namespace: "work", title: "render", body: "z", tags: ["fact:deploy_target=render"] }));
+    as("evil", () => w.s.create({ namespace: "work", title: "heroku", body: "z", tags: ["fact:deploy_target=heroku"] })); // distrusted: no side
+    const io = await surfaces(w);
+    try {
+      for (const who of Object.keys(SCOPE) as Who[]) {
+        const r = JSON.parse((await io.rest(who, "GET", `/notes/${a}`)).text).note.disputed;
+        const m = await io.mcp(who, "state_read", { id: a });
+        const mj = JSON.parse(JSON.parse(m.text).content[0].text.replace(/^[^{]*/, "")).note.disputed;
+        assert.deepEqual(r, mj, who);
+        assert.deepEqual(r.map((d: { value: string }) => d.value), ["render"], who);
+      }
+    } finally {
+      await io.close();
+    }
+  });
+});
+
+describe("R2-02: REST and MCP decide a flag the same way", () => {
+  // [caller, note key, expected decision, text that must not appear in either reply]
+  type Row = [Who, keyof World["ids"] | "missing", boolean, string];
+  const rows: Row[] = [
+    ["writer", "work", true, ""],
+    ["writer", "hidden", false, "EVILNOTE"], // a distrusted writer's note reads as missing
+    ["writer", "archived", false, ""],
+    ["writer", "missing", false, ""],
+    ["pinned-writer", "work", true, ""],
+    ["pinned-writer", "shared", false, "shared note"], // a read grant never lets it change another namespace's session start
+  ];
+  test("the table, through POST /notes/:id/flag and memory_flag", async () => {
+    for (const [who, key, want, secret] of rows) {
+      const w = seed();
+      const id = key === "missing" ? 9999 : w.ids[key];
+      const io = await surfaces(w);
+      try {
+        const r = await io.rest(who, "POST", `/notes/${id}/flag`, { reason: "looks wrong" });
+        const m = await io.mcp(who, "memory_flag", { id, reason: "looks wrong" });
+        const label = `${who} ${key}`;
+        assert.equal(r.ok, want, `REST ${label}: ${r.text.slice(0, 200)}`);
+        assert.equal(m.ok, want, `MCP ${label}: ${m.text.slice(0, 200)}`);
+        if (secret) for (const t of [r.text, m.text]) assert.ok(!t.includes(secret), `${label} leaked ${secret}`);
+      } finally {
+        await io.close();
+      }
+    }
+  });
+});
+
+describe("R2-04: REST and MCP handle client_key the same way", () => {
+  // [caller, first write's key, retry's key, the retry is deduplicated?]
+  type Row = [Who, string, string, boolean];
+  const rows: Row[] = [
+    ["writer", "k1", "k1", true],
+    ["writer", "k1", "k2", false],
+    ["pinned-writer", "k1", "k1", true],
+  ];
+
+  test("the table, through POST /notes and state_write", async () => {
+    for (const [who, first, retry, dedup] of rows) {
+      const w = seed();
+      const io = await surfaces(w);
+      try {
+        const label = `${who} ${first}/${retry}`;
+        const body = { title: "keyed note", body: "b", namespace: "work" };
+        await io.rest(who, "POST", "/notes", { ...body, client_key: first });
+        const r = await io.rest(who, "POST", "/notes", { ...body, client_key: retry });
+        // Same writer label on both surfaces: MCP finds the key the REST write recorded.
+        const m = await io.mcp(who, "state_write", { ...body, client_key: retry });
+        assert.ok(r.ok && m.ok, `${label}: ${r.text.slice(0, 200)} ${m.text.slice(0, 200)}`);
+        assert.equal(/"deduplicated":\s*true/.test(r.text), dedup, `REST ${label}`);
+        assert.equal(/deduplicated\\?":\s*true/.test(m.text), true, `MCP ${label}: the retry key is known by now`);
+        assert.equal((await io.mcp(who, "state_write", { id: w.ids.work, body: "z", client_key: "k9" })).ok, false, "a key with an id");
+      } finally {
+        await io.close();
+      }
+    }
+  });
+});

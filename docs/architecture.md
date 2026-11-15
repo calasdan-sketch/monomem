@@ -59,7 +59,7 @@ immediately visible through the others:
   `rev` for compare-and-swap, a provenance `source`, tags, and namespaces.
 - **`src/api.ts`** — a small HTTP/JSON API + a built-in web dashboard, on
   plain `node:http` (no framework).
-- **`src/mcp-server-core.ts`** — the transport-agnostic MCP server with thirty-six tools, nine of them registered by default (see MONOMEM_TOOLS),
+- **`src/mcp-server-core.ts`** — the transport-agnostic MCP server with thirty-seven tools, nine of them registered by default (see MONOMEM_TOOLS),
   tools, shared by both MCP transports.
 - **`src/mcp-stdio.ts`** — stdio entry point for local Claude Code / Desktop
   / editors.
@@ -113,6 +113,7 @@ immediately visible through the others:
 | `memory_supersede_confirm` | write | Step 2: replaces the previewed notes, only with the preview's code (once, in time, for the same caller). Nothing is deleted. A RED FLAG also needs an admin and `acknowledge_risk` |
 | `memory_supersede_undo` | write | Bring a replaced note back (recorded) |
 | `memory_confirm` | write | Confirm a note from outside content against a named source. Counts only for a different writer with its own key, a different source, and no earlier read of the note; corroboration, not verification. Lets the note back into session start, never lets it be pinned. Not in the default set ([trust.md](./trust.md)) |
+| `memory_flag` | write | Flag a note that looks wrong, with a one-line reason; the note does not change. A note no person confirmed leaves session start until a person keeps it (`monomem review keep <id>`) or replaces it; a person-confirmed note stays, labelled. Own-note flags refused, distrusted writers' flags ignored, 20 a day. Not in the default set ([trust.md](./trust.md#agent-flags-150)) |
 | `memory_history` | admin | Earlier versions of a note (bounded per note) |
 | `memory_restore_version` | admin | Put an earlier version back as a new version (`if_rev` supported) |
 | `memory_history_purge` | admin | Forget a note's earlier versions (cannot be undone) |

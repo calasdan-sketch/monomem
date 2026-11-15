@@ -152,13 +152,21 @@ export function expiredCountLine(n: number, days: number): string {
 }
 
 /** The text labels for a note's 1.4.0 flags, each with a leading space ("" when none). */
-export function noteFlags(n: { unconfirmed_label?: string; expired_label?: string; built_on_distrusted_label?: string }): string {
-  return [n.unconfirmed_label, n.expired_label, n.built_on_distrusted_label].filter(Boolean).map((l) => ` ${l}`).join("");
+export function noteFlags(n: { unconfirmed_label?: string; expired_label?: string; built_on_distrusted_label?: string; flagged_label?: string }): string {
+  // flagged_label names the flaggers only; the reason (agent text) is never part of a label.
+  return [n.unconfirmed_label, n.expired_label, n.built_on_distrusted_label, n.flagged_label].filter(Boolean).map((l) => ` ${l}`).join("");
 }
 
-/** Kept out of session start: unconfirmed outside content, a note built on a distrusted writer, an expired note in enforce mode. */
-export function heldFromSessionStart(n: { unconfirmed?: true; built_on_distrusted?: true; expired?: true }, enforce: boolean): boolean {
-  return n.unconfirmed === true || n.built_on_distrusted === true || (enforce && n.expired === true);
+/**
+ * Kept out of session start: unconfirmed outside content, a note built on a distrusted writer, an expired note in enforce mode,
+ * and (1.5.0 R2-02) a flagged note no person confirmed for its current version.
+ */
+export function heldFromSessionStart(
+  n: { unconfirmed?: true; built_on_distrusted?: true; expired?: true; flagged?: unknown[]; rev?: number; confirmed_kind?: string; confirmed_rev?: number },
+  enforce: boolean
+): boolean {
+  const flaggedUnconfirmed = Array.isArray(n.flagged) && n.flagged.length > 0 && !(n.confirmed_kind === "human" && n.confirmed_rev === n.rev);
+  return n.unconfirmed === true || n.built_on_distrusted === true || (enforce && n.expired === true) || flaggedUnconfirmed;
 }
 
 // ---- notes a connection read while they were unconfirmed ------------------------------------------------------------

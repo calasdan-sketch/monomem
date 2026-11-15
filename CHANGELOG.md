@@ -77,6 +77,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `monomem show`, `ls` and `why` print the trust state: unconfirmed, expired and built-on-distrusted labels, a plain origin
   line, confirmations (counted or not, and why) and who approved a held write. `ls --archived` includes notes kept as history.
 - `monomem review --step`: one typed yes, then y / n / q per note.
+- **Disputed facts are marked on every read**, not only at session start: a note whose fact another writer's live note
+  contradicts carries `disputed` (who says what, and whether a person confirmed it) on REST and MCP reads, searches, lists
+  and `memory_get` / `memory_index`; MCP shows a `DISPUTED key: #id says "value"` line. A side a person confirmed is listed
+  first and the other side is labelled "disputed by a confirmed note". Nothing is hidden, and a note the reader may not see
+  is never named. See docs/search.md.
+- **Agents can flag a note that looks wrong** instead of overwriting it: `memory_flag` (opt-in with `MONOMEM_TOOLS`) and
+  `POST /notes/:id/flag`, with a one-line reason. The note does not change. A flagged note no person confirmed leaves session
+  start; a person-confirmed note stays, labelled. Own-note flags are refused, distrusted writers' flags ignored, 20 a day per
+  writer. `monomem review` lists flagged notes; `monomem review keep <id>` keeps one. The reason is never shown at session
+  start. See docs/trust.md.
+- `monomem trust` shows each writer's record for the last 30 days: writes held by the linter, rejected by a person, rolled
+  back, flags upheld and replaced by someone else. Counts only: nothing is held or hidden because of them.
+- **Retry-safe note writes:** `client_key` on `state_write` and `POST /notes` (as tasks already had). A retry with the same key
+  from the same writer gets back the note the first write made (`deduplicated: true`; REST answers 200 instead of 201) and
+  writes nothing, so it does not count toward the flood guard. Keys are per writer and stored hashed. Not covered: a write
+  that was held for approval is held again on retry.
 - Line-by-line diff of what changes in `supersede preview`, `quarantine show` and the dashboard.
 - `monomem service install | status | uninstall` (Windows Task Scheduler, macOS LaunchAgent, Linux systemd user unit; never
   run by setup) and `start --log` writing a rotated `server.log`.
@@ -112,6 +128,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A 64 MB page-cache cap, a once-per-database check for old ciphertext, fewer counts at session start, an id-only profile
   step, one file open per audit line and a change feed that pages in constant time. On a 10,000-note encrypted store,
   session start went from about 108 ms to about 13 ms (measured on the development machine).
+- Database schema v22 (still one upgrade from 1.3.x, backup at `<database>.pre-v22-backup`): a redundant similarity-link
+  index is dropped (less work per write) and a live-notes index makes the unfiltered note count cheap.
 
 ## [1.4.0] - 2026-11-13
 
