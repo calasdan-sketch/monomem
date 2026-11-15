@@ -484,11 +484,13 @@ server is older than the CLI). The service files were generated and checked by t
 machine, so run `monomem service status` once and reboot once.
 
 - Windows: the task starts when you sign in, in a console window; minimise it (closing it stops Monomem until Task
-  Scheduler restarts it, within a minute). It uses the `MONOMEM_*` variables saved for your user (`setx`), not ones set
-  only in the terminal you installed from.
-- macOS and Linux: the unit carries the data folder in use when you installed it, plus any `MONOMEM_PORT`,
+  Scheduler restarts it, within a minute). The task runs `cmd.exe`, which sets the carried settings and then starts
+  `node.exe`. A value containing `%` or a quote cannot be carried; install says so, and you save that one with `setx`.
+- Every OS: the service carries the data folder in use when you installed it, plus any `MONOMEM_PORT`,
   `MONOMEM_MCP_PORT`, `MONOMEM_BIND`, `MONOMEM_ALLOWED_HOSTS`, `MONOMEM_DB_PATH` set then (never a key). On Linux,
   `loginctl enable-linger` keeps it running while you are logged out.
+- When `MONOMEM_BIND` is not loopback or `MONOMEM_ALLOWED_HOSTS` is set, install must be run by a person in a terminal
+  (it asks you to type yes); an agent's shell or a script is refused. `--print` is never gated.
 
 ### Linux: a system-wide systemd service
 

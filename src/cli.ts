@@ -4095,6 +4095,12 @@ async function main(): Promise<void> {
       const { DATA_DIR } = await import("./config.js");
       const { homedir } = await import("node:os");
       const { serviceCmd } = await import("./service.js");
+      // final-security SF4: a service that starts at every logon with a wider bind (or extra allowed hosts) is a lasting
+      // exposure an agent's shell must not set up on its own. A loopback-only service stays ungated.
+      const { isLoopback } = await import("./config.js");
+      if (rest[0] === "install" && !flags.print && (!isLoopback(process.env.MONOMEM_BIND?.trim() || "127.0.0.1") || process.env.MONOMEM_ALLOWED_HOSTS?.trim())) {
+        await requireOperator("service install (a background server reachable beyond this computer)");
+      }
       process.exitCode = serviceCmd(rest[0], flags.print === true, {
         platform: process.platform,
         node: process.execPath,

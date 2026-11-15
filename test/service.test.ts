@@ -26,8 +26,8 @@ describe("monomem service (U-16)", () => {
   test("Windows: a logon task whose action is the absolute node.exe with the absolute cli.js (never a .ps1/.cmd shim), restarted on failure", () => {
     const p = servicePlan(base("win32"));
     const cmd = /<Command>([^<]+)<\/Command>/.exec(p.file.text)![1];
-    assert.match(cmd, /^[A-Z]:\\.*\\node\.exe$/, "the action runs node.exe itself");
-    assert.match(p.file.text, /<Arguments>C:\\Users\\u\\AppData\\Roaming\\npm\\node_modules\\monomem\\dist\\src\\cli\.js start --log<\/Arguments>/);
+    assert.match(cmd, /^[A-Z]:\\.*\\cmd\.exe$/i, "cmd.exe sets the carried settings, then runs node.exe");
+    assert.match(p.file.text, /&amp;&amp; "C:\\Program Files\\nodejs\\node\.exe" C:\\Users\\u\\AppData\\Roaming\\npm\\node_modules\\monomem\\dist\\src\\cli\.js start --log<\/Arguments>/);
     assert.doesNotMatch(p.file.text, /\.ps1|\.cmd|monomem\.exe/);
     assert.match(p.file.text, /<LogonTrigger>/);
     assert.match(p.file.text, /<RestartOnFailure>/);
@@ -37,7 +37,39 @@ describe("monomem service (U-16)", () => {
     assert.deepEqual(p.uninstall.at(-1), ["schtasks", "/Delete", "/TN", "Monomem", "/F"]);
     // A path with a space is quoted in the arguments.
     const spaced = servicePlan(base("win32", { cli: "C:\\My Apps\\monomem\\dist\\src\\cli.js" }));
-    assert.match(spaced.file.text, /<Arguments>"C:\\My Apps\\monomem\\dist\\src\\cli\.js" start --log<\/Arguments>/);
+    assert.match(spaced.file.text, / "C:\\My Apps\\monomem\\dist\\src\\cli\.js" start --log<\/Arguments>/);
+  });
+
+  test("Windows (release-gate S1): the task carries MONOMEM_HOME and the other settings, like macOS and Linux; no key", () => {
+    const p = servicePlan(base("win32", { dataDir: "D:\\My Data & more\\mm", env: { MONOMEM_PORT: "9000", MONOMEM_TOKEN: "secret-should-not-appear", ComSpec: "C:\\Windows\\system32\\cmd.exe" } }));
+    const args = /<Arguments>([^<]+)<\/Arguments>/.exec(p.file.text)![1];
+    assert.equal(/<Command>([^<]+)<\/Command>/.exec(p.file.text)![1], "C:\\Windows\\system32\\cmd.exe");
+    assert.ok(args.startsWith("/d /v:off /c "), args);
+    assert.ok(args.includes('set "MONOMEM_HOME=D:\\My Data &amp; more\\mm"&amp;&amp; '), args);
+    assert.ok(args.includes('set "MONOMEM_PORT=9000"&amp;&amp; '), args);
+    assert.doesNotMatch(p.file.text, /secret-should-not-appear|MONOMEM_TOKEN/);
+    // A value cmd would change (% expands even inside quotes) is not carried; the note says so.
+    const pct = servicePlan(base("win32", { env: { MONOMEM_ALLOWED_HOSTS: "a%PATH%b" } }));
+    assert.doesNotMatch(pct.file.text, /MONOMEM_ALLOWED_HOSTS/);
+    assert.ok(pct.notes.some((n) => /MONOMEM_ALLOWED_HOSTS/.test(n) && /setx/.test(n)), pct.notes.join("\n"));
+  });
+
+  test("final-security SF4: install with a non-loopback bind needs a person at a terminal (refused from a script, nothing run)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "mm-svc-gate-"));
+    try {
+      // PATH is an empty folder: even if the gate failed, no schtasks/launchctl/systemctl could be found and run.
+      const env = { ...process.env, PATH: dir, Path: dir, HOME: dir, USERPROFILE: dir, MONOMEM_HOME: join(dir, "data"), XDG_CONFIG_HOME: join(dir, ".config"), MONOMEM_BIND: "0.0.0.0" };
+      const r = spawnSync(process.execPath, ["--no-warnings", CLI, "service", "install"], { env, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+      assert.equal(r.status, 1, r.stdout);
+      assert.match(r.stderr, /Refused: service install/);
+      for (const f of [join(dir, "data", "monomem-task.xml"), join(dir, "Library", "LaunchAgents", "io.monomem.server.plist"), join(dir, ".config", "systemd", "user", "monomem.service")]) {
+        assert.equal(existsSync(f), false, `wrote ${f}`);
+      }
+      const print = spawnSync(process.execPath, ["--no-warnings", CLI, "service", "install", "--print"], { env, encoding: "utf8" });
+      assert.equal(print.status, 0, "--print changes nothing, so it is not gated");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("macOS: a LaunchAgent with absolute node + cli.js, KeepAlive, and the data folder; no key in it", () => {
