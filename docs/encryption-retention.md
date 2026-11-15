@@ -30,8 +30,10 @@ This is the part most tools omit, so read it before enabling:
 | **Tags**, timestamps, namespace | No | Same: filtering, search and isolation read them directly |
 | Access counters | No | Ranking input; not sensitive |
 | **Embeddings** (`note_vectors`) | No | Vectors are stored unencrypted, and with `MONOMEM_EMBEDDINGS=on` the **decrypted body is sent to your embeddings endpoint** when a note is embedded. Leave semantic search off if that matters |
-| **Captured session titles and tags** (automatic capture) | No | Monomem writes these itself from the session: a "Decision: ..." or "Session: ..." title can repeat words from your prompt, `obs.concept:<word>` tags are words from it, and edited file paths are kept as they are. A secret you paste into a prompt is redacted only when it has a known secret shape. Turn capture off (`monomem setup --no-capture`) if your prompts carry sensitive text |
-| **Capture spool** (`capture-spool.jsonl` in the data folder) | No | Hook events wait there in plain JSON until the server takes them in |
+| **Captured session titles and tags** (automatic capture) | Kept out of them (1.5.0) | With a key present, a captured note gets a fixed title ("Decision (sealed)", "Session 2026-11-14"), the sentence it was built from goes into the sealed body, and no `obs.concept:<word>` tags are made. Notes captured **before** the key existed, or by a version before 1.5.0, keep their old titles and tags: `encrypt enable` seals bodies, it does not rewrite titles |
+| **Captured file paths and working folders** (`note_files.path`, `sessions.cwd`) | No | The files a session edited or read, and the folder it ran in, are kept as plain paths so "what does memory know about this file" works. A secret in a file or folder name stays readable |
+| **Capture spool** (`capture-spool.jsonl` in the data folder) | Yes, when a key exists (1.5.0) | Each waiting hook event is sealed and bound to its line id. Lines spooled before 1.5.0 or before the key existed stay plain JSON until the next hook takes them in |
+| Captured tool names, event times, the model name | No | Needed to list sessions; not your text |
 | **The FTS search index** | No — and **body text is not indexed at all** when encryption is on | See below |
 
 **The search tradeoff, stated plainly.** `notes_fts` is a SQLite
@@ -57,6 +59,16 @@ in addition to, not instead of, this.
   tag did not cover the note id or namespace, so ciphertext copied between
   rows still decrypted; 1.2.1 binds it to the row (see the CHANGELOG). A
   wrong/tampered key throws — it is never swallowed.
+- **Encryption gives confidentiality, not rollback protection.** Someone
+  who can write the database file but has no key (a database synced through
+  a cloud folder while the key stays local, for example) cannot read or
+  forge a body, but can put back an **older** sealed body of the same note
+  from any earlier copy of the file: it decrypts, because the seal binds the
+  note id and namespace, not its version. Held writes are bound to their own
+  queue row (1.5.0), so one cannot be moved into another. Access-log rows
+  are not bound to their row at all, so they can be reordered or swapped.
+  Keep the database where only you can write it; for git sync, see
+  [file-sync.md](./file-sync.md).
 - The key file is written via **temp file + atomic rename**, so a crash
   cannot leave a truncated key that silently fails to decrypt existing
   notes.

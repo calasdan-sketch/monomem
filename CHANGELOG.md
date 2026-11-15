@@ -24,6 +24,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   carries a key is refused (also with `--yes`); keyless entries are unchanged.
 - A reply from any route or tool that carries an unconfirmed note now marks the reader, and a test enumerates every route
   and tool so a new one cannot skip it (`memory_since` was one that did).
+- **With encryption on, automatic capture keeps your words out of plain text.** Captured notes get fixed titles ("Decision
+  (sealed)", "Session 2026-11-14"), the sentence goes into the sealed body, no `obs.concept:` word tags are made, and each
+  `capture-spool.jsonl` line is sealed. Notes captured before the key existed keep their old titles. File paths and working
+  folders stay plain text (docs/encryption-retention.md lists them).
+- **Held writes are sealed bound to their own queue row**, so one held body moved into another row no longer opens. Older
+  rows are still read. The docs now say plainly that encryption gives confidentiality, not rollback protection.
+- `MONOMEM_ENCRYPT=0` is no longer read: it only made `encrypt status` say "off" while writes were still sealed.
 
 ## [1.4.0] - 2026-11-13
 

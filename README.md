@@ -236,7 +236,7 @@ monomem setup --capture        # or answer y to "Also record what <agent> does i
   by `MONOMEM_LLM_TIMEOUT_MS`; the answer is redacted and linted like any write, and on any failure the automatic
   summary stays.
 - **Moves with your data:** export / import and the Markdown vault sync carry an observation's kind, session, type
-  and files; `monomem encrypt enable` seals the bodies of captured rows too (their titles, tags, file paths and the capture spool stay plain text: see [what is protected](https://github.com/calasdan-sketch/monomem/blob/main/docs/encryption-retention.md#what-is-protected-and-what-is-not)). Captured rows are left out of the stale
+  and files; `monomem encrypt enable` seals the bodies of captured rows too (with the key present they get fixed titles and no word tags, and the capture spool is sealed; file paths and working folders stay plain text: see [what is protected](https://github.com/calasdan-sketch/monomem/blob/main/docs/encryption-retention.md#what-is-protected-and-what-is-not)). Captured rows are left out of the stale
   count, `memory_stats` totals and consolidation.
 - **Old captured rows fade out:** an observation nobody updated or read for 30 days (`MONOMEM_DECAY_DAYS`; summaries
   180, `MONOMEM_DECAY_SUMMARY_DAYS`) is archived, never deleted, by the expiry sweep or at session end. Your own notes,

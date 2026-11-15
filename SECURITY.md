@@ -142,8 +142,16 @@ limits, stated plainly:
   ciphertext to its note id and namespace, so someone who could write to the
   SQLite file could copy ciphertext between rows. OneMemory 1.2.1 addresses this (see
   the CHANGELOG; confirm for the version you run).
+- **No rollback protection.** The binding covers the note id and namespace, not
+  its version: someone who can write the file but has no key can put back an
+  older sealed body of the same note from an earlier copy, and it reads as
+  current. Encryption here is confidentiality only. Access-log rows are not
+  bound to their row.
 - Quarantined (linter-held) writes are sealed too in OneMemory 1.2.1; in 1.2.0 they
-  were stored in plaintext.
+  were stored in plaintext. Monomem 1.5.0 binds each one to its own queue row.
+- Automatic capture with a key (Monomem 1.5.0): captured notes get fixed titles and
+  no word tags, and the capture spool is sealed. Captured file paths and working
+  folders stay plaintext.
 - `GET /export` returns decrypted bodies, so treat exports as sensitive.
 - Details: [docs/encryption-retention.md](./docs/encryption-retention.md).
 
