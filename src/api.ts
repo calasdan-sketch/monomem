@@ -858,7 +858,12 @@ export function createApiServer(
           const receipt = store.takeWriteReceipt(); // R2-06, read before any await
           // R2-04: a retry with a known key wrote nothing; 200 with the note the first write made.
           if (once.deduplicated) {
-            sendJson(res, 200, { note: once.note, deduplicated: true });
+            // final-security SF6: another writer may have changed the note since. Like MCP: no body; and an unconfirmed note
+            // marks this token as a read would (creating routes are otherwise exempt from read-taint).
+            const reads = actorRef?.taintedReads;
+            if (reads instanceof ReadTaint) for (const id of unconfirmedIdsIn(once.note)) reads.add(id);
+            const { body: _body, ...note } = once.note;
+            sendJson(res, 200, { note, deduplicated: true });
             return;
           }
           const note = once.note;

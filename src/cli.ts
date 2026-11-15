@@ -3522,9 +3522,13 @@ async function encryptCmd(): Promise<void> {
         console.log("Encryption here is confidentiality only: it does not stop an older sealed copy being put back. Whole-disk encryption covers titles, the index and logs too.");
         return;
       }
-      console.log(`encryption: ${enabled ? "on" : "off"}`);
+      const sealed = store.encryptedCount();
+      // final-security SF6: sealed bodies with no key is not "off": they cannot be read until the key is back.
+      console.log(
+        enabled ? "encryption: on" : sealed > 0 ? `encryption: on, but the key is missing: ${sealed} note bod${sealed === 1 ? "y" : "ies"} cannot be read (run: monomem doctor)` : "encryption: off"
+      );
       console.log(`key file:   ${keyFile}${enabled ? "" : " (not present)"}`);
-      console.log(`encrypted bodies: ${store.encryptedCount()}`);
+      console.log(`encrypted bodies: ${sealed}`);
       const plain = store.plaintextBodyCount();
       console.log(`plaintext bodies: ${plain}${enabled && plain > 0 ? "  (seal them: monomem encrypt enable)" : ""}`);
       if (enabled) {
