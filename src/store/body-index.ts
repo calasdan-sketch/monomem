@@ -94,10 +94,13 @@ export class BodyIndex {
     return Number((this.s.db.prepare("PRAGMA data_version").get() as { data_version: number }).data_version);
   }
 
-  /** Full build. False when it cannot run now (inside a caller's transaction: ATTACH is not allowed there) or is too large. */
+  /**
+   * Full build. False when it cannot run now or is too large. Never inside a caller's transaction: ATTACH is not allowed
+   * there, and a rollback would undo the table and the triggers while we believed them built.
+   */
   private build(): boolean {
     const db = this.s.db;
-    if (db.isTransaction && !this.attached) return false;
+    if (db.isTransaction) return false;
     const count = Number((db.prepare("SELECT COUNT(*) AS c FROM notes").get() as { c: number }).c);
     if (count > BODY_INDEX_MAX_NOTES) {
       this.tooLarge = true;
@@ -156,7 +159,10 @@ export class BodyIndex {
       this.ready = false;
       return this.build();
     }
-    this.dataVersion = v;
+    // Inside a caller's transaction the replay rolls back with it: replay, but keep our marks, so it is done again later
+    // (replaying a note twice is harmless).
+    const keep = !db.isTransaction;
+    if (keep) this.dataVersion = v;
     if (rows.length === 0) return true; // access counters and other non-note writes
     const del = db.prepare(`DELETE FROM ${TABLE} WHERE rowid = ?`);
     const ins = db.prepare(`INSERT INTO ${TABLE}(rowid, title, body, tags) SELECT id, title, om_index_body(id, namespace, body, body_enc), tags FROM notes WHERE id = ?`);
@@ -166,7 +172,7 @@ export class BodyIndex {
         ins.run(id);
       }
     });
-    this.watermark = Number(rows[rows.length - 1].seq);
+    if (keep) this.watermark = Number(rows[rows.length - 1].seq);
     return true;
   }
 

@@ -171,6 +171,26 @@ describe("C-06 encrypted body search (in-memory index)", () => {
       }
     }));
 
+  test("a catch-up made inside a transaction that rolls back is made again afterwards", () =>
+    withDirs((_pd, ed) => {
+      const s1 = encStore(ed);
+      const s2 = new Store(join(ed, "state.db"));
+      try {
+        s1.searchRanked("warm");
+        const n = s2.create({ title: "other", body: "an axolotl smiles", tags: [] });
+        assert.throws(() =>
+          s1.transaction(() => {
+            assert.deepEqual(ids(s1, "axolotl"), [n.id], "seen inside the transaction");
+            throw new Error("boom");
+          })
+        );
+        assert.deepEqual(ids(s1, "axolotl"), [n.id], "still seen after the rollback undid the replay");
+      } finally {
+        s1.close();
+        s2.close();
+      }
+    }));
+
   test("a body that cannot be decrypted never aborts a write; it is counted and the rest stay searchable", () =>
     withDirs((_pd, ed) => {
       const s = encStore(ed);
