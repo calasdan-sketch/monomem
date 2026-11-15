@@ -214,6 +214,11 @@ upgrading from 1.3.x takes one step (docs/upgrading.md).
   the write transaction). Approve, keep and reject of a held write are race-safe, and a damaged held write refuses to be
   cleared instead of half-applying.
 - `quarantine` context lists every note saved since the hold, not only the newest 500.
+- `doctor` names the right old program for each old-style setting it maps: `ONEMEMORY_*` (from OneMemory),
+  `CLAUDE_BRIDGE_*` (from claude-bridge). It used to call them all claude-bridge. Both old names still work.
+- Windows `service install`: the task no longer breaks when the data folder holds a `%` (so it is left out of the task)
+  and the cli.js path holds a space. The task now always sets `MONOMEM_SERVICE=1` first, so cmd.exe keeps the quotes.
+- `monomem bench --help` and `help --all` name all five suites (including `poison`) and the retrieval `--split a|b`.
 
 ### Performance
 

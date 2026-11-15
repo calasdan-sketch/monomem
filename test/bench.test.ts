@@ -715,6 +715,11 @@ describe("the command line", () => {
     assert.match(h.stdout, /provenance benchmark/);
     const main = spawnSync(process.execPath, [cli, "help", "--all"], { env: env(), encoding: "utf8", timeout: 60000 });
     assert.match(main.stdout, /\n  bench /);
+    // Every suite and the retrieval --split are named in both helps (they are the same lines).
+    for (const out of [h.stdout, main.stdout]) {
+      for (const s of SUITES) assert.ok(out.includes(s), `help names the ${s} suite`);
+      assert.match(out, /--split a\|b/);
+    }
   });
 
   test("an unknown option is a usage error (exit 2) with a hint", () => {

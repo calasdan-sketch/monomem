@@ -14,7 +14,7 @@ import { Store, type ImportNote, type ImportReport } from "../src/store.js";
 import { actorStore } from "../src/actor.js";
 import { createApiServer } from "../src/api.js";
 import { createMcpServer } from "../src/mcp-server-core.js";
-import { putTask, writeHandoff } from "../src/tasks.js";
+import { putTask } from "../src/tasks.js";
 import { exportMarkdown } from "../src/sync.js";
 import { distrustSql, mergedHasSql, matchesDistrust, MAX_TAINT_NAMES, type DistrustRule } from "../src/trust.js";
 import { backupStore } from "../src/backup.js";

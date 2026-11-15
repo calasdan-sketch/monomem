@@ -54,6 +54,16 @@ describe("monomem service (U-16)", () => {
     assert.ok(pct.notes.some((n) => /MONOMEM_ALLOWED_HOSTS/.test(n) && /setx/.test(n)), pct.notes.join("\n"));
   });
 
+  test("Windows: with every setting skipped (a % in the data folder), the command after /c still does not start with a quote", () => {
+    // cmd /c strips the first and last quote of a line that starts with one and holds more than two: a quoted node.exe
+    // plus a quoted cli.js path with a space would then break the task.
+    const p = servicePlan(base("win32", { dataDir: "C:\\Users\\u\\100%data", cli: "C:\\My Apps\\monomem\\dist\\src\\cli.js" }));
+    const args = /<Arguments>([^<]+)<\/Arguments>/.exec(p.file.text)![1];
+    assert.doesNotMatch(args, /MONOMEM_HOME/);
+    assert.ok(!/\/c "/.test(args), args);
+    assert.ok(args.includes('"C:\\Program Files\\nodejs\\node.exe" "C:\\My Apps\\monomem\\dist\\src\\cli.js" start --log'), args);
+  });
+
   test("final-security SF4: install with a non-loopback bind needs a person at a terminal (refused from a script, nothing run)", () => {
     const dir = mkdtempSync(join(tmpdir(), "mm-svc-gate-"));
     try {

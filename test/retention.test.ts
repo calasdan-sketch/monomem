@@ -75,7 +75,7 @@ describe("retention: TTL on write + sweep", () => {
   test("sweep is idempotent (does not re-archive or double-count)", () => {
     const { store, dir } = freshStore();
     try {
-      const note = store.create({ title: "t", body: "b", forget_after: 1 });
+      store.create({ title: "t", body: "b", forget_after: 1 });
       const future = Date.now() + 3 * DAY_MS;
       assert.equal(store.sweepExpired(future), 1);
       assert.equal(store.sweepExpired(future), 0, "second sweep finds nothing new");

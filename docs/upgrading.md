@@ -133,9 +133,12 @@ distrust list and writer labels are the stable part. See [trust.md](./trust.md).
 Run `monomem doctor` afterwards: it lists the pre-migration copies with size and age, and warns about
 leftover `.partial` files.
 
-## Rolling back
+## Rolling back (older versions: OneMemory 1.4.x and the v19 upgrade)
 
-To roll back:
+> **On Monomem 1.4.0 or 1.5.0?** This section is not for you. Follow "To go back to 1.3.x" in
+> [Monomem 1.4.0 and 1.5.0](#monomem-140-and-150-database-schema-v19-to-v22) (it restores `<database>.pre-v22-backup`).
+
+To roll back an older upgrade:
 
 Stop every Monomem process (server, MCP clients, runners, the CLI). **Move** `<database>.pre-v19-backup`
 over the database (a copy would leave the original; remove the `-wal` and `-shm` files next to it),

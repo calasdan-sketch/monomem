@@ -5,7 +5,7 @@ import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file r
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, renameSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, renameSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";

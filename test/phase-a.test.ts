@@ -338,7 +338,6 @@ describe("A3: connect / open / setup", () => {
 });
 
 // ---- A4: plain-language errors and CLI polish --------------------------------------------------------------------------
-import { DatabaseSync } from "node:sqlite";
 import { describeDbFailure } from "../src/db-problem.js";
 import { createMcpServer } from "../src/mcp-server-core.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";

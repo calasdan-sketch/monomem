@@ -289,7 +289,6 @@ describe("REST API: isolation holds under CONCURRENT requests", () => {
     const ops: Array<Promise<{ token: string; namespace: string }>> = [];
     for (let i = 0; i < 24; i++) {
       const tok = i % 2 === 0 ? WORK : PERSONAL;
-      const expectNs = i % 2 === 0 ? "work" : "personal";
       ops.push(
         fetch(`${baseUrl}/notes`, {
           method: "POST",
