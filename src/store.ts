@@ -1559,6 +1559,15 @@ export interface DecayCandidate {
   idleDays: number;
 }
 
+/** A row the similarity-edge rebuild reads (P6). */
+interface EdgeRow {
+  rev: number;
+  namespace: string;
+  title: string;
+  body: string;
+  body_enc: string | null;
+}
+
 /** _meta key: this database was checked for pre-1.2.1 (v1) ciphertext with a key present (P2). */
 const V1_CHECKED = "v1_envelopes_checked";
 
@@ -6169,15 +6178,29 @@ export class Store {
     );
     for (const id of [...idx.revs.keys()]) if (!live.has(id)) dropFromIndex(idx, id);
     const changed = [...live].filter(([id, rev]) => idx!.revs.get(id) !== rev).map(([id]) => id);
-    const fetch = this.db.prepare("SELECT id, rev, title, body FROM notes WHERE id = ?");
+    const fetch = this.db.prepare("SELECT id, rev, namespace, title, body, body_enc FROM notes WHERE id = ?");
     for (const id of changed) {
-      const r = fetch.get(id) as { rev: number; title: string; body: string } | undefined;
+      const r = fetch.get(id) as EdgeRow | undefined;
       dropFromIndex(idx, id);
-      if (r) addToIndex(idx, id, Number(r.rev), termFreq(tokenize(`${r.title} ${r.body}`)));
+      if (r) addToIndex(idx, id, Number(r.rev), termFreq(tokenize(this.edgeText(id, r))));
     }
     idx.ver = ver;
     this.evictEdgeIndexes(namespace);
     return idx;
+  }
+
+  /**
+   * 1.5.0 (round 2, P6): the text a note's similarity is scored on. With encryption on, `body` is empty and the text is in
+   * body_enc, so it is decrypted here exactly as a live write scores it (noteWritten gets the plaintext). Only scores are
+   * kept, never text. A row that will not decrypt is scored on its title, so one bad row does not stop the rebuild.
+   */
+  private edgeText(id: number, r: EdgeRow): string {
+    if (!r.body_enc) return `${r.title} ${r.body}`;
+    try {
+      return `${r.title} ${decryptIfEncrypted(r.body_enc, this.readKey(), noteAad(id, r.namespace))}`;
+    } catch {
+      return r.title;
+    }
   }
 
   /** Live (not archived) notes in a namespace; remembered for a minute because it is asked on every write to a big one. */
@@ -6220,7 +6243,7 @@ export class Store {
       this.db.prepare("SELECT id FROM notes WHERE namespace = ? AND archived_at IS NULL ORDER BY id").all(namespace) as Array<{ id: number }>
     ).map((r) => Number(r.id));
     const idx: NsEdgeIndex = { ver: -1, used: Date.now(), revs: new Map(), tf: new Map(), tfNorm: new Map(), postings: new Map() };
-    const fetch = this.db.prepare("SELECT rev, title, body FROM notes WHERE id = ? AND archived_at IS NULL");
+    const fetch = this.db.prepare("SELECT rev, namespace, title, body, body_enc FROM notes WHERE id = ? AND archived_at IS NULL");
     let i = 0;
     const step = (): void => {
       if (this.closed) return;
@@ -6228,8 +6251,8 @@ export class Store {
       const until = performance.now() + sliceMs;
       try {
         while (i < ids.length && performance.now() < until) {
-          const r = fetch.get(ids[i]) as { rev: number; title: string; body: string } | undefined;
-          if (r) addToIndex(idx, ids[i], Number(r.rev), termFreq(tokenize(`${r.title} ${r.body}`)));
+          const r = fetch.get(ids[i]) as EdgeRow | undefined;
+          if (r) addToIndex(idx, ids[i], Number(r.rev), termFreq(tokenize(this.edgeText(ids[i], r))));
           i++;
         }
       } catch {
