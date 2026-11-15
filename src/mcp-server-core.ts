@@ -830,9 +830,13 @@ export function createMcpServer(
           .describe(
             "Ids of the notes this one was built from (at most 20). Links are only ever added, never removed. A note built from an unconfirmed note is marked unconfirmed too."
           ),
+        client_key: z
+          .string()
+          .optional()
+          .describe("Idempotency key for creating (any unique string you invent, e.g. a UUID): a retry with the same key returns the note the first write made (deduplicated:true) instead of a duplicate."),
       },
     },
-    async ({ id, namespace, title: givenTitle, body, tags: plainTags, facts, source, if_rev, forget_after, confidence, sensitivity, outside, derived_from }) => {
+    async ({ id, namespace, title: givenTitle, body, tags: plainTags, facts, source, if_rev, forget_after, confidence, sensitivity, outside, derived_from, client_key }) => {
       const warnings: LintFinding[] = [];
       let title = givenTitle;
       let tags = plainTags;
@@ -846,6 +850,7 @@ export function createMcpServer(
           assertPlainWriteTags(tags, undefined);
           assertReviewedTag(tags, undefined, false);
         }
+        if (id !== undefined && client_key !== undefined) return errorResult("client_key applies to creating a note; use if_rev to guard an update");
         if (id !== undefined) {
           // When namespace resolution is active the model-supplied namespace
           // is dropped entirely (the note keeps its existing namespace), and
@@ -880,12 +885,16 @@ export function createMcpServer(
         // Writes always go to the server-resolved namespace when active; the
         // model-supplied `namespace` is ignored (prompt-injection guard).
         tags = withFacts(plainTags, facts);
-        const created = store.create(
+        const once = store.createOnce(
           nsActive
             ? { namespace: ownNs, title, body, tags, source, forget_after, sensitivity, outside, derived_from, ...(typeof confidence === "number" ? { confidence } : {}) }
             : { namespace, title, body, tags, source, forget_after, sensitivity, outside, derived_from, ...(typeof confidence === "number" ? { confidence } : {}) },
+          client_key,
           { lintWarnings: warnings }
         );
+        // R2-04: a retry with a known key wrote nothing; the reply is the note the first write made.
+        if (once.deduplicated) return untrustedResult({ note: noBody(once.note), deduplicated: true });
+        const created = once.note;
         await maybeEmbed(store, created);
         const sim = store.similarNote(created.id);
         return untrustedResult(withConflicts(withWarnings({ note: noBody(created), ...(titleGenerated ? { title_generated: `No title was given, so it was made from the body's first line. To change it: state_write id=${created.id} title="..."` } : {}), ...(sim ? { similar_note: { id: sim.id, title: sim.title, hint: `looks similar to #${sim.id} - consider updating it (state_write with id=${sim.id}) if this is the same thing` } } : {}) }, warnings), store, created, facts));

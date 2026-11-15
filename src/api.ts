@@ -193,7 +193,7 @@ function requiredScope(method: string | undefined, path: string): Scope {
 // a generic 500 so SQL/internal details never leak to the client.
 // REST note bodies: a field Monomem does not know (a client sent `content` for `body`) used to be dropped, leaving an empty note.
 // written_by / created_by are accepted and ignored: the server stamps the writer from the token.
-const POST_NOTE_FIELDS = ["namespace", "title", "body", "tags", "source", "created_at", "forget_after", "confidence", "facts", "written_by", "created_by", "sensitivity", "outside", "derived_from"];
+const POST_NOTE_FIELDS = ["namespace", "title", "body", "tags", "source", "created_at", "forget_after", "confidence", "facts", "written_by", "created_by", "sensitivity", "outside", "derived_from", "client_key"];
 const PUT_NOTE_FIELDS = ["namespace", "title", "body", "tags", "source", "forget_after", "confidence", "if_rev", "facts", "written_by", "created_by", "sensitivity", "outside", "derived_from"];
 // Fields of a note the server returns. A client that GETs a note and PUTs it back whole sends these; they are ignored (never applied).
 // `rev` is ignored too: use `if_rev` for compare-and-swap.
@@ -836,8 +836,20 @@ export function createApiServer(
           const { facts } = parsed as { facts?: unknown };
           delete (parsed as { facts?: unknown }).facts;
           parsed.tags = withFacts(parsed.tags, facts);
+          const { client_key: clientKey } = parsed as { client_key?: unknown };
+          delete (parsed as { client_key?: unknown }).client_key;
+          if (clientKey !== undefined && typeof clientKey !== "string") {
+            sendJson(res, 400, { error: "client_key must be a string" });
+            return;
+          }
           const warnings: LintFinding[] = [];
-          const note = store.create(parsed, { lintWarnings: warnings });
+          const once = store.createOnce(parsed, clientKey, { lintWarnings: warnings });
+          // R2-04: a retry with a known key wrote nothing; 200 with the note the first write made.
+          if (once.deduplicated) {
+            sendJson(res, 200, { note: once.note, deduplicated: true });
+            return;
+          }
+          const note = once.note;
           await maybeEmbed(store, note);
           const sim = store.similarNote(note.id);
           sendJson(res, 201, { note, ...(sim ? { similar_note: { id: sim.id, title: sim.title, hint: `looks similar to #${sim.id} - consider updating it (PUT /notes/${sim.id}) if this is the same thing` } } : {}), ...(warnings.length ? { warnings } : {}), ...(facts === undefined ? {} : factFeedback(store, note)) });

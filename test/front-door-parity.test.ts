@@ -172,3 +172,34 @@ describe("P-01: REST and MCP refuse include_distrusted the same way", () => {
     }
   });
 });
+
+describe("R2-04: REST and MCP handle client_key the same way", () => {
+  // [caller, first write's key, retry's key, the retry is deduplicated?]
+  type Row = [Who, string, string, boolean];
+  const rows: Row[] = [
+    ["writer", "k1", "k1", true],
+    ["writer", "k1", "k2", false],
+    ["pinned-writer", "k1", "k1", true],
+  ];
+
+  test("the table, through POST /notes and state_write", async () => {
+    for (const [who, first, retry, dedup] of rows) {
+      const w = seed();
+      const io = await surfaces(w);
+      try {
+        const label = `${who} ${first}/${retry}`;
+        const body = { title: "keyed note", body: "b", namespace: "work" };
+        await io.rest(who, "POST", "/notes", { ...body, client_key: first });
+        const r = await io.rest(who, "POST", "/notes", { ...body, client_key: retry });
+        // Same writer label on both surfaces: MCP finds the key the REST write recorded.
+        const m = await io.mcp(who, "state_write", { ...body, client_key: retry });
+        assert.ok(r.ok && m.ok, `${label}: ${r.text.slice(0, 200)} ${m.text.slice(0, 200)}`);
+        assert.equal(/"deduplicated":\s*true/.test(r.text), dedup, `REST ${label}`);
+        assert.equal(/deduplicated\\?":\s*true/.test(m.text), true, `MCP ${label}: the retry key is known by now`);
+        assert.equal((await io.mcp(who, "state_write", { id: w.ids.work, body: "z", client_key: "k9" })).ok, false, "a key with an id");
+      } finally {
+        await io.close();
+      }
+    }
+  });
+});

@@ -107,6 +107,7 @@ import * as trustOps from "./store/trust.js";
 import * as quarantineOps from "./store/quarantine.js";
 import * as confirmOps from "./store/confirm.js";
 import * as taintOps from "./store/taint.js";
+import * as clientKeyOps from "./store/client-keys.js";
 import { tagsToStorage, parseTags, dueBase, needsHumanConfirm, sealQuarantineCol, openQuarantineCol, isoOrNull, clampInt, envCount, floodWritesPerHour, isOperatorWrite, isPlainObject } from "./store/rows.js";
 export { dueBase, needsHumanConfirm, clampInt, floodWritesPerHour };
 export { ValidationError, NoteUnreadableError, StaleWriteError, RebuildBusyError, CandidateScanError, QuarantinedError, WriterPausedError };
@@ -3053,6 +3054,8 @@ export class Store {
       holdForApproval?: boolean;
       /** Sync of another machine's file: its (origin, id), linked to the note when a held create is approved. */
       syncIdentity?: { origin: string; id: number };
+      /** R2-04: the checked client_key (createOnce passes it); recorded for this writer in the same transaction. */
+      clientKey?: string;
     } & LintOpts = {}
   ): NoteRecord {
     if (!opts.bulkImport) this.floodGate(opts.lint ?? "full");
@@ -3195,6 +3198,7 @@ export class Store {
         const sealed = this.sealBody(body, noteAad(id, namespace));
         this.db.prepare("UPDATE notes SET body = ?, body_enc = ? WHERE id = ?").run(sealed.body, sealed.bodyEnc, id);
       }
+      if (opts.clientKey !== undefined) clientKeyOps.recordClientKey(this, id, writer, opts.clientKey, now);
       this.addLinks(id, derived, writer, now);
       this.stampCliTerminal(id, writer);
       // An archived (restored-as-forgotten) note stays out of the edge graph.
@@ -7947,6 +7951,11 @@ export class Store {
 
   // --- Flood guard (v17) -----------------------------------------------------
   // The paused set is a JSON list in _meta (like approve_first), so a restart does not clear it.
+
+  /** R2-04: create, unless this writer's `clientKey` already made a note (then that note, deduplicated: true, no write). */
+  createOnce(input: NoteInput, clientKey: string | undefined, opts: Parameters<Store["create"]>[1] = {}): { note: NoteRecord; deduplicated?: true } {
+    return clientKeyOps.createOnce(this, input, clientKey, opts);
+  }
 
   /** Writer identities the flood guard paused (sorted). */
   pausedWriters(): string[] {

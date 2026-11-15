@@ -62,6 +62,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `monomem show`, `ls` and `why` print the trust state: unconfirmed, expired and built-on-distrusted labels, a plain origin
   line, confirmations (counted or not, and why) and who approved a held write. `ls --archived` includes notes kept as history.
 - `monomem review --step`: one typed yes, then y / n / q per note.
+- **Retry-safe note writes:** `client_key` on `state_write` and `POST /notes` (as tasks already had). A retry with the same key
+  from the same writer gets back the note the first write made (`deduplicated: true`; REST answers 200 instead of 201) and
+  writes nothing, so it does not count toward the flood guard. Keys are per writer and stored hashed. Not covered: a write
+  that was held for approval is held again on retry.
 - Line-by-line diff of what changes in `supersede preview`, `quarantine show` and the dashboard.
 - `monomem service install | status | uninstall` (Windows Task Scheduler, macOS LaunchAgent, Linux systemd user unit; never
   run by setup) and `start --log` writing a rotated `server.log`.
