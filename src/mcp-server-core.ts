@@ -45,7 +45,7 @@ import { assertPlainWriteTags, assertReviewedTag } from "./reserved-tags.js";
 import { prepareNoteUpdate } from "./note-update.js";
 import { distrustedOptInRefusal } from "./trust.js";
 import { ORIGIN_DECLARED, ReadTaint, unconfirmedIdsIn } from "./taint.js";
-import { withFacts, factFeedback, COMMON_FACT_KEYS, type FactFeedback } from "./facts.js";
+import { withFacts, factFeedback, COMMON_FACT_KEYS, withDisputes, listWithDisputes, type FactFeedback } from "./facts.js";
 import { waitForChanges, parseWait, WAIT_MAX_SECONDS, WAIT_RECOMMENDED_SECONDS } from "./change-wait.js";
 import { type Scope, PACKAGE_VERSION } from "./config.js";
 export { PACKAGE_VERSION };
@@ -61,7 +61,7 @@ import { TIME_ZONE } from "./config.js";
 import { annotateStaleness } from "./staleness.js";
 
 /** Staleness fields plus a compact `when` ("2023-05-08, 5 months ago") so the reader sees the note's date and age. */
-const withWhen = (n: NoteRecord) => ({ ...annotateStaleness(n), when: describeWhen(n.created_at) });
+const withWhenBase = (n: NoteRecord) => ({ ...annotateStaleness(n), when: describeWhen(n.created_at) });
 import { meterStats } from "./meter.js";
 import { receiptList, receiptGet } from "./receipts.js";
 import { noteWhy } from "./why.js";
@@ -518,6 +518,8 @@ export function createMcpServer(
   const connTaint = (): string[] => (conn.readsOutside ? [ORIGIN_DECLARED] : []); // read-taint (via:memory) is decided by the Store from taintedReads
   /** Whether a tool is offered on this server: descriptions name only tools the model was actually given. */
   const has = (name: string): boolean => !enabled || enabled.has(name);
+  /** A note for a read reply: staleness, a readable date and (R2-01) the dispute marker, computed inside the caller's request. */
+  const withWhen = (n: NoteRecord) => withDisputes(store, withWhenBase(n) as NoteRecord);
   const registerRaw = server.registerTool.bind(server) as (...a: unknown[]) => unknown;
   (server as unknown as { registerTool: (...a: unknown[]) => unknown }).registerTool = (name: unknown, cfg: unknown, handler: unknown) => {
     // Every registered tool's name and description is sent to the model on
@@ -737,7 +739,7 @@ export function createMcpServer(
     const annotated = withWhen(note);
     const payload: Record<string, unknown> = note.neighbors
       ? { ...annotated, neighbors: note.neighbors.map((n) => ({ ...n, score: Math.round(n.score * 1000) / 1000 })) }
-      : annotated;
+      : { ...annotated };
     const full = typeof note.body === "string" ? note.body : "";
     if (start > 0 || full.length > max) {
       const end = Math.min(full.length, start + max);
@@ -1079,7 +1081,7 @@ export function createMcpServer(
             note: "Reconstructed from note history; hard-deleted notes cannot be shown.",
             not_kept: view.notKept,
             archived_then: view.archivedThen,
-            results: hits.map((h) => asOfFields(h, withWhen)),
+            results: hits.map((h) => asOfFields(h, withWhenBase)),
             searchedNamespaces: spaces ?? [],
           });
         }
@@ -1321,18 +1323,18 @@ export function createMcpServer(
           const hint = trustedHint(namespace);
           if (hint) {
             return untrustedResultCut({
-              ...store.list({ namespace: hint, limit, offset, ...wf }),
+              ...listWithDisputes(store, store.list({ namespace: hint, limit, offset, ...wf })),
               searchedNamespaces: [hint],
             });
           }
           return untrustedResultCut({
-            ...listReadable(limit, offset, wf),
+            ...listWithDisputes(store, listReadable(limit, offset, wf)),
             searchedNamespaces: readable(),
           });
         }
         const result = store.list({ namespace, limit, offset, ...wf });
         return untrustedResultCut({
-          ...result,
+          ...listWithDisputes(store, result),
           searchedNamespaces: namespace ? [namespace] : [],
         });
       } catch (e) {

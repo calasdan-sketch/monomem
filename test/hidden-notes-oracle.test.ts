@@ -12,6 +12,7 @@ import { Store } from "../src/store.js";
 import { createApiServer } from "../src/api.js";
 import { createMcpServer } from "../src/mcp-server-core.js";
 import { actorStore, setProcessWriter } from "../src/actor.js";
+import { disputeFields } from "../src/facts.js";
 
 const raw = (s: Store): any => (s as any).db;
 afterEach(() => setProcessWriter(""));
@@ -133,6 +134,51 @@ describe("R1-12 derived_from names only parents the reader may read", () => {
     assert.ok(!JSON.stringify(seen).includes(`${parent.id}`) || !(seen.derived_from ?? []).includes(parent.id), `derived_from leaked the parent id: ${JSON.stringify(seen.derived_from)}`);
     assert.deepEqual(seen.derived_from ?? [], []);
     s.close();
+  });
+});
+
+describe("R2-01 ceiling-leak probe: a dispute marker never shows a note the reader cannot see", () => {
+  // Two worlds that differ only in whether the private note (above the reader's ceiling) disputes the visible one.
+  function world(disputes: boolean) {
+    const store = new Store(":memory:");
+    setProcessWriter("cli");
+    const visible = store.create({ namespace: "pa", title: "deploy zebra", body: "zebra", tags: ["fact:deploy_target=fly"] });
+    setProcessWriter("stdio:other");
+    store.create({ namespace: "pa", title: "private zebra", body: "zebra", sensitivity: "private", tags: disputes ? ["fact:deploy_target=render"] : ["x"] });
+    setProcessWriter("");
+    return { store, visible };
+  }
+  test("REST and MCP reads answer the same with and without the hidden disputing note", async () => {
+    const replies: string[][] = [];
+    for (const disputes of [true, false]) {
+      const { store, visible } = world(disputes);
+      const http = createApiServer(store, [P]);
+      await new Promise<void>((r) => http.listen(0, "127.0.0.1", () => r()));
+      const base = `http://127.0.0.1:${(http.address() as AddressInfo).port}`;
+      const get = async (p: string) => norm(0, await (await fetch(base + p, { headers: { authorization: `Bearer ${P.token}` } })).text());
+      const server = createMcpServer(store, "write", { tools: "all", namespace: "pa" } as any, { label: "pinned-app", authed: true, maxSensitivity: "internal" } as any);
+      const [c1, c2] = InMemoryTransport.createLinkedPair();
+      const client = new Client({ name: "t", version: "1" });
+      await Promise.all([client.connect(c1), server.connect(c2)]);
+      const mcp = async (name: string, args: Record<string, unknown>) => norm(0, JSON.stringify(await client.callTool({ name, arguments: args })));
+      try {
+        const out = [await get(`/notes/${visible.id}`), await get(`/search?q=zebra`), await get(`/notes`), await mcp("state_read", { id: visible.id }), await mcp("state_list", {}), await mcp("memory_get", { ids: [visible.id] })];
+        for (const o of out) assert.ok(!/disputed|render/i.test(o), `marker leaked a hidden note: ${o.slice(0, 300)}`);
+        replies.push(out.map((o) => o.replace(/writer_id[^,]*/g, "")));  // the server id is random per store
+      } finally {
+        await client.close();
+        http.closeAllConnections();
+        await new Promise<void>((r) => http.close(() => r()));
+        store.close();
+      }
+    }
+    assert.deepEqual(replies[0], replies[1]);
+  });
+
+  test("control: an unrestricted reader does see the marker", () => {
+    const { store, visible } = world(true);
+    assert.match(JSON.stringify(disputeFields(store, store.read(visible.id)!)), /render/);
+    store.close();
   });
 });
 

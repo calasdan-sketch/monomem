@@ -123,7 +123,7 @@ function cachedFor<T>(store: Store, key: string, fn: () => Promise<T>): Promise<
 }
 let scanIds = 0;
 import { SupersedeError, supersedePreview, supersedeConfirm, supersedeUndo, noteHistory, restoreVersion, purgeNoteHistory, type Caller } from "./supersede.js";
-import { withFacts, factFeedback } from "./facts.js";
+import { withFacts, factFeedback, withDisputes, listWithDisputes } from "./facts.js";
 import { isBusyError } from "./restore.js";
 import { heldEditDiff } from "./line-diff.js";
 import { assertPlainWriteTags, assertReviewedTag } from "./reserved-tags.js";
@@ -202,7 +202,7 @@ const PUT_READ_ONLY_FIELDS = [
   "imported_unverified", "attested_writer", "attested_by", "attested_writer_id", "merged_from_writers", "distrusted", "confidence_claimed_by",
   "status", "superseded_by", "superseded_at", "superseded_by_writer", "access_count", "last_accessed", "expires_at", "archived_at",
   "pinned", "session_id", "obs_type", "stale", "ageDays", "staleWarning", "unreadable", "encrypted", "neighbors", "history", "files", "score", "breakdown",
-  "grandfathered_at", "approved_at", "approved_by", "confirmed_at", "confirmed_by", "confirmed_kind", "confirmed_rev", "unconfirmed", "unconfirmed_label", "expired", "expired_label", "built_on_distrusted", "built_on_distrusted_label",
+  "grandfathered_at", "approved_at", "approved_by", "confirmed_at", "confirmed_by", "confirmed_kind", "confirmed_rev", "unconfirmed", "unconfirmed_label", "expired", "expired_label", "built_on_distrusted", "built_on_distrusted_label", "disputed", "disputed_label",
 ];
 /** A 400 message naming the unknown top-level fields of a note body, or null when there are none. */
 export function unknownNoteFields(body: unknown, allowed: readonly string[], ignored: readonly string[] = []): string | null {
@@ -385,6 +385,8 @@ export function createApiServer(
   opts: ServerNamespaceOpts = {}
 ): Server {
   const tokens = normalizeTokens(token);
+  /** A note for a read reply: staleness and (R2-01) the dispute marker, computed inside the caller's request. */
+  const annotRead = (n: NoteRecord) => withDisputes(store, annotateStaleness(n) as NoteRecord);
   // Two buckets, neither of which lets garbage traffic lock out a valid
   // client sharing its IP (everyone behind one tunnel has the same socket IP):
   //  - authFailures: per client IP, counts FAILED authentications only
@@ -893,7 +895,7 @@ export function createApiServer(
         // Round edge scores to 3 decimals for readability (stored raw in
         // SQLite), mirroring the MCP state_read tool. Neighbor entries
         // already carry their staleness fields (annotated in Store.read).
-        const base = annotateStaleness(note);
+        const base = annotRead(note);
         const outNote = note.neighbors
           ? {
               ...base,
@@ -1480,18 +1482,18 @@ export function createApiServer(
               archivedOnly,
               ...wf,
             });
-            sendJson(res, 200, { ...result, searchedNamespaces: [hint] });
+            sendJson(res, 200, { ...listWithDisputes(store, result), searchedNamespaces: [hint] });
             return;
           }
           sendJson(res, 200, {
-            ...listReadable(
+            ...listWithDisputes(store, listReadable(
               nsCtx,
               limit,
               offset,
               includeArchived,
               archivedOnly,
               wf
-            ),
+            )),
             searchedNamespaces: readable(nsCtx),
           });
           return;
@@ -1505,7 +1507,7 @@ export function createApiServer(
           ...wf,
         });
         sendJson(res, 200, {
-          ...result,
+          ...listWithDisputes(store, result),
           searchedNamespaces: namespace ? [namespace] : [],
         });
         return;
@@ -1553,7 +1555,7 @@ export function createApiServer(
         // Shape a hit for the wire: staleness annotation always, breakdown
         // only when explain=1. Shared by all three namespace branches.
         const shapeHit = (n: NoteRecord, breakdown?: unknown): Record<string, unknown> => ({
-          ...annotateStaleness(n),
+          ...annotRead(n),
           ...(breakdown !== undefined ? { breakdown } : {}),
         });
         const toResults = (hits: ExplainedHit[]): Record<string, unknown>[] =>
@@ -1584,7 +1586,7 @@ export function createApiServer(
             }
             const results = await runSearch(store, q, { ...searchOpts, namespace: hint });
             sendJsonN(res, 200, {
-              results: results.map((n) => annotateStaleness(n)),
+              results: results.map((n) => annotRead(n)),
               timeRange: timePhrase ? timePhrase.label : null,
               searchedNamespaces: [hint],
             });
@@ -1613,7 +1615,7 @@ export function createApiServer(
             lists.push(await runSearch(store, q, { ...searchOpts, namespace: ns }));
           }
           sendJsonN(res, 200, {
-            results: roundRobin(lists, lim).map((n) => annotateStaleness(n)),
+            results: roundRobin(lists, lim).map((n) => annotRead(n)),
             timeRange: timePhrase ? timePhrase.label : null,
             searchedNamespaces: readable(nsCtx),
           });
@@ -1638,7 +1640,7 @@ export function createApiServer(
         }
         const results = await runSearch(store, q, singleOpts);
         sendJsonN(res, 200, {
-          results: results.map((n) => annotateStaleness(n)),
+          results: results.map((n) => annotRead(n)),
           timeRange: timePhrase ? timePhrase.label : null,
           searchedNamespaces: namespace ? [namespace] : [],
         });
@@ -1694,7 +1696,7 @@ export function createApiServer(
         // vague-message path is the most likely to act on outdated facts).
         const withStaleness = (r: { keywords: string[]; results: NoteRecord[] }) => ({
           keywords: r.keywords,
-          results: r.results.map((n) => annotateStaleness(n)),
+          results: r.results.map((n) => annotRead(n)),
         });
         if (nsCtx.active) {
           // Untrusted hint intersected with the readable set, like GET
@@ -1729,7 +1731,7 @@ export function createApiServer(
           const lim = clampInt(relLimit, 10, 1, 200);
           sendJson(res, 200, {
             keywords,
-            results: roundRobin(lists, lim).map((n) => annotateStaleness(n)),
+            results: roundRobin(lists, lim).map((n) => annotRead(n)),
             searchedNamespaces: readable(nsCtx),
           });
           return;

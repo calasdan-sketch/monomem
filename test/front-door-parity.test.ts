@@ -173,6 +173,27 @@ describe("P-01: REST and MCP refuse include_distrusted the same way", () => {
   });
 });
 
+describe("R2-01: REST and MCP mark a disputed note the same way", () => {
+  test("GET /notes/:id and state_read carry the same disputed list, for every caller kind", async () => {
+    const w = seed();
+    const a = as("good", () => w.s.create({ namespace: "work", title: "fly", body: "z", tags: ["fact:deploy_target=fly"] })).id;
+    as("other", () => w.s.create({ namespace: "work", title: "render", body: "z", tags: ["fact:deploy_target=render"] }));
+    as("evil", () => w.s.create({ namespace: "work", title: "heroku", body: "z", tags: ["fact:deploy_target=heroku"] })); // distrusted: no side
+    const io = await surfaces(w);
+    try {
+      for (const who of Object.keys(SCOPE) as Who[]) {
+        const r = JSON.parse((await io.rest(who, "GET", `/notes/${a}`)).text).note.disputed;
+        const m = await io.mcp(who, "state_read", { id: a });
+        const mj = JSON.parse(JSON.parse(m.text).content[0].text.replace(/^[^{]*/, "")).note.disputed;
+        assert.deepEqual(r, mj, who);
+        assert.deepEqual(r.map((d: { value: string }) => d.value), ["render"], who);
+      }
+    } finally {
+      await io.close();
+    }
+  });
+});
+
 describe("R2-04: REST and MCP handle client_key the same way", () => {
   // [caller, first write's key, retry's key, the retry is deduplicated?]
   type Row = [Who, string, string, boolean];

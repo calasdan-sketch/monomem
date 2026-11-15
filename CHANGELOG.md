@@ -62,6 +62,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `monomem show`, `ls` and `why` print the trust state: unconfirmed, expired and built-on-distrusted labels, a plain origin
   line, confirmations (counted or not, and why) and who approved a held write. `ls --archived` includes notes kept as history.
 - `monomem review --step`: one typed yes, then y / n / q per note.
+- **Disputed facts are marked on every read**, not only at session start: a note whose fact another writer's live note
+  contradicts carries `disputed` (who says what, and whether a person confirmed it) on REST and MCP reads, searches, lists
+  and `memory_get` / `memory_index`; MCP shows a `DISPUTED key: #id says "value"` line. A side a person confirmed is listed
+  first and the other side is labelled "disputed by a confirmed note". Nothing is hidden, and a note the reader may not see
+  is never named. See docs/search.md.
 - **Retry-safe note writes:** `client_key` on `state_write` and `POST /notes` (as tasks already had). A retry with the same key
   from the same writer gets back the note the first write made (`deduplicated: true`; REST answers 200 instead of 201) and
   writes nothing, so it does not count toward the flood guard. Keys are per writer and stored hashed. Not covered: a write

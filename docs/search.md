@@ -134,6 +134,17 @@ a field on the record (only when set), so a program can check it:
 None of them hides, archives or deletes a note. An unconfirmed note that is also expired in `enforce` mode is ranked at
 most x0.81.
 
+**Disputed facts (1.5.0).** A note whose `facts` another writer's live note contradicts (the same key, or a synonym such as
+`hosting` for `deploy_target`, with a different value) carries `disputed: [{id, key, value, written_by, confirmed}]` on every
+read: REST `GET /notes/:id`, `/notes`, `/search`, `/index`, `POST /get`, and MCP `state_read`, `state_search`, `state_list`,
+`memory_get`, `memory_index`. A note a person confirmed is listed first; when the other side is confirmed by a person and
+this note is not, it also carries `disputed_label: "disputed by a confirmed note"`. MCP adds one line per dispute to the
+"who wrote this" block: `DISPUTED deploy_target: #12 says "fly" ("stdio:cursor", unconfirmed)`. Both notes stay; nothing is
+hidden or re-ranked. Only notes the reader may read count: a note above its sensitivity ceiling, in another namespace or
+from a distrusted writer is never named, and the reply is the same as when there is no dispute. A writer's own older note
+with another value is not a dispute (as at session start). Not covered yet: the looser "key: value" matches that `monomem
+conflicts` lists as possible (they need a scan of the whole namespace on every read).
+
 ## Re-confirmation expiry
 
 A fact can stop being true without anyone noticing. Expiry asks a person (or a second agent) to stand behind a note again
