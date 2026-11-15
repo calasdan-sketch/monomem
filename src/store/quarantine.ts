@@ -113,8 +113,14 @@ export function quarantineRow(s: Store, row: Record<string, unknown>): Quarantin
   if (Number(row.sealed) === 1) {
     const key = s.readKey();
     const ns = String(row.namespace);
-    for (const col of ["title", "body", "tags"]) {
-      if (typeof row[col] === "string") row[col] = openQuarantineCol(row[col] as string, key, col, ns, Number(row.id));
+    try {
+      for (const col of ["title", "body", "tags"]) {
+        if (typeof row[col] === "string") row[col] = openQuarantineCol(row[col] as string, key, col, ns, Number(row.id));
+      }
+    } catch {
+      throw new ValidationError(
+        `held write #${row.id} cannot be opened: it was damaged or moved, or the encryption key is missing or changed. Throw it away with: monomem quarantine reject ${row.id}`
+      );
     }
   }
   let reasons: LintFinding[] = [];
@@ -147,7 +153,15 @@ export function listQuarantine(s: Store, opts: { namespaces?: string[]; limit?: 
   const rows = s.db
     .prepare(`SELECT * FROM quarantine ${where} ORDER BY id ASC LIMIT ?`)
     .all(...(opts.namespaces ?? []), limit) as Array<Record<string, unknown>>;
-  return rows.map((r) => s.quarantineRow(r));
+  // final-security SF3: one held row that does not open is listed as such; it must not hide the rest of the queue.
+  return rows.map((r) => {
+    try {
+      return s.quarantineRow({ ...r });
+    } catch (e) {
+      if (!(e instanceof ValidationError)) throw e;
+      return s.quarantineRow({ ...r, sealed: 0, title: "[sealed: cannot be opened]", body: null, tags: null });
+    }
+  });
 }
 
 export function getQuarantine(s: Store, id: number): QuarantineEntry | null {
@@ -365,11 +379,14 @@ export function keepQuarantineAsHistory(s: Store, id: number, byId?: number): { 
 }
 
 export function rejectQuarantine(s: Store, id: number): boolean {
-  const q = s.getQuarantine(id);
-  if (!q) return false;
+  // The plain columns only: a held write that does not open (damaged, key changed) can still be thrown away.
+  const q = s.db.prepare("SELECT namespace, written_by, sensitivity FROM quarantine WHERE id = ?").get(id) as
+    | { namespace: string; written_by: string | null; sensitivity?: string | null }
+    | undefined;
+  if (!q || s.hiddenByCeiling(q)) return false;
   // One statement: if another process decided it first, nothing is deleted and nothing is audited.
   if (Number(s.db.prepare("DELETE FROM quarantine WHERE id = ?").run(id).changes) === 0) return false;
-  s.recordWriterEvent(q.written_by, "rejected", null); // R2-08: rejecting a held write is an admin's or a person's decision
+  s.recordWriterEvent(q.written_by ?? "", "rejected", null); // R2-08: rejecting a held write is an admin's or a person's decision
   s.audit({ op: "quarantine-reject", id, namespace: q.namespace });
   return true;
 }
