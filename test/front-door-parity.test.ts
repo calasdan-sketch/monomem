@@ -270,6 +270,39 @@ describe("R2-02: REST and MCP decide a flag the same way", () => {
   });
 });
 
+describe("R2-03: REST and MCP decide `files` the same way", () => {
+  // [caller, files, accepted?]. The servers run in this checkout (a git repository), so package.json is a tracked file.
+  // Outside a git checkout every row is accepted with no anchors (today's behaviour): the refusals are skipped then.
+  type Row = [Who, unknown, boolean];
+  const rows: Row[] = [
+    ["writer", ["package.json"], true],
+    ["pinned-writer", ["package.json"], true],
+    ["writer", ["../package.json"], false],
+    ["writer", ["no-such-file-r203.ts"], false],
+    ["writer", Array.from({ length: 21 }, () => "package.json"), false],
+    ["writer", "package.json", false],
+  ];
+  test("the table, through POST /notes and state_write", async () => {
+    const { anchorsFor } = await import("../src/code-anchor.js");
+    const inRepo = anchorsFor(["package.json"], process.cwd()).length === 1;
+    for (const [who, files, want] of rows) {
+      const w = seed();
+      const io = await surfaces(w);
+      try {
+        const body = { title: "about a file", body: "b", namespace: "work", files };
+        const r = await io.rest(who, "POST", "/notes", body);
+        const m = await io.mcp(who, "state_write", body);
+        const label = `${who} ${JSON.stringify(files).slice(0, 60)}`;
+        const expect = want || (!inRepo && Array.isArray(files) && files.length <= 20 && !files.some((f) => String(f).includes("..")));
+        assert.equal(r.ok, expect, `REST ${label}: ${r.text.slice(0, 200)}`);
+        assert.equal(m.ok, expect, `MCP ${label}: ${m.text.slice(0, 200)}`);
+      } finally {
+        await io.close();
+      }
+    }
+  });
+});
+
 describe("R2-04: REST and MCP handle client_key the same way", () => {
   // [caller, first write's key, retry's key, the retry is deduplicated?]
   type Row = [Who, string, string, boolean];

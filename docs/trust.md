@@ -329,6 +329,26 @@ most 200 characters. The note itself does not change.
 Limits: an edit that makes a new version leaves the old flags behind (flag again if it is still wrong); flags from a session
 that read outside content are not marked differently yet.
 
+## Notes about code that changed (1.5.0)
+
+A note can name the files it is about: `files: ["src/auth.ts"]` on `state_write` or `POST /notes` when creating it (at most
+20). Each file must be tracked by git in the writer's repository: the folder a local MCP server was started in, otherwise the
+folder the Monomem process runs in. Monomem records the file's id in git's index, the commit and the repository folder, using
+the local `git` program only (no network, short timeout, the repository's fsmonitor and hooks switched off).
+
+- When a later commit changes or removes one of those files, reads carry `code_changed: [{path, since_commit}]` and the label
+  `[code changed since this was written: src/auth.ts]`, at session start too. The note is not hidden, deleted or unpinned for
+  it: a pinned note stays pinned, with the label.
+- It is compared with the **committed** code (HEAD), not with unsaved or uncommitted edits. HEAD is read from the `.git`
+  files; git itself runs once per new commit per repository, not once per read.
+- `monomem stale --code` lists these notes; `monomem review` lists them too. `monomem review keep <id>` says the note is still
+  right (its files count as checked against the current commit); `monomem supersede --old <id> ...` replaces it.
+- Refused: a path with `..`, a path outside the repository (absolute, or through a symlink), a folder, a file git does not
+  track. No git, no commit yet, or a folder outside a repository: `files` is accepted and nothing is recorded, as before.
+- Not covered yet: files cannot be added to an existing note (write a new one, or a person runs `review keep`), a write held
+  for approval drops its files, captured observations are not anchored, and anchors are not exported or synced (a backup
+  copy of the database keeps them). The file paths are stored plain, also with encryption on (docs/encryption-retention.md).
+
 ## Writer record (1.5.0)
 
 `monomem trust` (and `monomem trust --json`, field `writer_record_30d`) shows, per writer, what happened to its writes in the

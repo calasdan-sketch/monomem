@@ -111,6 +111,9 @@ import * as receiptOps from "./store/write-receipt.js";
 import * as surfaceOps from "./store/surfaces.js";
 import * as clientKeyOps from "./store/client-keys.js";
 import * as flagOps from "./store/flags.js";
+import * as codeAnchorOps from "./store/code-anchors.js";
+import type { CodeChange, CodeChangedItem } from "./store/code-anchors.js";
+export type { CodeChange, CodeChangedItem };
 import type { FlaggedItem, NoteFlag } from "./store/flags.js";
 import * as reputationOps from "./store/reputation.js";
 import type { WriterCounts, WriterEvent } from "./store/reputation.js";
@@ -794,6 +797,9 @@ export interface NoteRecord {
   /** 1.5.0 (R2-02): "this looks wrong" flags by other writers on this version (store/flags.ts); with its label. */
   flagged?: NoteFlag[];
   flagged_label?: string;
+  /** 1.5.0 (R2-03): files this note is about that changed in git since it was written (store/code-anchors.ts); with its label. */
+  code_changed?: CodeChange[];
+  code_changed_label?: string;
 }
 
 /** The re-confirmation expiry settings (_meta; Store.confirmSettings). `set_at`: when the mode was last changed. */
@@ -2877,6 +2883,8 @@ export class Store {
       //  - writer_events (R2-08): what happened to a writer's writes (held by the linter, rejected, rolled back, flag upheld,
       //    replaced), for the counts `monomem trust` shows. Counts only: no row outlives its usefulness by naming content, and
       //    the rows stay when a note is deleted (the count is about the writer, not the note).
+      //  - code_anchors (R2-03): the files a note is about, each with its git blob, the commit and the repository root at
+      //    write time. Plain paths (like note_files), never note text.
       this.db.exec(`
         DROP INDEX IF EXISTS idx_note_edges_note_id;
         CREATE INDEX IF NOT EXISTS idx_notes_live_kind ON notes(archived_at, kind);
@@ -2909,6 +2917,16 @@ export class Store {
           at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_writer_events ON writer_events(at, writer);
+        CREATE TABLE IF NOT EXISTS code_anchors (
+          note_id INTEGER NOT NULL,
+          path TEXT NOT NULL,
+          blob TEXT NOT NULL,
+          commit_sha TEXT NOT NULL,
+          repo_root TEXT NOT NULL,
+          at TEXT NOT NULL,
+          PRIMARY KEY (note_id, path)
+        );
+        DELETE FROM code_anchors WHERE note_id NOT IN (SELECT id FROM notes);
         DELETE FROM note_flags WHERE note_id NOT IN (SELECT id FROM notes);
         DELETE FROM note_client_keys WHERE note_id NOT IN (SELECT id FROM notes);
         DROP TRIGGER IF EXISTS notes_links_ad;
@@ -2917,6 +2935,7 @@ export class Store {
           DELETE FROM confirmations WHERE note_id = old.id;
           DELETE FROM note_flags WHERE note_id = old.id;
           DELETE FROM note_client_keys WHERE note_id = old.id;
+          DELETE FROM code_anchors WHERE note_id = old.id;
         END;
       `);
     }
@@ -3077,6 +3096,8 @@ export class Store {
       syncIdentity?: { origin: string; id: number };
       /** R2-04: the checked client_key (createOnce passes it); recorded for this writer in the same transaction. */
       clientKey?: string;
+      /** R2-03: files the note is about, as the request named them (checkFilesInput); anchored in the writer's git repository. */
+      files?: string[];
     } & LintOpts = {}
   ): NoteRecord {
     if (!opts.bulkImport) this.floodGate(opts.lint ?? "full");
@@ -3093,6 +3114,9 @@ export class Store {
     // sync) and restores carry only what their own tags or `outside` say.
     // ponytail: a held create (quarantine) keeps the inherited taint but not the links themselves; carry them in the hold if asked.
     const derived = this.derivedIds(input.derived_from);
+    // R2-03: the git calls run here, before the write lock; a path outside the repository is refused before anything is stored.
+    // ponytail: a held create (quarantine) does not keep its anchors; carry them in the hold if asked.
+    const anchors = codeAnchorOps.prepareAnchors(opts.files);
     const taint = [
       ...new Set([
         ...this.taintFor(input.outside, opts.bulkImport || opts.writtenBy !== undefined ? null : currentWriter()),
@@ -3221,6 +3245,7 @@ export class Store {
       }
       if (opts.clientKey !== undefined) clientKeyOps.recordClientKey(this, id, writer, opts.clientKey, now);
       this.addLinks(id, derived, writer, now);
+      codeAnchorOps.setAnchors(this, id, anchors, now);
       this.stampCliTerminal(id, writer);
       // An archived (restored-as-forgotten) note stays out of the edge graph.
       if (!archivedAt) this.noteWritten(namespace, id, { rev: startRev, title: input.title, body });
@@ -3497,7 +3522,7 @@ export class Store {
       r.access_count += p.n;
       if (!r.last_accessed || p.at > r.last_accessed) r.last_accessed = p.at;
     }
-    return flagOps.annotateFlags(this, row, this.annotateConfirmRules(row, annotateRetention(row, r)));
+    return codeAnchorOps.annotateCodeChanged(this, row, flagOps.annotateFlags(this, row, this.annotateConfirmRules(row, annotateRetention(row, r))));
   }
 
   /**
@@ -7996,6 +8021,16 @@ export class Store {
   }
 
   /** R2-02: a person keeps a flagged note: the flags on its current version are cleared. Returns how many. */
+  /** R2-03: live notes whose anchored files changed in git, for `monomem stale --code` and `monomem review`. */
+  codeChangedList(namespaces?: string[]): CodeChangedItem[] {
+    return codeAnchorOps.codeChangedList(this, namespaces);
+  }
+
+  /** R2-03: a person keeps a code-changed note: its anchors move to the files at HEAD. Returns how many moved. */
+  refreshCodeAnchors(id: number): number {
+    return codeAnchorOps.refreshAnchors(this, id);
+  }
+
   keepFlagged(id: number): number {
     return flagOps.keepFlagged(this, id);
   }

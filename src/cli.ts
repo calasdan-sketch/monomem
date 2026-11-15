@@ -19,7 +19,7 @@ const COMMANDS = [
   "consolidate", "rebuild-edges", "relevant", "search", "token", "changes", "backup", "runner-status", "watch", "export", "import", "trust",
   "quarantine", "approve-first", "access", "flood", "resume", "decay", "archive", "restore", "delete", "quality", "conflicts", "facts", "fact",
   "encrypt", "meter", "receipts", "why", "never-show", "supersede", "history", "pin", "unpin", "rollback", "bench", "drill", "health", "audit", "verify-receipt",
-  "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet", "confirm", "review", "taint", "config", "service",
+  "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet", "confirm", "review", "taint", "config", "service", "stale",
   "help", "--help", "-h", "--version", "-v", "version",
 ];
 
@@ -278,6 +278,10 @@ function usage(all = false): void {
       "  review [--ns <namespace>] [--json] [--confirm-all [--source \"what you checked\"]]",
       "            Lists the notes waiting for a person (id, title, why, writer): outside content nobody confirmed, and",
       "            notes not re-confirmed within confirm-days. --confirm-all confirms every listed note as you, after one typed yes.",
+      "            Also lists notes agents flagged and notes whose files changed in git; review keep <id> keeps one as it is.",
+      "  stale --code [--ns <namespace>] [--json]",
+      "            Notes written about files (state_write files) that a later commit changed, with the files and the commit",
+      "            each note was written against. Compares with the committed code (HEAD), on this computer only.",
       "  taint clear [--all | --session <id> | --here]",
       "            Ends the open outside-content windows (a hooked session read the web: local apps' notes written meanwhile are",
       "            marked). Run it in a terminal and type yes. Marks already written stay; nothing is deleted.",
@@ -2925,6 +2929,16 @@ function printFlagged(list: Array<{ id: number; namespace: string; title: string
   console.log('  Keep one as it is: monomem review keep <id>. Replace it: monomem supersede --old <id> --title "..." --body "..." (shows what changes, then asks).\n');
 }
 
+/** R2-03: notes whose files changed in git since they were written (the operator reads this at a terminal). */
+function printCodeChanged(list: Array<{ id: number; namespace: string; title: string; writer: string; pinned: boolean; changed: Array<{ path: string; since_commit: string }> }>): void {
+  console.log(`${list.length} note${list.length === 1 ? "" : "s"} written about code that has changed since:`);
+  for (const c of list) {
+    console.log(`  #${c.id} [${printable(c.namespace, 100)}] ${printable(c.title, 120)} (by ${printable(c.writer || "unknown", 100)})${c.pinned ? " pinned" : ""}`);
+    for (const f of c.changed.slice(0, 5)) console.log(`      ${printable(f.path, 200)} changed since commit ${printable(f.since_commit, 12)}`);
+  }
+  console.log('  Still right: monomem review keep <id>. Out of date: monomem supersede --old <id> --title "..." --body "..." (shows what changes, then asks).\n');
+}
+
 /**
  * `monomem review [--ns <ns>] [--json] [--confirm-all [--source <s>]]`: the notes waiting for a person. Titles are shown
  * here because the reader is the operator at a terminal; they never go into session start or an MCP reply.
@@ -2938,13 +2952,16 @@ async function reviewCmd(args: string[]): Promise<void> {
       console.error("Usage: monomem review keep <id>");
       process.exit(1);
     }
-    await requireOperator(`keep #${id} as it is (clears the agents' flags on this version)`, undefined, "person-confirm");
+    await requireOperator(`keep #${id} as it is (clears the agents' flags on this version, and marks its files as checked against the code now)`, undefined, "person-confirm");
     const { DB_PATH } = await import("./config.js");
     const { Store } = await import("./store.js");
     const store = new Store(DB_PATH);
     try {
       const n = store.keepFlagged(id);
-      console.log(n ? `Kept #${id}: cleared ${n} flag${n === 1 ? "" : "s"}. It is back in session start unless something else holds it.` : `#${id} has no flags on its current version. Nothing changed.`);
+      const moved = store.refreshCodeAnchors(id); // R2-03
+      if (n) console.log(`Kept #${id}: cleared ${n} flag${n === 1 ? "" : "s"}. It is back in session start unless something else holds it.`);
+      if (moved) console.log(`Kept #${id}: ${moved} changed file${moved === 1 ? "" : "s"} now count as checked against the current commit.`);
+      if (!n && !moved) console.log(`#${id} has no flags on its current version and no changed files. Nothing changed.`);
     } finally {
       store.close();
     }
@@ -2977,17 +2994,20 @@ async function reviewCmd(args: string[]): Promise<void> {
       return;
     }
     const flagged = store.flaggedList(ns !== undefined ? [ns] : undefined);
+    const codeChanged = store.codeChangedList(ns !== undefined ? [ns] : undefined);
     if (flags.json === true) {
-      console.log(JSON.stringify({ notes: items, flagged }, null, 2));
+      console.log(JSON.stringify({ notes: items, flagged, code_changed: codeChanged }, null, 2));
       if (flags["confirm-all"] !== true) return;
-    } else if (!items.length && !flagged.length) {
+    } else if (!items.length && !flagged.length && !codeChanged.length) {
       console.log("Nothing waits for review.");
       return;
     } else if (!items.length) {
-      printFlagged(flagged);
+      if (flagged.length) printFlagged(flagged);
+      if (codeChanged.length) printCodeChanged(codeChanged);
       return;
     } else {
       if (flagged.length) printFlagged(flagged);
+      if (codeChanged.length) printCodeChanged(codeChanged);
       console.log(`${items.length} note${items.length === 1 ? "" : "s"} wait for a person:`);
       for (const r of items) {
         console.log(`  #${r.id} [${printable(r.namespace, 100)}] ${printable(r.title, 120)} (by ${printable(r.writer || "unknown", 100)})`);
@@ -3816,6 +3836,27 @@ async function main(): Promise<void> {
     case "review":
       await reviewCmd(process.argv.slice(3));
       break;
+    case "stale": {
+      // R2-03: notes whose anchored files changed in git since they were written.
+      const { flags, rest } = parseFlags(process.argv.slice(3), { values: ["ns", "namespace"], bools: ["code", "json"] });
+      if (rest.length || flags.code !== true) {
+        console.error("Usage: monomem stale --code [--ns <namespace>] [--json]");
+        process.exit(1);
+      }
+      const ns = typeof flags.ns === "string" ? flags.ns : typeof flags.namespace === "string" ? flags.namespace : undefined;
+      const { DB_PATH } = await import("./config.js");
+      const { Store } = await import("./store.js");
+      const store = new Store(DB_PATH);
+      try {
+        const list = store.codeChangedList(ns !== undefined ? [ns] : undefined);
+        if (flags.json === true) console.log(JSON.stringify({ code_changed: list }, null, 2));
+        else if (!list.length) console.log("No note is about code that changed since it was written.");
+        else printCodeChanged(list);
+      } finally {
+        store.close();
+      }
+      break;
+    }
     case "taint":
       await taintCmd(process.argv.slice(3));
       break;

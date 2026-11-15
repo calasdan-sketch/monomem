@@ -107,6 +107,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **133 deterministic scenarios** (was 131): A 34, B 31, C 27, D 19, E 22. Obsolete-fact scenarios A33 and A34 in `monomem bench`. With the replace step the old value never reaches the agent (A34
   passes). Without it, search ranks the outdated note above its update (A33): recorded as the open known gap
   `GAP-OBSOLETE-UNREPLACED`, not hidden. MemoryAgentBench was not run (docs/BENCHMARK.md says why).
+- **Notes can say which files they are about, and are labelled when that code changes.** `files: ["src/auth.ts"]` on
+  `state_write` / `POST /notes` (creating, at most 20 git-tracked files in the writer's repository). After a commit changes
+  one, reads and session start show `[code changed since this was written: src/auth.ts]` and `code_changed`; the note is not
+  hidden, and a pinned one stays pinned. `monomem stale --code` and `monomem review` list them; `review keep <id>` marks them
+  checked. Compares with committed code only, using local git once per new commit. No git: nothing changes. Files cannot be
+  added to an existing note yet (docs/trust.md).
 - `/health` returns the version and schema; `doctor` warns when the running server is older than the CLI.
 - Pins travel through file sync (a file never unpins, and never pins an unconfirmed outside note).
 - Clearer everyday commands: a mistyped writer name gets "did you mean `stdio:…`" instead of an empty plan or a useless
