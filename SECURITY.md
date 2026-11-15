@@ -219,7 +219,8 @@ limits, stated plainly:
   were stored in plaintext. Monomem 1.5.0 binds each one to its own queue row.
 - Automatic capture with a key (Monomem 1.5.0): captured notes get fixed titles and
   no word tags, and the capture spool is sealed. Captured file paths and working
-  folders stay plaintext.
+  folders stay plaintext. Imported Claude Code chats (`import --from claude-code-chats`)
+  get the fixed title `Chat message (sealed)` the same way; their session-id tag stays plaintext.
 - `GET /export` returns decrypted bodies, so treat exports as sensitive.
 - Details: [docs/encryption-retention.md](./docs/encryption-retention.md).
 

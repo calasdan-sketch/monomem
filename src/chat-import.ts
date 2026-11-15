@@ -54,6 +54,15 @@ export function chatNotes(messages: readonly ChatMessage[]): ChatNote[] {
   });
 }
 
+/** The fixed title a chat note gets when the store seals writes (a key file is present): titles stay plaintext on disk. */
+export const SEALED_CHAT_TITLE = "Chat message (sealed)";
+
+/** Sealed store: like captured notes (SECURITY.md), the real title moves into the sealed body and a fixed title is stored. */
+export function sealedChatNote<T extends { title: string; body: string }>(n: T): T {
+  return { ...n, title: SEALED_CHAT_TITLE, body: `${n.title}
+${n.body}` };
+}
+
 type Rec = Record<string, unknown>;
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 

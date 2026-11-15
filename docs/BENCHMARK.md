@@ -338,7 +338,9 @@ Rall@5 / R@10 / Rall@10:
 The 400-character cut was set once and not tuned. Adding the turn *after* each turn as well was tried on both halves and
 made things worse (half b Rall@5 48.3 with the next turn only, 54.5 with both), so it is not done. LongMemEval-S and LoCoMo
 session are unchanged: their notes are whole sessions. Search time per query rose by about 1 ms (bodies are longer). The
-encrypted store gives the same figures (67.4 / 58.4 / 76.3 / 65.8).
+encrypted store stores chat turns as the import does there (a fixed title `Chat message (sealed)`, the real title as the
+sealed body's first line), so its figures differ slightly: 67.6 / 58.2 / 76.9 / 66.5 (halves a / b: 70.4 / 61.3 / 80.1 / 70.0
+and 64.8 / 55.0 / 73.6 / 63.0).
 
 **Speed at 10,000 notes (`monomem bench --scale 10k`), new in this round.** A synthetic store in a temp folder: 10,000 notes
 (10,200 after the timed writes) in 5 namespaces, made-up Zipf-distributed words, bodies 80 % 200-600 characters, 15 % 1.5-3k,
@@ -371,7 +373,7 @@ in-memory body index (C-06, below) was built, 2026-11-15:
 |---|---|---|---|
 | LongMemEval-S session (470), keyword | 97.2 / 85.7 / 98.7 / 91.8 | **97.2 / 85.7 / 98.7 / 91.8** | 3.9 / 13.6 ms (each haystack has one question, so every encrypted search includes the first-search build) |
 | LongMemEval-S session (470), relevant | 97.2 / 85.7 / 98.7 / 91.7 | **97.2 / 85.7 / 98.7 / 91.7** | 3.1 / 4.1 ms |
-| LoCoMo-10 turn (1,982), keyword (each turn with the one it replied to, see above) | 67.4 / 58.4 / 76.3 / 50.0 | **67.4 / 58.4 / 76.3 / 50.0** | 3.2 / 3.7 ms |
+| LoCoMo-10 turn (1,982), keyword (each turn with the one it replied to; encrypted: sealed fixed titles, see above) | 67.4 / 58.4 / 76.3 / 50.0 | **67.6 / 58.2 / 76.9 / 49.4** | 3.2 / 4.6 ms |
 | LoCoMo-10 session (1,982), keyword | 90.9 / 82.4 / 96.0 / 79.1 | **90.9 / 82.4 / 96.0 / 79.1** | 1.6 / 2.3 ms |
 
 (Re-run 2026-11-15 after the stems and rarity-weighted coverage above; the first C-06 run, before them, was likewise identical

@@ -525,13 +525,13 @@ and no judge (does the right conversation come back?). On one Windows PC, 2026-1
 | LoCoMo-10, 1,982 questions, by session | 90.9 % | 82.4 % | 96.0 % | 1.6 ms |
 | LoCoMo-10, 1,982 questions, by turn (the hard one: our weakest number), each turn stored with the turn it replied to, as `import --from claude-code-chats` does | 67.4 % | 58.4 % | 76.3 % | 3.2 ms |
 
-The same numbers with encryption on: the search index of decrypted bodies is kept in memory only (see Encryption below).
+The same numbers with encryption on, except by turn: 67.6 % / 58.2 % / 76.9 % (chat notes get a fixed sealed title there). The search index of decrypted bodies is kept in memory only (see Encryption below).
 The ranking settings were tuned on half the questions and checked on the other half; docs/BENCHMARK.md shows both halves,
 including the one figure that dipped on the held-out half.
 
-Optional hybrid search (keywords plus a local embedding model, `nomic-embed-text` via Ollama) does better still: LoCoMo-10
-by session 91.8 % / 96.7 %, by turn 66.3 % / 74.9 %, LongMemEval-S 98.5 % / 99.4 % (recall@5 / @10, full runs,
-13 to 22 ms per search (p50), measured 2026-11-09, before the 1.5.0 keyword ranking changes; not re-run since). Ties between equal scores go to the newest note, so a re-run
+Optional hybrid search (keywords plus a local embedding model, `nomic-embed-text` via Ollama) does better still (recall@5 / @10, full runs):
+LoCoMo-10 by session 92.2 % / 96.9 % and by turn 75.9 % / 84.6 % (measured 2026-11-15 on this release, 18 and 25 ms per
+search, p50); LongMemEval-S 98.5 % / 99.4 % (measured 2026-11-09, before the 1.5.0 keyword ranking changes; not re-run since). Ties between equal scores go to the newest note, so a re-run
 can move a by-turn figure by about 0.1 to 0.2 points.
 
 These are retrieval numbers, not the end-to-end QA accuracy memory vendors usually publish, so they are not comparable with

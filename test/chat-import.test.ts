@@ -4,10 +4,11 @@
 import "./setup-env.js";
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CHAT_TAG, chatNotes, readClaudeCodeChats, REPLY_CONTEXT_CHARS } from "../src/chat-import.js";
+import { ensureKey } from "../src/crypto.js";
+import { CHAT_TAG, SEALED_CHAT_TITLE, chatNotes, readClaudeCodeChats, REPLY_CONTEXT_CHARS } from "../src/chat-import.js";
 import { injectContext, rankContext } from "../src/context-inject.js";
 import { FOREIGN_SOURCES, runForeignImport, tagFor } from "../src/foreign-import.js";
 import { Store } from "../src/store.js";
@@ -125,6 +126,34 @@ describe("readClaudeCodeChats", () => {
       out.length = 0;
       assert.equal(await runForeignImport(e, io as never, { from: "claude-code-chats", path: root, dryRun: false, yes: true, dbPath }), 0);
       assert.match(out.join("\n"), /0 new, 3 already imported/);
+    } finally {
+      cleanup();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("import --from claude-code-chats on an encrypted store", () => {
+  test("titles are the fixed sealed title; the message words are nowhere in the database file; search still finds it", async () => {
+    const { root, cleanup } = fixture();
+    const dir = mkdtempSync(join(tmpdir(), "monomem-chats-enc-"));
+    ensureKey(dir);
+    const dbPath = join(dir, "state.db");
+    const out: string[] = [];
+    const io = { out: (s: string) => out.push(s), err: (s: string) => out.push(s), interactive: false, ask: async () => "" };
+    try {
+      assert.equal(await runForeignImport({ home: dir, env: {}, cwd: dir }, io as never, { from: "claude-code-chats", path: root, dryRun: false, yes: true, dbPath }), 0, out.join("\n"));
+      const store = new Store(dbPath);
+      try {
+        const all = store.list({ namespace: "chats", limit: 10 }).notes;
+        assert.equal(all.length, 3);
+        assert.ok(all.every((n) => n.title === SEALED_CHAT_TITLE), JSON.stringify(all.map((n) => n.title)));
+        assert.ok(all.some((n) => n.body.startsWith("Claude: Staging listens on 9443.\n")), "real title is the body's first line");
+      } finally {
+        store.close();
+      }
+      const bytes = readFileSync(dbPath).toString("latin1") + (existsSync(dbPath + "-wal") ? readFileSync(dbPath + "-wal").toString("latin1") : "");
+      assert.ok(!bytes.includes("9443") && !bytes.includes("Staging listens"), "message text leaked into the database file");
     } finally {
       cleanup();
       rmSync(dir, { recursive: true, force: true });

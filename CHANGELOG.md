@@ -92,7 +92,9 @@ upgrading from 1.3.x takes one step (docs/upgrading.md).
   dry run first, secrets skipped and never shown, the linter may hold a message, re-runs add only new messages; the dry run
   also counts files over 256 MB and damaged lines it skipped. The LoCoMo-10 by-turn benchmark now builds its notes with the
   same code: keyword R@5 / strict Rall@5 / R@10 60.8 / 52.2 / 67.7 -> **67.4 / 58.4 / 76.3** (held-out half b
-  58.8 / 49.6 / 65.1 -> 64.6 / 55.4 / 73.2); LongMemEval-S and LoCoMo by session unchanged; encrypted store identical.
+  58.8 / 49.6 / 65.1 -> 64.6 / 55.4 / 73.2); LongMemEval-S and LoCoMo by session unchanged. On an encrypted store a chat note gets the fixed title
+  `Chat message (sealed)` and its real title becomes the sealed body's first line (as captured notes do), so no message
+  text sits in plaintext titles; encrypted by turn 67.6 / 58.2 / 76.9.
 - **Search shows the part of a long note that matched.** When `state_search` cuts a body to 600 characters, it now shows the
   600 characters with the most of your query words instead of the first 600, and `body_offset` says where they start. It
   works on encrypted notes too. `state_list` and short notes are unchanged (docs/search.md).

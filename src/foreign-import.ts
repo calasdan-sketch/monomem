@@ -27,7 +27,7 @@ import { DatabaseSync } from "node:sqlite";
 import { MODEL_WRITTEN_TAG } from "./reserved-tags.js";
 import { chunkBody, looksLikeCredential, MAX_FILE_BYTES, parseFrontmatter, readHeld, writeHeld } from "./claude-import.js";
 import { lintContent } from "./lint.js";
-import { readClaudeCodeChats, type ChatStats } from "./chat-import.js";
+import { readClaudeCodeChats, sealedChatNote, type ChatStats } from "./chat-import.js";
 import { LIMITS, printable } from "./security.js";
 import type { SetupEnv, SetupIO } from "./setup.js";
 
@@ -458,7 +458,9 @@ export async function runForeignImport(e: Pick<SetupEnv, "home" | "env" | "cwd">
     let created = 0;
     let held = 0;
     let failed = 0;
-    for (const c of todo) {
+    const sealChats = from === "claude-code-chats" && writer.sealsWrites();
+    for (const raw of todo) {
+      const c = sealChats ? sealedChatNote(raw) : raw;
       const it = c.item;
       try {
         // ponytail: one write per item, no batching transaction; fine for tens of thousands of rows.

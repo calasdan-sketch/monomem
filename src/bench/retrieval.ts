@@ -3,7 +3,7 @@
 // retrieved sessions/turns are scored against the dataset's gold evidence (recall@k, strict recall-all@k, nDCG@10, MRR).
 import { BENCH_HOME } from "./retrieval-env.js"; // first: isolate MONOMEM_HOME before config.js loads
 import { createHash } from "node:crypto";
-import { chatNotes } from "../chat-import.js";
+import { chatNotes, sealedChatNote } from "../chat-import.js";
 import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
@@ -252,7 +252,9 @@ export async function runRetrieval(o: RetrievalOptions): Promise<RetrievalReport
       const unitOf = new Map<number, string>();
       const t0 = performance.now();
       const created = store.transaction(() =>
-        h.docs.map((d) => {
+        h.docs.map((raw) => {
+          // An encrypted store stores chat turns the way the import does there: fixed title, real title in the sealed body.
+          const d = o.encrypted && o.dataset === "locomo" && o.granularity === "turn" ? sealedChatNote(raw) : raw;
           if (d.body.length > LIMITS.body) truncated++;
           const n = store.create(
             { title: d.title, body: d.body.slice(0, LIMITS.body), created_at: d.date },
