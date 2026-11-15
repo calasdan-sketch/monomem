@@ -2,7 +2,7 @@
 // budgets, reserved tags, audit labels, idempotency, ack tokens, claims,
 // fields, compact catch_up.
 import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
-import { test, describe, before, after } from "node:test";
+import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,7 +10,7 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { Store, ValidationError } from "../src/store.js";
+import { Store } from "../src/store.js";
 import {
   putTask,
   listTasks,

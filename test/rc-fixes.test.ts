@@ -6,12 +6,9 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import fs, {
   chmodSync,
-  copyFileSync,
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
-  readFileSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -26,7 +23,6 @@ import { Store, MAX_FEED_MARKERS, feedScopeKey } from "../src/store.js";
 import { runChanges } from "../src/changes.js";
 import { scanForInjection } from "../src/lint.js";
 import { normalizeForScan } from "../src/security.js";
-import { PROJECT_ROOT } from "../src/config.js";
 import { exportMarkdown, importMarkdown } from "../src/sync.js";
 
 const STORE_JS = fileURLToPath(new URL("../src/store.js", import.meta.url));

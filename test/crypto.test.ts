@@ -4,7 +4,7 @@
 import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, existsSync, writeFileSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -21,7 +21,6 @@ import {
   ENC_PREFIX,
 } from "../src/crypto.js";
 
-const DAY_MS = 86_400_000;
 
 describe("crypto: envelope round-trip", () => {
   let dir: string;

@@ -34,6 +34,8 @@ jobs:
           node-version: ${{ matrix.node }}
       - run: npm ci
       - run: npm run build
+      - name: no unused locals or imports (src and test)
+        run: npx tsc -p tsconfig.json --noEmit --noUnusedLocals
       - run: npm test
       - name: provenance benchmark (exit 1 on a failed scenario)
         run: node dist/src/cli.js bench
