@@ -11,7 +11,7 @@ Applies to Monomem 1.3.x (and to a development build that already made the store
 
 - **What changes.** The first start migrates the database from schema v19 to **v22** (1.4.0 and 1.5.0 ship as one step): new columns on notes (when the upgrade ran,
   who approved a held write and when, the latest confirm), two on held writes (their forget date and confidence), one on capture
-  sessions, and two new tables (confirms, and "derived from" links between notes), and, from 1.5.0, when a note's title or body last changed (the re-confirmation clock starts there, not at any edit) and the folder of the local process that wrote it, plus two small tables (agents' "this looks wrong" flags, and the retry keys that stop a repeated write from saving a note twice) and two index changes. No note text is rewritten. Every note that exists
+  sessions, and two new tables (confirms, and "derived from" links between notes), and, from 1.5.0, when a note's title or body last changed (the re-confirmation clock starts there, not at any edit) and the folder of the local process that wrote it, plus three small tables (agents' "this looks wrong" flags, the retry keys that stop a repeated write from saving a note twice, and the per-writer counts `monomem trust` shows) and two index changes. No note text is rewritten. Every note that exists
   at the upgrade is marked with the upgrade time, so nothing that showed before the upgrade is hidden after it.
 - **A verified backup is made first**, at `<database>.pre-v22-backup`. The upgrade does not run if that copy cannot be made.
   Remove it when you are happy: `monomem backup --prune-premigration`. `monomem doctor` warns once a copy is more than 14 days old.

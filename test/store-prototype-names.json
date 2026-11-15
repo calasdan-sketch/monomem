@@ -200,6 +200,7 @@
  "recomputeEdgesFor",
  "recordDropped",
  "recordHistory",
+ "recordWriterEvent",
  "recoverStrandedKey",
  "refuseAgentOnPinned",
  "refusePaused",
@@ -293,5 +294,6 @@
  "windowTools",
  "writeKey",
  "writeLockHeld",
- "writerId"
+ "writerId",
+ "writerReputation"
 ]

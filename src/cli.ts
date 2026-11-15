@@ -2485,6 +2485,17 @@ function trustHelp(): void {
 }
 
 // `monomem trust ...`: the trust policy (docs/trust.md). Local, like every CLI command.
+/** R2-08: what happened to each writer's writes in the last 30 days. Counts only: Monomem holds or hides nothing because of them. */
+function printWriterRecord(r: Record<string, { quarantined: number; rejected: number; rolled_back: number; flags_upheld: number; superseded: number }>): void {
+  const writers = Object.keys(r).sort();
+  if (!writers.length) return void console.log("Writer record, last 30 days: nothing held, rejected, rolled back or replaced.");
+  console.log("Writer record, last 30 days (counts only; nothing is held or hidden because of them):");
+  for (const w of writers) {
+    const c = r[w];
+    console.log(`  ${printable(w, 60)}: held by the linter ${c.quarantined}, rejected by a person ${c.rejected}, rolled back ${c.rolled_back}, flags upheld ${c.flags_upheld}, replaced by someone else ${c.superseded}`);
+  }
+}
+
 async function trustCmd(): Promise<void> {
   const args = process.argv.slice(3);
   if (args.some((a) => a === "--help" || a === "-h") || args[0] === "help") {
@@ -2527,11 +2538,13 @@ async function trustCmd(): Promise<void> {
         // Read-only: never creates the signing key.
         const identity = store.peekIdentity();
         const view = store.trustView();
-        const out = { ...identity, distrust: view.distrust, attesters: view.attesters, revoked: view.revoked, log: view.log };
+        const reputation = store.writerReputation();
+        const out = { ...identity, distrust: view.distrust, attesters: view.attesters, revoked: view.revoked, log: view.log, writer_record_30d: reputation };
         if (flags.json) {
           console.log(JSON.stringify(out, null, 2));
           return;
         }
+        printWriterRecord(reputation);
         console.log(`This server: ${identity.server_id}${identity.key_id ? ` (signing key ${identity.key_id})` : " (no signing key yet: `monomem trust identity` creates it)"}`);
         console.log(`Distrusted writers (${out.distrust.length}):`);
         for (const r of out.distrust) console.log(`  [${r.namespace}] ${r.writer}  (added ${r.added_at} by ${r.added_by})`);

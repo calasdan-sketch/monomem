@@ -72,6 +72,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   start; a person-confirmed note stays, labelled. Own-note flags are refused, distrusted writers' flags ignored, 20 a day per
   writer. `monomem review` lists flagged notes; `monomem review keep <id>` keeps one. The reason is never shown at session
   start. See docs/trust.md.
+- `monomem trust` shows each writer's record for the last 30 days: writes held by the linter, rejected by a person, rolled
+  back, flags upheld and replaced by someone else. Counts only: nothing is held or hidden because of them.
 - **Retry-safe note writes:** `client_key` on `state_write` and `POST /notes` (as tasks already had). A retry with the same key
   from the same writer gets back the note the first write made (`deduplicated: true`; REST answers 200 instead of 201) and
   writes nothing, so it does not count toward the flood guard. Keys are per writer and stored hashed. Not covered: a write

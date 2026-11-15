@@ -267,6 +267,8 @@ export function rollbackConfirm(store: Store, caller: Caller, req: { token: unkn
     const archived: number[] = [];
     const restored: RollbackResult["restored"] = [];
     for (const a of plan.actions) {
+      // R2-08: counted against the note's writer as it stands before the rollback (a family name like "stdio" is not a writer).
+      store.recordWriterEvent(store.read(a.id)?.written_by ?? "", "rolled_back", a.id); // gate-ok: operator rollback, only the writer name is used
       if (a.action === "archive") {
         store.archive(a.id);
         archived.push(a.id);

@@ -30,6 +30,7 @@ describe("schema v22", () => {
     const db = s.captureDb() as unknown as DatabaseSync;
     assert.ok(names(db, "table").includes("note_flags"));
     assert.ok(names(db, "table").includes("note_client_keys"));
+    assert.ok(names(db, "table").includes("writer_events"));
     const idx = names(db, "index");
     assert.ok(idx.includes("idx_notes_live_kind"), "(archived_at, kind) index");
     assert.ok(!idx.includes("idx_note_edges_note_id"), "prefix of the note_edges primary key: dropped");

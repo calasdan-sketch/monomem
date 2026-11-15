@@ -110,7 +110,9 @@ import * as taintOps from "./store/taint.js";
 import * as clientKeyOps from "./store/client-keys.js";
 import * as flagOps from "./store/flags.js";
 import type { FlaggedItem, NoteFlag } from "./store/flags.js";
-export type { FlaggedItem, NoteFlag };
+import * as reputationOps from "./store/reputation.js";
+import type { WriterCounts, WriterEvent } from "./store/reputation.js";
+export type { FlaggedItem, NoteFlag, WriterCounts, WriterEvent };
 import { tagsToStorage, parseTags, dueBase, needsHumanConfirm, sealQuarantineCol, openQuarantineCol, isoOrNull, clampInt, envCount, floodWritesPerHour, isOperatorWrite, isPlainObject } from "./store/rows.js";
 export { dueBase, needsHumanConfirm, clampInt, floodWritesPerHour };
 export { ValidationError, NoteUnreadableError, StaleWriteError, RebuildBusyError, CandidateScanError, QuarantinedError, WriterPausedError };
@@ -2870,6 +2872,9 @@ export class Store {
       //    makes the unfiltered live COUNT covering.
       //  - note_flags (R2-02): "this looks wrong" flags. Nothing in the note changes; a flag names the rev it was about.
       //  - note_client_keys (R2-04): idempotency keys on note writes, per writer, stored hashed (never the raw key).
+      //  - writer_events (R2-08): what happened to a writer's writes (held by the linter, rejected, rolled back, flag upheld,
+      //    replaced), for the counts `monomem trust` shows. Counts only: no row outlives its usefulness by naming content, and
+      //    the rows stay when a note is deleted (the count is about the writer, not the note).
       this.db.exec(`
         DROP INDEX IF EXISTS idx_note_edges_note_id;
         CREATE INDEX IF NOT EXISTS idx_notes_live_kind ON notes(archived_at, kind);
@@ -2894,6 +2899,14 @@ export class Store {
           PRIMARY KEY (writer, key_hash)
         );
         CREATE INDEX IF NOT EXISTS idx_note_client_keys_note ON note_client_keys(note_id);
+        CREATE TABLE IF NOT EXISTS writer_events (
+          id INTEGER PRIMARY KEY,
+          writer TEXT NOT NULL,
+          event TEXT NOT NULL,
+          note_id INTEGER,
+          at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_writer_events ON writer_events(at, writer);
         DELETE FROM note_flags WHERE note_id NOT IN (SELECT id FROM notes);
         DELETE FROM note_client_keys WHERE note_id NOT IN (SELECT id FROM notes);
         DROP TRIGGER IF EXISTS notes_links_ad;
@@ -4724,9 +4737,16 @@ export class Store {
       input.oldIds.forEach((oid, i) => {
         if (oid === input.newId) throw new ValidationError("a note cannot replace itself");
         this.refuseAgentOnPinned(oid, "replacing it");
+        const before = this.read(oid);
         const res = upd.run(now, input.newId, now, input.actor, oid, input.oldRevs[i], target.namespace);
         if (Number(res.changes) === 0) {
           throw new StaleWriteError(`note ${oid} changed (or was retired, moved or removed) after the preview; nothing was changed`);
+        }
+        // R2-08: replaced by someone else through the two-step supersede (admin keys and the terminal only); a flag on the
+        // version it replaced is upheld.
+        if (before && before.written_by !== currentWriter()) {
+          this.recordWriterEvent(before.written_by, "superseded", oid);
+          if (before.flagged) this.recordWriterEvent(before.written_by, "flags_upheld", oid);
         }
         log.run(now, input.actor, target.namespace, oid, input.newId, input.flags ?? "");
       });
@@ -7971,6 +7991,16 @@ export class Store {
   /** R2-02: a person keeps a flagged note: the flags on its current version are cleared. Returns how many. */
   keepFlagged(id: number): number {
     return flagOps.keepFlagged(this, id);
+  }
+
+  /** R2-08: record what happened to a writer's write (inside the action's own transaction). */
+  /** @internal */ recordWriterEvent(writer: string, event: WriterEvent, noteId: number | null): void {
+    reputationOps.recordWriterEvent(this, writer, event, noteId);
+  }
+
+  /** R2-08: per writer, the last `days` (30) of held, rejected, rolled-back, flag-upheld and replaced writes. Counts only. */
+  writerReputation(days?: number): Record<string, WriterCounts> {
+    return reputationOps.writerReputation(this, days);
   }
 
   /** R2-04: create, unless this writer's `clientKey` already made a note (then that note, deduplicated: true, no write). */

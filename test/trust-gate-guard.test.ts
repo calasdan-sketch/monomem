@@ -96,6 +96,7 @@ const EXPECTED_SITES: Record<string, string[]> = {
   "rollback.ts": [
     "operator rollback (admin), confined to the caller's namespaces by rollbackCandidates",
     "re-embed what the operator just restored; nothing is returned",
+    "operator rollback, only the writer name is used",
   ],
   "tasks.ts": [
     "requireTaskRef: a distrusted task reads as absent",
