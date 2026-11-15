@@ -2784,9 +2784,9 @@ async function confirmCmd(args: string[]): Promise<void> {
  * here because the reader is the operator at a terminal; they never go into session start or an MCP reply.
  */
 async function reviewCmd(args: string[]): Promise<void> {
-  const { flags, rest } = parseFlags(args, { values: ["ns", "namespace", "source"], bools: ["json", "confirm-all"] });
-  if (rest.length) {
-    console.error('Usage: monomem review [--ns <namespace>] [--json] [--confirm-all [--source "what you checked"]]');
+  const { flags, rest } = parseFlags(args, { values: ["ns", "namespace", "source"], bools: ["json", "confirm-all", "step"] });
+  if (rest.length || (flags.step === true && (flags.json === true || flags["confirm-all"] === true))) {
+    console.error('Usage: monomem review [--ns <namespace>] [--json] [--confirm-all [--source "what you checked"]]\n       monomem review --step [--ns <namespace>] [--source "what you checked"]   (one note at a time: y confirm, n skip, q stop)');
     process.exit(1);
   }
   const ns = typeof flags.ns === "string" ? flags.ns : typeof flags.namespace === "string" ? flags.namespace : undefined;
@@ -2795,6 +2795,22 @@ async function reviewCmd(args: string[]): Promise<void> {
   const store = new Store(DB_PATH);
   try {
     const items = store.reviewList(ns !== undefined ? [ns] : undefined);
+    if (flags.step === true) {
+      if (!items.length) return void console.log("Nothing waits for review.");
+      await requireOperator(`review ${items.length} note${items.length === 1 ? "" : "s"} one at a time (each y is recorded as your confirm)`);
+      const readline = await import("node:readline/promises");
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      let ended = false;
+      rl.on("close", () => (ended = true));
+      try {
+        const { reviewSteps } = await import("./review-step.js");
+        const source = typeof flags.source === "string" ? flags.source : undefined;
+        await reviewSteps(store, items, { ask: async (q) => (ended ? null : rl.question(q).catch(() => null)), print: (l) => console.log(l) }, source);
+      } finally {
+        rl.close();
+      }
+      return;
+    }
     if (flags.json === true) {
       console.log(JSON.stringify({ notes: items }, null, 2));
       if (flags["confirm-all"] !== true) return;

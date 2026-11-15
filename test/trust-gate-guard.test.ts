@@ -51,6 +51,7 @@ const EXPECTED_SITES: Record<string, string[]> = {
   "quality.ts": ["admin-only report"],
   "conflicts.ts": ["admin-only report"],
   "why.ts": ["local shell command (why): the operator owns the database file"],
+  "review-step.ts": ["local CLI, the operator owns the database file"],
   "consolidate.ts": [
     "admin consolidation by ids: mixed trusted/distrusted sources are refused below",
     "candidate scan is filtered with store.filterVisible before use",
