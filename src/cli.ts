@@ -368,6 +368,9 @@ function usage(all = false): void {
       "            Run the provenance benchmark on a throwaway store: stale memory, contradiction recovery,",
       "            permission isolation, provenance retention. Offline, deterministic, exits 1 on a failure.",
       "            Your own data is never touched. See docs/BENCHMARK.md.",
+      "  bench --scale 10k [--json]",
+      "            Speed on a synthetic store (temp folder): session start, search and write p50/p95, plain and",
+      "            encrypted. Exits 1 at 10k+ notes when encrypted session start p50 is 50 ms or more.",
       "  bench --longmemeval | --locomo [--data file] [--limit n] [--mode keyword|hybrid] [--granularity session|turn] [--json]",
       "            Retrieval benchmark (recall@k, nDCG, MRR) on a public dataset, in a temp folder. No LLM.",
       "  drill [--json]",
@@ -3913,6 +3916,12 @@ async function main(): Promise<void> {
     }
     case "bench": {
       const args = process.argv.slice(3);
+      if (args.includes("--scale")) {
+        // Same isolation as the retrieval bench: scale.js moves MONOMEM_HOME to a temp folder before config.js loads.
+        const { scaleMain } = await import("./bench/scale.js");
+        process.exitCode = await scaleMain(args);
+        break;
+      }
       if (args.includes("--longmemeval") || args.includes("--locomo")) {
         // Imported before anything loads config.js: it moves MONOMEM_HOME to a temp folder first.
         const { retrievalMain } = await import("./bench/retrieval.js");

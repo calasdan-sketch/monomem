@@ -276,6 +276,29 @@ The honest headline for LongMemEval-S is therefore **84.0 strict / 96.8 any-hit 
 strict recall-all@5 with BM25 (its own figure, not re-run here), so on the strict metric the two are level, not the 12-point gap
 the any-hit number suggests.
 
+**Speed at 10,000 notes (`monomem bench --scale 10k`), new in this round.** A synthetic store in a temp folder: 10,000 notes
+(10,200 after the timed writes) in 5 namespaces, made-up Zipf-distributed words, bodies 80 % 200-600 characters, 15 % 1.5-3k,
+5 % 8-20k (the corpus shape of the round-2 performance seat). Built twice from the same seed: once plain, once with a key file
+beside the database (at-rest encryption on). Session start is `injectContext` for one namespace (2,000 notes), 30 runs on an
+open store after one warm-up; "open + session start" opens a new `Store` each time (a hook process, minus Node start-up).
+Search is a 2-word keyword query in one namespace, 150 runs. Write is `create` with similarity edges and the linter on, 200 runs
+on the full store. Three back-to-back runs, ms p50 / p95 (the third run overlapped heavier load from other agents):
+
+| Path | plain, run 1 / 2 / 3 | encrypted, run 1 / 2 / 3 |
+|---|---|---|
+| Session start (`injectContext`) | 8.8/10.1, 8.7/9.9, 9.8/15.6 | **12.5/15.6, 12.3/17.1, 18.2/42.0** |
+| Open store + session start | 23.2/32.2, 23.2/34.8, 24.6/32.8 | 28.6/54.7, 24.9/29.4, 39.3/115.7 |
+| Keyword search, 2 words | 6.9/10.4, 6.0/8.7, 6.8/10.4 | 3.3/4.9, 2.9/4.6, 5.7/14.2 (title + tags only, see below) |
+| Write (`create`, edges on) | 5.7/10.7, 5.9/11.7, 6.6/12.3 | 6.0/9.7, 5.7/9.9, 9.0/31.9 |
+| Build 10k (one transaction per 1,000, no edges) | 10.8 s, 10.4 s, 10.6 s | 14.0 s, 12.9 s, 25.1 s |
+
+**Release gate (10k encrypted session start p50 < 50 ms): PASS** in all three runs (12.3-18.2 ms; with a fresh store open each
+time 24.9-39.3 ms, also under 50). Limits of this measurement: the bulk build skips similarity edges, so the database is 31 MB
+instead of the about 57-60 MB the performance seat's fully-edged 10k store had (edges are 43 % of that file); session start does
+not read edges, but a smaller file caches better. The time for a whole `monomem recall` hook process (Node start-up included,
+657-760 ms in the performance seat's before table) was not re-measured. Encrypted search is faster only because it searches less
+text (next section). 1,000 notes for comparison: session start 5.3 / 8.8 ms plain / encrypted p50.
+
 ### Results, 2026-11-09 (expert round 4)
 
 Full runs on one Windows PC with this round's changes: keyword ranking weighs title 5, tags 2, body 1 (`bm25(notes_fts, 5, 1, 2)`),
