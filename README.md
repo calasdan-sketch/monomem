@@ -399,6 +399,9 @@ shipped in the npm package** — build it from the repo.
 | `memory_ack` | read | confirm a manual-ack change-feed page |
 | `memory_stats` | read | totals, most-read, never-read, stale |
 | `memory_quarantine` | admin | review linter-held writes |
+| `memory_confirm` | write | record that you checked an unconfirmed note against a source (counts only for a token caller that did not write the note; a person's pin still needs a person) |
+| `memory_flag` | write | say a note looks wrong, with a one-line reason, instead of overwriting it |
+| `memory_receipt` / `memory_why` | read | which notes session start showed an agent and why; why a note is where it is (titles only, never the body) |
 | `trust_policy` | admin | list / change the per-namespace distrust list and the trusted attester keys ([docs/trust.md](./docs/trust.md)) |
 | `memory_supersede_preview` / `memory_supersede_confirm` / `memory_supersede_undo` | write | replace a note in two steps (preview changes nothing; confirm needs its one-time code); undo ([docs/replacing-memories.md](./docs/replacing-memories.md)) |
 | `memory_history` / `memory_restore_version` / `memory_history_purge` | admin | earlier versions of a note; put one back as a new version; forget them |

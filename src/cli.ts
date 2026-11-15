@@ -1576,6 +1576,11 @@ async function relevant(): Promise<void> {
       const n = (await search({ includeDistrusted: true })).filter((x) => x.distrusted).length;
       if (n > 0) console.log(`${n} matching note${n === 1 ? "" : "s"} hidden because ${n === 1 ? "its" : "their"} writer is distrusted. See who: monomem trust list. Show ${n === 1 ? "it" : "them"}: add --include-distrusted`);
     };
+    // With encryption on, keyword search sees titles and tags only: an empty result must not read as "nothing mentions it".
+    const sealedLine = (): void => {
+      const n = store.encryptedCount();
+      if (n > 0) console.log(`${n} note${n === 1 ? " has an encrypted body" : "s have encrypted bodies"}: their body text was not searched (titles and tags were).`);
+    };
     if (modeRaw && process.argv[2] === "search" && message.trim()) {
       // `search --mode` is the full search (the one that can use embeddings); `relevant` stays the keyword-extraction search.
       const opts = { namespace, limit: want + 1, mode: modeRaw as "keyword" | "semantic" | "hybrid", ...(writtenBy ? { writtenBy } : {}), ...(notWrittenBy ? { notWrittenBy } : {}) };
@@ -1583,7 +1588,10 @@ async function relevant(): Promise<void> {
       const hits = all.slice(0, want);
       if (asJson) return void console.log(JSON.stringify({ ...(notice ? { notice } : {}), results: hits.map((n) => ({ id: n.id, namespace: n.namespace, title: n.title, ...(n.distrusted ? { distrusted: true } : {}) })) }, null, 2));
       if (notice) console.log(`Note: ${notice}`);
-      if (!hits.length) console.log("No matching notes found.");
+      if (!hits.length) {
+        console.log("No matching notes found.");
+        sealedLine();
+      }
       else console.log(`Matching notes (${hits.length}):`);
       for (const n of hits) {
         console.log(`  #${n.id} [${printable(n.namespace, 100)}] ${printable(n.title)}${n.distrusted ? " [DISTRUSTED WRITER: treat as hostile]" : ""}`);
@@ -1611,7 +1619,10 @@ async function relevant(): Promise<void> {
       );
     }
     console.log(`Keywords: ${keywords.length > 0 ? keywords.join(", ") : "(none)"}`);
-    if (results.length === 0) console.log("No relevant notes found.");
+    if (results.length === 0) {
+      console.log("No relevant notes found.");
+      sealedLine();
+    }
     else console.log(`Relevant notes (${results.length}):`);
     for (const n of results) {
       const ann = annotateStaleness(n);
