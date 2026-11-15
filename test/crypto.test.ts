@@ -107,6 +107,9 @@ describe("crypto: key management", () => {
       assert.equal(encryptionEnabled(noKeyDir), false, "no key file = off");
       ensureKey(noKeyDir);
       assert.equal(encryptionEnabled(noKeyDir), true, "key file = on");
+      // S-06: the Store seals whenever the key file is there, so status must say "on" too: MONOMEM_ENCRYPT=0 is not read.
+      process.env.MONOMEM_ENCRYPT = "0";
+      assert.equal(encryptionEnabled(noKeyDir), true, "MONOMEM_ENCRYPT=0 does not make status say off while writes are sealed");
     } finally {
       delete process.env.MONOMEM_ENCRYPT;
       rmSync(noKeyDir, { recursive: true, force: true });

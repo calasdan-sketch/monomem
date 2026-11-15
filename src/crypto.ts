@@ -79,9 +79,10 @@ export function keyPath(dataDir: string): string {
  * source of truth. A stale MONOMEM_ENCRYPT=1 with no key would produce
  * unreadable notes, so we never infer "on" from an environment variable
  * alone. `monomem encrypt enable` creates the key; `disable` removes it.
+ * Nor "off" (1.5.0 S-06): MONOMEM_ENCRYPT=0 used to change only what status
+ * printed while the Store kept sealing by the key file. It is not read.
  */
 export function encryptionEnabled(dataDir: string): boolean {
-  if (process.env.MONOMEM_ENCRYPT === "0") return false; // hard off (tests)
   try {
     return existsSync(keyPath(dataDir));
   } catch {
