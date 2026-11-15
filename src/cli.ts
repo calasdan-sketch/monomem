@@ -514,6 +514,20 @@ async function doctor(): Promise<void> {
     const sample = edges === 0 && total >= 2 ? s.list({ limit: 60 }).notes : [];
     hasLabelled = s.labelledAboveDefault() > 0;
     hasPrivate = s.hasPrivateNotes();
+    // 1.5.0 (S-03): say plainly when sealed notes have no key, or a key sits next to readable bodies.
+    {
+      const { keyPath } = await import("./crypto.js");
+      const { dirname } = await import("node:path");
+      const { existsSync } = await import("node:fs");
+      const kp = keyPath(dirname(DB_PATH));
+      const sealed = s.encryptedCount();
+      if (sealed > 0 && !existsSync(kp)) {
+        fail(`${sealed} note${sealed === 1 ? " is" : "s are"} encrypted, but the key is missing at ${kp}`, "Put the key file back (from the computer or backup it came from). Without it those notes cannot be read.");
+      } else if (existsSync(kp)) {
+        const plain = s.plaintextBodyCount();
+        if (plain > 0) warn(`${plain} note bod${plain === 1 ? "y is" : "ies are"} not encrypted although encryption is on`, "Seal them: monomem encrypt enable");
+      }
+    }
     distrustCount = s.distrustRules().length;
     const { meterStats, meterLine } = await import("./meter.js");
     const footprint = meterLine(meterStats(s));
@@ -3242,6 +3256,8 @@ async function encryptCmd(): Promise<void> {
       console.log(`encryption: ${enabled ? "on" : "off"}`);
       console.log(`key file:   ${keyFile}${enabled ? "" : " (not present)"}`);
       console.log(`encrypted bodies: ${store.encryptedCount()}`);
+      const plain = store.plaintextBodyCount();
+      console.log(`plaintext bodies: ${plain}${enabled && plain > 0 ? "  (seal them: monomem encrypt enable)" : ""}`);
       if (enabled) {
         console.log(
           "note: keyword search covers title+tags only for encrypted notes " +

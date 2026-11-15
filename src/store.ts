@@ -5266,6 +5266,12 @@ export class Store {
   }
 
   /** Count of notes whose body is stored encrypted at rest. */
+  /** 1.5.0 (S-03): notes whose body is stored readable (meaningful when a key exists: `encrypt enable` seals them). */
+  plaintextBodyCount(): number {
+    const r = this.db.prepare("SELECT COUNT(*) AS c FROM notes WHERE body_enc IS NULL AND body <> ''").get() as { c: number };
+    return Number(r.c);
+  }
+
   encryptedCount(): number {
     const r = this.db.prepare("SELECT COUNT(*) AS c FROM notes WHERE body_enc IS NOT NULL").get() as {
       c: number;
