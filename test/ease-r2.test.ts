@@ -2,7 +2,7 @@
 import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
 import { test, describe, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { computeHealth } from "../src/digest.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -351,5 +351,22 @@ describe("U-15 the first run looks right", () => {
       } finally {
         rmSync(profile, { recursive: true, force: true });
       }
+    }));
+});
+
+describe("U-17 doctor warns about pre-upgrade copies older than 14 days", () => {
+  test("an old copy is a [warn] with its size and age; a recent one stays [info]", () =>
+    withDir((dir) => {
+      assert.equal(run(dir, ["add", "x"]).status, 0);
+      const old = join(dir, "t.db.pre-v20-backup");
+      const fresh = join(dir, "t.db.pre-v21-backup");
+      writeFileSync(old, Buffer.alloc(2_100_000));
+      writeFileSync(fresh, Buffer.alloc(10));
+      const past = new Date(Date.now() - 20 * 86_400_000);
+      utimesSync(old, past, past);
+      const out = run(dir, ["doctor"]).stdout;
+      assert.match(out, /\[warn\] .*pre-upgrade copy .*t\.db\.pre-v20-backup \(2\.1 MB, 20 days old\)/);
+      assert.match(out, /monomem backup --prune-premigration/);
+      assert.match(out, /\[info\] pre-upgrade copy .*t\.db\.pre-v21-backup/);
     }));
 });

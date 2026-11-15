@@ -379,6 +379,7 @@ function usage(all = false): void {
 /** doctor warns above these (docs/footprint.md). */
 const DOCTOR_MAX_DATA_BYTES = 1e9;
 const DOCTOR_MAX_BACKLOG = 10_000;
+const PREMIGRATION_WARN_DAYS = 14;
 
 /** doctor: settings that weaken protection, plus a data folder a cloud-sync client may copy. Warnings only; the list is shared with `monomem health`. */
 async function doctorSecurityChecks(dataDir: string, bindHost: string, warn: (m: string) => void): Promise<void> {
@@ -615,6 +616,14 @@ async function doctor(): Promise<void> {
     const mb = (b.bytes / 1e6).toFixed(1);
     if (/\.partial(-journal|-wal|-shm)?$/.test(b.path)) {
       warn(`unfinished pre-upgrade copy ${b.path} (${mb} MB, ${b.age_days} day(s) old): a copy that was interrupted. It is safe to delete (monomem backup --prune-premigration).`);
+      continue;
+    }
+    // Two weeks is long enough to notice a bad upgrade; after that the copy is mostly old notes nobody meant to keep (1.5.0 U-17).
+    if (b.age_days > PREMIGRATION_WARN_DAYS) {
+      warn(
+        `pre-upgrade copy ${b.path} (${mb} MB, ${b.age_days} days old) is more than ${PREMIGRATION_WARN_DAYS} days old. It still holds notes you may since have deleted or encrypted.`,
+        "If the upgrade works for you, remove it: monomem backup --prune-premigration  (this removes every pre-upgrade copy next to the database)"
+      );
       continue;
     }
     console.log(
