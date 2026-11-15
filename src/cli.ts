@@ -1983,8 +1983,9 @@ async function changes(): Promise<void> {
       `Changes ${page.since} -> ${page.until}: ${c.created} created, ${c.updated} updated, ${c.deleted} deleted` +
         (page.quarantined ? `, ${page.quarantined} quarantined` : "")
     );
-    for (const [src, n] of Object.entries(page.bySource)) {
-      console.log(`  ${src || "(no source)"}: +${n.created} ~${n.updated} -${n.deleted}`);
+    // Grouped by who the server stamped as the writer, not by the source a writer claims for itself (any app can claim one).
+    for (const [w, n] of Object.entries(page.byWriter)) {
+      console.log(`  ${w ? printable(w, 100) : "(writer not recorded)"}: +${n.created} ~${n.updated} -${n.deleted}`);
     }
     // One page only (--limit entries, default 100): a long window is summed up above, not printed in full.
     // Except --since last: its marker moves only when the final page is read, so every page is printed.
@@ -1992,7 +1993,8 @@ async function changes(): Promise<void> {
     for (;;) {
       for (const e of page.changes) {
         const mark = e.kind === "created" ? "+" : e.kind === "updated" ? "~" : "-";
-        console.log(`${mark} #${e.id} [${printable(e.namespace, 100)}] ${printable(e.title)}  (${e.at}${e.source ? `, ${printable(e.source)}` : ""})${e.distrusted ? " [DISTRUSTED WRITER]" : ""}`);
+        const by = `${e.written_by ? `, by ${printable(e.written_by, 100)}` : ""}${e.source ? `, claims "${printable(e.source, 100)}"` : ""}`;
+        console.log(`${mark} #${e.id} [${printable(e.namespace, 100)}] ${printable(e.title)}  (${e.at}${by})${e.distrusted ? " [DISTRUSTED WRITER]" : ""}`);
       }
       if (!page.nextCursor) break;
       if (!isLast) {

@@ -201,3 +201,24 @@ describe("U-03 setup says plainly whether the start-of-session hook was installe
     }
   });
 });
+
+describe("U-04 changes groups by the stamped writer; the claimed source is shown as a claim", () => {
+  test("two agent writes with no source show under stdio:cursor, and a claimed source is labelled 'claims'", () =>
+    withDir((dir) => {
+      const s = new Store(join(dir, "t.db"));
+      try {
+        setProcessWriter("stdio:cursor");
+        s.create({ namespace: "work", title: "One", body: "a" });
+        s.create({ namespace: "work", title: "Two", body: "b", source: "claude-code" });
+      } finally {
+        s.close();
+        setProcessWriter("");
+      }
+      const r = run(dir, ["changes", "--since", "1h"]);
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stdout, /^  stdio:cursor: \+2 ~0 -0$/m);
+      assert.doesNotMatch(r.stdout, /\(no source\)/);
+      assert.match(r.stdout, /#2 .*by stdio:cursor, claims "claude-code"/);
+      assert.match(r.stdout, /#1 .*by stdio:cursor\)/);
+    }));
+});

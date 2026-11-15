@@ -45,6 +45,10 @@ Scope: **read** (REST and MCP).
     "phone":       { "created": 1, "updated": 1, "deleted": 0 },
     "claude-code": { "created": 1, "updated": 0, "deleted": 1 }
   },
+  "byWriter": {
+    "token:phone":  { "created": 1, "updated": 1, "deleted": 0 },
+    "stdio:claude-code": { "created": 1, "updated": 0, "deleted": 1 }
+  },
   "quarantined": 0,
   "changes": [
     { "kind": "created", "id": 41, "namespace": "work", "title": "Release cadence",
@@ -64,7 +68,9 @@ Scope: **read** (REST and MCP).
 - Entries are oldest first. A note created *and* edited in the window shows
   once, as `created`, with its current title; created-then-deleted shows only
   the delete. Consolidation shows as one `created` plus the deleted sources.
-- `counts` / `bySource` cover the **whole window**, not just the page.
+- `counts` / `bySource` / `byWriter` cover the **whole window**, not just the page.
+  `source` is what the writer *claims*; `byWriter` groups by the writer the server stamped (`written_by`), which is
+  what `monomem changes` prints (each line shows `by <writer>` and, when set, `claims "<source>"`).
   `quarantined` counts linter-held writes queued in the window (they are not
   notes; see [memory-linter.md](./memory-linter.md)).
 - The window is frozen when the first page is requested (it ends at the

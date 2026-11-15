@@ -599,8 +599,10 @@ export interface ChangesPage {
   changes: ChangeEntry[];
   /** Totals over the whole window, not just this page. */
   counts: ChangeCounts & { total: number };
-  /** Totals grouped by provenance source ("" = unattributed). */
+  /** Totals grouped by provenance source ("" = unattributed). The source is what the writer CLAIMS. */
   bySource: Record<string, ChangeCounts>;
+  /** Totals grouped by the stamped writer of each change (written_by; "" = unknown). */
+  byWriter: Record<string, ChangeCounts>;
   /** Linter-held writes queued in the window (not notes; see quarantine). */
   quarantined: number;
   /** Opaque cursor for the next page; null when this was the last page. */
@@ -7144,6 +7146,7 @@ export class Store {
       changes: [],
       counts: { created: 0, updated: 0, deleted: 0, total: 0 },
       bySource: {},
+      byWriter: {},
       quarantined: 0,
       nextCursor: null,
       consumer: c.c ?? null,
@@ -7286,15 +7289,19 @@ export class Store {
     let totals = c.n;
     if (!totals) {
       const grouped = this.db
-        .prepare(`SELECT source, kind, COUNT(*) AS n FROM (${eventsSql}) GROUP BY source, kind`)
-        .all(...eventParams) as Array<{ source: string; kind: ChangeEntry["kind"]; n: number }>;
+        .prepare(`SELECT source, written_by, kind, COUNT(*) AS n FROM (${eventsSql}) GROUP BY source, written_by, kind`)
+        .all(...eventParams) as Array<{ source: string; written_by: string | null; kind: ChangeEntry["kind"]; n: number }>;
       const counts = { created: 0, updated: 0, deleted: 0, total: 0 };
       const bySource: Record<string, ChangeCounts> = {};
+      const byWriter: Record<string, ChangeCounts> = {};
       for (const g of grouped) {
         const n = Number(g.n);
         const key = g.source ?? "";
         bySource[key] ??= { created: 0, updated: 0, deleted: 0 };
         bySource[key][g.kind] += n;
+        const w = g.written_by ?? "";
+        byWriter[w] ??= { created: 0, updated: 0, deleted: 0 };
+        byWriter[w][g.kind] += n;
         counts[g.kind] += n;
         counts.total += n;
       }
@@ -7307,9 +7314,10 @@ export class Store {
             .get(c.s, c.u, ...nsParams, ...srcParams) as { c: number }
         ).c
       );
-      totals = { counts, bySource, q };
+      totals = { counts, bySource, byWriter, q };
     }
     const { counts, bySource } = totals;
+    const byWriter = totals.byWriter ?? {}; // a cursor minted before 1.5.0 carries no byWriter
     const quarantined = totals.q;
     const last = pageRows[pageRows.length - 1];
     return {
@@ -7318,6 +7326,7 @@ export class Store {
       changes: page,
       counts,
       bySource,
+      byWriter,
       quarantined,
       nextCursor: more && last ? this.encodeCursor({ ...c, a: Number(last.seq), n: totals }) : null,
       consumer: c.c ?? null,
@@ -9401,7 +9410,7 @@ interface FeedCursor {
   /** exclude_self: hide changes whose source equals this label */
   x?: string;
   /** The window's totals, counted once on the first page and carried (signed) to the later ones. */
-  n?: { counts: ChangesPage["counts"]; bySource: ChangesPage["bySource"]; q: number };
+  n?: { counts: ChangesPage["counts"]; bySource: ChangesPage["bySource"]; byWriter?: ChangesPage["byWriter"]; q: number };
 }
 
 /** Most "last" markers a store keeps (see Store.setFeedMarker). */

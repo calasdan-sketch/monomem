@@ -284,7 +284,7 @@ dashboard's **Usage** view. Tokens are estimates at about 4 characters a token.
   in total, mostly the MCP SDK's own), no native modules, no vector database,
   no Python. Back it up by copying one file.
 - **Change feed.** `memory_since` / `GET /changes`: "what changed while I was
-  away" — created, updated **and deleted** notes grouped by source, with a
+  away" — created, updated **and deleted** notes grouped by the writer that made them, with a
   per-device "since I last looked" marker. Driven by a local change log, so
   restores, file-sync imports and deletes are never missed. → [docs/change-feed.md](./docs/change-feed.md)
 - **Live wait.** `GET /changes?wait=25` / `memory_since { wait_seconds: 25 }` parks
