@@ -264,3 +264,22 @@ describe("U-07 restore <id> <version> points to history restore", () => {
       assert.doesNotMatch(r.stderr, /is not archived/);
     }));
 });
+
+describe("U-08 the verbs people try first get a hint (nothing runs)", () => {
+  test("undo, approve, reject and distrust name the real commands; help <verb> does too", () =>
+    withDir((dir) => {
+      const undo = run(dir, ["undo"]);
+      assert.equal(undo.status, 1);
+      assert.match(undo.stderr, /monomem history restore <id> <version>/);
+      assert.match(undo.stderr, /monomem rollback --writer <writer> --since 1h/);
+      assert.match(undo.stderr, /monomem supersede undo <id>/);
+      assert.match(run(dir, ["approve", "3"]).stderr, /monomem quarantine approve <id>/);
+      assert.match(run(dir, ["reject"]).stderr, /monomem quarantine reject <id>/);
+      const d = run(dir, ["distrust", "cursor"]);
+      assert.equal(d.status, 1);
+      assert.match(d.stderr, /monomem trust distrust <writer> --namespace '\*'/);
+      assert.match(run(dir, ["help", "undo"]).stdout, /monomem history restore/);
+      // Nothing ran: no database was even created.
+      assert.equal(JSON.parse(run(dir, ["trust", "list", "--json"]).stdout).distrust.length, 0);
+    }));
+});

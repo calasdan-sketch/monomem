@@ -34,6 +34,26 @@ function editDistance(a: string, b: string): number {
   return prev[b.length];
 }
 
+/**
+ * Words people type first that are not commands. Each gets the real commands as a hint; nothing runs (no aliases: approve
+ * and distrust are trust decisions, so the person types the full command and sees what it does).
+ */
+const VERB_HINTS: Record<string, string> = {
+  undo: [
+    "There is no 'undo' command. What do you want to undo?",
+    "  An edit to one note:            monomem history <id>, then  monomem history restore <id> <version>",
+    "  Everything one agent did:       monomem rollback --writer <writer> --since 1h   (shows the plan first)",
+    "  A replacement (supersede):      monomem supersede undo <id>",
+    "  A forgotten note:               monomem restore <id>",
+    "  The last setup run:             monomem setup --undo",
+  ].join("\n"),
+  approve: "There is no 'approve' command. To approve a held write: monomem quarantine approve <id>   (see them: monomem quarantine list)",
+  reject: "There is no 'reject' command. To reject a held write: monomem quarantine reject <id>   (see them: monomem quarantine list)",
+  distrust:
+    "There is no 'distrust' command. To leave a writer's notes out of every read: monomem trust distrust <writer> --namespace '*'\n" +
+    "  A local app's notes are written by stdio:<app> (for example stdio:cursor); monomem show <id> prints a note's writer.",
+};
+
 /** The closest known command, or undefined when nothing is plausibly what the person meant. */
 function suggestCommand(cmd: string): string | undefined {
   let best: string | undefined;
@@ -3570,6 +3590,11 @@ async function main(): Promise<void> {
     }
   }
   if (!COMMANDS.includes(cmd)) {
+    const hint = Object.hasOwn(VERB_HINTS, cmd.toLowerCase()) ? VERB_HINTS[cmd.toLowerCase()] : undefined;
+    if (hint) {
+      console.error(hint);
+      process.exit(1);
+    }
     const guess = suggestCommand(cmd);
     console.error(`Unknown command '${cmd}'.${guess ? ` Did you mean '${guess}'?` : ""}\nRun 'monomem help' to see the commands.`);
     process.exit(1);
@@ -3846,7 +3871,8 @@ async function main(): Promise<void> {
     case "-h": {
       // `monomem help <cmd>` is the same as `monomem <cmd> --help`; an unknown word falls back to the general help.
       const sub = process.argv[3];
-      if (sub && sub !== "all" && !sub.startsWith("-") && helpFor(sub)) printCommandHelp(sub);
+      if (sub && Object.hasOwn(VERB_HINTS, sub.toLowerCase())) console.log(VERB_HINTS[sub.toLowerCase()]);
+      else if (sub && sub !== "all" && !sub.startsWith("-") && helpFor(sub)) printCommandHelp(sub);
       else usage(process.argv.includes("--all") || sub === "all");
       break;
     }
