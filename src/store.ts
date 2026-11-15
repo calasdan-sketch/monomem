@@ -1355,6 +1355,9 @@ export function accessFlushMs(): number {
  * `autoMax` (MONOMEM_EDGE_AUTO_MAX_NOTES, default 100,000) is not indexed automatically at all: new notes there get no
  * automatic similarity links until `monomem rebuild-edges` is run.
  */
+/** _meta key prefix for a failed background edge build (F-06). */
+const EDGE_FAIL_PREFIX = "edge_build_failed:";
+
 export function edgeBuildLimits(): { syncMax: number; autoMax: number; sliceMs: number } {
   const num = (v: string | undefined, def: number): number => {
     const n = Number(v);
@@ -5440,63 +5443,61 @@ export class Store {
       withTagPrefix?: string;
       /** v16: newest-created first or oldest-created first, instead of last-updated first (timelines). */
       order?: "created_desc" | "created_asc";
+      /** 1.5.0 F-01: false skips the COUNT(*); `total` is then just the page size. Default true. */
+      count?: boolean;
     } & RangeOpts = {}
   ): {
     notes: NoteRecord[];
     total: number;
   } {
-    const limit = clampInt(opts.limit, 50, 1, 500);
-    const offset = clampInt(opts.offset, 0, 0, Number.MAX_SAFE_INTEGER);
-    const range = this.rangeFor(opts, opts.namespaces ?? (opts.namespace ? [opts.namespace] : undefined));
-    const tagF = tagClause(opts.withTags, opts.withoutTags, opts.withTagPrefix);
+    if (opts.namespaces && opts.namespaces.length === 0) return { notes: [], total: 0 };
+    const q = this.listQuery(opts, "*");
+    const rows = q.rows as unknown as NoteRow[];
+    // 1.5.0 F-01: callers that ignore `total` (session start) skip the COUNT, a row scan when a tag filter is set.
+    const total = opts.count === false ? rows.length : q.count();
+    const out = rows.filter(q.exact).map((r) => this.rec(r));
+    return { notes: opts.includeDistrusted ? this.markDistrusted(out) : out, total };
+  }
+
+  /** The ids list() would return (same filters, order, paging), without reading or decrypting bodies. 1.5.0 F-02. */
+  listIds(opts: Parameters<Store["list"]>[0] = {}): number[] {
+    if (opts.namespaces && opts.namespaces.length === 0) return [];
+    const q = this.listQuery(opts, "id, tags");
+    return (q.rows as unknown as Array<{ id: number; tags: string }>).filter(q.exact).map((r) => r.id);
+  }
+
+  /** Shared by list() and listIds(): the page of `cols` plus what the COUNT needs. */
+  private listQuery(opts: Parameters<Store["list"]>[0], cols: string) {
+    const o = opts ?? {};
+    const limit = clampInt(o.limit, 50, 1, 500);
+    const offset = clampInt(o.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+    const range = this.rangeFor(o, o.namespaces ?? (o.namespace ? [o.namespace] : undefined));
+    const tagF = tagClause(o.withTags, o.withoutTags, o.withTagPrefix);
     // Archived filter: default hides archived; archivedOnly inverts it.
-    const archSql = archivedClause(opts.includeArchived, opts.archivedOnly, opts.includeSuperseded, opts.supersededOnly);
+    const archSql = archivedClause(o.includeArchived, o.archivedOnly, o.includeSuperseded, o.supersededOnly);
     const extra = [...range.params, ...tagF.params];
     // SQL LIKE is only a prefilter (tags are a JSON array string); the exact
     // match is re-checked below so a tag never matches inside another value.
-    const exact = (r: NoteRow): boolean => tagsMatch(r.tags, opts.withTags, opts.withoutTags, opts.withTagPrefix);
-    const orderSql = opts.order === "created_asc" ? "created_at ASC, id ASC" : opts.order === "created_desc" ? "created_at DESC, id DESC" : "updated_at DESC, id DESC";
-
-    let rows: NoteRow[];
-    let total: number;
-
-    if (opts.namespaces) {
-      if (opts.namespaces.length === 0) return { notes: [], total: 0 };
-      const inList = `namespace IN (${opts.namespaces.map(() => "?").join(",")})`;
-      rows = this.db
-        .prepare(
-          `SELECT * FROM notes WHERE ${inList}${archSql}${range.sql}${tagF.sql} ORDER BY ${orderSql} LIMIT ? OFFSET ?`
-        )
-        .all(...opts.namespaces, ...extra, limit, offset) as unknown as NoteRow[];
-      total = (
-        this.db
-          .prepare(`SELECT COUNT(*) as c FROM notes WHERE ${inList}${archSql}${range.sql}${tagF.sql}`)
-          .get(...opts.namespaces, ...extra) as { c: number }
-      ).c;
-    } else if (opts.namespace) {
-      rows = this.db
-        .prepare(
-          `SELECT * FROM notes WHERE namespace = ?${archSql}${range.sql}${tagF.sql} ORDER BY ${orderSql} LIMIT ? OFFSET ?`
-        )
-        .all(opts.namespace, ...extra, limit, offset) as unknown as NoteRow[];
-      total = (
-        this.db
-          .prepare(`SELECT COUNT(*) as c FROM notes WHERE namespace = ?${archSql}${range.sql}${tagF.sql}`)
-          .get(opts.namespace, ...extra) as { c: number }
-      ).c;
+    const exact = (r: { tags: string }): boolean => tagsMatch(r.tags, o.withTags, o.withoutTags, o.withTagPrefix);
+    const orderSql = o.order === "created_asc" ? "created_at ASC, id ASC" : o.order === "created_desc" ? "created_at DESC, id DESC" : "updated_at DESC, id DESC";
+    let scope: string;
+    let scopeArgs: Array<string | number>;
+    if (o.namespaces) {
+      scope = `namespace IN (${o.namespaces.map(() => "?").join(",")})`;
+      scopeArgs = o.namespaces;
+    } else if (o.namespace) {
+      scope = "namespace = ?";
+      scopeArgs = [o.namespace];
     } else {
-      rows = this.db
-        .prepare(
-          `SELECT * FROM notes WHERE 1 = 1${archSql}${range.sql}${tagF.sql} ORDER BY ${orderSql} LIMIT ? OFFSET ?`
-        )
-        .all(...extra, limit, offset) as unknown as NoteRow[];
-      total = (
-        this.db.prepare(`SELECT COUNT(*) as c FROM notes WHERE 1 = 1${archSql}${range.sql}${tagF.sql}`).get(...extra) as { c: number }
-      ).c;
+      scope = "1 = 1";
+      scopeArgs = [];
     }
-
-    const out = rows.filter(exact).map((r) => this.rec(r));
-    return { notes: opts.includeDistrusted ? this.markDistrusted(out) : out, total };
+    const where = `${scope}${archSql}${range.sql}${tagF.sql}`;
+    const rows = this.db
+      .prepare(`SELECT ${cols} FROM notes WHERE ${where} ORDER BY ${orderSql} LIMIT ? OFFSET ?`)
+      .all(...scopeArgs, ...extra, limit, offset);
+    const count = (): number => (this.db.prepare(`SELECT COUNT(*) as c FROM notes WHERE ${where}`).get(...scopeArgs, ...extra) as { c: number }).c;
+    return { rows, exact, count };
   }
 
   /**
@@ -6302,8 +6303,9 @@ export class Store {
           if (r) addToIndex(idx, ids[i], Number(r.rev), termFreq(tokenize(this.edgeText(ids[i], r))));
           i++;
         }
-      } catch {
+      } catch (e) {
         this.edgeBuilds.delete(namespace); // e.g. the file went away; the next write tries again
+        this.noteEdgeBuildFailure(namespace, e);
         return;
       }
       if (i < ids.length) {
@@ -6314,10 +6316,38 @@ export class Store {
       // Done. ver = -1 makes the next use diff against the database, which picks up everything written during the build.
       this.edgeIndexes.set(namespace, idx);
       this.edgeBuilds.delete(namespace);
-      if (waiting.size) void this.linkIds(namespace, [...waiting]).catch(() => undefined);
+      this.clearEdgeBuildFailure(namespace);
+      if (waiting.size) void this.linkIds(namespace, [...waiting]).catch((e) => this.noteEdgeBuildFailure(namespace, e));
     };
     const t = setTimeout(step, 0);
     t.unref?.();
+  }
+
+  /** 1.5.0 (F-06): remember that a background edge build/link failed, where `monomem doctor` (another process) can read it. */
+  private noteEdgeBuildFailure(namespace: string, e: unknown): void {
+    const msg = String((e as Error)?.message ?? e).replace(/\s+/g, " ").slice(0, 200);
+    try {
+      this.setMeta(`${EDGE_FAIL_PREFIX}${namespace}`, `${new Date().toISOString()}|${msg}`);
+    } catch {
+      /* the file may be the very thing that failed */
+    }
+  }
+
+  private clearEdgeBuildFailure(namespace: string): void {
+    try {
+      this.db.prepare("DELETE FROM _meta WHERE key = ?").run(`${EDGE_FAIL_PREFIX}${namespace}`);
+    } catch {
+      /* best effort */
+    }
+  }
+
+  /** Background similarity-index builds that failed and have not since succeeded (doctor shows them). */
+  edgeBuildFailures(): Array<{ namespace: string; at: string; error: string }> {
+    const rows = this.db.prepare("SELECT key, value FROM _meta WHERE key LIKE ? ORDER BY key").all(`${EDGE_FAIL_PREFIX}%`) as Array<{ key: string; value: string }>;
+    return rows.map((r) => {
+      const i = r.value.indexOf("|");
+      return { namespace: r.key.slice(EDGE_FAIL_PREFIX.length), at: r.value.slice(0, i), error: r.value.slice(i + 1) };
+    });
   }
 
   /** Give these notes their similarity links now that the namespace index exists (a few at a time, yielding between). */
@@ -7237,15 +7267,34 @@ export class Store {
         LEFT JOIN notes n ON n.id = e.note_id
        WHERE 1 = 1${noteSql}${dis.sql}${ceilFeed}`;
     const eventParams = [c.f, c.t, ...nsParams, ...srcParams, ...wbParams, ...exParams, ...noteParams, ...dis.params];
+    // F-04: the rows of one page, streamed in seq order so a page costs O(limit), not O(window). Same answer as eventsSql:
+    // an event is its note's LAST in the window (nothing later passes the event filters), and the note was born in the
+    // window when ANY filtered 'created' event sits in (f, t], also one at or before the cursor.
+    const evSql = `${nsSql}${srcSql}${wbSql}${exSql}`;
+    const evParams = [...nsParams, ...srcParams, ...wbParams, ...exParams];
+    const pagedSql = `
+      SELECT e.seq AS seq,
+             CASE WHEN e.kind = 'deleted' THEN 'deleted'
+                  WHEN EXISTS (SELECT 1 FROM change_log b WHERE b.note_id = e.note_id AND b.kind = 'created' AND b.seq > ? AND b.seq <= ?${evSql}) THEN 'created'
+                  ELSE 'updated' END AS kind,
+             e.note_id AS id, e.namespace AS namespace, e.title AS title, e.source AS source,
+             e.changed_at AS at, e.rev AS rev, e.written_by AS written_by,
+             ${cur.writer} AS cur_writer, (n.id IS NOT NULL) AS live,
+             (n.archived_at IS NOT NULL AND n.superseded_by IS NULL) AS forgotten,
+             ${cur.attWriter} AS cur_att_writer, ${cur.attBy} AS cur_att_by, ${cur.merged} AS cur_merged
+        FROM (SELECT * FROM change_log WHERE seq > ? AND seq <= ?${evSql}) e
+        LEFT JOIN notes n ON n.id = e.note_id
+       WHERE NOT EXISTS (SELECT 1 FROM change_log x WHERE x.note_id = e.note_id AND x.seq > e.seq AND x.seq <= ?${evSql})${noteSql}${dis.sql}${ceilFeed}`;
+    const pagedParams = [c.f, c.t, ...evParams, c.a, c.t, ...evParams, c.t, ...evParams, ...noteParams, ...dis.params];
 
     const tail = opts.tail !== undefined ? clampInt(opts.tail, 30, 1, CHANGES_MAX_LIMIT) : 0;
     const rowsRaw = this.db
       .prepare(
         tail
-          ? `SELECT * FROM (${eventsSql}) WHERE seq > ? ORDER BY seq DESC LIMIT ?`
-          : `SELECT * FROM (${eventsSql}) WHERE seq > ? ORDER BY seq ASC LIMIT ?`
+          ? `SELECT * FROM (${pagedSql}) ORDER BY seq DESC LIMIT ?`
+          : `SELECT * FROM (${pagedSql}) ORDER BY seq ASC LIMIT ?`
       )
-      .all(...eventParams, c.a, (tail || limit) + 1) as Array<{
+      .all(...pagedParams, (tail || limit) + 1) as Array<{
       seq: number;
       kind: ChangeEntry["kind"];
       id: number;

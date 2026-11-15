@@ -208,10 +208,10 @@ export function projectProfile(store: Store, opts: InjectOptions, latestSummary:
   const titles = (notes: NoteRecord[]): string => notes.map((n) => one(n.title).replace(/^Decision:\s*/i, "").slice(0, 90)).join("; ");
   // 1.4.0: unconfirmed outside content is held out of session start, titles included.
   const enforce = expiryEnforced(store);
-  const decisions = store.list({ ...base, obsTypes: ["decision"], limit: 10 }).notes.filter((n) => !heldFromSessionStart(n, enforce)).slice(0, 3);
-  const conventions = store.list({ ...base, withTags: ["convention"], limit: 10 }).notes.filter((n) => !heldFromSessionStart(n, enforce)).slice(0, 3);
+  const decisions = store.list({ ...base, obsTypes: ["decision"], limit: 10, count: false }).notes.filter((n) => !heldFromSessionStart(n, enforce)).slice(0, 3);
+  const conventions = store.list({ ...base, withTags: ["convention"], limit: 10, count: false }).notes.filter((n) => !heldFromSessionStart(n, enforce)).slice(0, 3);
   // Key files: note_files frequency over the rows this reader may see (the store's read filters pick them).
-  const ids = store.list({ ...base, limit: 500 }).notes.map((n) => n.id);
+  const ids = store.listIds({ ...base, limit: 500 });
   const files = ids.length
     ? (store
         .captureDb()
@@ -262,9 +262,9 @@ export async function rankContext(
     if (!why.has(id)) why.set(id, new Set());
     why.get(id)!.add(s);
   };
-  const recent = { notes: store.list({ ...base, limit: POOL }).notes.filter((n) => !skip(n)) };
+  const recent = { notes: store.list({ ...base, limit: POOL, count: false }).notes.filter((n) => !skip(n)) };
   // R1-06: only a summary the capture hooks wrote is framed as a summary block; anything else is an ordinary index line.
-  const latestSummary = store.list({ ...base, kinds: ["summary"] as const, limit: 5 }).notes.find((n) => !skip(n) && n.written_by === "capture") ?? null;
+  const latestSummary = store.list({ ...base, kinds: ["summary"] as const, limit: 5, count: false }).notes.find((n) => !skip(n) && n.written_by === "capture") ?? null;
   const signals = opts.signals ?? (await gitSignals(opts.cwd ?? process.cwd()));
   const db = store.captureDb();
   const recentFiles = store.recentFilePaths(ns, 30);
