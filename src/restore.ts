@@ -45,7 +45,10 @@ export function inspectBackup(input: string): RestorePlan {
     } catch {
       throw new RestoreError(`${source} has no notes table; it is not a Monomem database.`);
     }
-    const encrypted = notes > 0 && Number((db.prepare("SELECT COUNT(*) AS c FROM notes WHERE body LIKE 'v1:%' OR body LIKE 'v2:%'").get() as { c: number }).c) > 0;
+    // 1.5.0 (F3): sealed bodies live in body_enc (the body column stays empty); a plain body that starts with "v2:" is just text.
+    // A backup from before body_enc existed has no sealed bodies.
+    const hasEnc = (db.prepare("SELECT 1 FROM pragma_table_info('notes') WHERE name = 'body_enc'").get() as unknown) !== undefined;
+    const encrypted = notes > 0 && hasEnc && (db.prepare("SELECT 1 FROM notes WHERE body_enc IS NOT NULL AND body_enc <> '' LIMIT 1").get() as unknown) !== undefined;
     return { source, schema, notes, encrypted };
   } finally {
     db.close();
