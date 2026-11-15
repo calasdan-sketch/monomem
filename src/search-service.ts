@@ -14,7 +14,7 @@ import { Store, NoteRecord, clampInt, queryTooLong, ValidationError } from "./st
 import { embed, embeddingsEnabled, embeddingsConfig, noteEmbeddingText } from "./embeddings.js";
 import { filterByTimeRange, parseTimePhrase, type TimeRange } from "./time-parse.js";
 import { TIME_ZONE } from "./config.js";
-import { extractKeywords } from "./keywords.js";
+import { extractKeywords, searchStem } from "./keywords.js";
 import { UNCONFIRMED_FACTOR, heldFromSessionStart } from "./taint.js";
 import { factClash } from "./facts.js";
 import {
@@ -941,8 +941,11 @@ export function anyKeywordHits(
   opts: Parameters<Store["searchRanked"]>[1]
 ): Array<{ note: NoteRecord; score: number }> {
   if (keywords.length === 0) return [];
+  // The FTS query uses suffix-trimmed stems ("camping" -> camp*), so other forms of a word match too. Coverage still
+  // counts the keywords as typed, so a note with the exact form outranks one with only another form of it.
+  const stems = [...new Set(keywords.map(searchStem))];
   return store
-    .searchRanked(keywords.join(" "), { ...opts, limit, anyTerm: true })
+    .searchRanked(stems.join(" "), { ...opts, limit, anyTerm: true })
     // Floor the coverage: an FTS match the text scan misses (an odd tokenisation) still counts as one keyword.
     .map((h) => ({ note: h.note, score: h.score * Math.max(keywordCoverage(h.note, keywords), 1 / keywords.length) }))
     .sort((a, b) => b.score - a.score);
