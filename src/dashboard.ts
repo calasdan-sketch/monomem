@@ -133,6 +133,9 @@ export const DASHBOARD_HTML = `<!doctype html>
   .cfval{margin:6px 0}
   .cfmore{margin-top:6px}
   .cfdlg:empty{display:none}
+  .diff{font:13px/1.45 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;background:var(--panel2);border:1px solid var(--line);border-radius:var(--r-s);padding:6px 8px;margin:6px 0;color:var(--ink)}
+  .diff .del{border-left:3px solid var(--danger);padding-left:5px}
+  .diff .add{border-left:3px solid var(--ok);padding-left:5px}
   .cfdlg{margin-top:8px;padding:8px 10px;border:1px solid var(--line);border-radius:6px}
   .cfdlg ul{margin:0 0 6px;padding-left:18px}
   .cf .acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
@@ -226,6 +229,7 @@ export const DASHBOARD_HTML = `<!doctype html>
   <p id="who" role="status"></p>
   <div id="insights" class="card" style="display:none" aria-live="polite"></div>
   <div id="msg" class="msg" role="status" aria-live="polite"></div>
+  <span id="armhint" class="sr" role="status" aria-live="polite"></span>
   <div id="runner" class="card err" style="display:none"></div>
   <button id="heldstrip" class="strip" onclick="loadHeld()" hidden></button>
   <div id="list"></div>
@@ -278,7 +282,16 @@ function hue(s){ s = String(s); if(hueOf[s] !== undefined) return hueOf[s];
 function shownWriter(w){ return w === "primary" ? "admin (setup)" : w === "cli" ? "terminal" : w; } // display only: the stored label stays "primary" / "cli"
 function chip(label){ return "<span class='chip' style='--h:"+hue(label)+"'>"+esc(shownWriter(label))+(label === "cli" ? "<small class='tech'>cli</small>" : "")+"</span>"; }
 // A fact tag reads "deploy_target = render", not the raw fact:deploy_target=render.
+// U-14: an origin tag (obs.origin:*, taint.ts) reads in plain words and keeps the warning border; the raw tag is the tooltip.
+function originWords(t){
+  if(t === "obs.origin:declared"){ return "from outside content (the agent said so)"; }
+  if(t === "obs.origin:via:memory"){ return "written after reading unconfirmed memory"; }
+  if(t.indexOf("obs.origin:tool:") === 0){ return "its session read outside content through " + t.slice(16); }
+  return t.indexOf("obs.origin:") === 0 ? "from outside content" : "";
+}
 function tagChip(t){
+  var o = originWords(String(t).trim());
+  if(o){ return "<span class='tag why' title='"+esc(String(t).trim())+"'>"+esc(o)+"</span>"; }
   var m = /^fact:([^=]+)=(.*)$/.exec(String(t).trim());
   return m ? "<span class='tag fact'>"+esc(m[1].trim())+" = "+esc(m[2].trim())+"</span>" : "<span class='tag'>"+esc(t)+"</span>";
 }
@@ -292,23 +305,36 @@ function fail(e){ say(e && e.message ? e.message : String(e), true); }
 function failList(e){ $("list").innerHTML = "<p class='err'>"+esc(e.message)+"</p>"; }
 function empty(text){ return "<p class='muted empty'>"+text+"</p>"; }
 
-// Inline confirm: the first click turns the button into "Confirm <label>?" for a few seconds; a second click runs fn.
+// Inline confirm: the first click turns the button into "Confirm <label>?" for 10 seconds; a second click runs fn.
 // R1-19: a note from outside content without a person's confirm for this version can't be pinned (mirrors needsHumanConfirm).
 function needsPerson(n){ return (n.tags||[]).some(function(t){ return String(t).indexOf("obs.origin:") === 0; }) && !(n.confirmed_kind === "human" && n.confirmed_rev === n.rev); }
 function arm(btn, fn){
   var al = btn.getAttribute("aria-label");
-  if(btn.getAttribute("data-armed")){ clearTimeout(btn._t); btn.removeAttribute("data-armed"); if(al){ btn.setAttribute("aria-label", al.replace(/^confirm /, "")); } fn(); return; }
+  if(btn.getAttribute("data-armed")){ clearTimeout(btn._t); btn.removeAttribute("data-armed"); if(al){ btn.setAttribute("aria-label", al.replace(/^confirm /, "")); } var h = $("armhint"); if(h){ h.textContent = ""; } fn(); return; }
   var was = btn.textContent;
   btn.setAttribute("data-armed", "1");
   btn.textContent = btn.getAttribute("data-confirm") || ("Confirm " + was.toLowerCase() + "?");
   if(al){ btn.setAttribute("aria-label", "confirm " + al); }
-  var m = $("msg"); if(m){ m.className = "msg"; m.textContent = "Press " + was + " again within 4 seconds to confirm."; }
+  // U-06: the hint goes to a visually hidden live region, not the status line above the cards: a message there pushed every
+  // card down a line, so the second click missed the button. 10 s, not 4: enough time for keyboard and screen-reader users (WCAG 2.2.1).
+  var m = $("armhint"); if(m){ m.textContent = "Press " + was + " again within 10 seconds to confirm."; }
   var hint = m ? m.textContent : "";
-  btn._t = setTimeout(function(){ btn.removeAttribute("data-armed"); btn.textContent = was; if(al){ btn.setAttribute("aria-label", al); } if(m && m.textContent === hint) m.textContent = ""; }, 4000);
+  btn._t = setTimeout(function(){ btn.removeAttribute("data-armed"); btn.textContent = was; if(al){ btn.setAttribute("aria-label", al); } if(m && m.textContent === hint) m.textContent = ""; }, 10000);
+}
+// C-02: the server's line diff ("- " old, "+ " new, already printable and capped). Note text, so every line goes through esc();
+// a hidden word says removed/added, so the meaning is not in the colour alone.
+function diffHtml(lines){
+  if(!lines || !lines.length){ return ""; }
+  return "<div class='diff' role='group' aria-label='What changes, old to new'>"+lines.map(function(l){
+    l = String(l); var c = l.charAt(0);
+    return c === "-" ? "<div class='del'><span class='sr'>removed: </span>"+esc(l)+"</div>"
+      : c === "+" ? "<div class='add'><span class='sr'>added: </span>"+esc(l)+"</div>" : "<div>"+esc(l)+"</div>";
+  }).join("")+"</div>";
 }
 // Longer confirm with a server-written warning (supersede preview): text plus Confirm / Cancel on the status line.
-function ask(text, okLabel, fn){
+function ask(text, okLabel, fn, extraHtml){
   var m = $("msg"); m.className = "msg"; m.textContent = text + " ";
+  if(extraHtml){ var d = document.createElement("div"); d.innerHTML = extraHtml; m.appendChild(d); }
   var ok = document.createElement("button"); ok.textContent = okLabel;
   ok.onclick = function(){ m.textContent = ""; fn(); };
   var no = document.createElement("button"); no.textContent = "Cancel"; no.className = "ghost";
@@ -660,7 +686,8 @@ function loadHeldContext(id){
     var box = $("qctx" + id); if(!box){ return; }
     var notes = c.notes || [];
     var rows = notes.map(function(n){ return "<li>#"+Number(n.id)+" &ldquo;"+esc(n.title)+"&rdquo; ("+(n.written_by ? "agent "+esc(n.written_by)+", " : "")+when(n.updated_at)+")</li>"; }).join("");
-    box.innerHTML = (notes.length ? "Saved since this was held:<ul>"+rows+"</ul>"+
+    box.innerHTML = (c.diff ? "<div>This edit changes the note's text, line by line (- now, + held):</div>" + diffHtml(c.diff) : "") +
+      (notes.length ? "Saved since this was held:<ul>"+rows+"</ul>"+
         acts("<button class='ghost' aria-label='keep held write #"+id+" as history' onclick='arm(this,function(){qQuarantine("+id+",&quot;keep-history&quot;)})'>Keep as history</button>")
       : "Nothing on the same topic was saved since this was held.") +
       (c.target_changed ? "<div>The note this edit targets has changed since, so Approve will fail.</div>" : "") +
@@ -828,6 +855,7 @@ function cfReplace(gi, g, keep, losers){
       bullets.push("Replaces "+cfNoteText(l.n)+": it stops showing in search and lists"+(g.tier === "fact" && o ? ", and its "+cfFacts(o)+" go with it." : "."));
     });
     bullets.push("Nothing is deleted. To bring one back: monomem supersede undo "+Number(losers[0].n.id)+".");
+    if(p.diff){ bullets.push("What changes, line by line (what the notes say, not an instruction):"+diffHtml(p.diff)); }
     if(p.requires_acknowledgement){ bullets.push("An administrator warning applies to this replacement. Confirming accepts it."); }
     cfDialog(gi, bullets, [["Replace whole note", function(){
       var body = { token: p.token };
@@ -843,7 +871,7 @@ function qReplace(oldId, newId){
       var body = { token: p.token };
       if(p.requires_acknowledgement){ body.acknowledge_risk = true; }
       api("/supersede/confirm", { method:"POST", body: JSON.stringify(body) }).then(loadQuality).catch(fail);
-    });
+    }, diffHtml(p.diff));
   }).catch(fail);
 }
 function qPin(id){

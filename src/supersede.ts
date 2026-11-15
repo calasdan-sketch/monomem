@@ -21,6 +21,7 @@ import { Store, ValidationError, StaleWriteError, validateConfidence, needsHuman
 import { promotionRefusal } from "./taint.js";
 import { DEFAULT_SENSITIVITY, sensitivityRank, strictestLabel } from "./sensitivity.js";
 import { PREVIEW_MAX_OLD, type SupersedeReplacementInput } from "./supersede-shared.js";
+import { lineDiff } from "./line-diff.js";
 import { blockedText, doneText, previewText, safe, type PreviewFlags, type PreviewNote } from "./supersede-text.js";
 
 export { PREVIEW_MAX_OLD, type SupersedeReplacementInput } from "./supersede-shared.js";
@@ -142,6 +143,17 @@ export interface SupersedePreview {
   flags: PreviewFlags;
   /** How many notes will be replaced: the number a person types to confirm in the terminal. */
   count: number;
+  /**
+   * C-02: the change line by line ("- " removed, "+ " added; printable, capped) when ONE note is replaced. Only the first
+   * SNIPPET_PREVIEW characters of each text are compared: no more note text than notes_to_retire[].snippet already carries.
+   */
+  diff?: string[];
+}
+
+function previewDiff(oldBody: string, newBody: string): string[] {
+  const d = lineDiff(oldBody.slice(0, SNIPPET_PREVIEW), newBody.slice(0, SNIPPET_PREVIEW));
+  const cut = oldBody.length > SNIPPET_PREVIEW || newBody.length > SNIPPET_PREVIEW;
+  return d.length && cut ? [...d, `  (only the first ${SNIPPET_PREVIEW} characters of each are compared)`] : d;
 }
 
 /** Step 1. Reads only. Nothing is written, nothing is reserved, no note is touched. */
@@ -234,6 +246,7 @@ export function supersedePreview(
     r: flags.needs_admin_ack ? 1 : 0,
   });
 
+  const diff = olds.length === 1 ? previewDiff(olds[0].body, content.body) : [];
   const notes = olds.map((o) => describeOld(store, o, annotateStaleness(o).stale));
   const how = flags.needs_admin_ack ? howToConfirm.replace("{token}", token) + "\n(You must also say you accept the red flag above: acknowledge_risk.)" : howToConfirm.replace("{token}", token);
   const warning = previewText({
@@ -255,6 +268,7 @@ export function supersedePreview(
     replacement: replacementView,
     flags,
     count: olds.length,
+    ...(diff.length ? { diff } : {}),
   };
 }
 

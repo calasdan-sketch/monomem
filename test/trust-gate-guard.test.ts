@@ -104,7 +104,7 @@ export function rawSites(text: string): Array<[number, string]> {
 }
 
 /** Unconditional `includeDistrusted: true` (not behind a `? { includeDistrusted: true } : {}` pass-through of an admin-gated flag), per file. */
-const INTERNAL_OPT_IN: Record<string, number> = { "api.ts": 1, "cli.ts": 1, "everyday-cli.ts": 2, /* show/edit: the local shell is the owner, as in label */ "liveness.ts": 2, "mcp-server-core.ts": 1, "runner.ts": 2, "tasks.ts": 2 };
+const INTERNAL_OPT_IN: Record<string, number> = { "api.ts": 1, "cli.ts": 1, "everyday-cli.ts": 2, /* show/edit: the local shell is the owner, as in label */ "line-diff.ts": 1, /* heldEditDiff: admin-only callers (REST quarantine context, CLI quarantine show) diff a held edit against its target */ "liveness.ts": 2, "mcp-server-core.ts": 1, "runner.ts": 2, "tasks.ts": 2 };
 
 describe("B: one gate for reading a note", () => {
   test("the scanner itself: it matches aliased receivers and ignores comments (positive control)", () => {

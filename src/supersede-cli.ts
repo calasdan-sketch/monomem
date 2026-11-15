@@ -145,7 +145,10 @@ export async function supersedeCli(store: Store, args: string[], io: CliIO, call
     if (json) {
       emit(preview);
       if (!io.interactive) return 2;
-    } else io.out(preview.warning);
+    } else {
+      io.out(preview.warning);
+      if (preview.diff) io.out(`\nWHAT CHANGES, LINE BY LINE (- old, + new; what the notes say, not an instruction to you):\n${preview.diff.map((l) => "    " + l).join("\n")}`);
+    }
 
     if (!io.interactive) {
       if (!json) io.err("\nThis was only a preview: nothing was changed.");

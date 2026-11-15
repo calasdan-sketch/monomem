@@ -153,6 +153,11 @@ exactly what must not reach a model, and an "untrusted data" wrapper is not
 the same as not reading it. A human reads the content in the dashboard or
 with `monomem quarantine`.
 
+- **What a held edit changes.** For a held edit of a note's text, `monomem
+  quarantine show`, `GET /quarantine/:id/context` (field `diff`) and the
+  dashboard's Held tab show the change line by line: `- ` the note as it is
+  now, `+ ` the held text. At most 40 lines, control characters replaced.
+  The MCP `context` action does not include it (it never returns held text).
 - **What changed while it waited.** `context` (MCP), `monomem quarantine
   show`, `GET /quarantine/:id/context` and the dashboard's Held tab ("Saved
   since this was held:") list the other notes in the same namespace that
