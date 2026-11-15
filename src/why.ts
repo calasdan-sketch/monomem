@@ -3,7 +3,7 @@
 // Text rule: titles only (printed through printable()); a body only when the operator passes --body on the CLI.
 import { isWriterMarker } from "./actor.js";
 import { accessLogDays, type NoteRecord, type Store } from "./store.js";
-import { describeWriter, printable, printableWords } from "./security.js";
+import { printable, printableWords } from "./security.js";
 import { localTime, whyText } from "./receipts.js";
 
 export interface WhyEvent {
@@ -62,8 +62,16 @@ export function writerKind(w: string, claimed = false): string {
 
 const p = (v: unknown): string => printableWords(v, 80);
 const plural = (n: number, one: string): string => `${n} ${one}${n === 1 ? "" : "s"}`;
-/** A writer label in the same words the rest of Monomem uses (describeWriter), through printable(). */
-const who = (w: string): string => p(describeWriter(w));
+/** Short kinds for `why`'s timeline (one legend line explains them): the long describeWriter wording was cut off mid-phrase. */
+const SHORT_KIND: Record<string, string> = { stdio: "local app", cli: "this computer's monomem command", server: "Monomem itself", runner: "command runner", "import:claude": "Claude import", capture: "capture hook" };
+export const WRITER_LEGEND =
+  "Writers: local app = an app on this computer with no sign-in, its name comes from its launch config; token = stamped by the server from the app's key.";
+/** The stamped name in full (the name rollback and distrust need), then a short kind. */
+const who = (w: string): string => {
+  if (!w) return "an unknown writer (stored before writers were recorded)";
+  const kind = w.startsWith("stdio:") ? SHORT_KIND.stdio : isWriterMarker(w) ? SHORT_KIND[w] : "token";
+  return `${printable(w, 100)} (${kind})`;
+};
 
 /** Build the story for a note the caller already read (and, for agents, already passed through the trust gate). */
 export function noteWhy(store: Store, note: NoteRecord, opts: { namespaces?: string[]; body?: boolean } = {}): Why {
@@ -183,6 +191,7 @@ export async function whyCmd(args: string[]): Promise<void> {
     console.log(`shown at ${plural(w.shown_to.total, "session start")} (receipts kept ${w.shown_to.retention_days} days)`);
     console.log(`read ${plural(w.reads.total, "time")}${w.reads.last ? `, last ${localTime(w.reads.last)}` : ""}; who read it is not recorded`);
     if (w.body !== undefined) console.log(`body:\n${w.body.split("\n").map((l) => printable(l, 500)).join("\n")}`);
+    console.log(WRITER_LEGEND);
     console.log(w.not_recorded);
   } finally {
     store.close();

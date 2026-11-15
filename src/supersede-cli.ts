@@ -279,7 +279,7 @@ export async function rollbackCli(store: Store, args: string[], io: CliIO, calle
     const how = flags.yes === true || io.interactive ? "" : "Nothing was changed. Run it again at a terminal, or add --yes, to go ahead.";
     const preview = rollbackPreview(store, caller, { writer: s(flags.writer), since: s(flags.since), include_conflicts: flags["include-conflicts"] === true }, how);
     io.out(json ? JSON.stringify(preview, null, 2) : preview.warning);
-    if (preview.actions.length === 0) return 0;
+    if (preview.actions.length === 0) return preview.did_you_mean ? 1 : 0;
     if (flags.yes !== true) {
       if (!io.interactive) return 2;
       const a = await io.ask(`

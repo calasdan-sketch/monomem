@@ -1786,11 +1786,24 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   const anyHook = hookPlans.size > 0;
   const hookReplacesOld = [...hookPlans.values()].some((c) => c.lines.some((l) => l.startsWith("replace the start-of-session hook")));
   const anyCapture = capturePlans.size > 0;
+  // The apps that have no start-of-session hook yet (with --no-hook nothing was planned, so look). Without it an assistant
+  // only sees your notes when it decides to search, which is the feature most people install Monomem for: say so at the end.
+  const hookMissing = hosts.filter((h) => (opts.hook === "no" ? !!planHooks(e, opts, hookDb, { recall: true, capture: false }, h).change : hookPlans.has(h)));
+  /** Owner decision (1.5.0, Q1): `--yes` adds the start-of-session hook for Claude Code; other apps' hooks still need --hook. */
+  const yesSkips = new Set<HookHost>();
+  const hookFor = (h: HookHost): boolean => wantHook && !yesSkips.has(h);
+  const hookLines = (): void => {
+    if (opts.terse) return;
+    const names = (hs: HookHost[]): string => closeList(hs.map((h) => h.client));
+    const missing = hookMissing.filter((h) => !hookFor(h));
+    if (missing.length) io.out(`\nNot installed: start-of-session hook. Add it: monomem setup --hook (without it, ${names(missing)} only ${missing.length === 1 ? "sees" : "see"} your notes when it searches for them).`);
+  };
 
   if (plan.changes.length === 0 && !anyHook && !anyCapture) {
     for (const a of plan.already) io.out(`  (already fine) ${a}`);
     for (const w of plan.warnings) io.out(`  (careful) ${w}`);
     io.out(plan.already.length ? "\nNothing to change: Monomem is already connected. To check it, run:  monomem doctor" : "\nNothing was changed.");
+    hookLines();
     return 0;
   }
 
@@ -1831,14 +1844,17 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   if (opts.dryRun) {
     if (offeredRemoval) io.out("(The removal of the old entry above is only done if you say yes when you run setup for real.)");
     io.out("Dry run: nothing was changed. No file was written, and no database was created or upgraded.");
-    if ((anyHook && !wantHook) || (anyCapture && !wantCapture)) io.out("(The hooks above are only added if you say yes to them, or pass --hook / --capture.)");
+    if ((anyHook && !wantHook) || (anyCapture && !wantCapture)) io.out("(The hooks above are only added if you say yes to them, or pass --hook / --capture. With --yes the start-of-session hook for Claude Code is added too; --no-hook leaves it out.)");
     return 0;
   }
   if (plan.changes.length === 0 && !anyHook && !anyCapture) return 0;
 
   if (!opts.yes) {
     if (!io.interactive) {
-      io.err("This is not an interactive terminal, so I cannot ask. Re-run with --yes to go ahead (a backup is still made), or --dry-run to only look.");
+      io.err(
+        "This is not an interactive terminal, so I cannot ask. Re-run with --yes to go ahead (a backup is still made; for Claude Code this also adds the start-of-session hook, " +
+          "so your assistant sees your notes when a session starts; add --no-hook to leave it out), or --dry-run to only look."
+      );
       return 1;
     }
     const a = (await io.ask(plan.changes.length ? "Go ahead with the changes above? Type y to continue, anything else cancels: " : "Install the hooks? Type y: ")).trim().toLowerCase();
@@ -1863,7 +1879,12 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
       wantCapture = c === "y" || c === "yes";
     }
   } else {
-    if (anyHook && opts.hook === "ask") wantHook = false; // --yes alone never adds a hook; it needs --hook
+    // --yes adds the start-of-session hook for Claude Code (owner decision, 1.5.0): without it "remember" only works when the
+    // assistant thinks to search. The other apps' hooks still need --hook, and --no-hook leaves every one out.
+    if (anyHook && opts.hook === "ask") {
+      for (const h of hookPlans.keys()) if (h.client !== "claude-code") yesSkips.add(h);
+      wantHook = yesSkips.size < hookPlans.size;
+    }
     if (anyCapture && capture === "ask") wantCapture = false; // ... or --capture
   }
 
@@ -1881,22 +1902,32 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
             // deletes the one note it writes below, by its id. The old ones are named, never touched.
             const old = s.list({ limit: 50, withTags: ["setup-check"] }).notes;
             if (old.length) io.out(`Database ${d}: an earlier installer left ${old.map((n) => `#${n.id} "${n.title}"`).join(", ")}; I left ${old.length === 1 ? "it" : "them"} as ${old.length === 1 ? "it is" : "they are"} (archive with  monomem forget <id>  if you do not want ${old.length === 1 ? "it" : "them"}).`);
-            {
-              const note = s.create({
+            // A store with no notes at all checks in a scratch copy beside it (same folder, same SQLite), so the person's
+            // first note is #1 and not #2: ids are never reused, and a deleted #1 leaves change-log and sync records behind.
+            const fresh = s.list({ limit: 1, includeArchived: true, includeSuperseded: true, includeDistrusted: true }).total === 0;
+            const scratch = fresh ? join(dirname(d), `.setup-check-${randomBytes(4).toString("hex")}.db`) : "";
+            const t = fresh ? new Store(scratch) : s;
+            try {
+              const note = t.create({
                 title: "Monomem is connected",
                 body: "This note was written by `monomem setup` to check that writing and reading work. You can delete it any time.",
                 tags: ["setup-check"],
                 source: "monomem setup",
               });
-              const back = s.read(note.id); // gate-ok: setup reads back the test note it wrote a moment ago
+              const back = t.read(note.id); // gate-ok: setup reads back the test note it wrote a moment ago
               if (!back || back.title !== note.title || back.body !== note.body) throw new Error("the test note was written but did not read back the same");
               // Then remove it, so a brand-new store starts empty. Leaving it
               // behind made the installer's own note a permanent memory (1 of
               // the 13 notes in the maintainer's own store), and it was the
               // first thing a user ever searched for. Deleting it also proves
               // one more operation works than the old check did.
-              if (!s.delete(note.id)) throw new Error("the test note was written and read back, but could not be deleted");
-              io.out(`Database ${d}: test note written, read back and cleaned up.`);
+              if (!t.delete(note.id)) throw new Error("the test note was written and read back, but could not be deleted");
+              io.out(`Database ${d}: test note written, read back and cleaned up${fresh ? " (in a scratch copy beside it, so your first note is #1)" : ""}.`);
+            } finally {
+              if (fresh) {
+                t.close();
+                for (const f of [scratch, `${scratch}-wal`, `${scratch}-shm`]) rmSync(f, { force: true });
+              }
             }
           } else io.out(`Database ${d}: opens fine.`);
         } finally {
@@ -1918,10 +1949,10 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   // Each hook file: automatic memory (with the start-of-session hook when that was wanted too), else the hook alone.
   const hookChanges = hosts.flatMap((h) => {
     const c = wantCapture
-      ? planHooks(e, opts, hookDb, { recall: wantHook || (opts.hook !== "no" && !hookPlans.has(h)), capture: true }, h).change
+      ? planHooks(e, opts, hookDb, { recall: hookFor(h) || (opts.hook !== "no" && !hookPlans.has(h)), capture: true }, h).change
       : capture !== "no" && upgradeHosts.has(h)
-        ? planHooks(e, opts, hookDb, { recall: wantHook, capture: true, upgradeOnly: true }, h).change
-        : wantHook ? hookPlans.get(h) : null;
+        ? planHooks(e, opts, hookDb, { recall: hookFor(h), capture: true, upgradeOnly: true }, h).change
+        : hookFor(h) ? hookPlans.get(h) : null;
     return c ? [c] : [];
   });
   const toWrite = [...plan.changes, ...hookChanges];
@@ -1948,13 +1979,22 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
     all.push({ id: stamp(e.now()), at: e.now().toISOString(), version: e.version, changes: written, dbs: dbsBefore, migratedLegacy });
     saveHistory(e, all);
   }
+  {
+    const added = hookMissing.filter(hookFor);
+    if (added.length && opts.yes && opts.hook === "ask") {
+      io.out(
+        `Added: the start-of-session hook for ${closeList(added.map((h) => h.client))}, so your assistant sees your recent notes when a session starts. ` +
+          "To leave it out next time: monomem setup --yes --no-hook. To take back this whole setup run, the hook included: monomem setup --undo"
+      );
+    }
+  }
 
   // Remember a no to the Claude Code hook (or clear it after a yes), so `monomem health` reports "you chose no" as info, not a warning.
   const claudeHost = hosts.find((h) => h.client === "claude-code");
   if (claudeHost) {
     const marker = join(dirname(DB_PATH), HOOKS_DECLINED_FILE); // the standard data folder, never an old install's
     try {
-      if (wantHook || wantCapture || (capture !== "no" && upgradeHosts.has(claudeHost))) rmSync(marker, { force: true });
+      if (hookFor(claudeHost) || wantCapture || (capture !== "no" && upgradeHosts.has(claudeHost))) rmSync(marker, { force: true });
       else if (hookPlans.has(claudeHost) || capturePlans.has(claudeHost)) {
         mkdirSync(dirname(marker), { recursive: true });
         writeFileSync(marker, "The Claude Code hook was declined when setup ran. Run monomem setup --hook to add it.\n");
@@ -2023,6 +2063,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   await offerClaudeMemPreview(e, io, opts, primaryDb);
   await offerServerMemoryPreview(e, io, opts, primaryDb);
   io.out("\nIf monomem is missing or red: docs/live-claude-code.md has the fixes. To go back: monomem setup --undo");
+  hookLines();
   return 0;
 }
 

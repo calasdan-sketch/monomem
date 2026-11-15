@@ -104,7 +104,23 @@ export function rawSites(text: string): Array<[number, string]> {
 }
 
 /** Unconditional `includeDistrusted: true` (not behind a `? { includeDistrusted: true } : {}` pass-through of an admin-gated flag), per file. */
-const INTERNAL_OPT_IN: Record<string, number> = { "api.ts": 1, "cli.ts": 1, "everyday-cli.ts": 2, /* show/edit: the local shell is the owner, as in label */ "line-diff.ts": 1, /* heldEditDiff: admin-only callers (REST quarantine context, CLI quarantine show) diff a held edit against its target */ "liveness.ts": 2, "mcp-server-core.ts": 1, "runner.ts": 2, "tasks.ts": 2 };
+const INTERNAL_OPT_IN: Record<string, number> = {
+  "api.ts": 1,
+  // 1 + 2 (1.5.0 U-02): search counts how many matches the distrust list hid (the type and the call); only the count is printed.
+  "cli.ts": 3,
+  // 1.5.0 U-15: tidiness counts notes in any state, so an empty store loses no points for a missing backup; a count only.
+  "digest.ts": 1,
+  // show/edit: the local shell is the owner, as in label; + 1 (1.5.0 U-02): ls counts the notes the distrust list hid.
+  "everyday-cli.ts": 3,
+  // heldEditDiff: admin-only callers (REST quarantine context, CLI quarantine show) diff a held edit against its target.
+  "line-diff.ts": 1,
+  "liveness.ts": 2,
+  "mcp-server-core.ts": 1,
+  "runner.ts": 2,
+  // 1.5.0 U-15: setup checks whether the store has any note at all before choosing where to write its test note; a count only.
+  "setup.ts": 1,
+  "tasks.ts": 2,
+};
 
 describe("B: one gate for reading a note", () => {
   test("the scanner itself: it matches aliased receivers and ignores comments (positive control)", () => {

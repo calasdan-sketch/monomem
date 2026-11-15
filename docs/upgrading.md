@@ -14,7 +14,7 @@ Applies to Monomem 1.3.x (and to a development build that already made the store
   sessions, and two new tables (confirms, and "derived from" links between notes), and, from 1.5.0, when a note's title or body last changed (the re-confirmation clock starts there, not at any edit) and the folder of the local process that wrote it. No note text is rewritten. Every note that exists
   at the upgrade is marked with the upgrade time, so nothing that showed before the upgrade is hidden after it.
 - **A verified backup is made first**, at `<database>.pre-v21-backup`. The upgrade does not run if that copy cannot be made.
-  Remove it when you are happy: `monomem backup --prune-premigration`.
+  Remove it when you are happy: `monomem backup --prune-premigration`. `monomem doctor` warns once a copy is more than 14 days old.
 - **Your app keys are hashed on the first start of 1.5.0 (automatic).** Each plain-text key in `tokens.json` is replaced by its
   one-way hash; the rewrite is atomic, `tokens.json.bak` (which held the plain text) is deleted, and starting again changes nothing.
   Your apps keep working: they still send the key in their own config. The main key in `.token` stays in plain text (the CLI

@@ -599,8 +599,10 @@ export interface ChangesPage {
   changes: ChangeEntry[];
   /** Totals over the whole window, not just this page. */
   counts: ChangeCounts & { total: number };
-  /** Totals grouped by provenance source ("" = unattributed). */
+  /** Totals grouped by provenance source ("" = unattributed). The source is what the writer CLAIMS. */
   bySource: Record<string, ChangeCounts>;
+  /** Totals grouped by the stamped writer of each change (written_by; "" = unknown). */
+  byWriter: Record<string, ChangeCounts>;
   /** Linter-held writes queued in the window (not notes; see quarantine). */
   quarantined: number;
   /** Opaque cursor for the next page; null when this was the last page. */
@@ -645,10 +647,13 @@ interface HeldRow {
   clears: string | null;
 }
 
-/** Shown with every approval view (CLI, MCP, REST, dashboard). */
-export const QUARANTINE_CAS_NOTE =
-  "Approving keeps the time the write was made. A held edit is applied only to the exact version of the note it was written " +
-  "against: if the note changed since (compare-and-swap), approval fails and the edit stays held so you can reject it.";
+/** Shown with every approval view (CLI, MCP, REST, dashboard). The second sentence only applies to a held edit. */
+export function quarantineCasNote(op: "create" | "update"): string {
+  return (
+    "Approving keeps the time the write was made." +
+    (op === "update" ? " A held edit applies only to the version of the note it was written against: if the note changed since it was held, approval fails and the edit stays held so you can reject it." : "")
+  );
+}
 
 /** What was saved while a held write waited (Store.quarantineContext). Never the held text. */
 export interface QuarantineContext {
@@ -7192,6 +7197,7 @@ export class Store {
       changes: [],
       counts: { created: 0, updated: 0, deleted: 0, total: 0 },
       bySource: {},
+      byWriter: {},
       quarantined: 0,
       nextCursor: null,
       consumer: c.c ?? null,
@@ -7353,15 +7359,19 @@ export class Store {
     let totals = c.n;
     if (!totals) {
       const grouped = this.db
-        .prepare(`SELECT source, kind, COUNT(*) AS n FROM (${eventsSql}) GROUP BY source, kind`)
-        .all(...eventParams) as Array<{ source: string; kind: ChangeEntry["kind"]; n: number }>;
+        .prepare(`SELECT source, written_by, kind, COUNT(*) AS n FROM (${eventsSql}) GROUP BY source, written_by, kind`)
+        .all(...eventParams) as Array<{ source: string; written_by: string | null; kind: ChangeEntry["kind"]; n: number }>;
       const counts = { created: 0, updated: 0, deleted: 0, total: 0 };
       const bySource: Record<string, ChangeCounts> = {};
+      const byWriter: Record<string, ChangeCounts> = {};
       for (const g of grouped) {
         const n = Number(g.n);
         const key = g.source ?? "";
         bySource[key] ??= { created: 0, updated: 0, deleted: 0 };
         bySource[key][g.kind] += n;
+        const w = g.written_by ?? "";
+        byWriter[w] ??= { created: 0, updated: 0, deleted: 0 };
+        byWriter[w][g.kind] += n;
         counts[g.kind] += n;
         counts.total += n;
       }
@@ -7374,9 +7384,10 @@ export class Store {
             .get(c.s, c.u, ...nsParams, ...srcParams) as { c: number }
         ).c
       );
-      totals = { counts, bySource, q };
+      totals = { counts, bySource, byWriter, q };
     }
     const { counts, bySource } = totals;
+    const byWriter = totals.byWriter ?? {}; // a cursor minted before 1.5.0 carries no byWriter
     const quarantined = totals.q;
     const last = pageRows[pageRows.length - 1];
     return {
@@ -7385,6 +7396,7 @@ export class Store {
       changes: page,
       counts,
       bySource,
+      byWriter,
       quarantined,
       nextCursor: more && last ? this.encodeCursor({ ...c, a: Number(last.seq), n: totals }) : null,
       consumer: c.c ?? null,
@@ -8781,7 +8793,7 @@ export class Store {
       hours > 0
         ? `Outside-content window: notes written by a local app (no key of its own) launched in the same folder as a hooked session that read outside content, within ${hours} hours and while that session is active (idle 30 minutes ends it), are marked; apps with their own key are not (MONOMEM_TAINT_WINDOW_HOURS)`
         : "Outside-content window: off (MONOMEM_TAINT_WINDOW_HOURS=0), so hooked sessions' outside reads mark nothing",
-      "Read-taint: a connection that reads an unconfirmed note marks what it writes next, until that note is confirmed or the taint window passes. This is per connection; it resets when the server restarts.",
+      "Reading unconfirmed notes marks later writes: when an app reads a note nobody has confirmed, what it writes next is marked too, until that note is confirmed or the taint window passes. This is counted per connection and starts over when the server restarts.",
     ];
   }
 
@@ -9474,7 +9486,7 @@ interface FeedCursor {
   /** exclude_self: hide changes whose source equals this label */
   x?: string;
   /** The window's totals, counted once on the first page and carried (signed) to the later ones. */
-  n?: { counts: ChangesPage["counts"]; bySource: ChangesPage["bySource"]; q: number };
+  n?: { counts: ChangesPage["counts"]; bySource: ChangesPage["bySource"]; byWriter?: ChangesPage["byWriter"]; q: number };
 }
 
 /** Most "last" markers a store keeps (see Store.setFeedMarker). */

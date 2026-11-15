@@ -31,7 +31,7 @@ import {
   validateForgetAfter,
   coerceNumeric,
   DEFAULT_NAMESPACE,
-  QUARANTINE_CAS_NOTE,
+  quarantineCasNote,
 } from "./store.js";
 import { truthyParam } from "./trust.js";
 import { originAllowed, hostAllowed, hostRefusal, RateLimiter, AuthTarpit, clientKey, tokenKey, authenticateEntry, scopeAllows, LIMITS, audit, auditFailureCount, printable } from "./security.js";
@@ -1399,7 +1399,7 @@ export function createApiServer(
           return;
         }
         const diff = heldEditDiff(store, entry!);
-        sendJson(res, 200, { ...ctx, ...(diff.length ? { diff } : {}), note: QUARANTINE_CAS_NOTE });
+        sendJson(res, 200, { ...ctx, ...(diff.length ? { diff } : {}), note: quarantineCasNote(ctx.op) });
         return;
       }
 

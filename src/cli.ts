@@ -34,6 +34,26 @@ function editDistance(a: string, b: string): number {
   return prev[b.length];
 }
 
+/**
+ * Words people type first that are not commands. Each gets the real commands as a hint; nothing runs (no aliases: approve
+ * and distrust are trust decisions, so the person types the full command and sees what it does).
+ */
+const VERB_HINTS: Record<string, string> = {
+  undo: [
+    "There is no 'undo' command. What do you want to undo?",
+    "  An edit to one note:            monomem history <id>, then  monomem history restore <id> <version>",
+    "  Everything one agent did:       monomem rollback --writer <writer> --since 1h   (shows the plan first)",
+    "  A replacement (supersede):      monomem supersede undo <id>",
+    "  A forgotten note:               monomem restore <id>",
+    "  The last setup run:             monomem setup --undo",
+  ].join("\n"),
+  approve: "There is no 'approve' command. To approve a held write: monomem quarantine approve <id>   (see them: monomem quarantine list)",
+  reject: "There is no 'reject' command. To reject a held write: monomem quarantine reject <id>   (see them: monomem quarantine list)",
+  distrust:
+    "There is no 'distrust' command. To leave a writer's notes out of every read: monomem trust distrust <writer> --namespace '*'\n" +
+    "  A local app's notes are written by stdio:<app> (for example stdio:cursor); monomem show <id> prints a note's writer.",
+};
+
 /** The closest known command, or undefined when nothing is plausibly what the person meant. */
 function suggestCommand(cmd: string): string | undefined {
   let best: string | undefined;
@@ -300,7 +320,7 @@ function usage(all = false): void {
       "            (state.db.before-restore-<time>), removes the stale -wal/-shm files and checks the result. Also works with state.db.pre-vNN-backup.",
       "  add \"text\" [--title T] [--ns work] [--tag a,b] [--private | --sens public|internal|private]",
       "            Save a note from the shell (\"-\" reads a pipe). Same linter, secret refusal and quarantine as any other writer; written as \"cli\".",
-      "  show <id> | ls [--ns x] [--limit 20] [--archived] | edit <id> [- | --editor] | forget <id>",
+      "  show <id> | ls [--ns x] [--limit 20] [--archived] [--include-distrusted] | edit <id> [- | --editor] | forget <id>",
       "            Read, list, change (in $EDITOR, refused if the note changed meanwhile) or archive a note. The CLI is you, the owner: sensitivity limits apply to apps, not to it.",
       "            edit <id> - reads the new text from a pipe (first line the title); without a terminal edit needs - or --editor.",
       "            ls --archived lists forgotten notes with the restore <id> that brings each back.",
@@ -364,6 +384,7 @@ function usage(all = false): void {
 /** doctor warns above these (docs/footprint.md). */
 const DOCTOR_MAX_DATA_BYTES = 1e9;
 const DOCTOR_MAX_BACKLOG = 10_000;
+const PREMIGRATION_WARN_DAYS = 14;
 
 /** doctor: settings that weaken protection, plus a data folder a cloud-sync client may copy. Warnings only; the list is shared with `monomem health`. */
 async function doctorSecurityChecks(dataDir: string, bindHost: string, warn: (m: string) => void): Promise<void> {
@@ -470,20 +491,6 @@ async function doctor(): Promise<void> {
       fail(`Monomem cannot write to its data folder (${DATA_DIR}).`, "This is a permissions problem. Make the folder writable for your user (or run Monomem as the user who owns it), or point MONOMEM_HOME at a folder you can write to.");
     }
   }
-  // On Windows the token file and database get the folder's inherited permissions (chmod does nothing
-  // there). Inside the user profile that means "this user only"; elsewhere (D:\, a shared folder) often not.
-  // Changing ACLs automatically could break backup or indexing tools, so this says how instead of doing it.
-  if (process.platform === "win32") {
-    const { homedir } = await import("node:os");
-    const { resolve } = await import("node:path");
-    const home = resolve(homedir()).toLowerCase();
-    if (!resolve(DATA_DIR).toLowerCase().startsWith(home + "\\")) {
-      warn(
-        `data dir is outside your user folder, so other accounts on this PC may be able to read the token and notes. ` +
-          `To limit it to you: icacls "${DATA_DIR}" /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F" /grant:r "SYSTEM:(OI)(CI)F"`
-      );
-    }
-  }
   const { MAPPED_LEGACY_ENV } = await import("./legacy-env.js");
   if (MAPPED_LEGACY_ENV.length) {
     warn(
@@ -587,14 +594,28 @@ async function doctor(): Promise<void> {
     const files = [resolvePath(DATA_DIR, ".token"), resolvePath(DATA_DIR, "tokens.json"), ...appKeyFiles(realEnv("", process.argv[1] ?? ""))].filter((f) => existsSync(f));
     if (process.platform === "win32") {
       // 1.5.0 (R1-11): an existing data folder may be open to other accounts on this PC. Read once, here; never on the hot path.
+      // On Windows the token file and database get the folder's inherited permissions (chmod does nothing there). Inside
+      // the user profile that means "this user only"; elsewhere (D:\, a shared folder) often not. Changing ACLs
+      // automatically could break backup or indexing tools, so this says how instead of doing it. One warning, one command
+      // (1.5.0 U-15): what icacls reports decides; "outside your user folder" is only the fallback when it cannot be read.
+      const { homedir } = await import("node:os");
+      const outside = !resolvePath(DATA_DIR).toLowerCase().startsWith(resolvePath(homedir()).toLowerCase() + "\\");
+      let checked = false;
       try {
         const { execFileSync } = await import("node:child_process");
         const { wideAccessGroups, lockdownArgs } = await import("./config.js");
         const wide = wideAccessGroups(execFileSync("icacls", [DATA_DIR], { encoding: "utf8", timeout: 15_000, windowsHide: true }));
+        checked = true;
         const args = lockdownArgs(DATA_DIR);
-        if (wide.length) warn(`the data folder is also open to ${wide.join(", ")} (other accounts on this PC). This does not stop programs running as you.`, args ? `To limit it to you and SYSTEM, run:  icacls "${DATA_DIR}" ${args.slice(1).map((x) => `"${x}"`).join(" ")}` : "Limit the folder's permissions to your own account in its Security tab.");
+        if (wide.length) warn(`the data folder${outside ? " is outside your user folder and" : ""} is also open to ${wide.join(", ")} (other accounts on this PC), so they may be able to read the keys and notes. This does not stop programs running as you.`, args ? `To limit it to you and SYSTEM, run:  icacls "${DATA_DIR}" ${args.slice(1).map((x) => `"${x}"`).join(" ")}` : "Limit the folder's permissions to your own account in its Security tab.");
       } catch {
-        /* icacls missing or the folder unreadable: say nothing */
+        /* icacls missing or the folder unreadable: the fallback below */
+      }
+      if (!checked && outside) {
+        warn(
+          "the data folder is outside your user folder, so other accounts on this PC may be able to read the keys and notes.",
+          `To limit it to you: icacls "${DATA_DIR}" /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F" /grant:r "SYSTEM:(OI)(CI)F"`
+        );
       }
     }
     const plainKeys = (await import("./tokens-admin.js")).plainKeyCount();
@@ -608,6 +629,14 @@ async function doctor(): Promise<void> {
     const mb = (b.bytes / 1e6).toFixed(1);
     if (/\.partial(-journal|-wal|-shm)?$/.test(b.path)) {
       warn(`unfinished pre-upgrade copy ${b.path} (${mb} MB, ${b.age_days} day(s) old): a copy that was interrupted. It is safe to delete (monomem backup --prune-premigration).`);
+      continue;
+    }
+    // Two weeks is long enough to notice a bad upgrade; after that the copy is mostly old notes nobody meant to keep (1.5.0 U-17).
+    if (b.age_days > PREMIGRATION_WARN_DAYS) {
+      warn(
+        `pre-upgrade copy ${b.path} (${mb} MB, ${b.age_days} days old) is more than ${PREMIGRATION_WARN_DAYS} days old. It still holds notes you may since have deleted or encrypted.`,
+        "If the upgrade works for you, remove it: monomem backup --prune-premigration  (this removes every pre-upgrade copy next to the database)"
+      );
       continue;
     }
     console.log(
@@ -1522,29 +1551,33 @@ async function relevant(): Promise<void> {
     const moreLine = (shown: number, cut: boolean): void => {
       if (cut) console.log(`Showing ${shown}; more notes match. More: --limit ${Math.min(200, want * 2)}`);
     };
+    // "No relevant notes found." while the match is hidden by the distrust list reads as an empty store: count the hidden
+    // matches by running the same search with them (only when a distrust rule exists; the search reads, nothing more).
+    const hiddenLine = async (search: (opts: { includeDistrusted: true }) => Promise<Array<{ distrusted?: true }>>): Promise<void> => {
+      if (includeDistrusted || store.distrustRules().length === 0) return;
+      const n = (await search({ includeDistrusted: true })).filter((x) => x.distrusted).length;
+      if (n > 0) console.log(`${n} matching note${n === 1 ? "" : "s"} hidden because ${n === 1 ? "its" : "their"} writer is distrusted. See who: monomem trust list. Show ${n === 1 ? "it" : "them"}: add --include-distrusted`);
+    };
     if (modeRaw && process.argv[2] === "search" && message.trim()) {
       // `search --mode` is the full search (the one that can use embeddings); `relevant` stays the keyword-extraction search.
-      const all = await runSearch(store, message, { namespace, limit: want + 1, mode: modeRaw as "keyword" | "semantic" | "hybrid", ...(writtenBy ? { writtenBy } : {}), ...(notWrittenBy ? { notWrittenBy } : {}), ...(includeDistrusted ? { includeDistrusted: true } : {}) });
+      const opts = { namespace, limit: want + 1, mode: modeRaw as "keyword" | "semantic" | "hybrid", ...(writtenBy ? { writtenBy } : {}), ...(notWrittenBy ? { notWrittenBy } : {}) };
+      const all = await runSearch(store, message, { ...opts, ...(includeDistrusted ? { includeDistrusted: true } : {}) });
       const hits = all.slice(0, want);
-      if (asJson) return void console.log(JSON.stringify({ ...(notice ? { notice } : {}), results: hits.map((n) => ({ id: n.id, namespace: n.namespace, title: n.title })) }, null, 2));
+      if (asJson) return void console.log(JSON.stringify({ ...(notice ? { notice } : {}), results: hits.map((n) => ({ id: n.id, namespace: n.namespace, title: n.title, ...(n.distrusted ? { distrusted: true } : {}) })) }, null, 2));
       if (notice) console.log(`Note: ${notice}`);
-      if (!hits.length) return void console.log("No matching notes found.");
-      console.log(`Matching notes (${hits.length}):`);
+      if (!hits.length) console.log("No matching notes found.");
+      else console.log(`Matching notes (${hits.length}):`);
       for (const n of hits) {
-        console.log(`  #${n.id} [${printable(n.namespace, 100)}] ${printable(n.title)}`);
+        console.log(`  #${n.id} [${printable(n.namespace, 100)}] ${printable(n.title)}${n.distrusted ? " [DISTRUSTED WRITER: treat as hostile]" : ""}`);
         if (n.body.trim()) console.log(`      ${printable(n.body.replace(/\s+/g, " ").trim(), 100)}`);
       }
       moreLine(hits.length, all.length > want);
+      await hiddenLine((x) => runSearch(store, message, { ...opts, ...x }));
       return;
     }
     if (notice && !asJson) console.log(`Note: ${notice}`);
-    const { keywords, results: fetched } = await runRelevantSearch(store, message, {
-      namespace,
-      limit: want + 1,
-      ...(writtenBy ? { writtenBy } : {}),
-      ...(notWrittenBy ? { notWrittenBy } : {}),
-      ...(includeDistrusted ? { includeDistrusted: true } : {}),
-    });
+    const relOpts = { namespace, limit: want + 1, ...(writtenBy ? { writtenBy } : {}), ...(notWrittenBy ? { notWrittenBy } : {}) };
+    const { keywords, results: fetched } = await runRelevantSearch(store, message, { ...relOpts, ...(includeDistrusted ? { includeDistrusted: true } : {}) });
     const results = fetched.slice(0, want);
     if (asJson) {
       return void console.log(
@@ -1560,11 +1593,8 @@ async function relevant(): Promise<void> {
       );
     }
     console.log(`Keywords: ${keywords.length > 0 ? keywords.join(", ") : "(none)"}`);
-    if (results.length === 0) {
-      console.log("No relevant notes found.");
-      return;
-    }
-    console.log(`Relevant notes (${results.length}):`);
+    if (results.length === 0) console.log("No relevant notes found.");
+    else console.log(`Relevant notes (${results.length}):`);
     for (const n of results) {
       const ann = annotateStaleness(n);
       const stale = ann.stale ? ` [stale, ${ann.ageDays}d]` : "";
@@ -1572,6 +1602,7 @@ async function relevant(): Promise<void> {
       if (n.body.trim()) console.log(`      ${printable(n.body.replace(/\s+/g, " ").trim(), 100)}`);
     }
     moreLine(results.length, fetched.length > want);
+    await hiddenLine(async (x) => (await runRelevantSearch(store, message, { ...relOpts, ...x })).results);
   } finally {
     store.close();
   }
@@ -2022,8 +2053,9 @@ async function changes(): Promise<void> {
       `Changes ${page.since} -> ${page.until}: ${c.created} created, ${c.updated} updated, ${c.deleted} deleted` +
         (page.quarantined ? `, ${page.quarantined} quarantined` : "")
     );
-    for (const [src, n] of Object.entries(page.bySource)) {
-      console.log(`  ${src || "(no source)"}: +${n.created} ~${n.updated} -${n.deleted}`);
+    // Grouped by who the server stamped as the writer, not by the source a writer claims for itself (any app can claim one).
+    for (const [w, n] of Object.entries(page.byWriter)) {
+      console.log(`  ${w ? printable(w, 100) : "(writer not recorded)"}: +${n.created} ~${n.updated} -${n.deleted}`);
     }
     // One page only (--limit entries, default 100): a long window is summed up above, not printed in full.
     // Except --since last: its marker moves only when the final page is read, so every page is printed.
@@ -2031,7 +2063,8 @@ async function changes(): Promise<void> {
     for (;;) {
       for (const e of page.changes) {
         const mark = e.kind === "created" ? "+" : e.kind === "updated" ? "~" : "-";
-        console.log(`${mark} #${e.id} [${printable(e.namespace, 100)}] ${printable(e.title)}  (${e.at}${e.source ? `, ${printable(e.source)}` : ""})${e.distrusted ? " [DISTRUSTED WRITER]" : ""}`);
+        const by = `${e.written_by ? `, by ${printable(e.written_by, 100)}` : ""}${e.source ? `, claims "${printable(e.source, 100)}"` : ""}`;
+        console.log(`${mark} #${e.id} [${printable(e.namespace, 100)}] ${printable(e.title)}  (${e.at}${by})${e.distrusted ? " [DISTRUSTED WRITER]" : ""}`);
       }
       if (!page.nextCursor) break;
       if (!isLast) {
@@ -2562,12 +2595,26 @@ async function trustCmd(): Promise<void> {
           process.exit(1);
         }
         if (action === "distrust") {
+          // "cursor" matches nothing while its notes say "stdio:cursor": refuse and suggest, never widen on our own
+          // (a saved rule that hides nothing would leave the person believing the app is distrusted).
+          if (store.distrustMatchCount(ns!, writer) === 0) {
+            const { suggestWriter } = await import("./trust.js");
+            const hint = suggestWriter(writer.trim(), (w) => store.distrustMatchCount(ns!, w));
+            if (hint) {
+              console.error(
+                `No notes are written by "${printable(writer, 60)}", so nothing was saved. Did you mean "${hint.writer}" (${hint.notes} note${hint.notes === 1 ? "" : "s"})?\n` +
+                  `Writer names must match exactly; \`monomem show <id>\` prints a note's "written by:".\n` +
+                  `Run: monomem trust distrust ${hint.writer} --namespace ${ns === "*" ? "'*'" : printable(ns!, 100)}`
+              );
+              process.exit(1);
+            }
+          }
           const r = store.distrustAdd(ns!, writer);
           const matched = store.distrustMatchCount(r.namespace, r.writer);
           show(
             { ...r, matched_notes: matched },
             `Distrusting "${r.writer}" in [${r.namespace}]: its notes are now left out of every read and never run (${matched} existing note(s) match` +
-              `${matched === 0 ? " - none yet: check the spelling against the written_by of a note (`monomem recall --include-distrusted`): labels are exact and case-sensitive" : ""}).`
+              `${matched === 0 ? ' - none yet: check the spelling against the "written by:" line of a note (`monomem show <id>`): labels are exact and case-sensitive' : ""}).`
           );
         } else {
           await requireOperator(`trust undistrust ${writer} [${ns}]`);
@@ -2710,7 +2757,7 @@ async function tokenCmd(): Promise<void> {
 // `monomem quarantine [list | show <id> | approve <id> | keep-history <id> [--by <note id>] | reject <id>]`.
 async function quarantineCmd(): Promise<void> {
   const { DB_PATH } = await import("./config.js");
-  const { Store, ValidationError, QUARANTINE_CAS_NOTE } = await import("./store.js");
+  const { Store, ValidationError, quarantineCasNote } = await import("./store.js");
   const { maybeEmbed } = await import("./search-service.js");
   const [action = "list", idRaw] = process.argv.slice(3);
   const store = new Store(DB_PATH);
@@ -2739,7 +2786,7 @@ async function quarantineCmd(): Promise<void> {
       process.exit(1);
     }
     if (action === "show") {
-      showHeld(store, id, QUARANTINE_CAS_NOTE, (await import("./line-diff.js")).heldEditDiff);
+      showHeld(store, id, quarantineCasNote, (await import("./line-diff.js")).heldEditDiff);
       return;
     }
     if (action === "keep-history") {
@@ -2787,7 +2834,7 @@ async function quarantineCmd(): Promise<void> {
 }
 
 /** `monomem quarantine show <id>`: the held write in full, plus what was saved in its namespace since it was held. */
-function showHeld(store: import("./store.js").Store, id: number, casNote: string, heldEditDiff: typeof import("./line-diff.js").heldEditDiff): void {
+function showHeld(store: import("./store.js").Store, id: number, casNote: (op: "create" | "update") => string, heldEditDiff: typeof import("./line-diff.js").heldEditDiff): void {
   const q = store.getQuarantine(id);
   const ctx = store.quarantineContext(id);
   if (!q || !ctx) {
@@ -2810,7 +2857,7 @@ function showHeld(store: import("./store.js").Store, id: number, casNote: string
     console.log(`\nSince this was held, ${n} newer note${n === 1 ? "" : "s"} in ${printable(q.namespace, 100)}:`);
     for (const c of ctx.notes) console.log(`    #${c.id} "${printable(c.title)}" (${c.written_by ? `agent ${printable(c.written_by, 100)}, ` : ""}${c.updated_at.slice(0, 10)})`);
   }
-  console.log(`\n${casNote}`);
+  console.log(`\n${casNote(q.op)}`);
   console.log(`Decide: monomem quarantine approve ${id}${n ? ` | keep-history ${id}` : ""} | reject ${id}`);
 }
 
@@ -3215,6 +3262,16 @@ async function archiveCmd(action: "archive" | "restore"): Promise<void> {
     console.error(`Usage: monomem ${action} <id>`);
     process.exit(1);
   }
+  // `restore <id> <version>` is how people guess "put back an older text". That is `history restore`; this command only
+  // brings back an archived note. Do nothing and name the right one.
+  const version = process.argv[4];
+  if (action === "restore" && version !== undefined && /^\d+$/.test(version)) {
+    console.error(
+      `monomem restore <id> brings back an archived note; it takes no version, so nothing was changed.\n` +
+        `To put back version ${version} of note #${id}: monomem history restore ${id} ${version}   (see the versions: monomem history ${id})`
+    );
+    process.exit(1);
+  }
   const store = new Store(DB_PATH);
   try {
     const before = store.read(id); // gate-ok: local shell command (archive/restore): the operator owns the database file
@@ -3585,6 +3642,11 @@ async function main(): Promise<void> {
     }
   }
   if (!COMMANDS.includes(cmd)) {
+    const hint = Object.hasOwn(VERB_HINTS, cmd.toLowerCase()) ? VERB_HINTS[cmd.toLowerCase()] : undefined;
+    if (hint) {
+      console.error(hint);
+      process.exit(1);
+    }
     const guess = suggestCommand(cmd);
     console.error(`Unknown command '${cmd}'.${guess ? ` Did you mean '${guess}'?` : ""}\nRun 'monomem help' to see the commands.`);
     process.exit(1);
@@ -3877,7 +3939,8 @@ async function main(): Promise<void> {
     case "-h": {
       // `monomem help <cmd>` is the same as `monomem <cmd> --help`; an unknown word falls back to the general help.
       const sub = process.argv[3];
-      if (sub && sub !== "all" && !sub.startsWith("-") && helpFor(sub)) printCommandHelp(sub);
+      if (sub && Object.hasOwn(VERB_HINTS, sub.toLowerCase())) console.log(VERB_HINTS[sub.toLowerCase()]);
+      else if (sub && sub !== "all" && !sub.startsWith("-") && helpFor(sub)) printCommandHelp(sub);
       else usage(process.argv.includes("--all") || sub === "all");
       break;
     }

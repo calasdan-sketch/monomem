@@ -284,7 +284,7 @@ dashboard's **Usage** view. Tokens are estimates at about 4 characters a token.
   in total, mostly the MCP SDK's own), no native modules, no vector database,
   no Python. Back it up by copying one file.
 - **Change feed.** `memory_since` / `GET /changes`: "what changed while I was
-  away" — created, updated **and deleted** notes grouped by source, with a
+  away" — created, updated **and deleted** notes grouped by the writer that made them, with a
   per-device "since I last looked" marker. Driven by a local change log, so
   restores, file-sync imports and deletes are never missed. → [docs/change-feed.md](./docs/change-feed.md)
 - **Live wait.** `GET /changes?wait=25` / `memory_since { wait_seconds: 25 }` parks
@@ -408,7 +408,7 @@ REST mirrors them (`/notes`, `/search`, `/relevant`, `/changes`, `/tasks`, `/han
 
 ```
 monomem start | mcp | doctor | init
-monomem setup [--dry-run] [--yes] [--only claude-code,claude-desktop,cursor,codex,gemini,muse,vscode,zed] [--hook] [--undo]   # connect your apps; safe, backed up, undoable
+monomem setup [--dry-run] [--yes] [--only claude-code,claude-desktop,cursor,codex,gemini,muse,vscode,zed] [--hook|--no-hook] [--undo]   # connect your apps; safe, backed up, undoable (--yes also adds the Claude Code start-of-session hook unless --no-hook)
 monomem import --claude [--dry-run] [--update] [--project <folder>]   # bring in CLAUDE.md files and Claude Code auto memory
 monomem import --from claude-mem|mem0|basic-memory|mcp-memory [--path p] [--dry-run]   # switch from another memory tool (docs/switching.md)
 monomem sync --git ~/my-private-memory-repo [--encrypt]   # keep your computers in step through YOUR private git repository
@@ -421,7 +421,7 @@ monomem backup [--out dir] [--include-approval-key] [--include-attest-key]   # h
 monomem export --format md --dir ~/memory     monomem import --dir ~/memory
 monomem export --format json [--attest] --out a.json     monomem import --file a.json [--require-attestation]
 monomem supersede --old 12 --title "..." --body "..."   # replace a note: shows what you would lose, asks you to type the count
-monomem supersede undo <id>     monomem history <id> | restore <id> <version> | purge <id>
+monomem supersede undo <id>     monomem history <id>     monomem history restore <id> <version>     monomem history purge <id>
 monomem quarantine [list | approve <id> | reject <id>]
 monomem approve-first [<namespace> on|off | --all on|off]   # hold every agent write (one namespace, or all) for your approval
 monomem pin [<id>]     monomem unpin <id>     # agents can read a pinned note; only this CLI can change it
@@ -474,7 +474,9 @@ Details and limits: [docs/provenance.md](./docs/provenance.md).
 writer on a per-namespace **distrust list** (`monomem trust distrust <writer> --namespace work`, the
 `trust_policy` MCP tool, `/trust` REST): its notes, tasks, handoffs and feed entries are then left out of every
 read path unless an **admin** passes `include_distrusted`, they stay hidden after anyone else edits them, and a
-distrusted command task is never run. A JSON export made with `--attest` (`?attest=1`) carries a per-note Ed25519
+distrusted command task is never run. `monomem ls` and `monomem search` say how many notes they left out this way,
+and `--include-distrusted` shows them, marked. A local app's notes are written by `stdio:<app>` (`stdio:cursor`, not
+`cursor`); `monomem show <id>` prints a note's writer, and `trust distrust cursor` refuses and suggests the right name. A JSON export made with `--attest` (`?attest=1`) carries a per-note Ed25519
 **attestation**; an import that trusts the exporting server's key keeps the original author as `attested_writer`,
 otherwise it marks the note `imported_unverified`. (Attestations are **experimental**.) What that proves and what it
 does not: [docs/trust.md](./docs/trust.md).

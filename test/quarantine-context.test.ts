@@ -86,7 +86,9 @@ describe("quarantine context", () => {
     assert.ok(!text.includes("$50"), "held title never reaches the model");
     const out = JSON.parse(text.slice(text.indexOf("{")));
     assert.deepEqual(out.since_held.map((n: any) => n.id), [fix.id]);
-    assert.match(out.note, /compare-and-swap|changed since/i);
+    // A held NEW note: only the keep-the-time sentence (1.5.0 U-14: the changed-since paragraph is for held edits).
+    assert.match(out.note, /Approving keeps the time the write was made/);
+    assert.doesNotMatch(out.note, /held edit/);
     await client.close();
     s.close();
   });

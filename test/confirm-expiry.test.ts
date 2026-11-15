@@ -183,7 +183,7 @@ describe("re-confirmation expiry", () => {
     assert.match(lines, /Unconfirmed notes.*: 1/);
     assert.match(lines, /expiry: label, every 30 days.*1 note/i);
     assert.match(lines, /window/i);
-    assert.match(lines, /per connection; it resets when the server restarts/);
+    assert.match(lines, /counted per connection and starts over when the server restarts/);
     s.close();
   });
 });

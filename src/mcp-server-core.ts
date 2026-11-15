@@ -21,7 +21,7 @@ import {
   clampInt,
   REBUILD_CONFIRM_NOTE_COUNT,
   CHANGES_MAX_LIMIT,
-  QUARANTINE_CAS_NOTE,
+  quarantineCasNote,
   type NoteRecord,
 } from "./store.js";
 import type { LintFinding } from "./lint.js";
@@ -223,6 +223,15 @@ function noteWriterArgs(note_written_by?: string, not_note_written_by?: string):
 
 // A linter-held write is not an error: the write was accepted for review.
 function quarantinedResult(e: QuarantinedError) {
+  // Lead with what the linter saw: under approve-first an injected instruction used to be reported only as "waiting for
+  // approval", and the agent then told the person it was routine. The labels are the linter's own words, never note text.
+  const approval = e.findings.some((f) => f.category === "approval");
+  const injected = [...new Set(e.findings.filter((f) => f.category === "injection" || f.category === "directive").map((f) => f.label))];
+  const why = injected.length
+    ? `This write was held because it looks like an injected instruction (${injected.join(", ")})${approval ? ", and its namespace also requires approval (approve-first)" : ""}. It is not stored as a note yet. `
+    : approval && e.findings.length === 1
+      ? "This write was held for admin review because its namespace requires approval (approve-first), and is not stored as a note yet. "
+      : `This write was held for admin review by the memory linter${approval ? " (its namespace also requires approval, approve-first)" : ""} and is not stored as a note yet. `;
   return textResult({
     quarantined: {
       id: e.quarantineId,
@@ -233,9 +242,7 @@ function quarantinedResult(e: QuarantinedError) {
       // the surfaces that always exist instead.
       next: "The write was held, not lost. An administrator can approve or reject it in the dashboard, or with: monomem quarantine list",
       message:
-        (e.findings.some((f) => f.category === "approval")
-          ? "This write was held for admin review because its namespace requires approval (approve-first), and is not stored as a note yet. "
-          : "This write was held for admin review by the memory linter and is not stored as a note yet. ") +
+        why +
         "An admin can approve or reject it in the Monomem dashboard, or with `monomem quarantine` " +
         "(and through the memory_quarantine tool where MONOMEM_TOOLS makes it available).",
     },
@@ -2264,7 +2271,7 @@ export function createMcpServer(
             ...(ctx.target_changed !== undefined ? { target_changed: ctx.target_changed } : {}),
             ...(ctx.clears ? { clears: ctx.clears } : {}),
             since_held: ctx.notes,
-            note: QUARANTINE_CAS_NOTE,
+            note: quarantineCasNote(ctx.op),
           });
         }
         if (action === "keep_history") {
