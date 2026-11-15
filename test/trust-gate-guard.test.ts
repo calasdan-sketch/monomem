@@ -51,6 +51,7 @@ const EXPECTED_SITES: Record<string, string[]> = {
     "namespace probe; flagNote re-reads through readVisible",
   ],
   "operator-gate.ts": ["the CLI is the operator"],
+  "audit-cli.ts": ["verify-receipt --note: the operator compares a note with their own receipt; only a hash and the rev are printed"],
   "bench/engine.ts": ["bench adapter over HTTP GET /export (admin-only), not a Store read"],
   "cli.ts": [
     "the CLI is the operator",
