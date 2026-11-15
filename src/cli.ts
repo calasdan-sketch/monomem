@@ -2521,12 +2521,26 @@ async function trustCmd(): Promise<void> {
           process.exit(1);
         }
         if (action === "distrust") {
+          // "cursor" matches nothing while its notes say "stdio:cursor": refuse and suggest, never widen on our own
+          // (a saved rule that hides nothing would leave the person believing the app is distrusted).
+          if (store.distrustMatchCount(ns!, writer) === 0) {
+            const { suggestWriter } = await import("./trust.js");
+            const hint = suggestWriter(writer.trim(), (w) => store.distrustMatchCount(ns!, w));
+            if (hint) {
+              console.error(
+                `No notes are written by "${printable(writer, 60)}", so nothing was saved. Did you mean "${hint.writer}" (${hint.notes} note${hint.notes === 1 ? "" : "s"})?\n` +
+                  `Writer names must match exactly; \`monomem show <id>\` prints a note's "written by:".\n` +
+                  `Run: monomem trust distrust ${hint.writer} --namespace ${ns === "*" ? "'*'" : printable(ns!, 100)}`
+              );
+              process.exit(1);
+            }
+          }
           const r = store.distrustAdd(ns!, writer);
           const matched = store.distrustMatchCount(r.namespace, r.writer);
           show(
             { ...r, matched_notes: matched },
             `Distrusting "${r.writer}" in [${r.namespace}]: its notes are now left out of every read and never run (${matched} existing note(s) match` +
-              `${matched === 0 ? " - none yet: check the spelling against the written_by of a note (`monomem recall --include-distrusted`): labels are exact and case-sensitive" : ""}).`
+              `${matched === 0 ? ' - none yet: check the spelling against the "written by:" line of a note (`monomem show <id>`): labels are exact and case-sensitive' : ""}).`
           );
         } else {
           await requireOperator(`trust undistrust ${writer} [${ns}]`);

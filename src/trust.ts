@@ -140,6 +140,20 @@ export function nameIs(v: unknown, name: string, family: boolean): boolean {
   return v === name || (family && typeof v === "string" && v.startsWith(name + ":"));
 }
 
+/**
+ * People know a local app as "cursor"; its notes are stamped "stdio:cursor" (a token's as "token:<label>" only when the
+ * label collides with a marker). When `writer` is a bare name, return the first stamped form that `count` finds notes
+ * for, so a command that matched nothing can say "Did you mean ...". Suggest only: callers never widen a name on their own.
+ */
+export function suggestWriter(writer: string, count: (name: string) => number): { writer: string; notes: number } | undefined {
+  if (!writer || writer.includes(":") || writer.includes("/") || stdioFamily(writer)) return undefined;
+  for (const name of [`stdio:${writer}`, `token:${writer}`]) {
+    const notes = count(name);
+    if (notes > 0) return { writer: name, notes };
+  }
+  return undefined;
+}
+
 /** SQL twin of nameIs. GLOB is exact (case-sensitive) and safe here: a family name is "stdio" or "<uuid>/stdio". */
 export function nameIsSql(col: string, name: string, family: boolean): { sql: string; params: string[] } {
   return family ? { sql: `(${col} = ? OR ${col} GLOB ?)`, params: [name, `${name}:*`] } : { sql: `${col} = ?`, params: [name] };
