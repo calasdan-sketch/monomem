@@ -31,6 +31,61 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Held writes are sealed bound to their own queue row**, so one held body moved into another row no longer opens. Older
   rows are still read. The docs now say plainly that encryption gives confidentiality, not rollback protection.
 - `MONOMEM_ENCRYPT=0` is no longer read: it only made `encrypt status` say "off" while writes were still sealed.
+- **Hidden notes leak nothing through errors.** `state_write` checks what the caller may see before its reserved-tag rule, so
+  a refusal no longer tells a hidden note from a missing one. A script running `quarantine approve <id>` is refused before it
+  learns whether the id exists.
+- **A damaged trust setting fails closed.** A stored setting that can't be read makes Monomem stricter, never looser:
+  approve-first applies everywhere, agent writers are paused, no attester key is believed, and expiry runs in enforce mode.
+  `monomem doctor` names the setting and the command that resets it.
+- **Sealed git sync can't be rolled back.** Each sealed file carries a version inside the seal; a computer that already synced
+  a newer version stops instead of accepting an older file replayed from the repository's history.
+- **Approving a held write never echoes its text.** REST approve and keep-history reply with ids only, as MCP already did.
+- **An app older than the database refuses to write.** If a newer Monomem upgraded the file while an older one was running,
+  the older one says "restart this app" instead of writing rows in the old shape.
+- **`doctor` tells the truth about encryption:** it fails when encrypted notes have no key and warns about readable bodies
+  next to a key; `encrypt status` counts them. `restore` recognises an encrypted backup again.
+
+### Changed
+
+- **`monomem setup --yes` adds the start-of-session hook for Claude Code** (it is what makes remembered notes reach a new
+  session). It says what it added; leave it out with `--no-hook`, take it back with `setup --undo`. When the hook is not
+  installed, setup says so on its last line.
+- **`monomem doctor` only reports.** It no longer upgrades an older database (apps still running would keep writing in the
+  old shape); it says how to upgrade.
+- **The HTTP server waits at most 2 seconds for a busy database**, then REST answers 503 with `Retry-After` and MCP tools say
+  "busy, try again". The CLI and the stdio server still wait up to 20 seconds.
+- `changes` groups by the server-stamped writer; the writer's stated source is shown as a claim.
+- A held write that looks like an injected instruction is reported to the agent as that, also in an approve-first namespace.
+
+### Added
+
+- `monomem show`, `ls` and `why` print the trust state: unconfirmed, expired and built-on-distrusted labels, a plain origin
+  line, confirmations (counted or not, and why) and who approved a held write. `ls --archived` includes notes kept as history.
+- `monomem review --step`: one typed yes, then y / n / q per note.
+- Line-by-line diff of what changes in `supersede preview`, `quarantine show` and the dashboard.
+- `monomem service install | status | uninstall` (Windows Task Scheduler, macOS LaunchAgent, Linux systemd user unit; never
+  run by setup) and `start --log` writing a rotated `server.log`.
+- `/health` returns the version and schema; `doctor` warns when the running server is older than the CLI.
+- Pins travel through file sync (a file never unpins, and never pins an unconfirmed outside note).
+- Clearer everyday commands: a mistyped writer name gets "did you mean `stdio:…`" instead of an empty plan or a useless
+  distrust entry; `ls` and `search` say how many notes the distrust list hides (and `--include-distrusted` shows them);
+  `edit <id> -` refuses a one-line pipe that would empty the body (`--title` sets the title); `restore <id> <version>` points
+  to `history restore`; `undo`, `approve`, `reject` and `distrust` print the real commands; plainer words in `why`, held
+  writes and the dashboard; the dashboard's confirm button no longer moves and waits 10 seconds.
+
+### Fixed
+
+- Similarity links in an encrypted store survive a restart (the rebuild now reads the decrypted text).
+- Pinning a note with only an admin (dashboard) confirm explains that a person must confirm it at a terminal.
+- First run: an empty store scores 100 for tidiness, the first note is #1, and Windows shows one folder-permission line.
+- `doctor` warns about pre-upgrade copies older than 14 days and about failed background index builds.
+- The remote-access guide works as written (`MONOMEM_ALLOWED_HOSTS`, `tailscale serve`, `monomem` on the Docker image's PATH).
+
+### Performance
+
+- A 64 MB page-cache cap, a once-per-database check for old ciphertext, fewer counts at session start, an id-only profile
+  step, one file open per audit line and a change feed that pages in constant time. On a 10,000-note encrypted store,
+  session start went from about 108 ms to about 13 ms (measured on the development machine).
 
 ## [1.4.0] - 2026-11-13
 
