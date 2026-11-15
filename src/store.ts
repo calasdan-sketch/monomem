@@ -12,10 +12,10 @@
 // app-level "remember to reindex" step to forget.
 
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, statSync, statfsSync, readdirSync, renameSync, linkSync, existsSync, unlinkSync } from "node:fs";
+import { mkdirSync, statSync, statfsSync, readdirSync, renameSync, linkSync, existsSync, unlinkSync, copyFileSync } from "node:fs";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { dirname, basename, join, resolve } from "node:path";
-import { checkSizes, checkNames, audit, auditHead, auditPath, ADMIN_SCOPE_NEEDED } from "./security.js";
+import { checkSizes, checkNames, audit, auditHead, auditPath, beginKeyRotation, ADMIN_SCOPE_NEEDED } from "./security.js";
 import { chmodQuiet } from "./config.js";
 import { SECRET_ASSIGN_LABEL } from "./security.js";
 import { lintContent, lintPolicy, describeFindings, type LintFinding, type LintAction, type LintCategory } from "./lint.js";
@@ -1677,6 +1677,8 @@ export class Store {
     }
     // Notes are private: owner-only db + WAL/SHM (POSIX; no-op on Windows).
     if (dbPath !== ":memory:") for (const ext of ["", "-wal", "-shm"]) chmodQuiet(dbPath + ext, 0o600);
+    // 1.5.0: the store key exists from the moment the store is opened, not from its first write.
+    this.ensureAuditKey();
   }
 
   private static isReadOnlyError(e: unknown): boolean {
@@ -7704,10 +7706,11 @@ export class Store {
       });
     }
     let k!: SigningKey;
+    const endRotation = beginKeyRotation(); // other writers' audit lines wait until the key-rotate line and the swap are both done
     try {
       // The signed audit log hands over to the new key: a key-rotate line signed by the OLD key (the file is not swapped
       // yet), naming the new public key. Only when the log beside this store is the one this key signs.
-      const handOver = old && resolve(dirname(auditPath())) === resolve(this.keyDir);
+      const handOver = !!old; // a log elsewhere is signed by a copy of this key beside it (mirrorKeyToLog), so it hands over too
       k = replaceSigningKey(this.keyDir, oldFile ?? undefined, handOver ? (next) => this.audit({ op: "key-rotate", detail: `${old.keyId} -> ${next.keyId}`, new_pub: next.publicKey }) : undefined);
     } catch (e) {
       if (old && recordedNow) {
@@ -7718,6 +7721,13 @@ export class Store {
         }
       }
       throw e;
+    } finally {
+      try {
+        this.mirrorKeyToLog(); // a log elsewhere keeps signing with the key beside it: hand that copy over in the same window
+      } catch {
+        /* the copy beside the log is refreshed again at the next open */
+      }
+      endRotation();
     }
     this.signingKey = null; // the next use re-reads the file and its stamp
     this.signingStamp = "";
@@ -8182,12 +8192,29 @@ export class Store {
   private ensureAuditKey(): void {
     if (this.auditKeyChecked || this.dbPath === ":memory:") return;
     this.auditKeyChecked = true;
-    if (resolve(dirname(auditPath())) !== resolve(this.keyDir)) return; // a log elsewhere is signed by the key beside it, if any
     try {
       this.signing();
+      this.mirrorKeyToLog();
     } catch (e) {
       console.error(`[monomem] audit lines stay unsigned: could not create the signing key (${(e as Error).message})`);
     }
+  }
+
+  /**
+   * A log elsewhere (MONOMEM_AUDIT_LOG) is signed by the key found beside it, so that folder gets a copy of the store key
+   * (mode 0600, written to a temp name and renamed). Rotation refreshes it. An in-memory store never does this.
+   */
+  private mirrorKeyToLog(): void {
+    const logDir = dirname(auditPath());
+    if (this.dbPath === ":memory:" || resolve(logDir) === resolve(this.keyDir)) return;
+    const src = attestKeyPath(this.keyDir);
+    const dest = attestKeyPath(logDir);
+    if (resolve(src) === resolve(dest)) return; // MONOMEM_ATTEST_KEY_FILE names one file for both
+    mkdirSync(logDir, { recursive: true, mode: 0o700 });
+    const tmp = `${dest}.${process.pid}.tmp`;
+    copyFileSync(src, tmp);
+    chmodQuiet(tmp, 0o600);
+    renameSync(tmp, dest);
   }
 
   /** The current key and every retired own key (key id -> public key): what `audit verify` and `verify-receipt` trust. */
