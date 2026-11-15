@@ -22,6 +22,19 @@ const as = <T>(label: string, fn: () => T): T => actorStore.run({ label, authed:
 const read = (f: string): string => readFileSync(join(SRC, f), "utf8");
 
 /**
+ * The gate itself: store.ts and the modules split out of it (src/store/**) may read notes and query the gated tables
+ * directly. Every other file under src/ (recursively, so a new subfolder is not silently unscanned) is checked below.
+ */
+const isGateFile = (f: string): boolean => f === "store.ts" || f.startsWith("store/");
+function srcFiles(dir = SRC, prefix = ""): string[] {
+  return readdirSync(join(dir), { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? srcFiles(join(dir, e.name), `${prefix}${e.name}/`) : e.name.endsWith(".ts") ? [`${prefix}${e.name}`] : [],
+  );
+}
+/** The files outside the gate, paths relative to src/ with forward slashes. */
+const scanned = (): string[] => srcFiles().filter((f) => !isGateFile(f));
+
+/**
  * Every raw read of notes outside store.ts: `.read(` / `.exportAll(` / `.exportBatch(` on ANY receiver (an alias,
  * `this.s.read(`, `deps.store.read(` all match), each carrying a `// gate-ok: <reason>` comment on the same line.
  * The reasons are listed here per file, so the check is keyed on the call site and not on a count: adding a read, or
@@ -39,6 +52,7 @@ const EXPECTED_SITES: Record<string, string[]> = {
     "namespace check; confirm() re-reads through readVisible",
   ],
   "operator-gate.ts": ["the CLI is the operator"],
+  "bench/engine.ts": ["bench adapter over HTTP GET /export (admin-only), not a Store read"],
   "cli.ts": [
     "the CLI is the operator",
     "local shell command (reindex): the operator owns the database file",
@@ -122,6 +136,20 @@ const INTERNAL_OPT_IN: Record<string, number> = {
   "tasks.ts": 2,
 };
 
+/** SQL on a table the trust rules read or write: notes, their history, held writes, distrust/attester state, _meta (trust settings), confirmations, links. */
+const GATED_SQL_RE = /\b(?:FROM|JOIN|UPDATE|INTO)\s+(notes|note_history|quarantine|trust_distrust|trust_attesters|trust_log|_meta|confirmations|note_links)\b/gi;
+/** Files outside the gate that touch a gated table directly, with the tables, each reviewed. */
+const SQL_ALLOWED: Record<string, string[]> = {
+  // backup.ts counts the notes of the COPY it just made and strips local-only _meta keys from that copy.
+  "backup.ts": ["_meta", "notes"],
+  // health.ts keeps its own "audit lines seen" marker in _meta (health_audit_seen); it reads no trust setting.
+  "health.ts": ["_meta"],
+  // restore.ts counts (and checks for encryption) the BACKUP FILE it is about to put in place, before any store opens it.
+  "restore.ts": ["_meta", "notes"],
+  // why.ts is a local shell command (the operator owns the database file): held-write and confirmation history for one id.
+  "why.ts": ["confirmations", "quarantine"],
+};
+
 describe("B: one gate for reading a note", () => {
   test("the scanner itself: it matches aliased receivers and ignores comments (positive control)", () => {
     const sample = [
@@ -138,7 +166,8 @@ describe("B: one gate for reading a note", () => {
   });
 
   test("no module reads notes raw without a reviewed, reasoned call site", () => {
-    const files = readdirSync(SRC).filter((f) => f.endsWith(".ts") && f !== "store.ts");
+    const files = scanned();
+    assert.ok(files.length > 50 && files.some((f) => f.includes("/")), "the scan is recursive and found the source files");
     const seen: Record<string, string[]> = {};
     const unmarked: string[] = [];
     for (const f of files) {
@@ -154,20 +183,27 @@ describe("B: one gate for reading a note", () => {
     assert.deepEqual(seen, expected, "the set of reviewed raw reads changed: update EXPECTED_SITES in test/trust-gate-guard.test.ts with the reason it is safe");
   });
 
-  test("no SQL on the notes table outside store.ts, and no new unconditional includeDistrusted opt-in", () => {
-    const files = readdirSync(SRC).filter((f) => f.endsWith(".ts") && f !== "store.ts");
-    const sql: string[] = [];
+  test("no SQL on the gated tables outside the gate, and no new unconditional includeDistrusted opt-in", () => {
+    const files = scanned();
+    const sql: Record<string, string[]> = {};
     const optIn: Record<string, number> = {};
     for (const f of files) {
       const t = read(f);
-      if (/\b(?:FROM|JOIN|UPDATE|INTO)\s+notes\b/i.test(t)) sql.push(f);
+      const code = t.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+      const tables = new Set([...code.matchAll(GATED_SQL_RE)].map((m) => m[1]));
+      if (tables.size) sql[f] = [...tables].sort();
       const n = t.split("\n").filter((l) => /includeDistrusted: ?true/.test(l) && !/\? \{ includeDistrusted: true \} : \{\}/.test(l) && !/^\s*\/\//.test(l)).length;
       if (n) optIn[f] = n;
     }
-    // backup.ts only counts the notes of the COPY it just made; restore.ts only counts (and checks for encryption) the BACKUP FILE it is about to put
-    // in place, before any store opens it: neither reads a note into a response.
-    assert.deepEqual(sql.sort(), ["backup.ts", "restore.ts"], "SQL on the notes table belongs in store.ts, behind the gate");
+    assert.deepEqual(sql, SQL_ALLOWED, "SQL on a gated table belongs in store.ts / src/store/, behind the gate: route it through the Store, or review it and list it in SQL_ALLOWED");
     assert.deepEqual(optIn, INTERNAL_OPT_IN, "an unconditional includeDistrusted: true was added or removed: review it, then update INTERNAL_OPT_IN");
+  });
+
+  test("the SQL scanner matches every gated table and ignores other tables (positive control)", () => {
+    const hits = (s: string) => [...s.matchAll(GATED_SQL_RE)].map((m) => m[1]);
+    assert.deepEqual(hits("SELECT * FROM notes; UPDATE note_history SET x; INSERT INTO quarantine; DELETE FROM trust_distrust"), ["notes", "note_history", "quarantine", "trust_distrust"]);
+    assert.deepEqual(hits("select 1 from _meta join confirmations on 1 join note_links on 1 from trust_attesters from trust_log"), ["_meta", "confirmations", "note_links", "trust_attesters", "trust_log"]);
+    assert.deepEqual(hits("SELECT * FROM notes_fts; FROM note_vectors; FROM access_log; FROM notesx"), []);
   });
 
   test("every HTTP GET route and every MCP tool is classified", () => {
