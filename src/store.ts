@@ -130,6 +130,7 @@ import {
   WriterPausedError,
   heldHandled,
 } from "./errors.js";
+import * as trustOps from "./store/trust.js";
 import * as quarantineOps from "./store/quarantine.js";
 import * as confirmOps from "./store/confirm.js";
 import * as taintOps from "./store/taint.js";
@@ -1610,7 +1611,7 @@ export class Store {
   /** Directory the key file resolves against (single resolver: beside the DB). */
   private readonly keyDir: string;
   /** This database's server_id (the `store_uuid` in _meta); filled in by the constructor. */
-  private serverIdValue = "";
+  /** @internal */ serverIdValue = "";
   /** The attestation signing key, loaded (or created) on first use. */
   private signingKey: SigningKey | null = null;
 
@@ -7333,45 +7334,29 @@ export class Store {
    * `writer_id`.
    */
   serverId(): string {
-    return this.serverIdValue || (this.serverIdValue = this.storeId());
+    return trustOps.serverId(this);
   }
 
   /** `<server_id>/<label>`: the stable id of a writer on this server ("" for an unknown writer). */
   writerId(label: string): string {
-    return makeWriterId(this.serverId(), label);
+    return trustOps.writerId(this, label);
   }
 
-  /** Who is changing the trust configuration right now, for the log. */
-  private trustActor(): string {
-    return currentWriter() || currentActor() || "unknown";
+  /** @internal */ trustActor(): string {
+    return trustOps.trustActor(this);
   }
 
-  private logTrust(action: string, namespace: string, subject: string): void {
-    const actor = this.trustActor();
-    this.db
-      .prepare("INSERT INTO trust_log (at, actor, action, namespace, subject) VALUES (?, ?, ?, ?, ?)")
-      .run(new Date().toISOString(), actor, action, namespace, subject);
-    this.pruneTrustLog(namespace);
-    this.audit({ op: `trust.${action}`, namespace, label: actor, kind: "trust", detail: subject.slice(0, 200) });
+  /** @internal */ logTrust(action: string, namespace: string, subject: string): void {
+    return trustOps.logTrust(this, action, namespace, subject);
   }
 
-  /**
-   * Bounded per namespace: each namespace keeps its own newest MAX_TRUST_LOG_ROWS rows (the server-wide lines, namespace `*`,
-   * their own bucket of MAX_TRUST_LOG_ROWS_GLOBAL), so a pinned admin flooding its own namespace can only push out its own lines,
-   * never another admin's or the attester / key-rotation lines. The audit log keeps the full trail.
-   */
-  private pruneTrustLog(namespace: string): void {
-    const keep = namespace === ALL_NAMESPACES ? MAX_TRUST_LOG_ROWS_GLOBAL : MAX_TRUST_LOG_ROWS;
-    this.db
-      .prepare("DELETE FROM trust_log WHERE namespace = ? AND seq NOT IN (SELECT seq FROM trust_log WHERE namespace = ? ORDER BY seq DESC LIMIT ?)")
-      .run(namespace, namespace, keep);
+  /** @internal */ pruneTrustLog(namespace: string): void {
+    return trustOps.pruneTrustLog(this, namespace);
   }
 
   /** The distrust list (every namespace). Cheap: a tiny table read per query, so a change elsewhere is seen at once. */
   distrustRules(): DistrustRule[] {
-    return this.db
-      .prepare("SELECT namespace, writer, added_at, added_by FROM trust_distrust ORDER BY namespace, writer")
-      .all() as unknown as DistrustRule[];
+    return trustOps.distrustRules(this);
   }
 
   /**
@@ -7380,60 +7365,17 @@ export class Store {
    * scope is checked by the caller; the change is logged. Returns the rule.
    */
   distrustAdd(namespace: string, writer: string): DistrustRule {
-    const ns = typeof namespace === "string" ? namespace.trim() : "";
-    if (!ns) throw new ValidationError('namespace is required (use "*" for every namespace)');
-    if (ns.length > 200) throw new ValidationError("namespace is too long");
-    const parsed = canonicalRuleWriter(writer);
-    if (!parsed.ok) throw new ValidationError(parsed.error);
-    const canonical = parsed.writer;
-    const addedBy = this.trustActor();
-    const at = new Date().toISOString();
-    this.transaction(() => {
-      const have = this.db.prepare("SELECT 1 FROM trust_distrust WHERE namespace = ? AND writer = ?").get(ns, canonical);
-      if (have) return;
-      const perNs = Number((this.db.prepare("SELECT COUNT(*) AS c FROM trust_distrust WHERE namespace = ?").get(ns) as { c: number }).c);
-      if (perNs >= MAX_DISTRUST_RULES_PER_NAMESPACE) {
-        throw new ValidationError(`the distrust list for ${ns === "*" ? "the * bucket" : `namespace ${ns}`} is full (${MAX_DISTRUST_RULES_PER_NAMESPACE} entries); remove one first`);
-      }
-      const n = Number((this.db.prepare("SELECT COUNT(*) AS c FROM trust_distrust").get() as { c: number }).c);
-      if (n >= MAX_DISTRUST_RULES) throw new ValidationError(`the distrust list is full (${MAX_DISTRUST_RULES} entries); remove one first`);
-      // Namespace-specific rules may not use the room reserved for the `*` bucket, so ten namespaces
-      // (or ten pinned admins) cannot lock the server-wide admin out of adding a `*` rule.
-      if (ns !== ALL_NAMESPACES && n >= MAX_DISTRUST_RULES - MAX_DISTRUST_RULES_PER_NAMESPACE) {
-        throw new ValidationError(`the distrust list is full for namespace-specific entries (${MAX_DISTRUST_RULES - MAX_DISTRUST_RULES_PER_NAMESPACE}; the rest is kept for "*" entries); remove one first`);
-      }
-      this.db.prepare("INSERT INTO trust_distrust (namespace, writer, added_at, added_by) VALUES (?, ?, ?, ?)").run(ns, canonical, at, addedBy);
-      this.logTrust("distrust", ns, canonical);
-    });
-    return (this.db.prepare("SELECT namespace, writer, added_at, added_by FROM trust_distrust WHERE namespace = ? AND writer = ?").get(ns, canonical) as unknown) as DistrustRule;
+    return trustOps.distrustAdd(this, namespace, writer);
   }
 
   /** How many stored notes the rule `(namespace, writer)` hides right now (0 usually means a misspelt label). */
   distrustMatchCount(namespace: string, writer: string): number {
-    const parsed = canonicalRuleWriter(writer);
-    if (!parsed.ok) return 0;
-    const rule: DistrustRule = { namespace, writer: parsed.writer, added_at: "", added_by: "" };
-    const d = distrustSql([rule], this.serverId(), NOTE_COLUMNS);
-    if (!d.sql) return 0;
-    const nsSql = namespace === ALL_NAMESPACES ? "" : " AND notes.namespace = ?";
-    const nsParams = namespace === ALL_NAMESPACES ? [] : [namespace];
-    const all = Number((this.db.prepare(`SELECT COUNT(*) AS c FROM notes WHERE 1 = 1${nsSql}${this.ceilingSql("notes.sensitivity")}`).get(...nsParams) as { c: number }).c);
-    const visible = Number((this.db.prepare(`SELECT COUNT(*) AS c FROM notes WHERE 1 = 1${nsSql}${d.sql}${this.ceilingSql("notes.sensitivity")}`).get(...nsParams, ...d.params) as { c: number }).c);
-    return all - visible;
+    return trustOps.distrustMatchCount(this, namespace, writer);
   }
 
   /** Take a writer off the list. True if it was there. */
   distrustRemove(namespace: string, writer: string): boolean {
-    const ns = typeof namespace === "string" ? namespace.trim() : "";
-    const parsed = canonicalRuleWriter(writer);
-    if (!ns || !parsed.ok) throw new ValidationError("namespace and writer are required");
-    const canonical = parsed.writer;
-    let removed = false;
-    this.transaction(() => {
-      removed = Number(this.db.prepare("DELETE FROM trust_distrust WHERE namespace = ? AND writer = ?").run(ns, canonical).changes) > 0;
-      if (removed) this.logTrust("undistrust", ns, canonical);
-    });
-    return removed;
+    return trustOps.distrustRemove(this, namespace, writer);
   }
 
   /**
@@ -7443,17 +7385,7 @@ export class Store {
    * or other tenants' subjects.
    */
   trustLog(limit = 20, pinnedNamespace?: string): Array<{ at: string; actor: string; action: string; namespace: string; subject: string }> {
-    const n = clampInt(limit, 20, 1, 200);
-    return (
-      pinnedNamespace === undefined
-        ? this.db.prepare("SELECT at, actor, action, namespace, subject FROM trust_log ORDER BY seq DESC LIMIT ?").all(n)
-        : this.db
-            .prepare(
-              `SELECT at, actor, action, namespace, subject FROM trust_log
-               WHERE (namespace = ? OR namespace = '*') AND action NOT LIKE 'attester-%' AND action <> 'key-rotate' ORDER BY seq DESC LIMIT ?`
-            )
-            .all(pinnedNamespace, n)
-    ) as unknown as Array<{ at: string; actor: string; action: string; namespace: string; subject: string }>;
+    return trustOps.trustLog(this, limit, pinnedNamespace);
   }
 
   /**
@@ -7467,31 +7399,22 @@ export class Store {
     revoked: ReturnType<Store["revocationList"]>;
     log: ReturnType<Store["trustLog"]>;
   } {
-    const pinned = pinnedNamespace !== undefined;
-    return {
-      distrust: this.distrustRules().filter((r) => !pinned || r.namespace === pinnedNamespace || r.namespace === ALL_NAMESPACES),
-      attesters: pinned ? [] : this.attesterList(),
-      revoked: pinned ? [] : this.revocationList(),
-      log: this.trustLog(20, pinnedNamespace),
-    };
+    return trustOps.trustView(this, pinnedNamespace);
   }
 
   /** Does the distrust list name a writer that touched this note (current writer, attested original, merged sources)? */
   isDistrusted(n: WriterFacts): boolean {
-    return matchesDistrust(this.distrustRules(), n, this.serverId());
+    return trustOps.isDistrusted(this, n);
   }
 
   /** isDistrusted against rules the caller already loaded (hot loops). */
   isDistrustedWith(rules: readonly DistrustRule[], serverId: string, n: WriterFacts): boolean {
-    return matchesDistrust(rules, n, serverId);
+    return trustOps.isDistrustedWith(this, rules, serverId, n);
   }
 
   /** Flag (distrusted: true) the notes whose writer is on the list. Used where a read opted in with include_distrusted. */
   markDistrusted<T extends NoteRecord>(notes: T[]): T[] {
-    const rules = this.distrustRules();
-    if (rules.length === 0) return notes;
-    const id = this.serverId();
-    return notes.map((n) => (matchesDistrust(rules, n, id) ? { ...n, distrusted: true as const } : n));
+    return trustOps.markDistrusted(this, notes);
   }
 
   /** The query fragment hiding distrusted rows (empty when the list is empty). */
@@ -7513,12 +7436,12 @@ export class Store {
 
   /** Operator-level (no ceiling): how many notes carry a label other than "internal". Used only for start-up and sync warnings. */
   labelledAboveDefault(): number {
-    return Number((this.db.prepare("SELECT COUNT(*) AS c FROM notes WHERE sensitivity <> ?").get(DEFAULT_SENSITIVITY) as { c: number }).c);
+    return trustOps.labelledAboveDefault(this);
   }
 
   /** Operator-level: is there any note labelled private? */
   hasPrivateNotes(): boolean {
-    return !!this.db.prepare("SELECT 1 FROM notes WHERE sensitivity = 'private' LIMIT 1").get();
+    return trustOps.hasPrivateNotes(this);
   }
 
   /** True when this row is above the caller's ceiling (and so must read as "not found"). */
@@ -7528,49 +7451,19 @@ export class Store {
 
   /** True when note `id` exists but is above the caller's ceiling (for callers that hold a bare id from a side table, e.g. a session's summary). */
   hiddenFromCaller(id: number): boolean {
-    if (currentCeiling() === undefined) return false;
-    const row = this.db.prepare("SELECT sensitivity FROM notes WHERE id = ?").get(id) as { sensitivity: string } | undefined;
-    return !!row && this.hiddenByCeiling(row);
+    return trustOps.hiddenFromCaller(this, id);
   }
 
-  /** By-id guard for the write/move paths that touch a row without reading it first: true when the caller may not see note `id`. */
   private idHidden(id: number): boolean {
-    if (currentCeiling() === undefined) return false;
-    const row = this.db.prepare("SELECT sensitivity FROM notes WHERE id = ?").get(id) as { sensitivity: string } | undefined;
-    return !row || this.hiddenByCeiling(row);
+    return trustOps.idHidden(this, id);
   }
 
-  /** The label a new note gets: the one asked for (checked against the ceiling), else "internal" -- or the ceiling itself when that is lower. */
   private labelForNew(raw: unknown): Sensitivity {
-    const max = currentCeiling();
-    if (raw === undefined || raw === null) {
-      if (max === undefined) return DEFAULT_SENSITIVITY;
-      const levels = levelsAtOrBelow(max);
-      if (levels.length === 0) throw new ValidationError("this token's sensitivity ceiling is not a valid label, so it cannot write");
-      return levels.includes(DEFAULT_SENSITIVITY) ? DEFAULT_SENSITIVITY : levels[levels.length - 1];
-    }
-    const label = parseSensitivity(raw);
-    if (!label) throw new ValidationError(`sensitivity must be ${SENSITIVITY_HELP}`);
-    if (!sensitivityVisible(label, max)) {
-      throw new ValidationError(`this token cannot write a "${label}" note: its sensitivity ceiling is "${String(max)}"`);
-    }
-    return label;
+    return trustOps.labelForNew(this, raw);
   }
 
-  /** A relabel of an existing note: undefined when nothing changes; otherwise the new label, after the ceiling and declassify checks. */
   private labelForRelabel(raw: unknown, current: string | undefined): Sensitivity | undefined {
-    const label = parseSensitivity(raw);
-    if (!label) throw new ValidationError(`sensitivity must be ${SENSITIVITY_HELP}`);
-    const max = currentCeiling();
-    if (!sensitivityVisible(label, max)) {
-      throw new ValidationError(`this token cannot label a note "${label}": its sensitivity ceiling is "${String(max)}"`);
-    }
-    const now = current ?? DEFAULT_SENSITIVITY;
-    if (label === now) return undefined;
-    if (sensitivityRank(label) < sensitivityRank(now) && actorStore.getStore()?.canDeclassify === false) {
-      throw new ValidationError("lowering a note's sensitivity label needs an admin token (raising it does not)");
-    }
-    return label;
+    return trustOps.labelForRelabel(this, raw, current);
   }
 
   /** rangeClause + the distrust exclusion (unless the caller opted in) + the sensitivity ceiling (always). */
