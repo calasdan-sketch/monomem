@@ -1,8 +1,9 @@
 // Pure row helpers shared by store.ts and the src/store/* modules (1.5.0 store split). Imports only the pure taint.ts and
-// types, so every user stays out of import cycles.
+// crypto.ts and types, so every user stays out of import cycles.
 
 import type { NoteRecord } from "../store.js";
 import { isTainted } from "../taint.js";
+import { encryptV3, decryptV3, decryptIfEncrypted, ENC_PREFIX_V3 } from "../crypto.js";
 
 /** A hooked session with no event for this long no longer counts as open (same as extract.ts STALE_SESSION_MS). */
 export const SESSION_IDLE_MS = 30 * 60_000;
@@ -64,4 +65,38 @@ export function dueBase(r: DueRow, c: { set_at?: string }): number {
  */
 export function needsHumanConfirm(n: Pick<NoteRecord, "tags" | "rev" | "confirmed_kind" | "confirmed_rev">): boolean {
   return isTainted(n.tags) && !(n.confirmed_kind === "human" && n.confirmed_rev === n.rev);
+}
+
+/** AAD binding a sealed quarantine column to its column name and namespace (v2, rows sealed before 1.5.0). */
+export function quarantineAad(col: string, namespace: string): string {
+  return `quarantine|${col}|${namespace}`;
+}
+
+/**
+ * 1.5.0 S-05: a held write is sealed as v3, bound to its row id too, so one held body moved into another held row (same
+ * namespace) does not open and cannot be approved under that row's writer. v2 rows are still read.
+ */
+export function sealQuarantineCol(v: string, key: Buffer, col: string, namespace: string, id: number): string {
+  return encryptV3(v, key, `${quarantineAad(col, namespace)}|${id}`);
+}
+
+export function openQuarantineCol(v: string, key: Buffer | null, col: string, namespace: string, id: number): string {
+  return v.startsWith(ENC_PREFIX_V3) ? decryptV3(v, key, `${quarantineAad(col, namespace)}|${id}`) : decryptIfEncrypted(v, key, quarantineAad(col, namespace));
+}
+
+/**
+ * Normalize a caller-supplied timestamp to canonical ISO-8601 (UTC, ms), or
+ * null when it is missing, not a string, or doesn't parse. Canonical form
+ * matters: created_at/updated_at are compared and sorted as strings.
+ */
+export function isoOrNull(v: unknown): string | null {
+  if (typeof v !== "string" || !v.trim()) return null;
+  const t = Date.parse(v);
+  return Number.isNaN(t) ? null : new Date(t).toISOString();
+}
+
+/** Coerce a possibly-NaN/undefined value to a bounded integer with a default. */
+export function clampInt(v: number | undefined, def: number, min: number, max: number): number {
+  const n = typeof v === "number" && Number.isFinite(v) ? Math.floor(v) : def;
+  return Math.min(Math.max(n, min), max);
 }

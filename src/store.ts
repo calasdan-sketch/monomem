@@ -130,10 +130,11 @@ import {
   WriterPausedError,
   heldHandled,
 } from "./errors.js";
+import * as quarantineOps from "./store/quarantine.js";
 import * as confirmOps from "./store/confirm.js";
 import * as taintOps from "./store/taint.js";
-import { SESSION_IDLE_MS, tagsToStorage, parseTags, CONFIRM_RANK, rankSql, dueBase, needsHumanConfirm, type DueRow } from "./store/rows.js";
-export { dueBase, needsHumanConfirm };
+import { SESSION_IDLE_MS, tagsToStorage, parseTags, CONFIRM_RANK, rankSql, dueBase, needsHumanConfirm, type DueRow, quarantineAad, sealQuarantineCol, openQuarantineCol, isoOrNull, clampInt } from "./store/rows.js";
+export { dueBase, needsHumanConfirm, clampInt };
 export { ValidationError, NoteUnreadableError, StaleWriteError, RebuildBusyError, CandidateScanError, QuarantinedError, WriterPausedError };
 
 /**
@@ -575,7 +576,7 @@ export interface QuarantineEntry {
 }
 
 /** The quarantine columns approval needs beyond QuarantineEntry (Store.applyHeld). */
-interface HeldRow {
+export interface HeldRow {
   if_rev: number | null;
   set_namespace: number;
   created_at: string;
@@ -909,21 +910,6 @@ export { ORIGIN_TOOL_PREFIX };
 const PREMIGRATION_FILE_RE = /-backup(-\d{8}-\d{6}(-\d+)?)?(\.[0-9a-f]+\.partial(-journal|-wal|-shm)?)?$/;
 const PREMIGRATION_PARTIAL_RE = /\.[0-9a-f]+\.partial(-journal|-wal|-shm)?$/;
 
-/** AAD binding a sealed quarantine column to its column name and namespace (v2, rows sealed before 1.5.0). */
-function quarantineAad(col: string, namespace: string): string {
-  return `quarantine|${col}|${namespace}`;
-}
-/**
- * 1.5.0 S-05: a held write is sealed as v3, bound to its row id too, so one held body moved into another held row (same
- * namespace) does not open and cannot be approved under that row's writer. v2 rows are still read.
- */
-function sealQuarantineCol(v: string, key: Buffer, col: string, namespace: string, id: number): string {
-  return encryptV3(v, key, `${quarantineAad(col, namespace)}|${id}`);
-}
-function openQuarantineCol(v: string, key: Buffer | null, col: string, namespace: string, id: number): string {
-  return v.startsWith(ENC_PREFIX_V3) ? decryptV3(v, key, `${quarantineAad(col, namespace)}|${id}`) : decryptIfEncrypted(v, key, quarantineAad(col, namespace));
-}
-
 /** Who is making this write: an internal override, else the connection's server-stamped writer. */
 function writerNow(opts: { writtenBy?: string }): string {
   return opts.writtenBy !== undefined ? cleanWriter(opts.writtenBy) : currentWriter();
@@ -1084,23 +1070,6 @@ function buildMatchQuery(q: string, any = false): string {
     // match every word starting with go). A typed search keeps prefix matching for every word.
     .map((t) => `"${t.replace(/"/g, '""')}"${any && /^[\p{L}]{1,2}$/u.test(t) ? "" : "*"}`);
   return tokens.join(any ? " OR " : " AND "); // "" when nothing usable; caller returns []
-}
-
-/**
- * Normalize a caller-supplied timestamp to canonical ISO-8601 (UTC, ms), or
- * null when it is missing, not a string, or doesn't parse. Canonical form
- * matters: created_at/updated_at are compared and sorted as strings.
- */
-function isoOrNull(v: unknown): string | null {
-  if (typeof v !== "string" || !v.trim()) return null;
-  const t = Date.parse(v);
-  return Number.isNaN(t) ? null : new Date(t).toISOString();
-}
-
-/** Coerce a possibly-NaN/undefined value to a bounded integer with a default. */
-export function clampInt(v: number | undefined, def: number, min: number, max: number): number {
-  const n = typeof v === "number" && Number.isFinite(v) ? Math.floor(v) : def;
-  return Math.min(Math.max(n, min), max);
 }
 
 // --- Similarity edge graph (v4) -------------------------------------------
@@ -1620,7 +1589,7 @@ export class Store {
   /** @internal */ db: DatabaseSync;
   private readonly dbPath: string;
   /** Per-namespace edge-scoring index (see NsEdgeIndex). */
-  private edgeIndexes = new Map<string, NsEdgeIndex>();
+  /** @internal */ edgeIndexes = new Map<string, NsEdgeIndex>();
   /** Namespaces whose index is being built in the background, with the notes written meanwhile (linked when it is ready). */
   private edgeBuilds = new Map<string, Set<number>>();
   /** Recent live-note counts per namespace, so a write does not recount a big namespace every time. */
@@ -3686,7 +3655,7 @@ export class Store {
    * deleted key (unrecoverable) or keep writing plaintext after enable.
    * Null = encryption is off (no key file).
    */
-  private writeKey(): Buffer | null {
+  /** @internal */ writeKey(): Buffer | null {
     const stamp = this.stampOf();
     if (stamp === "") {
       // No key. Fine for a plaintext store; but if encrypted rows exist the key
@@ -3732,7 +3701,7 @@ export class Store {
    * encrypted) keeps working; falls back to a fresh load when this process
    * started before `encrypt enable`.
    */
-  private readKey(): Buffer | null {
+  /** @internal */ readKey(): Buffer | null {
     return this.lastKey ?? this.writeKey();
   }
 
@@ -5237,7 +5206,7 @@ export class Store {
    * 1.5.0 (round 2, S-04): every write starts here. The version is read under the write lock, so a newer Monomem that
    * upgraded the file from another process can't slip in between the check and the write; this process then refuses.
    */
-  private beginWrite(): void {
+  /** @internal */ beginWrite(): void {
     this.db.exec("BEGIN IMMEDIATE");
     const uv = Number((this.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
     if (uv > SCHEMA_VERSION) {
@@ -7553,7 +7522,7 @@ export class Store {
   }
 
   /** True when this row is above the caller's ceiling (and so must read as "not found"). */
-  private hiddenByCeiling(row: { sensitivity?: string | null }): boolean {
+  /** @internal */ hiddenByCeiling(row: { sensitivity?: string | null }): boolean {
     return !sensitivityVisible(row.sensitivity ?? DEFAULT_SENSITIVITY, currentCeiling());
   }
 
@@ -7605,7 +7574,7 @@ export class Store {
   }
 
   /** rangeClause + the distrust exclusion (unless the caller opted in) + the sensitivity ceiling (always). */
-  private rangeFor(opts: RangeOpts, namespaces?: readonly string[]): { sql: string; params: string[] } {
+  /** @internal */ rangeFor(opts: RangeOpts, namespaces?: readonly string[]): { sql: string; params: string[] } {
     const base = rangeClause(opts, this.serverId());
     const ceil = this.ceilingSql();
     const r = ceil ? { sql: base.sql + ceil, params: base.params } : base;
@@ -8209,13 +8178,13 @@ export class Store {
   }
 
   /** COMMIT (or a savepoint RELEASE), then write the audit lines it held, once the outermost transaction has ended. */
-  private commitTx(sql = "COMMIT"): void {
+  /** @internal */ commitTx(sql = "COMMIT"): void {
     this.db.exec(sql);
     if (!this.db.isTransaction) this.flushAudit();
   }
 
   /** ROLLBACK (or ROLLBACK TO a savepoint); when the whole transaction is gone, so are the audit lines it held. */
-  private rollbackTx(sql = "ROLLBACK"): void {
+  /** @internal */ rollbackTx(sql = "ROLLBACK"): void {
     try {
       this.db.exec(sql);
     } finally {
@@ -8493,7 +8462,6 @@ export class Store {
 
   // --- Quarantine (v7) -----------------------------------------------------
 
-  /** Hold a linter-flagged write for admin review; returns its quarantine id. */
   private quarantineWrite(q: {
     op: "create" | "update";
     targetId?: number;
@@ -8520,122 +8488,20 @@ export class Store {
     /** ... and (create) linked to its (origin, id). */
     syncIdentity?: { origin: string; id: number };
   }): number {
-    // Held writes are the flagged ones (secrets, injections): when at-rest
-    // encryption is on they are sealed too. The key state is read under the
-    // write lock (see writeKey) so a concurrent `encrypt disable` cannot
-    // strand a sealed row.
-    const nested = this.db.isTransaction;
-    // What a held EDIT clears (confidence / forget_after set to null) is stored in the INSERT itself, not by a second statement.
-    const clears = q.op === "update" ? (["forget_after", "confidence"] as const).filter((f) => (f === "confidence" ? q.confidence : q.forgetAfter) === null) : [];
-    if (!nested) this.beginWrite();
-    let id: number;
-    try {
-      const key = this.writeKey();
-      // Sealed rows are bound to their id (S-05): inserted with empty columns, sealed below in this same transaction.
-      const sealCol = (col: string, v: string | null): string | null => (v === null || !key ? v : "");
-      const res = this.db
-        .prepare(
-          `INSERT INTO quarantine (op, target_id, if_rev, namespace, title, body, tags, source,
-                                   created_at_override, reasons, created_at, set_namespace, sealed, written_by, sensitivity,
-                                   forget_after, confidence, clears)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .run(
-          q.op,
-          q.targetId ?? null,
-          q.ifRev ?? null,
-          q.namespace,
-          sealCol("title", q.title ?? null),
-          sealCol("body", q.body ?? null),
-          sealCol("tags", q.tags === undefined ? null : JSON.stringify(q.tags)),
-          q.source === undefined ? null : q.source.replace(/[\u{E0000}-\u{E007F}]/gu, ""),
-          isoOrNull(q.createdAt),
-          JSON.stringify(q.findings),
-          new Date().toISOString(),
-          q.setNamespace ? 1 : 0,
-          key ? 1 : 0,
-          q.writtenBy !== undefined ? cleanWriter(q.writtenBy) : currentWriter(),
-          q.sensitivity ?? DEFAULT_SENSITIVITY,
-          q.forgetAfter ?? null,
-          typeof q.confidence === "number" ? q.confidence : null,
-          clears.length ? JSON.stringify(clears) : null
-        );
-      id = Number(res.lastInsertRowid);
-      if (key) {
-        const seal = (col: string, v: string | null): string | null => (v === null ? null : sealQuarantineCol(v, key, col, q.namespace, id));
-        this.db
-          .prepare("UPDATE quarantine SET title = ?, body = ?, tags = ? WHERE id = ?")
-          .run(seal("title", q.title ?? null), seal("body", q.body ?? null), seal("tags", q.tags === undefined ? null : JSON.stringify(q.tags)), id);
-      }
-      if (q.importedUnverified || q.syncIdentity) {
-        this.db
-          .prepare("UPDATE quarantine SET imported_unverified = ?, sync_origin = ?, sync_origin_id = ? WHERE id = ?")
-          .run(q.importedUnverified ? 1 : 0, q.syncIdentity?.origin ?? null, q.syncIdentity?.id ?? null, id);
-      }
-      if (!nested) this.commitTx();
-    } catch (e) {
-      if (!nested) {
-        try {
-          this.rollbackTx();
-        } catch {
-          /* already rolled back */
-        }
-      }
-      throw e;
-    }
-    // Audit records the decision, never the content.
-    this.audit({ op: "quarantine", id, namespace: q.namespace, bytes: (q.body ?? "").length });
-    return id;
+    return quarantineOps.quarantineWrite(this, q);
   }
 
-  private quarantineRow(row: Record<string, unknown>): QuarantineEntry {
-    if (Number(row.sealed) === 1) {
-      const key = this.readKey();
-      const ns = String(row.namespace);
-      for (const col of ["title", "body", "tags"]) {
-        if (typeof row[col] === "string") row[col] = openQuarantineCol(row[col] as string, key, col, ns, Number(row.id));
-      }
-    }
-    let reasons: LintFinding[] = [];
-    try {
-      reasons = JSON.parse(String(row.reasons)) as LintFinding[];
-    } catch {
-      /* corrupt row: show it with no reasons rather than hide it */
-    }
-    return {
-      id: Number(row.id),
-      op: row.op === "update" ? "update" : "create",
-      target_id: row.target_id === null ? null : Number(row.target_id),
-      namespace: String(row.namespace),
-      title: (row.title as string | null) ?? null,
-      body: (row.body as string | null) ?? null,
-      tags: row.tags === null ? null : parseTags(String(row.tags)),
-      source: (row.source as string | null) ?? null,
-      written_by: typeof row.written_by === "string" ? row.written_by : "",
-      reasons,
-      created_at: String(row.created_at),
-    };
+  /** @internal */ quarantineRow(row: Record<string, unknown>): QuarantineEntry {
+    return quarantineOps.quarantineRow(this, row);
   }
 
   /** Pending quarantined writes, oldest first (optionally per namespace set). */
   listQuarantine(opts: { namespaces?: string[]; limit?: number } = {}): QuarantineEntry[] {
-    if (opts.namespaces && opts.namespaces.length === 0) return [];
-    const limit = clampInt(opts.limit, 50, 1, 500);
-    const where = `WHERE 1 = 1${
-      opts.namespaces ? ` AND namespace IN (${opts.namespaces.map(() => "?").join(",")})` : ""
-    }${this.ceilingSql()}`;
-    const rows = this.db
-      .prepare(`SELECT * FROM quarantine ${where} ORDER BY id ASC LIMIT ?`)
-      .all(...(opts.namespaces ?? []), limit) as Array<Record<string, unknown>>;
-    return rows.map((r) => this.quarantineRow(r));
+    return quarantineOps.listQuarantine(this, opts);
   }
 
   getQuarantine(id: number): QuarantineEntry | null {
-    const row = this.db.prepare("SELECT * FROM quarantine WHERE id = ?").get(id) as
-      | Record<string, unknown>
-      | undefined;
-    // A held write above the caller's ceiling does not exist as far as it can tell.
-    return row && !this.hiddenByCeiling(row as { sensitivity?: string | null }) ? this.quarantineRow(row) : null;
+    return quarantineOps.getQuarantine(this, id);
   }
 
   /**
@@ -8648,120 +8514,23 @@ export class Store {
    * named a namespace.
    */
   approveQuarantine(id: number): NoteRecord {
-    if (!this.getQuarantine(id)) throw new ValidationError(`no quarantined write with id ${id}`);
-    // The row is read again INSIDE the write transaction: another process may have approved or rejected it since the check above.
-    const done = this.transaction(() => {
-      const q = this.getQuarantine(id);
-      if (!q) throw heldHandled(id);
-      return { note: this.applyHeld(id, q), namespace: q.namespace };
-    });
-    this.audit({ op: "quarantine-approve", id, namespace: done.namespace });
-    return done.note;
+    return quarantineOps.approveQuarantine(this, id);
   }
 
-  /**
-   * Apply held write `id` (caller holds a transaction) and drop it from the queue.
-   *
-   * Times (1.4.0): the note keeps the time the write was WRITTEN (the hold time), not the approval time, so a late approval
-   * cannot make an old claim outrank a correction saved while it waited. approved_at/approved_by record the approval.
-   *  - create: created_at = the write's own created_at if it sent one, else the hold time; updated_at = the hold time.
-   *  - update: updated_at = the hold time, but never earlier than the note's current updated_at. The rev pin
-   *    (compare-and-swap) already guarantees the note did not change since the hold, so this only guards clock skew and
-   *    paths that touch updated_at without a rev bump; the note's time never moves backwards.
-   * forget_after counts from that written time; confidence is the writer's claim, as if the write had gone straight in.
-   */
-  private applyHeld(id: number, q: QuarantineEntry): NoteRecord {
-    const held = this.db
-      .prepare(
-        `SELECT op, if_rev, set_namespace, created_at, created_at_override, written_by, sensitivity, imported_unverified,
-                sync_origin, sync_origin_id, forget_after, confidence, clears FROM quarantine WHERE id = ?`
-      )
-      .get(id) as unknown as HeldRow | undefined;
-    if (!held) throw heldHandled(id);
-    const note = q.op === "create" ? this.applyHeldCreate(q, held) : this.applyHeldUpdate(id, q, held);
-    this.db.prepare("UPDATE notes SET approved_at = ?, approved_by = ? WHERE id = ?").run(new Date().toISOString(), currentWriter(), note.id);
-    this.db.prepare("DELETE FROM quarantine WHERE id = ?").run(id);
-    return this.read(note.id)!;
+  /** @internal */ applyHeld(id: number, q: QuarantineEntry): NoteRecord {
+    return quarantineOps.applyHeld(this, id, q);
   }
 
-  /** The held write's forget_after and confidence as a patch; a held EDIT that cleared one (null) clears it again. */
-  private heldExtras(held: HeldRow, id: number): { forget_after?: number; confidence?: number | null } {
-    let clears: string[] = [];
-    try {
-      clears = held.clears ? (JSON.parse(held.clears) as string[]) : [];
-      if (!Array.isArray(clears)) throw new Error("not a list");
-    } catch {
-      // A damaged list must not quietly clear nothing: the approved edit would keep a value the writer meant to remove.
-      throw new ValidationError(`held write ${id} has a damaged record of what it clears, so it cannot be approved safely; reject it and re-submit the change`);
-    }
-    return {
-      ...(held.forget_after !== null ? { forget_after: Number(held.forget_after) } : clears.includes("forget_after") ? { forget_after: null as unknown as number } : {}),
-      ...(held.confidence !== null ? { confidence: Number(held.confidence) } : clears.includes("confidence") ? { confidence: null } : {}),
-    };
+  /** @internal */ heldExtras(held: HeldRow, id: number): { forget_after?: number; confidence?: number | null } {
+    return quarantineOps.heldExtras(this, held, id);
   }
 
-  private applyHeldCreate(q: QuarantineEntry, held: HeldRow): NoteRecord {
-    const note = this.create(
-      {
-        namespace: q.namespace,
-        title: q.title ?? "",
-        body: q.body ?? "",
-        tags: q.tags ?? undefined,
-        source: q.source ?? undefined,
-        created_at: held.created_at_override ?? held.created_at,
-        sensitivity: held.sensitivity,
-        // A create has nothing to clear (heldExtras clears only for an edit), so no null reaches here.
-        ...(this.heldExtras(held, q.id) as { forget_after?: number; confidence?: number }),
-      },
-      { lint: "none", writtenBy: held.written_by ?? "", importedUnverified: Number(held.imported_unverified) === 1, updatedAt: held.created_at }
-    );
-    if (held.sync_origin !== null && held.sync_origin_id !== null) {
-      this.syncLink(held.sync_origin, Number(held.sync_origin_id), note.id);
-      // What this store has now synced for the note, so an origin edit before the next sync merges as an update.
-      this.setSyncBase(note.id, syncContentHash(note));
-    }
-    return note;
+  /** @internal */ applyHeldCreate(q: QuarantineEntry, held: HeldRow): NoteRecord {
+    return quarantineOps.applyHeldCreate(this, q, held);
   }
 
-  private applyHeldUpdate(id: number, q: QuarantineEntry, held: HeldRow): NoteRecord {
-    // Rows from before 1.1.0 may lack the rev the update was based on;
-    // applying them unguarded could overwrite later edits.
-    if (held.if_rev === null) {
-      throw new ValidationError(
-        `quarantined update #${id} predates rev tracking, so it can't be applied safely; reject it and re-submit the change`
-      );
-    }
-    // A stale if_rev makes update() throw "stale write" -- a conflict the
-    // admin resolves (reject, or re-submit), never a silent overwrite.
-    let updated: NoteRecord | null;
-    try {
-      updated = this.update(
-      q.target_id ?? -1,
-      {
-        ...(held.set_namespace ? { namespace: q.namespace } : {}),
-        ...(q.title !== null ? { title: q.title } : {}),
-        ...(q.body !== null ? { body: q.body } : {}),
-        ...(q.tags !== null ? { tags: q.tags } : {}),
-        ...(q.source !== null ? { source: q.source } : {}),
-        // The rev pin above means the note is exactly as it was when the write was held, so re-applying its label is a no-op
-        // unless the write itself relabelled the note.
-        sensitivity: held.sensitivity,
-        ...this.heldExtras(held, id),
-      },
-      { ifRev: held.if_rev, lint: "none", writtenBy: held.written_by ?? "", importedUnverified: Number(held.imported_unverified) === 1, writtenAt: held.created_at }
-      );
-    } catch (e) {
-      if (e instanceof StaleWriteError) throw new StaleWriteError("The note changed since this edit was held; reject it or edit the note by hand.");
-      throw e;
-    }
-    if (!updated) {
-      throw new ValidationError(
-        `quarantined update #${id} targets note ${q.target_id}, which no longer exists; reject it instead`
-      );
-    }
-    // A held sync update: record the synced content as the merge base (else the next origin edit looks like a conflict).
-    if (held.sync_origin !== null) this.setSyncBase(updated.id, syncContentHash(updated));
-    return updated;
+  /** @internal */ applyHeldUpdate(id: number, q: QuarantineEntry, held: HeldRow): NoteRecord {
+    return quarantineOps.applyHeldUpdate(this, id, q, held);
   }
 
   /**
@@ -8772,51 +8541,15 @@ export class Store {
    * (distrusted writers, sensitivity ceiling). null when there is no such held write.
    */
   quarantineContext(id: number): QuarantineContext | null {
-    const q = this.getQuarantine(id);
-    if (!q) return null;
-    const target = q.op === "update" && q.target_id !== null ? this.read(q.target_id) : null;
-    // A held edit that leaves the title alone is about its target's topic.
-    const topic = tokenize(`${q.title ?? target?.title ?? ""} ${(q.tags ?? []).join(" ")}`);
-    const words = new Set(topic);
-    // 1.5.0 (R1-17): every live note of the namespace saved since the hold, found by one query (the caller's ceiling and distrust
-    // rules in the SQL), then matched on title words. Before, only the newest 500 notes by recency were looked at.
-    // ponytail: title-word overlap; a ranked search if the queue ever needs fuzzier matching.
-    const range = this.rangeFor({}, [q.namespace]);
-    const rows = this.db
-      .prepare(
-        `SELECT id, title, tags, updated_at, written_by FROM notes WHERE namespace = ? AND updated_at >= ? AND id <> ? AND archived_at IS NULL${range.sql} ORDER BY updated_at DESC, id DESC LIMIT 2000`
-      )
-      .all(q.namespace, q.created_at, q.target_id ?? -1, ...range.params) as Array<{ id: number; title: string; tags: string; updated_at: string; written_by: string | null }>;
-    const notes = rows
-      .filter((n) => tokenize(`${n.title} ${parseTags(n.tags).join(" ")}`).some((w) => words.has(w)))
-      .map((n) => ({ id: Number(n.id), title: n.title, updated_at: n.updated_at, written_by: n.written_by ?? "" }));
-    return {
-      id: q.id,
-      op: q.op,
-      target_id: q.target_id,
-      namespace: q.namespace,
-      held_at: q.created_at,
-      ...(q.op === "update" ? { target_changed: !target || target.rev !== this.heldRev(id) } : {}),
-      ...this.heldClears(id),
-      notes,
-    };
+    return quarantineOps.quarantineContext(this, id);
   }
 
-  /** { clears } for a held edit that clears confidence or the forget date ({} when it clears nothing). */
-  private heldClears(id: number): { clears?: string[] } {
-    const row = this.db.prepare("SELECT clears FROM quarantine WHERE id = ?").get(id) as { clears: string | null } | undefined;
-    try {
-      const list = row?.clears ? (JSON.parse(row.clears) as unknown) : null;
-      return Array.isArray(list) && list.length ? { clears: list.filter((x): x is string => typeof x === "string") } : {};
-    } catch {
-      return {};
-    }
+  /** @internal */ heldClears(id: number): { clears?: string[] } {
+    return quarantineOps.heldClears(this, id);
   }
 
-  /** The rev a held edit was written against (its compare-and-swap pin); null for a create or a pre-1.1.0 row. */
-  private heldRev(id: number): number | null {
-    const row = this.db.prepare("SELECT if_rev FROM quarantine WHERE id = ?").get(id) as { if_rev: number | null } | undefined;
-    return row?.if_rev ?? null;
+  /** @internal */ heldRev(id: number): number | null {
+    return quarantineOps.heldRev(this, id);
   }
 
   /**
@@ -8826,54 +8559,12 @@ export class Store {
    * write left queued, when nothing newer and related was saved since it was held.
    */
   keepQuarantineAsHistory(id: number, byId?: number): { note: NoteRecord; superseded_by: number } {
-    const ctx = this.quarantineContext(id);
-    if (!ctx) throw new ValidationError(`no quarantined write with id ${id}`);
-    if (!ctx.notes.length) {
-      throw new ValidationError(
-        `held write #${id}: nothing newer on the same topic was saved in "${ctx.namespace}" since it was held, so there is nothing to keep it as history of. Approve or reject it instead.`
-      );
-    }
-    const by = byId === undefined ? ctx.notes[0] : ctx.notes.find((n) => n.id === byId);
-    if (!by) throw new ValidationError(`note ${byId} is not one of the newer related notes saved since held write #${id} was held`);
-    // 1.4.0: retiring one note in favour of another is a promotion of the other; neither side may be outside content no person
-    // has confirmed. The CLI (behind its operator gate) decides that itself.
-    if (currentWriter() !== "cli" && isTainted(this.getQuarantine(id)?.tags ?? [])) {
-      throw new ValidationError(`Can't keep as history: held write #${id} came from outside content. A person must decide it in a terminal: monomem quarantine keep-history ${id}`);
-    }
-    const note = this.transaction(() => {
-      // Inside the transaction: if applying the held write fails, the operator's pass is not left behind as a confirm.
-      const held = this.getQuarantine(id); // read again here: another process may have decided it since the checks above
-      if (!held) throw heldHandled(id);
-      this.requireHumanConfirm(by.id, "use it as a replacement");
-      const n = this.applyHeld(id, held);
-      if (n.id === by.id) throw new ValidationError("a note cannot replace itself");
-      const now = new Date().toISOString();
-      const actor = currentWriter();
-      const res = this.db
-        .prepare(
-          `UPDATE notes SET archived_at = ?, superseded_by = ?, superseded_at = ?, superseded_by_writer = ?, rev = rev + 1
-           WHERE id = ? AND archived_at IS NULL AND superseded_by IS NULL`
-        )
-        .run(now, by.id, now, actor, n.id);
-      if (Number(res.changes) === 0) throw new StaleWriteError(`note ${n.id} is no longer live; nothing was changed`);
-      this.db
-        .prepare("INSERT INTO supersede_log (at, actor, action, namespace, old_id, new_id, flags) VALUES (?, ?, 'supersede', ?, ?, ?, 'keep-history')")
-        .run(now, actor, n.namespace, n.id, by.id);
-      return n;
-    });
-    this.edgeIndexes.clear();
-    this.audit({ op: "quarantine-keep-history", id, namespace: ctx.namespace });
-    return { note: this.read(note.id)!, superseded_by: by.id };
+    return quarantineOps.keepQuarantineAsHistory(this, id, byId);
   }
 
   /** Discard a quarantined write. Returns false when no such entry. */
   rejectQuarantine(id: number): boolean {
-    const q = this.getQuarantine(id);
-    if (!q) return false;
-    // One statement: if another process decided it first, nothing is deleted and nothing is audited.
-    if (Number(this.db.prepare("DELETE FROM quarantine WHERE id = ?").run(id).changes) === 0) return false;
-    this.audit({ op: "quarantine-reject", id, namespace: q.namespace });
-    return true;
+    return quarantineOps.rejectQuarantine(this, id);
   }
 
   // --- Plain-file sync identity (v7) ---------------------------------------
