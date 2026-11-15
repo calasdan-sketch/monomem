@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_OPTIONS, readHistory, runSetup, type SetupEnv, type SetupIO } from "../src/setup.js";
-import { runUninstall, type UninstallOptions } from "../src/uninstall.js";
+import { foreignEntries, runUninstall, type UninstallOptions } from "../src/uninstall.js";
 import { Store } from "../src/store.js";
 
 const CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "cli.js");
@@ -131,5 +131,43 @@ describe("uninstall", () => {
     assert.ok(!readdirSync(s.home).some((f) => f.startsWith("monomem-final-backup")));
     assert.equal(readFileSync(cur, "utf8"), mine);
     assert.ok(lines.some((l) => l.includes("(left alone)") && l.includes(cur)));
+  });
+  test("--purge finds the background service from `monomem service install` and removes it before deleting data", async () => {
+    const s = sandbox();
+    const unit = join(s.home, ".config", "systemd", "user", "monomem.service");
+    mkdirSync(dirname(unit), { recursive: true });
+    writeFileSync(unit, "[Service]\n");
+    mkdirSync(s.om, { recursive: true });
+    writeFileSync(join(s.om, "capture-spool.jsonl"), "{}\n");
+    lines.length = 0;
+    assert.equal(await runUninstall(s.e, io(), opts({ purge: true, dryRun: true })), 0);
+    assert.ok(lines.some((l) => l.includes("background service") && l.includes(unit)), lines.join("\n"));
+    let calls = 0;
+    // The removal fails: the data stays and the exact command is named.
+    lines.length = 0;
+    assert.equal(await runUninstall(s.e, io(), opts({ purge: true, noBackup: true, removeService: () => (calls++, 1) })), 1);
+    assert.ok(existsSync(s.om), "data kept while the service could still restart the server");
+    assert.ok(lines.some((l) => l.includes("monomem service uninstall")));
+    assert.equal(await runUninstall(s.e, io(), opts({ purge: true, noBackup: true, removeService: () => (calls++, 0) })), 0);
+    assert.equal(calls, 2);
+    assert.ok(!existsSync(s.om));
+  });
+
+  test("without --purge the service is listed with the command, not removed", async () => {
+    const s = sandbox();
+    const unit = join(s.home, ".config", "systemd", "user", "monomem.service");
+    mkdirSync(dirname(unit), { recursive: true });
+    writeFileSync(unit, "[Service]\n");
+    lines.length = 0;
+    assert.equal(await runUninstall(s.e, io(), opts({ removeService: () => assert.fail("not removed without --purge") })), 0);
+    assert.ok(lines.some((l) => l.includes(unit) && l.includes("monomem service uninstall")), lines.join("\n"));
+  });
+
+  test("sync-git-seen-<id>.json and the Windows task file are Monomem's own files", async () => {
+    const s = sandbox();
+    mkdirSync(s.om, { recursive: true });
+    writeFileSync(join(s.om, "sync-git-seen-0123456789abcdef.json"), "{}");
+    writeFileSync(join(s.om, "monomem-task.xml"), "x");
+    assert.deepEqual(foreignEntries(s.om), []);
   });
 });
