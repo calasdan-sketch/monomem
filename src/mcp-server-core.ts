@@ -42,6 +42,8 @@ import { rollbackPreview, rollbackConfirm, embedRestored } from "./rollback.js";
 import { supersedePreview, supersedeConfirm, supersedeUndo, noteHistory, restoreVersion, purgeNoteHistory, SupersedeError, type Caller } from "./supersede.js";
 import { runnerStatus } from "./liveness.js";
 import { assertPlainWriteTags, assertReviewedTag } from "./reserved-tags.js";
+import { prepareNoteUpdate } from "./note-update.js";
+import { distrustedOptInRefusal } from "./trust.js";
 import { ORIGIN_DECLARED, ReadTaint, unconfirmedIdsIn } from "./taint.js";
 import { withFacts, factFeedback, COMMON_FACT_KEYS, type FactFeedback } from "./facts.js";
 import { waitForChanges, parseWait, WAIT_MAX_SECONDS, WAIT_RECOMMENDED_SECONDS } from "./change-wait.js";
@@ -547,24 +549,24 @@ export function createMcpServer(
     {
       // include_distrusted turns the trust policy OFF for the call: admin only, for every tool.
       // A read/write connection (or an agent a hostile note talked into asking) gets a refusal.
-      const first = args[0] as { include_distrusted?: unknown; namespace?: unknown } | undefined;
-      if (localGuard && first && first.include_distrusted === true) {
-        return errorResult(`include_distrusted shows notes from writers the operator distrusted. ${STDIO_ADMIN_HINT}`);
-      }
-      if (first && first.include_distrusted === true && !scopeAllows(scope, "admin")) {
-        return errorResult("include_distrusted needs an admin connection: it shows notes from writers the admin put on the distrust list");
-      }
+      // The rule itself is distrustedOptInRefusal (trust.ts), shared with REST; this maps its answer to an error result.
       // A namespace-pinned admin: honoured for its OWN namespace only (the ones it merely reads belong to their own admins).
       // By-id tools (state_read, task_get) are checked against the note's namespace where they read it.
-      if (
-        first &&
-        first.include_distrusted === true &&
-        nsActive &&
-        name !== "state_read" &&
-        name !== "task_get" &&
-        readable().some((n) => n !== ownNs) &&
-        first.namespace !== ownNs
-      ) {
+      const first = args[0] as { include_distrusted?: unknown; namespace?: unknown } | undefined;
+      const why =
+        first && first.include_distrusted === true
+          ? distrustedOptInRefusal({
+              admin: scopeAllows(scope, "admin"),
+              local: localGuard,
+              byId: name === "state_read" || name === "task_get",
+              pinnedWithGrants: () => nsActive && readable().some((n) => n !== ownNs),
+              ownNs,
+              nsHint: first.namespace,
+            })
+          : null;
+      if (why === "local") return errorResult(`include_distrusted shows notes from writers the operator distrusted. ${STDIO_ADMIN_HINT}`);
+      if (why === "not-admin") return errorResult("include_distrusted needs an admin connection: it shows notes from writers the admin put on the distrust list");
+      if (why === "other-namespace") {
         return errorResult(
           `include_distrusted is honoured only for this connection's own namespace ("${ownNs}"): pass namespace "${ownNs}". The namespaces it can only read are governed by their own admins.`
         );
@@ -852,18 +854,11 @@ export function createMcpServer(
           // update-by-id could rewrite notes from a granted namespace. A
           // missing or foreign note reports the same "no note" so the caller
           // can't probe which ids exist in namespaces it may not write.
-          // A note the distrust list hides reads as missing here too (only an admin may rewrite it).
-          // hideArchived: updating a forgotten note would echo its text back; it must be restored first.
-          const target = store.readVisible(id, { hideArchived: true, includeDistrusted: scopeAllows(scope, "admin") });
-          if (!target) return errorResult(noNote(id, scopeAllows(scope, "admin")));
-          if (nsActive && target.namespace !== ownNs) {
-            return errorResult(`no note with id ${id}`);
-          }
-          if (tags !== undefined) {
-            assertPlainWriteTags(tags, target.tags);
-            assertReviewedTag(tags, target.tags, false);
-          }
-          if (facts !== undefined) tags = withFacts(plainTags, facts, target.tags);
+          // A note the distrust list hides reads as missing here too (only an admin may rewrite it). The checks are shared with
+          // REST PUT /notes/:id (note-update.ts). `reviewed` is never an MCP caller's: an admin connection is an agent.
+          const check = prepareNoteUpdate(store, { admin: scopeAllows(scope, "admin"), mayReview: false, ...(nsActive ? { ownNs } : {}) }, id, tags, facts);
+          if (!check.ok) return errorResult(check.why === "missing" ? noNote(id, scopeAllows(scope, "admin")) : `no note with id ${id}`);
+          tags = check.tags;
           const patch = nsActive
             ? { title, body, tags, source, forget_after, confidence, sensitivity, outside, derived_from }
             : { namespace, title, body, tags, source, forget_after, confidence, sensitivity, outside, derived_from };

@@ -33,7 +33,7 @@ import {
   DEFAULT_NAMESPACE,
   quarantineCasNote,
 } from "./store.js";
-import { truthyParam } from "./trust.js";
+import { truthyParam, distrustedOptInRefusal } from "./trust.js";
 import { originAllowed, hostAllowed, hostRefusal, RateLimiter, AuthTarpit, clientKey, tokenKey, authenticateEntry, scopeAllows, LIMITS, audit, auditFailureCount, printable } from "./security.js";
 import { type Scope, type TokenEntry, TIME_ZONE, PROJECT_ROOT, DATA_DIR, resolveToken, tokenId, sha256Hex } from "./config.js";
 import { readFileSync } from "node:fs";
@@ -127,6 +127,7 @@ import { withFacts, factFeedback } from "./facts.js";
 import { isBusyError } from "./restore.js";
 import { heldEditDiff } from "./line-diff.js";
 import { assertPlainWriteTags, assertReviewedTag } from "./reserved-tags.js";
+import { prepareNoteUpdate } from "./note-update.js";
 import { ORIGIN_DECLARED, ReadTaint, taintRegistryFor, unconfirmedIdsIn } from "./taint.js";
 import { waitForChanges, parseWait, WaitBusyError } from "./change-wait.js";
 import type { LintFinding } from "./lint.js";
@@ -688,26 +689,22 @@ export function createApiServer(
       // belong to their own admins, so the opt-in is honoured for the token's own namespace and nowhere else (it must say
       // so with namespace=<own>, or name a note of its own namespace by id).
       const pinnedWithGrants = (): boolean => nsCtx.active && readable(nsCtx).some((n) => n !== nsCtx.ownNamespace);
-      const refuseDistrustedOptIn = (nsHint?: string | null): boolean => {
-        if (!isAdmin) {
-          sendJson(res, 403, {
-            error: "include_distrusted needs an admin token: it shows notes from writers the admin put on the distrust list",
-          });
-          return true;
-        }
-        if (pinnedWithGrants() && (nsHint ?? "") !== nsCtx.ownNamespace) {
-          sendJson(res, 403, {
-            error:
-              `include_distrusted is honoured only for this token's own namespace ("${nsCtx.ownNamespace}"): pass namespace=${nsCtx.ownNamespace}. ` +
-              "The namespaces this token can only read are governed by their own admins.",
-          });
-          return true;
-        }
-        return false;
+      // The rule itself is distrustedOptInRefusal (trust.ts), shared with MCP; this maps its answer to a 403.
+      const refuseDistrustedOptIn = (nsHint?: string | null, byId = false): boolean => {
+        const why = distrustedOptInRefusal({ admin: isAdmin, byId, pinnedWithGrants, ownNs: nsCtx.ownNamespace, nsHint: nsHint ?? "" });
+        if (why === null) return false;
+        sendJson(res, 403, {
+          error:
+            why === "other-namespace"
+              ? `include_distrusted is honoured only for this token's own namespace ("${nsCtx.ownNamespace}"): pass namespace=${nsCtx.ownNamespace}. ` +
+                "The namespaces this token can only read are governed by their own admins."
+              : "include_distrusted needs an admin token: it shows notes from writers the admin put on the distrust list",
+        });
+        return true;
       };
       // (By-id reads carry no namespace parameter: they are checked against the note's own namespace where they read it.)
       const byIdRead = req.method === "GET" && (/^\/notes\/\d+$/.test(path) || /^\/tasks\/\d+$/.test(path));
-      if (flagParam(url, "include_distrusted") && (byIdRead ? !isAdmin && refuseDistrustedOptIn() : refuseDistrustedOptIn(url.searchParams.get("namespace")))) return;
+      if (flagParam(url, "include_distrusted") && refuseDistrustedOptIn(byIdRead ? null : url.searchParams.get("namespace"), byIdRead)) return;
 
       // GET /whoami -> who this token is and what it can see (the dashboard's signed-in banner; a quick connection test).
       if (req.method === "GET" && path === "/whoami") {
@@ -936,29 +933,19 @@ export function createApiServer(
           }
         }
         try {
-          if (nsCtx.active) {
-            // The client-supplied namespace is dropped (the note keeps its
-            // existing namespace), and the note must live in the server's
-            // own namespace -- otherwise a PUT by id could rewrite a granted
-            // namespace's notes (grants are read-only).
-            const existing = store.read(id); // gate-ok: PUT: namespace check, then a hidden note reads as 404
-            if (!denyUnwritable(nsCtx, res, existing)) return;
-            delete parsed.namespace;
-          }
-          // A note the distrust list hides reads as missing to everyone but an admin (who may rewrite it under a trusted writer).
-          if (!store.readVisible(id, { hideArchived: true, includeDistrusted: isAdmin })) { // a forgotten note is restored first, never edited (the reply echoes the body)
-            sendJson(res, 404, { error: "not found" });
-            return;
-          }
           // `facts` as in the MCP update: they replace the note's fact tags and keep its other tags.
           const putFacts = (parsed as { facts?: unknown }).facts;
           if (putFacts !== undefined) delete (parsed as { facts?: unknown }).facts;
-          const currentTags = putFacts !== undefined || (parsed && parsed.tags !== undefined) ? store.read(id)?.tags : undefined; // gate-ok: tag-guard lookup only (no content returned)
-          if (putFacts !== undefined) parsed.tags = withFacts(parsed.tags, putFacts, currentTags);
-          if (parsed && parsed.tags !== undefined) {
-            assertPlainWriteTags(parsed.tags, currentTags);
-            assertReviewedTag(parsed.tags, currentTags, isAdmin);
+          // The same checks as MCP state_write (note-update.ts): a hidden, forgotten, missing or (for a pinned token) other
+          // namespace's note is 404 -- grants are read-only -- before any tag rule can answer.
+          const check = prepareNoteUpdate(store, { admin: isAdmin, mayReview: isAdmin, ...(nsCtx.active ? { ownNs: nsCtx.ownNamespace } : {}) }, id, parsed.tags, putFacts);
+          if (!check.ok) {
+            sendJson(res, 404, { error: "not found" });
+            return;
           }
+          // The client-supplied namespace is dropped for a pinned token (the note keeps its existing namespace).
+          if (nsCtx.active) delete parsed.namespace;
+          if (check.tags !== undefined) parsed.tags = check.tags;
           const warnings: LintFinding[] = [];
           const { unchanged, ...note } = store.update(id, parsed, { lintWarnings: warnings, ...(ifRev !== undefined ? { ifRev } : {}) }) ?? ({} as NoteRecord);
           if (!note.id) {

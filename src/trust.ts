@@ -373,3 +373,26 @@ export function writerTaintFilterSql(cols: WriterColumns, value: string, localId
     ? { sql: `(NOT (${cols.attBy} = ? AND ${a.sql}) AND NOT ${merged})`, params: [ref.serverId, ...a.params, ...m] }
     : { sql: `(NOT ${a.sql} AND NOT ${merged})`, params: [...a.params, ...m] };
 }
+
+/**
+ * Why an `include_distrusted` opt-in is refused, or null when it is honoured (1.5.0 P-01: the one rule REST and MCP share).
+ * The opt-in turns the distrust policy OFF for the call, so it is an admin decision: `local` = the stdio transport, which runs
+ * as admin with no token (nobody chose to give that agent admin); `not-admin` = a read or write caller; `other-namespace` = a
+ * namespace-pinned admin that also has read grants names a namespace other than its own (those belong to their own admins).
+ * A by-id read names no namespace: it is checked against the note's own namespace where the note is read.
+ */
+export type DistrustedOptInRefusal = "local" | "not-admin" | "other-namespace";
+export function distrustedOptInRefusal(c: {
+  admin: boolean;
+  local?: boolean;
+  byId: boolean;
+  /** Pinned to a namespace and able to read another one. */
+  pinnedWithGrants: () => boolean;
+  ownNs: string;
+  nsHint: unknown;
+}): DistrustedOptInRefusal | null {
+  if (c.local) return "local";
+  if (!c.admin) return "not-admin";
+  if (!c.byId && c.pinnedWithGrants() && c.nsHint !== c.ownNs) return "other-namespace";
+  return null;
+}

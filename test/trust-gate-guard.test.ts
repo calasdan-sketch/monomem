@@ -45,8 +45,6 @@ const GATE_OK = "// gate-ok: ";
 const EXPECTED_SITES: Record<string, string[]> = {
   "api.ts": [
     "access probe: denyUnreadable/readVisible decide before anything is returned",
-    "PUT: namespace check, then a hidden note reads as 404",
-    "tag-guard lookup only (no content returned)",
     "archive/restore: denyUnwritable probe, hidden note is 404",
     "GET /export is admin-only (a full backup)",
     "namespace check; confirm() re-reads through readVisible",
