@@ -186,7 +186,7 @@ upgrading from 1.3.x takes one step (docs/upgrading.md).
 - Database schema v22 (still one upgrade from 1.3.x, backup at `<database>.pre-v22-backup`): a redundant similarity-link
   index is dropped (less work per write) and a live-notes index makes the unfiltered note count cheap.
 
-## [1.4.0] - 2026-11-13
+### Also in 1.5.0: the trust work first planned as 1.4.0 (never published on its own)
 
 **What this release can't do.** Monomem marks a note as from outside content only when it can see the outside read: a
 hook-equipped session (Claude Code) that ran `WebFetch`, `WebSearch` or another MCP server's tool, a connection that read
