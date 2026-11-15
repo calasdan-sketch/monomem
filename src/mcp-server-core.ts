@@ -826,10 +826,11 @@ export function createMcpServer(
         const denied = denyIfUnder("write");
         if (denied) return errorResult(denied);
         // task / handoff / task.* tags belong to task_put and session_handoff.
-        if (tags !== undefined) {
-          const currentTags = id !== undefined ? store.read(id)?.tags : undefined; // gate-ok: tag-guard lookup only (no content returned)
-          assertPlainWriteTags(tags, currentTags);
-          assertReviewedTag(tags, currentTags, false);
+        // 1.5.0 (A2): for an update the guard runs below, on the note this caller may see (the same order as REST), so a
+        // reserved-tag refusal can't reveal a hidden note.
+        if (tags !== undefined && id === undefined) {
+          assertPlainWriteTags(tags, undefined);
+          assertReviewedTag(tags, undefined, false);
         }
         if (id !== undefined) {
           // When namespace resolution is active the model-supplied namespace
@@ -845,6 +846,10 @@ export function createMcpServer(
           if (!target) return errorResult(noNote(id, scopeAllows(scope, "admin")));
           if (nsActive && target.namespace !== ownNs) {
             return errorResult(`no note with id ${id}`);
+          }
+          if (tags !== undefined) {
+            assertPlainWriteTags(tags, target.tags);
+            assertReviewedTag(tags, target.tags, false);
           }
           if (facts !== undefined) tags = withFacts(plainTags, facts, target.tags);
           const patch = nsActive

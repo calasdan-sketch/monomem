@@ -58,7 +58,6 @@ const EXPECTED_SITES: Record<string, string[]> = {
     "re-read of an id the pool already admitted",
   ],
   "mcp-server-core.ts": [
-    "tag-guard lookup only (no content returned)",
     "read-taint probe, a flag check, nothing returned",
     "access probe: readVisible decides before anything is returned",
     "admin delete: namespace check only",
