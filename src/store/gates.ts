@@ -25,9 +25,11 @@ export function resumeWriter(s: Store, label: string): boolean {
   const damaged = s.metaJson("flood_paused", isStringArray).damaged;
   const all = s.pausedWriters();
   if (!damaged && !all.includes(w)) return false;
-  s.setMeta("flood_paused", JSON.stringify(damaged ? [] : all.filter((x) => x !== w)));
-  // A fresh hour: otherwise its very next write would trip the guard again on the old count.
-  s.db.prepare("DELETE FROM write_rate WHERE writer = ?").run(w);
+  s.transaction(() => {
+    s.setMeta("flood_paused", JSON.stringify(damaged ? [] : all.filter((x) => x !== w)));
+    // A fresh hour: otherwise its very next write would trip the guard again on the old count.
+    s.db.prepare("DELETE FROM write_rate WHERE writer = ?").run(w);
+  });
   s.audit({ op: "flood-resume", label: w });
   return true;
 }

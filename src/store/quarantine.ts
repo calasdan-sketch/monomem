@@ -384,9 +384,12 @@ export function rejectQuarantine(s: Store, id: number): boolean {
     | { namespace: string; written_by: string | null; sensitivity?: string | null }
     | undefined;
   if (!q || s.hiddenByCeiling(q)) return false;
-  // One statement: if another process decided it first, nothing is deleted and nothing is audited.
-  if (Number(s.db.prepare("DELETE FROM quarantine WHERE id = ?").run(id).changes) === 0) return false;
-  s.recordWriterEvent(q.written_by ?? "", "rejected", null); // R2-08: rejecting a held write is an admin's or a person's decision
-  s.audit({ op: "quarantine-reject", id, namespace: q.namespace });
-  return true;
+  // If another process decided it first, nothing is deleted and nothing is recorded. One transaction: the delete and the
+  // writer event land together (SF-3).
+  return s.transaction(() => {
+    if (Number(s.db.prepare("DELETE FROM quarantine WHERE id = ?").run(id).changes) === 0) return false;
+    s.recordWriterEvent(q.written_by ?? "", "rejected", null); // R2-08: rejecting a held write is an admin's or a person's decision
+    s.audit({ op: "quarantine-reject", id, namespace: q.namespace });
+    return true;
+  });
 }

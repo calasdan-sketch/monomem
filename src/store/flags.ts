@@ -114,7 +114,7 @@ export function keepFlagged(s: Store, id: number): number {
   const n = s.read(id); // gate-ok: operator action from the CLI; clears flags, returns a count only
   if (!n) return 0;
   const by = currentWriter() || "cli";
-  const c = Number(s.db.prepare("UPDATE note_flags SET cleared_at = ?, cleared_by = ? WHERE note_id = ? AND note_rev = ? AND cleared_at IS NULL").run(new Date().toISOString(), by, id, n.rev).changes);
+  const c = s.transaction(() => Number(s.db.prepare("UPDATE note_flags SET cleared_at = ?, cleared_by = ? WHERE note_id = ? AND note_rev = ? AND cleared_at IS NULL").run(new Date().toISOString(), by, id, n.rev).changes));
   if (c) s.audit({ op: "flag-keep", id, namespace: n.namespace });
   return c;
 }
