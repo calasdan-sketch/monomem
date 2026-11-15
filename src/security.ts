@@ -763,12 +763,31 @@ export function audit(entry: {
 }): void {
   try {
     const path = auditPath();
-    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    if (auditDirMade !== path) {
+      mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+      auditDirMade = path;
+    }
     rotateAuditIfNeeded(path);
     // Hash chain: `prev` = sha256 of the previous line (carried across rotation from audit.log.1).
-    const prev = lastAuditLineHash(path);
-    appendFileSync(path, JSON.stringify({ ts: new Date().toISOString(), prev, ...entry }) + "\n", { mode: 0o600 });
+    // F-03: the tail is re-read only when the file is not the size this process left it at (another process
+    // appended, the file rotated or was replaced); otherwise the hash of our own last line is the answer.
+    let size = 0;
+    let mtime = 0;
+    try {
+      const st = statSync(path);
+      [size, mtime] = [st.size, st.mtimeMs];
+    } catch {
+      mkdirSync(dirname(path), { recursive: true, mode: 0o700 }); // no file (yet, or the folder was removed)
+    }
+    const prev = auditTail && auditTail.path === path && auditTail.size === size && auditTail.mtime === mtime ? auditTail.hash : lastAuditLineHash(path);
+    const line = JSON.stringify({ ts: new Date().toISOString(), prev, ...entry });
+    appendFileSync(path, line + "\n", { mode: 0o600 });
+    // Cache only when the file is exactly what we left (another process appending right now means: re-read next time).
+    const after = statSync(path);
+    auditTail = after.size === size + Buffer.byteLength(line) + 1 ? { path, size: after.size, mtime: after.mtimeMs, hash: sha(line) } : null;
   } catch (e) {
+    auditDirMade = undefined;
+    auditTail = null;
     // Audit logging must never break a request, but a failing log must not be silent either: count it (shown in
     // GET /stats and `monomem health`) and say so on stderr on the first failure and every 1000th after.
     auditFailures++;
@@ -779,6 +798,9 @@ export function audit(entry: {
 }
 
 let auditFailures = 0;
+/** F-03: the directory is made once per path; size, mtime and hash of the last line this process wrote. */
+let auditDirMade: string | undefined;
+let auditTail: { path: string; size: number; mtime: number; hash: string } | null = null;
 /** Audit entries this process could not write. */
 export function auditFailureCount(): number {
   return auditFailures;
