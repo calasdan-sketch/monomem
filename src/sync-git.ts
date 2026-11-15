@@ -7,7 +7,7 @@
 // ciphertext; the key stays in a file on your computers and is never written inside the repository.
 
 import { spawnSync } from "node:child_process";
-import { createHmac, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path, { dirname, join, relative, resolve, sep } from "node:path";
@@ -156,17 +156,46 @@ export function safeRelPath(p: unknown): string | null {
   return p;
 }
 
-export function sealFile(rel: string, text: string, key: Buffer): string {
+/**
+ * 1.5.0 (F1): `v` is a per-file version counter sealed with the text. Each computer remembers the highest `v` it synced per
+ * file (seenFile), so an older sealed file replayed from git history is refused instead of rolling the note back.
+ */
+export function sealFile(rel: string, text: string, key: Buffer, v = 0): string {
   const name = blobName(rel, key);
-  return encrypt(JSON.stringify({ p: rel, t: text }), key, `git-sync|${name}`) + "\n";
+  return encrypt(JSON.stringify({ p: rel, t: text, v }), key, `git-sync|${name}`) + "\n";
 }
 
-export function openFile(name: string, blob: string, key: Buffer): { rel: string; text: string } {
-  const json = JSON.parse(decrypt(blob.trim(), key, `git-sync|${name}`)) as { p?: unknown; t?: unknown };
+export function openFile(name: string, blob: string, key: Buffer): { rel: string; text: string; v: number } {
+  const json = JSON.parse(decrypt(blob.trim(), key, `git-sync|${name}`)) as { p?: unknown; t?: unknown; v?: unknown };
   const rel = safeRelPath(json.p);
   if (!rel || typeof json.t !== "string") throw new Error("a sealed file holds an unsafe path");
   if (blobName(rel, key) !== name) throw new Error("a sealed file is stored under the wrong name");
-  return { rel, text: json.t };
+  // A file sealed before 1.5.0 has no counter: version 0.
+  const v = typeof json.v === "number" && Number.isSafeInteger(json.v) && json.v >= 0 ? json.v : 0;
+  return { rel, text: json.t, v };
+}
+
+/** F1: where this computer keeps the highest version it synced per sealed file name, one record per repository. */
+function seenFile(dataDir: string, repoTop: string): string {
+  return join(dataDir, `sync-git-seen-${createHash("sha256").update(repoTop).digest("hex").slice(0, 16)}.json`);
+}
+function readSeen(path: string): Map<string, number> {
+  if (!existsSync(path)) return new Map();
+  let v: unknown;
+  try {
+    v = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    v = null;
+  }
+  if (typeof v !== "object" || v === null || Array.isArray(v)) {
+    throw new SyncStop(`the sync version record ${path} is damaged, so an old sealed file could not be told from a new one. Nothing was changed. If you trust the repository, delete that file and sync again.`);
+  }
+  return new Map(Object.entries(v as Record<string, unknown>).filter((e): e is [string, number] => typeof e[1] === "number"));
+}
+function writeSeen(path: string, seen: Map<string, number>): void {
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, JSON.stringify(Object.fromEntries([...seen].sort())), { mode: 0o600 });
+  renameSync(tmp, path);
 }
 
 function listMd(dir: string): string[] {
@@ -341,7 +370,10 @@ export async function runGitSync(io: GitSyncIO, o: GitSyncOptions): Promise<numb
       try {
         mkdirSync(work, { recursive: true });
         let before = new Map<string, string>();
-        if (o.encrypt) before = decryptInto(vault, work, key!);
+        const versions = new Map<string, number>();
+        const seenPath = seenFile(o.dataDir, top);
+        const seen = o.encrypt ? readSeen(seenPath) : new Map<string, number>();
+        if (o.encrypt) before = decryptInto(vault, work, key!, { seen, versions, seenPath });
         const store = new Store(o.dbPath);
         try {
           const imp = await importMarkdown(store, work, {});
@@ -366,7 +398,10 @@ export async function runGitSync(io: GitSyncIO, o: GitSyncOptions): Promise<numb
         } finally {
           store.close();
         }
-        if (o.encrypt) writeSealed(vault, work, key!, before);
+        if (o.encrypt) {
+          writeSealed(vault, work, key!, before, versions, seen);
+          writeSeen(seenPath, seen);
+        }
       } finally {
         if (o.encrypt) rmSync(work, { recursive: true, force: true });
       }
@@ -404,18 +439,26 @@ export async function runGitSync(io: GitSyncIO, o: GitSyncOptions): Promise<numb
 }
 
 /** Decrypt every sealed file into `work`; returns relative path -> text as found. Any bad file stops everything. */
-function decryptInto(vault: string, work: string, key: Buffer): Map<string, string> {
+function decryptInto(vault: string, work: string, key: Buffer, check?: { seen: Map<string, number>; versions: Map<string, number>; seenPath: string }): Map<string, string> {
   const seen = new Map<string, string>();
   if (!existsSync(vault)) return seen;
   for (const de of readdirSync(vault, { withFileTypes: true })) {
     const f = de.name;
     if (!f.endsWith(".enc") || !de.isFile()) continue; // links and folders are never followed
-    let opened: { rel: string; text: string };
+    let opened: { rel: string; text: string; v: number };
     try {
       opened = openFile(f, readFileSync(join(vault, f), "utf8"), key);
     } catch (e) {
       throw new SyncStop(`could not open the sealed file ${f}: ${(e as Error).message}. Is this the right key? Nothing was changed.`);
     }
+    const had = check?.seen.get(f) ?? 0;
+    if (check && opened.v < had) {
+      throw new SyncStop(
+        `the sealed file ${f} is older than one this computer already synced (version ${opened.v}, already had ${had}): someone replayed or rewound the repository's history. ` +
+          `Nothing was changed. If you reset the repository on purpose, delete ${check.seenPath} and sync again.`
+      );
+    }
+    check?.versions.set(opened.rel, opened.v);
     const dest = join(work, ...opened.rel.split("/"));
     if (!isInside(work, dest)) throw new SyncStop(`a sealed file points outside the work folder; stopped.`);
     mkdirSync(dirname(dest), { recursive: true });
@@ -426,14 +469,20 @@ function decryptInto(vault: string, work: string, key: Buffer): Map<string, stri
 }
 
 /** Write sealed files for what changed (unchanged text keeps its old bytes, so git sees no change) and remove vanished ones. */
-function writeSealed(vault: string, work: string, key: Buffer, before: Map<string, string>): void {
+function writeSealed(vault: string, work: string, key: Buffer, before: Map<string, string>, versions: Map<string, number>, seen: Map<string, number>): void {
   mkdirSync(vault, { recursive: true });
   const now = new Set<string>();
   for (const rel of listMd(work)) {
     now.add(rel);
+    const name = blobName(rel, key);
     const text = readFileSync(join(work, ...rel.split("/")), "utf8");
-    if (before.get(rel) === text && existsSync(join(vault, blobName(rel, key)))) continue;
-    writeFileSync(join(vault, blobName(rel, key)), sealFile(rel, text, key));
+    const had = Math.max(versions.get(rel) ?? 0, seen.get(name) ?? 0);
+    if (before.get(rel) === text && existsSync(join(vault, name))) {
+      seen.set(name, had);
+      continue;
+    }
+    writeFileSync(join(vault, name), sealFile(rel, text, key, had + 1));
+    seen.set(name, had + 1); // F1: a removed file keeps its high-water mark, so it can't be replayed back either
   }
   for (const rel of before.keys()) if (!now.has(rel)) rmSync(join(vault, blobName(rel, key)), { force: true });
 }

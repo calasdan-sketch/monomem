@@ -185,6 +185,11 @@ not touched. A push that loses a race with another computer is retried once afte
   the repository is refused. **Copy the key to your other computers yourself, never through the repository.** A computer without the
   key is told so and does not invent a new one over sealed notes; the wrong key stops everything before the database is changed.
   Lose the key and the sealed copies cannot be read: keep a copy of it somewhere safe, apart from the repository.
+- **No rolling back (1.5.0).** Each sealed file carries a version number inside the encryption, and each computer remembers the
+  highest version it synced per file (`<data folder>/sync-git-seen-<id>.json`). If the repository serves an older sealed file than
+  one this computer already synced (someone with access to the remote replayed or rewound its history), the sync stops and changes
+  nothing. If you reset the repository on purpose, delete that file and sync again. A computer that has never synced a file cannot
+  tell its first copy is old: this protects computers that were already in sync, not a brand-new one.
 - **Remote addresses.** Sync refuses a remote whose address has a password or token inside it (`https://user:pass@host/...`), because git saves that in `.git/config` in plain text; use a credential helper or an SSH key. Any address in text sync prints has its `user:pass@` part replaced by `***`.
 - **Two computers settle.** A note that came from another computer keeps the writer name its file came with (`origin_writer`), so once both computers agree, a sync commits nothing.
 - **While it runs**, the readable notes of a sealed sync exist only in a temporary folder inside the data folder, removed afterwards.
