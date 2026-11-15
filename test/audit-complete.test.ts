@@ -3,7 +3,7 @@ import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file r
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, renameSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, renameSync, rmSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../src/store.js";
@@ -124,6 +124,29 @@ describe("audit completeness and chain", () => {
     assert.equal(r.forks, 1);
     audit({ op: "r3" });
     assert.equal(verifyAuditChain().ok, true, "the chain keeps going after a fork");
+  });
+
+  test("a same-size rewrite inside one mtime tick does not reuse the cached tail (F-03)", () => {
+    // Restore size AND mtime exactly as audit() cached them. A float mtime does not always round-trip through
+    // utimes, so try a few nearby values and repeat until one lands (each try about 50%).
+    let hit = false;
+    for (let tries = 0; tries < 30 && !hit; tries++) {
+      audit({ op: "s1" });
+      const st = statSync(log);
+      const all = readFileSync(log, "utf8").trim().split("\n");
+      const last = JSON.parse(all[all.length - 1]);
+      last.op = "s2"; // same length, different hash
+      all[all.length - 1] = JSON.stringify(last);
+      writeFileSync(log, all.join("\n") + "\n");
+      for (let d = -5; d <= 5 && !hit; d++) {
+        utimesSync(log, st.atimeMs / 1000, st.mtimeMs / 1000 + d * 1e-7);
+        hit = statSync(log).mtimeMs === st.mtimeMs && statSync(log).size === st.size;
+      }
+      if (!hit) audit({ op: "s-retry" }); // re-sync the cache; the chain stays valid
+    }
+    assert.ok(hit, "could not restore the cached mtime");
+    audit({ op: "s3" });
+    assert.equal(verifyAuditChain().ok, true, "s3 chains to the line now on disk");
   });
 
   test("a line without prev after the chain started is a break", () => {
