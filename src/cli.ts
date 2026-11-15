@@ -2839,8 +2839,17 @@ async function quarantineCmd(): Promise<void> {
         process.exit(1);
       }
       await requireOperator(`quarantine keep-history ${id}`, () => {
-        if (store.getQuarantine(id)) return;
-        console.error(`no quarantined write with id ${id}`);
+        // Same checks keepQuarantineAsHistory makes, run before the typed yes: nobody confirms what cannot happen.
+        const ctx = store.quarantineContext(id);
+        const why = !ctx
+          ? `no quarantined write with id ${id}`
+          : !ctx.notes.length
+            ? `held write #${id}: nothing newer on the same topic was saved in "${printable(ctx.namespace, 100)}" since it was held, so there is nothing to keep it as history of. Approve or reject it instead.`
+            : by !== undefined && !ctx.notes.some((n) => n.id === by)
+              ? `note ${by} is not one of the newer related notes saved since held write #${id} was held`
+              : "";
+        if (!why) return;
+        console.error(`Error: ${why}`);
         process.exit(1);
       });
       const kept = store.keepQuarantineAsHistory(id, by);
