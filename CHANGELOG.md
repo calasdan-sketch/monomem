@@ -65,6 +65,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Line-by-line diff of what changes in `supersede preview`, `quarantine show` and the dashboard.
 - `monomem service install | status | uninstall` (Windows Task Scheduler, macOS LaunchAgent, Linux systemd user unit; never
   run by setup) and `start --log` writing a rotated `server.log`.
+- `monomem bench --longmemeval | --locomo` prints strict recall-all@5 (`Rall@5`, every gold session in the top 5) next to
+  the any-hit `R@5`. LongMemEval-S keyword: 96.8 any-hit, 84.0 strict (docs/BENCHMARK.md).
 - `/health` returns the version and schema; `doctor` warns when the running server is older than the CLI.
 - Pins travel through file sync (a file never unpins, and never pins an unconfirmed outside note).
 - Clearer everyday commands: a mistyped writer name gets "did you mean `stdio:…`" instead of an empty plan or a useless

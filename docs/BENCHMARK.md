@@ -247,9 +247,34 @@ monomem bench --locomo      [--data file] [--limit N] [--mode keyword|hybrid] [-
   per-keyword BM25 rankings fused with RRF; the keyword fallback used the same). `--mode hybrid` also scores
   `runSearch(mode: "hybrid")` (BM25 + embeddings; since 2026-11-04 a 0.5 / 0.5 blend of min-max-scaled scores, before
   that RRF) when an embedding server answers; otherwise it is reported as skipped.
-- **Metrics.** `R@5`, `R@10`: any gold session (or turn) in the top k. `Rall@10`: every gold one in the top 10.
+- **Metrics.** `R@5`, `R@10`: any gold session (or turn) in the top k. `Rall@5`, `Rall@10`: every gold one in the top 5 / 10
+  (strict; `R@k` is the generous any-hit variant). In `--json`: `rAll5`, `rAll10`.
   `nDCG@10` with binary relevance. `MRR` over the top 50. Search latency p50/p95 per query; indexing time per
   haystack (single process, SQLite in a temp folder).
+
+### Results, 2026-11-14 (1.5.0 work; measured, not yet published)
+
+Measured on 2026-11-14 on the development PC: Windows 11 Home, AMD Ryzen 7 9800X3D (8 cores / 16 threads), 31 GB RAM, NVMe,
+Node v24.18.0, feat/1.5.0 code. Other build agents were running on the same PC at the same time, so the search times here are
+higher than the 2026-11-09 ones (same ranking code) and should be read as "loaded machine", not as a regression. Keyword-only
+(no embedding server), the commands exactly as above.
+
+**Strict recall-all@5 (`Rall@5`), new in this round.** `R@5` counts a question as found when any one gold session is in the
+top 5; `Rall@5` needs every gold session there. Questions with one gold session score the same on both, so the gap is all in
+multi-session questions.
+
+| Run | search | R@5 | **Rall@5** | R@10 | Rall@10 | nDCG@10 | MRR | search p50 / p95 |
+|---|---|---|---|---|---|---|---|---|
+| LongMemEval-S session (470) | keyword | 96.8 | **84.0** | 98.3 | 90.2 | 89.7 | 91.0 | 5.0 / 34.0 ms |
+| LongMemEval-S session (470) | relevant | 96.8 | **84.0** | 98.3 | 90.2 | 89.7 | 90.9 | 3.6 / 16.3 ms |
+| LoCoMo-10 turn (1,982) | keyword | 57.8 | **49.8** | 65.2 | 56.2 | 48.0 | 46.6 | 2.6 / 13.2 ms |
+| LoCoMo-10 turn (1,982) | relevant | 57.9 | **49.9** | 65.3 | 56.3 | 48.0 | 46.7 | 2.8 / 13.5 ms |
+| LoCoMo-10 session (1,982) | keyword | 90.4 | **81.5** | 95.5 | 87.7 | 80.3 | 78.6 | 2.1 / 5.6 ms |
+| LoCoMo-10 session (1,982) | relevant | 90.5 | **81.6** | 95.5 | 87.7 | 80.5 | 78.8 | 1.6 / 5.6 ms |
+
+The honest headline for LongMemEval-S is therefore **84.0 strict / 96.8 any-hit at k = 5**. agentmemory 0.9.31 reports 84.7
+strict recall-all@5 with BM25 (its own figure, not re-run here), so on the strict metric the two are level, not the 12-point gap
+the any-hit number suggests.
 
 ### Results, 2026-11-09 (expert round 4)
 

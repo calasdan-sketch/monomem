@@ -1,6 +1,6 @@
 // `monomem bench --longmemeval | --locomo`: a retrieval benchmark on public long-conversation datasets.
 // No LLM, no judge: each conversation is loaded into a fresh throwaway Store, the question is searched, and the
-// retrieved sessions/turns are scored against the dataset's gold evidence (recall@k, nDCG@10, MRR).
+// retrieved sessions/turns are scored against the dataset's gold evidence (recall@k, strict recall-all@k, nDCG@10, MRR).
 import { BENCH_HOME } from "./retrieval-env.js"; // first: isolate MONOMEM_HOME before config.js loads
 import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
@@ -285,11 +285,11 @@ export function renderRetrieval(r: RetrievalReport): string {
   ];
   const table = (name: string, m: ModeResult): void => {
     lines.push("", `${name} (search p50 ${m.latencyMs.p50.toFixed(2)} ms, p95 ${m.latencyMs.p95.toFixed(2)} ms)`);
-    lines.push(`${"type".padEnd(28)}${"n".padStart(5)}    R@5   R@10 Rall@10 nDCG@10    MRR`);
+    lines.push(`${"type".padEnd(28)}${"n".padStart(5)}    R@5 Rall@5   R@10 Rall@10 nDCG@10    MRR`);
     const keys = ["all", ...Object.keys(m.metrics).filter((k) => k !== "all").sort()];
     for (const k of keys) {
       const x = m.metrics[k];
-      lines.push(`${k.padEnd(28)}${String(x.n).padStart(5)} ${pct(x.r5)} ${pct(x.r10)}  ${pct(x.rAll10)}  ${pct(x.ndcg10)} ${pct(x.mrr)}`);
+      lines.push(`${k.padEnd(28)}${String(x.n).padStart(5)} ${pct(x.r5)} ${pct(x.rAll5)} ${pct(x.r10)}  ${pct(x.rAll10)}  ${pct(x.ndcg10)} ${pct(x.mrr)}`);
     }
   };
   table("keyword (runSearch mode=keyword / state_search: BM25, all-terms first, then any-keyword BM25 x keyword coverage)", r.keyword);
