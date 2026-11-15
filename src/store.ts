@@ -1345,6 +1345,9 @@ export function accessFlushMs(): number {
  * `autoMax` (MONOMEM_EDGE_AUTO_MAX_NOTES, default 100,000) is not indexed automatically at all: new notes there get no
  * automatic similarity links until `monomem rebuild-edges` is run.
  */
+/** _meta key prefix for a failed background edge build (F-06). */
+const EDGE_FAIL_PREFIX = "edge_build_failed:";
+
 export function edgeBuildLimits(): { syncMax: number; autoMax: number; sliceMs: number } {
   const num = (v: string | undefined, def: number): number => {
     const n = Number(v);
@@ -6285,8 +6288,9 @@ export class Store {
           if (r) addToIndex(idx, ids[i], Number(r.rev), termFreq(tokenize(this.edgeText(ids[i], r))));
           i++;
         }
-      } catch {
+      } catch (e) {
         this.edgeBuilds.delete(namespace); // e.g. the file went away; the next write tries again
+        this.noteEdgeBuildFailure(namespace, e);
         return;
       }
       if (i < ids.length) {
@@ -6297,10 +6301,38 @@ export class Store {
       // Done. ver = -1 makes the next use diff against the database, which picks up everything written during the build.
       this.edgeIndexes.set(namespace, idx);
       this.edgeBuilds.delete(namespace);
-      if (waiting.size) void this.linkIds(namespace, [...waiting]).catch(() => undefined);
+      this.clearEdgeBuildFailure(namespace);
+      if (waiting.size) void this.linkIds(namespace, [...waiting]).catch((e) => this.noteEdgeBuildFailure(namespace, e));
     };
     const t = setTimeout(step, 0);
     t.unref?.();
+  }
+
+  /** 1.5.0 (F-06): remember that a background edge build/link failed, where `monomem doctor` (another process) can read it. */
+  private noteEdgeBuildFailure(namespace: string, e: unknown): void {
+    const msg = String((e as Error)?.message ?? e).replace(/\s+/g, " ").slice(0, 200);
+    try {
+      this.setMeta(`${EDGE_FAIL_PREFIX}${namespace}`, `${new Date().toISOString()}|${msg}`);
+    } catch {
+      /* the file may be the very thing that failed */
+    }
+  }
+
+  private clearEdgeBuildFailure(namespace: string): void {
+    try {
+      this.db.prepare("DELETE FROM _meta WHERE key = ?").run(`${EDGE_FAIL_PREFIX}${namespace}`);
+    } catch {
+      /* best effort */
+    }
+  }
+
+  /** Background similarity-index builds that failed and have not since succeeded (doctor shows them). */
+  edgeBuildFailures(): Array<{ namespace: string; at: string; error: string }> {
+    const rows = this.db.prepare("SELECT key, value FROM _meta WHERE key LIKE ? ORDER BY key").all(`${EDGE_FAIL_PREFIX}%`) as Array<{ key: string; value: string }>;
+    return rows.map((r) => {
+      const i = r.value.indexOf("|");
+      return { namespace: r.key.slice(EDGE_FAIL_PREFIX.length), at: r.value.slice(0, i), error: r.value.slice(i + 1) };
+    });
   }
 
   /** Give these notes their similarity links now that the namespace index exists (a few at a time, yielding between). */
