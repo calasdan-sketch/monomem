@@ -371,7 +371,7 @@ function usage(all = false): void {
       "  bench --scale 10k [--json]",
       "            Speed on a synthetic store (temp folder): session start, search and write p50/p95, plain and",
       "            encrypted. Exits 1 at 10k+ notes when encrypted session start p50 is 50 ms or more.",
-      "  bench --longmemeval | --locomo [--data file] [--limit n] [--mode keyword|hybrid] [--granularity session|turn] [--json]",
+      "  bench --longmemeval | --locomo [--data file] [--limit n] [--mode keyword|hybrid] [--granularity session|turn] [--encrypted] [--json]",
       "            Retrieval benchmark (recall@k, nDCG, MRR) on a public dataset, in a temp folder. No LLM.",
       "  drill [--json]",
       "            Replay known memory-poisoning attacks on a copy of your store and your settings; your data is not changed.",

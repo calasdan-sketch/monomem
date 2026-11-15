@@ -70,6 +70,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `monomem bench --scale 10k`: session start, search and write p50/p95 on a synthetic store in a temp folder, plain and
   encrypted, with the 50 ms encrypted session-start gate (exit 1 when it fails). On the development PC at 10k notes:
   encrypted session start 12-18 ms p50, plain 9-10 ms (docs/BENCHMARK.md).
+- `monomem bench --longmemeval | --locomo --encrypted` runs the same retrieval benchmark on encrypted stores. Measured: keyword
+  recall falls from 96.8 to 0.0 R@5 on LongMemEval-S (titles there are session ids, and keyword search covers only title and
+  tags while encryption is on). The in-memory body index that would fix this is written up in docs/BENCHMARK.md, not built.
 - `/health` returns the version and schema; `doctor` warns when the running server is older than the CLI.
 - Pins travel through file sync (a file never unpins, and never pins an unconfirmed outside note).
 - Clearer everyday commands: a mistyped writer name gets "did you mean `stdio:…`" instead of an empty plan or a useless

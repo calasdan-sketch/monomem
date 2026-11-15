@@ -217,8 +217,8 @@ reads anything and no judge grades anything: each conversation is written into a
 question is searched, and the returned sessions (or turns) are compared with the dataset's own gold evidence.
 
 ```
-monomem bench --longmemeval [--data file] [--limit N] [--mode keyword|hybrid] [--granularity session|turn] [--json]
-monomem bench --locomo      [--data file] [--limit N] [--mode keyword|hybrid] [--granularity turn|session] [--json]
+monomem bench --longmemeval [--data file] [--limit N] [--mode keyword|hybrid] [--granularity session|turn] [--encrypted] [--json]
+monomem bench --locomo      [--data file] [--limit N] [--mode keyword|hybrid] [--granularity turn|session] [--encrypted] [--json]
 ```
 
 - **Data.** LongMemEval-S, cleaned release ([`xiaowu0162/longmemeval-cleaned`](https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned),
@@ -298,6 +298,37 @@ instead of the about 57-60 MB the performance seat's fully-edged 10k store had (
 not read edges, but a smaller file caches better. The time for a whole `monomem recall` hook process (Node start-up included,
 657-760 ms in the performance seat's before table) was not re-measured. Encrypted search is faster only because it searches less
 text (next section). 1,000 notes for comparison: session start 5.3 / 8.8 ms plain / encrypted p50.
+
+**Recall with encryption on vs off (`--encrypted`), new in this round.** The same commands with `--encrypted`, which puts a key
+file beside every throwaway database before the notes are written; same corpus, same questions, keyword-only:
+
+| Run | plain R@5 / Rall@5 / R@10 / MRR | encrypted R@5 / Rall@5 / R@10 / MRR | encrypted search p50 |
+|---|---|---|---|
+| LongMemEval-S session (470), keyword | 96.8 / 84.0 / 98.3 / 91.0 | **0.0 / 0.0 / 0.0 / 0.0** | 0.7 ms |
+| LongMemEval-S session (470), relevant | 96.8 / 84.0 / 98.3 / 90.9 | **0.0 / 0.0 / 0.0 / 0.0** | 0.2 ms |
+| LoCoMo-10 turn (1,982), keyword | 57.8 / 49.8 / 65.2 / 46.6 | **0.1 / 0.1 / 0.1 / 0.1** | 0.3 ms |
+| LoCoMo-10 session (1,982), keyword | 90.4 / 81.5 / 95.5 / 78.6 | **0.0 / 0.0 / 0.0 / 0.0** | 0.3 ms |
+
+(`relevant` matched `keyword` to within 0.1 in every encrypted run.) **Recall drops to about zero.** The cause is the documented
+limit, not a bug: while encryption is on, the body is stored only as ciphertext (`body_enc`), so the full-text index has the
+title and tags but no body words, and keyword search covers title + tags only (SECURITY.md, docs/encryption-retention.md). In
+these datasets every title is a session or dialog id and there are no tags, so nothing a question says can match. This is the
+worst case: a real store whose titles carry words still finds notes by those words, but any fact that lives only in a body is
+invisible to keyword search when encrypted. Indexing was faster encrypted (LongMemEval-S 24.1 s total vs 47.0 s plain,
+because there is less to index; not a speed claim). Hybrid search (embeddings are still computed from the decrypted text and
+stored unencrypted) would likely recover much of this, but could not be measured: the local Ollama on 127.0.0.1:11434 has
+`nomic-embed-text` installed but did not answer an embedding request within 120 s during this round (it was not restarted,
+since other work was using it).
+
+**Proposal, not built (C-06).** Keep a body index in memory only while an encrypted store is open: a `TEMP` FTS5 table (with
+`PRAGMA temp_store = MEMORY` so SQLite never spills it to a temp file) filled from the decrypted bodies at open, kept in step by
+the write paths (create, update, edit, archive, restore, delete, supersede, import, purge), and queried by the two
+`notes_fts MATCH` sites in store.ts in place of the on-disk body column. Why it was not built now: it is not small. The on-disk
+index is external-content and kept in sync by SQL triggers, which cannot decrypt, so every write path needs an app-level
+hook; the open cost is one decryption per note (to be measured at 100k); ranking must give the same bm25 weights across two
+tables; and it puts decrypted text in process memory for the life of the process (no worse than a decrypted read, but a
+security-review item). Until then the honest statement stays: encryption costs keyword recall on body text, and the size of
+that cost depends on how much of what you look for is in titles and tags.
 
 ### Results, 2026-11-09 (expert round 4)
 

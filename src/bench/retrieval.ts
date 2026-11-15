@@ -9,6 +9,7 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { DATA_DIR, DB_PATH } from "../config.js";
 import { Store } from "../store.js";
+import { ensureKey } from "../crypto.js";
 import { LIMITS } from "../security.js";
 import { embed, embeddingsEnabled } from "../embeddings.js";
 import { maybeEmbed, runRelevantSearch, runSearch } from "../search-service.js";
@@ -159,6 +160,8 @@ export interface RetrievalOptions {
   limit?: number;
   mode: "keyword" | "hybrid";
   granularity: Granularity;
+  /** C-06: write every haystack into an encrypted store (a key file beside the database) to measure what encryption costs. */
+  encrypted?: boolean;
 }
 
 interface ModeResult {
@@ -169,6 +172,7 @@ interface ModeResult {
 export interface RetrievalReport {
   dataset: string;
   granularity: Granularity;
+  encrypted: boolean;
   questions: number;
   haystacks: number;
   notes: number;
@@ -215,6 +219,7 @@ export async function runRetrieval(o: RetrievalOptions): Promise<RetrievalReport
   let nq = 0;
   for (const [i, h] of stacks.entries()) {
     const dir = join(BENCH_HOME, `h${i}`);
+    if (o.encrypted) ensureKey(dir);
     const store = new Store(join(dir, "state.db"));
     try {
       const unitOf = new Map<number, string>();
@@ -262,6 +267,7 @@ export async function runRetrieval(o: RetrievalOptions): Promise<RetrievalReport
   return {
     dataset: o.dataset === "longmemeval" ? "LongMemEval-S (cleaned)" : "LoCoMo-10",
     granularity: o.granularity,
+    encrypted: o.encrypted === true,
     questions: nq,
     haystacks: stacks.length,
     notes,
@@ -279,7 +285,7 @@ const pct = (x: number): string => (x * 100).toFixed(1).padStart(6);
 
 export function renderRetrieval(r: RetrievalReport): string {
   const lines = [
-    `${r.dataset}, ${r.granularity} granularity: ${r.questions} questions over ${r.haystacks} haystacks, ${r.notes} notes` +
+    `${r.dataset}, ${r.granularity} granularity${r.encrypted ? ", ENCRYPTED store (key file on)" : ""}: ${r.questions} questions over ${r.haystacks} haystacks, ${r.notes} notes` +
       (r.truncatedBodies ? ` (${r.truncatedBodies} bodies cut to ${LIMITS.body} chars)` : ""),
     `indexing: ${(r.indexMs.total / 1000).toFixed(1)} s total, p50 ${r.indexMs.p50PerHaystack.toFixed(1)} ms per haystack`,
   ];
@@ -314,6 +320,7 @@ export async function retrievalMain(argv: string[], out: (s: string) => void = c
       const a = argv[i];
       if (a === "--longmemeval" || a === "--locomo" || a === "--") continue;
       else if (a === "--json") json = true;
+      else if (a === "--encrypted") o.encrypted = true;
       else if (a === "--data") o.data = resolve(take(i++, a));
       else if (a === "--limit") {
         const n = Number(take(i++, a));

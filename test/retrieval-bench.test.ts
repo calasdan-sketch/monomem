@@ -99,3 +99,24 @@ test("LoCoMo parsing: evidence split, session mapping, dates", () => {
   assert.equal(locomoDate("1:56 pm on 8 May, 2023"), "2023-05-08T13:56:00.000Z");
   assert.equal(locomoDate("12:05 am on 1 June, 2023"), "2023-06-01T00:05:00.000Z");
 });
+
+test("encrypted retrieval run (C-06): same corpus with a key file; body-only answers are lost (titles are session ids)", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { runRetrieval } = await import("../src/bench/retrieval.js");
+  const file = join(mkdtempSync(join(tmpdir(), "monomem-c06-")), "lme.json");
+  const sessions = Array.from({ length: 6 }, (_, i) => [{ role: "user", content: i === 3 ? "my giraffe is named Zuzu" : `filler talk ${i}` }]);
+  writeFileSync(file, JSON.stringify([{
+    question_id: "q1", question_type: "single-session-user", question: "What is my giraffe named?", answer_session_ids: ["s3"],
+    haystack_session_ids: sessions.map((_, i) => `s${i}`), haystack_dates: [], haystack_sessions: sessions,
+  }]));
+  const plain = await runRetrieval({ dataset: "longmemeval", data: file, mode: "keyword", granularity: "session" });
+  const enc = await runRetrieval({ dataset: "longmemeval", data: file, mode: "keyword", granularity: "session", encrypted: true });
+  assert.equal(plain.encrypted, false);
+  assert.equal(enc.encrypted, true);
+  assert.equal(plain.keyword.metrics.all.r5, 1);
+  // Measured gap, not a goal: keyword search covers title + tags only while encryption is on (SECURITY.md). If bodies become
+  // searchable when encrypted, flip this to 1.
+  assert.equal(enc.keyword.metrics.all.r5, 0);
+});
