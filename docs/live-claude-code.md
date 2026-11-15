@@ -32,8 +32,10 @@ It changes only the Monomem entry. Other servers, other settings, comments, numb
 stay exactly as they were. A file it cannot read safely (broken JSON) stops everything and is not modified. If Claude Code writes the
 file while you are reading the plan, the change is added to the **newer** text, not the one it read first.
 
-**The start-of-session hook** (Claude sees your recent notes when a session starts) is only installed if you agree: setup asks
-separately, or pass `--hook`. It is merged into the `SessionStart` list in `~/.claude/settings.json` without touching your other hooks.
+**The start-of-session hook** (Claude sees your recent notes when a session starts) is only installed if you agree: at a terminal
+setup asks separately; `--yes` installs it for Claude Code and says so; `--hook` installs it; `--no-hook` leaves it out. When it was
+not installed, the last line of setup says so and how to add it later (`monomem setup --hook`). It is merged into the `SessionStart`
+list in `~/.claude/settings.json` without touching your other hooks, and `monomem setup --undo` takes it out again with the rest of that run.
 
 **Go back:** `monomem setup --undo` restores the files it changed (if Claude Code has changed a file since, only the Monomem part is
 taken out and the rest is kept). Your notes are never touched by undo.
