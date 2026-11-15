@@ -9,6 +9,7 @@ import type { AddressInfo } from "node:net";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Store } from "../src/store.js";
+import { actorStore } from "../src/actor.js";
 import { createMcpServer } from "../src/mcp-server-core.js";
 import { createApiServer } from "../src/api.js";
 import { extractKeywords } from "../src/keywords.js";
@@ -110,9 +111,10 @@ describe("runRelevantSearch: same pipeline as search (I-MEDIUM-1)", () => {
     store = new Store(":memory:");
     // Identical keyword content: same bm25, same keyword count. The only
     // ranking signal left is the access boost -- which only applies if the
-    // relevant path runs the shared finalize pipeline.
-    store.create({ title: "Alpha widget", body: "widget specs and pricing" });
-    store.create({ title: "Beta widget", body: "widget specs and pricing" });
+    // relevant path runs the shared finalize pipeline. Two writers: from one writer the newer copy would be a restatement
+    // and go first by itself (1.5.0, search-twins.test.ts).
+    actorStore.run({ label: "w1", authed: true }, () => store.create({ title: "Alpha widget", body: "widget specs and pricing" }));
+    actorStore.run({ label: "w2", authed: true }, () => store.create({ title: "Beta widget", body: "widget specs and pricing" }));
     const alpha = store.list({}).notes.find((n) => n.title === "Alpha widget")!;
     for (let i = 0; i < 5; i++) store.touch(alpha.id);
   });

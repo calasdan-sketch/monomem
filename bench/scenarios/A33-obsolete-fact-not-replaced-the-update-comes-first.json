@@ -1,9 +1,8 @@
 {
   "id": "A33",
   "suite": "stale",
-  "known_gap": "GAP-OBSOLETE-UNREPLACED",
   "title": "Obsolete fact, not replaced: the update comes first everywhere",
-  "what": "The obsolete-fact test (an outdated statement in the retrieved context; arXiv 2610.36308). A fact is written, then a later note says it changed, in different words, and nobody replaces or edits the old note. Search, the 'what is relevant' lookup and the SessionStart injection must all put the current value in front of the agent, and search must rank it first. The old note is still there (Monomem never hides a note by guessing), so this scenario does not check that the old value is absent; A34 does, with the replace step.",
+  "what": "The obsolete-fact test (an outdated statement in the retrieved context; arXiv 2610.36308). A fact is written, then a later note says it changed, in different words, and nobody replaces or edits the old note. Search, the 'what is relevant' lookup and the SessionStart injection must all put the current value in front of the agent, and search must rank it first. The old note is still there (Monomem never hides a note by guessing): it comes right behind the update, labelled restated_by, so this scenario does not check that the old value is absent; A34 does, with the replace step. A35 to A38 are the guards (another writer, a confirmed note, another subject, outside content).",
   "actors": {
     "alice": {
       "scope": "write"
@@ -65,6 +64,12 @@
       "step": "ss",
       "text": "{{v2}}",
       "desc": "the SessionStart injection carries the current value"
+    },
+    {
+      "check": "contains_text",
+      "step": "s",
+      "text": "restated_by",
+      "desc": "the older note is still returned, labelled as restated by the newer one"
     }
   ]
 }

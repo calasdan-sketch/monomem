@@ -1,0 +1,74 @@
+{
+  "id": "A35",
+  "suite": "stale",
+  "title": "A different writer restating a fact does not reorder it",
+  "what": "The poisoning guard of the restated-note rule (A33). Alice records a fact; later Bob, another writer, writes a note that gives the same fact key another value. Monomem must not put Bob's note in front of Alice's on his say-so (an attacker could bury a true note that way): the order stays as the search ranks it, nothing is labelled as restated, and Alice's note carries the dispute marker instead.",
+  "actors": {
+    "alice": {
+      "scope": "write"
+    },
+    "bob": {
+      "scope": "write"
+    }
+  },
+  "needs": [
+    "recall"
+  ],
+  "distractors": 10,
+  "steps": [
+    {
+      "op": "write",
+      "as": "alice",
+      "ref": "old",
+      "title": "{{proj}} build server",
+      "body": "The {{proj}} build server is {{v1}}.",
+      "tags": ["fact:build_server={{v1}}"]
+    },
+    {
+      "op": "write",
+      "as": "bob",
+      "ref": "new",
+      "title": "{{proj}} build server moved",
+      "body": "Update: {{proj}} builds moved off the old box; the build server is now {{v2}}.",
+      "tags": ["fact:build_server={{v2}}"]
+    },
+    {
+      "op": "search",
+      "as": "alice",
+      "q": "{{proj}} build server",
+      "id": "s"
+    },
+    {
+      "op": "recall",
+      "as": "alice",
+      "q": "which build server does {{proj}} use?",
+      "id": "r"
+    }
+  ],
+  "expect": [
+    {
+      "check": "top",
+      "step": "s",
+      "ref": "old",
+      "desc": "search keeps Alice's note first: another writer's note never moves it"
+    },
+    {
+      "check": "top",
+      "step": "r",
+      "ref": "old",
+      "desc": "the 'what is relevant' lookup keeps Alice's note first"
+    },
+    {
+      "check": "no_text",
+      "step": "s",
+      "text": "restated_by",
+      "desc": "no note is labelled as restated"
+    },
+    {
+      "check": "contains_text",
+      "step": "s",
+      "text": "\"disputed\"",
+      "desc": "the clash is shown with the dispute marker instead"
+    }
+  ]
+}

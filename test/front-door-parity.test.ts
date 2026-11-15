@@ -246,6 +246,59 @@ describe("R2-01: REST and MCP mark a disputed note the same way", () => {
   });
 });
 
+describe("GAP-OBSOLETE-UNREPLACED: REST, MCP and the CLI label a restated note the same way", () => {
+  /** good writes a fact, then a day later restates it; returns the two ids. */
+  function restate(s: Store): { old: number; neu: number } {
+    const old = as("good", () => s.create({ namespace: "work", title: "quarzo build server", body: "The quarzo build server is kalmuth.", tags: ["fact:build_server=kalmuth"] })).id;
+    const neu = as("good", () => s.create({ namespace: "work", title: "quarzo build server moved", body: "Update: quarzo builds moved; the build server is now prendal.", tags: ["fact:build_server=prendal"] })).id;
+    const day = (d: number) => new Date(Date.now() - d * 86_400_000).toISOString();
+    for (const [id, d] of [[old, 2], [neu, 1]]) w0(s).prepare("UPDATE notes SET created_at = ?, updated_at = ?, content_at = ? WHERE id = ?").run(day(d), day(d), day(d), id);
+    return { old, neu };
+  }
+  const w0 = (s: Store) => s.captureDb();
+  const mcpJson = (text: string) => JSON.parse(JSON.parse(text).content[0].text.replace(/^[^{]*/, ""));
+
+  test("search and the relevance lookup: same order, same restated_by, the explain line on both", async () => {
+    const w = seed();
+    const { old, neu } = restate(w.s);
+    const io = await surfaces(w);
+    // Every call reads both notes (eight searches per caller kind): the order must hold across them.
+    try {
+      for (const who of ["writer", "pinned-writer"] as Who[]) {
+        const rs = JSON.parse((await io.rest(who, "GET", "/search?q=quarzo%20build%20server&namespace=work")).text).results;
+        const ms = mcpJson((await io.mcp(who, "state_search", { query: "quarzo build server", namespace: "work" })).text).results;
+        const rr = JSON.parse((await io.rest(who, "POST", "/relevant", { message: "which build server does quarzo use?", namespace: "work" })).text).results;
+        const mr = mcpJson((await io.mcp(who, "state_relevant", { message: "which build server does quarzo use?", namespace: "work" })).text).results;
+        for (const [name, r] of [["REST search", rs], ["MCP search", ms], ["REST relevant", rr], ["MCP relevant", mr]] as const) {
+          const pick = (r as Array<{ id: number; restated_by?: number }>).map((n) => [n.id, n.restated_by ?? null]);
+          assert.deepEqual(pick.slice(0, 2), [[neu, null], [old, neu]], `${who} ${name}`);
+        }
+        const re = JSON.parse((await io.rest(who, "GET", "/search?q=quarzo%20build%20server&namespace=work&explain=1")).text).results;
+        const me = mcpJson((await io.mcp(who, "state_search", { query: "quarzo build server", namespace: "work", explain: true })).text).results;
+        for (const r of [re, me]) assert.match(r[1].breakdown.explanation, new RegExp(`Kept behind #${neu}, a newer note by the same writer`), who);
+      }
+      // A client that PUTs a search result back whole: restated_by / restated_label are read-only fields, ignored like `score`.
+      const back = JSON.parse((await io.rest("writer", "GET", "/search?q=quarzo%20build%20server&namespace=work")).text).results[1];
+      assert.equal(back.restated_by, neu);
+      const put = await io.rest("writer", "PUT", `/notes/${old}`, { ...back, body: "The quarzo build server was kalmuth." });
+      assert.ok(put.ok, put.text.slice(0, 200));
+    } finally {
+      await io.close();
+    }
+  });
+
+  test("the CLI's relevant / search lines carry the same label", async () => {
+    const { restatedFlag } = await import("../src/search-service.js");
+    const s = new Store(":memory:");
+    const { old, neu } = restate(s);
+    const { runRelevantSearch } = await import("../src/search-service.js");
+    const r = (await runRelevantSearch(s, "which build server does quarzo use?", { namespace: "work" })).results;
+    assert.match(restatedFlag(r.find((n) => n.id === old)!), new RegExp(`restated by newer note #${neu}`));
+    assert.equal(restatedFlag(r.find((n) => n.id === neu)!), "");
+    s.close();
+  });
+});
+
 describe("R2-02: REST and MCP decide a flag the same way", () => {
   // [caller, note key, expected decision, text that must not appear in either reply]
   type Row = [Who, keyof World["ids"] | "missing", boolean, string];

@@ -111,6 +111,12 @@ export const canonKey = (key: string): string => {
   return g ? prefixOf(key) + g[0] : key;
 };
 
+/** Two notes give one fact key (same common spelling) different values: they are about the same setting. */
+export function factClash(a: readonly string[], b: readonly string[]): boolean {
+  const mine = new Map(noteFacts(a).map(([k, v]) => [canonKey(k), normFact(v)]));
+  return noteFacts(b).some(([k, v]) => mine.has(canonKey(k)) && mine.get(canonKey(k)) !== normFact(v));
+}
+
 /** Plural / one-edit spellings of one word ("deploy_targets", "deploy_targt"). Short words are skipped: "db" vs "dr" is not drift. */
 function nearWord(a: string, b: string): boolean {
   if (a === b || a.length < 5 || b.length < 5 || Math.abs(a.length - b.length) > 1) return false;

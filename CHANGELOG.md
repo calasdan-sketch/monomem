@@ -132,9 +132,16 @@ upgrading from 1.3.x takes one step (docs/upgrading.md).
   off. **Security change:** while a server runs, every body's words are in its memory, which the system can page to swap or a
   hibernation file or write into a crash dump; use whole-disk encryption too (SECURITY.md, docs/encryption-retention.md,
   `encrypt status --surfaces` lists it). A search that finds nothing says bodies were not searched only when that is true.
-- **133 deterministic scenarios** (was 131): A 34, B 31, C 27, D 19, E 22. Obsolete-fact scenarios A33 and A34 in `monomem bench`. With the replace step the old value never reaches the agent (A34
-  passes). Without it, search ranks the outdated note above its update (A33): recorded as the open known gap
-  `GAP-OBSOLETE-UNREPLACED`, not hidden. MemoryAgentBench was not run (docs/BENCHMARK.md says why).
+- **137 deterministic scenarios** (was 131): A 38, B 31, C 27, D 19, E 22. Obsolete-fact scenarios A33 and A34 in `monomem bench`. With the replace step the old value never reaches the agent (A34
+  passes). Without it, search used to rank the outdated note above its update (A33): first recorded as the known gap
+  `GAP-OBSOLETE-UNREPLACED`, now fixed (below). **0 known gaps are open.** MemoryAgentBench was not run (docs/BENCHMARK.md says why).
+- **A later restatement by the same writer ranks first, labelled (GAP-OBSOLETE-UNREPLACED fixed).** When the same writer later
+  writes a note on the same subject (the same fact key with another value, or a similarity link of at least 0.6) and the two are a
+  near tie (old score at most 1.5x the new one), search, the "what is relevant" lookup and session start put the newer note first and
+  the older one right behind it, with `restated_by`, `restated_label` and an explain line (REST, MCP, the CLI). Nothing is hidden.
+  Never for a different writer (the dispute label covers that), over a note a person confirmed, or behind a held, replaced or
+  distrusted note. Guard scenarios A35 to A38; the bench has a new `confirm` step. LongMemEval-S and LoCoMo-10 retrieval figures are
+  unchanged (docs/BENCHMARK.md).
 - **Notes can say which files they are about, and are labelled when that code changes.** `files: ["src/auth.ts"]` on
   `state_write` / `POST /notes` (creating, at most 20 git-tracked files in the writer's repository). After a commit changes
   one, reads and session start show `[code changed since this was written: src/auth.ts]` and `code_changed`; the note is not

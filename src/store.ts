@@ -4874,6 +4874,15 @@ export class Store {
     return new Set(rows.map((r) => r.neighbor_id));
   }
 
+  /** neighbourIds with each edge's similarity score (search-service.ts restated-twin rule). */
+  neighbourScores(id: number): Map<number, number> {
+    const ceil = this.ceilingSql("n.sensitivity");
+    const rows = this.db
+      .prepare(`SELECT e.neighbor_id AS neighbor_id, e.score AS score FROM note_edges e JOIN notes n ON n.id = e.neighbor_id WHERE e.note_id = ?${ceil}`)
+      .all(id) as Array<{ neighbor_id: number; score: number }>;
+    return new Map(rows.map((r) => [Number(r.neighbor_id), Number(r.score)]));
+  }
+
   /**
    * For captured rows (observations, summaries) among `ids`: the live rows written just before and just after each one in
    * the same capture session (by created_at, then id). Ordinary notes have no session and are left out.

@@ -1,0 +1,69 @@
+{
+  "id": "A37",
+  "suite": "stale",
+  "title": "A related note on another subject does not reorder",
+  "what": "The false-positive guard of the restated-note rule (A33). Alice records the build server, then later the API server of the same project: related words, same writer, both match the question, but a different subject. The later note is not a restatement, so the order stays as the search ranks it and nothing is labelled as restated.",
+  "actors": {
+    "alice": {
+      "scope": "write"
+    }
+  },
+  "needs": [
+    "recall"
+  ],
+  "distractors": 10,
+  "steps": [
+    {
+      "op": "write",
+      "as": "alice",
+      "ref": "old",
+      "title": "{{proj}} build server",
+      "body": "The {{proj}} build server is {{v1}}."
+    },
+    {
+      "op": "write",
+      "as": "alice",
+      "ref": "other",
+      "title": "{{proj}} API server",
+      "body": "The {{proj}} API server is {{v3}}; it also serves the status page."
+    },
+    {
+      "op": "search",
+      "as": "alice",
+      "q": "{{proj}} server",
+      "id": "s"
+    },
+    {
+      "op": "recall",
+      "as": "alice",
+      "q": "which servers does {{proj}} use?",
+      "id": "r"
+    }
+  ],
+  "expect": [
+    {
+      "check": "top",
+      "step": "s",
+      "ref": "old",
+      "desc": "search keeps the build server note where it ranks"
+    },
+    {
+      "check": "top",
+      "step": "r",
+      "ref": "old",
+      "desc": "the 'what is relevant' lookup keeps it where it ranks"
+    },
+    {
+      "check": "no_text",
+      "step": "s",
+      "text": "restated_by",
+      "desc": "no note is labelled as restated in search"
+    },
+    {
+      "check": "no_text",
+      "step": "r",
+      "text": "restated_by",
+      "desc": "no note is labelled as restated in the lookup"
+    }
+  ]
+}

@@ -30,6 +30,7 @@ import {
   REBUILD_CONFIRM_NOTE_COUNT,
   type NoteRecord,
 } from "../src/store.js";
+import { actorStore } from "../src/actor.js";
 import {
   findCandidates,
   findCandidatesCooperative,
@@ -473,9 +474,10 @@ describe("9: MONOMEM_ACCESS_BOOST=0", () => {
     const s = new Store(":memory:");
     const saved = process.env.MONOMEM_ACCESS_BOOST;
     try {
-      // b is the older of two equal notes: native order (ties newest first) puts a first, the boost lifts b.
-      const b = s.create({ title: "falcon report", body: "falcon migration notes" });
-      const a = s.create({ title: "falcon report", body: "falcon migration notes" });
+      // b is the older of two equal notes: native order (ties newest first) puts a first, the boost lifts b. Two writers: from
+      // one writer the newer copy would be a restatement and go first by itself (1.5.0, search-twins.test.ts).
+      const b = actorStore.run({ label: "w1", authed: true }, () => s.create({ title: "falcon report", body: "falcon migration notes" }));
+      const a = actorStore.run({ label: "w2", authed: true }, () => s.create({ title: "falcon report", body: "falcon migration notes" }));
       for (let i = 0; i < 5; i++) s.touch(b.id);
       delete process.env.MONOMEM_ACCESS_BOOST;
       const boosted = await runSearch(s, "falcon", { mode: "keyword" });

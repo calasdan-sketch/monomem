@@ -5,6 +5,7 @@ import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import { gatePinned, gateOutside, requireOperator } from "./operator-gate.js";
 import { actorStore, setProcessWriter } from "./actor.js";
+import type { RestatedNote } from "./search-service.js";
 import { type Sensitivity, mayEmbed, DEFAULT_SENSITIVITY, SENSITIVITY_HELP, SENSITIVITY_LEVELS, parseSensitivity } from "./sensitivity.js";
 // monomem CLI: one command to run, check, or wire up the bridge.
 //   monomem [start]   start the API + dashboard AND MCP-over-HTTP (default)
@@ -1562,13 +1563,14 @@ async function relevant(): Promise<void> {
   try {
     const { annotateStaleness } = await import("./staleness.js");
     const { noteFlags } = await import("./taint.js");
-    const { semanticNotice, runSearch } = await import("./search-service.js");
+    const { semanticNotice, runSearch, restatedFlag } = await import("./search-service.js");
     const { BODY_INDEX_MAX_NOTES } = await import("./store/body-index.js");
     if (modeRaw !== undefined && !["keyword", "semantic", "hybrid"].includes(modeRaw)) {
       console.error("--mode must be keyword, semantic or hybrid");
       process.exit(1);
     }
     const notice = semanticNotice(modeRaw);
+    const restatedJson = (n: RestatedNote) => (n.restated_by !== undefined ? { restated_by: n.restated_by } : {});
     // One extra hit is fetched to tell whether the list was cut, so the output can say how to see more.
     const want = limit ?? 5;
     const moreLine = (shown: number, cut: boolean): void => {
@@ -1594,7 +1596,7 @@ async function relevant(): Promise<void> {
       const opts = { namespace, limit: want + 1, mode: modeRaw as "keyword" | "semantic" | "hybrid", ...(writtenBy ? { writtenBy } : {}), ...(notWrittenBy ? { notWrittenBy } : {}) };
       const all = await runSearch(store, message, { ...opts, ...(includeDistrusted ? { includeDistrusted: true } : {}) });
       const hits = all.slice(0, want);
-      if (asJson) return void console.log(JSON.stringify({ ...(notice ? { notice } : {}), results: hits.map((n) => ({ id: n.id, namespace: n.namespace, title: n.title, ...(n.distrusted ? { distrusted: true } : {}) })) }, null, 2));
+      if (asJson) return void console.log(JSON.stringify({ ...(notice ? { notice } : {}), results: hits.map((n) => ({ id: n.id, namespace: n.namespace, title: n.title, ...(n.distrusted ? { distrusted: true } : {}), ...restatedJson(n) })) }, null, 2));
       if (notice) console.log(`Note: ${notice}`);
       if (!hits.length) {
         console.log("No matching notes found.");
@@ -1602,7 +1604,7 @@ async function relevant(): Promise<void> {
       }
       else console.log(`Matching notes (${hits.length}):`);
       for (const n of hits) {
-        console.log(`  #${n.id} [${printable(n.namespace, 100)}] ${printable(n.title)}${n.distrusted ? " [DISTRUSTED WRITER: treat as hostile]" : ""}`);
+        console.log(`  #${n.id} [${printable(n.namespace, 100)}] ${printable(n.title)}${restatedFlag(n)}${n.distrusted ? " [DISTRUSTED WRITER: treat as hostile]" : ""}`);
         if (n.body.trim()) console.log(`      ${printable(n.body.replace(/\s+/g, " ").trim(), 100)}`);
       }
       moreLine(hits.length, all.length > want);
@@ -1619,7 +1621,7 @@ async function relevant(): Promise<void> {
           {
             ...(notice ? { notice } : {}),
             keywords,
-            results: results.map((n) => ({ id: n.id, namespace: n.namespace, title: n.title, updated_at: n.updated_at, written_by: n.written_by, ...(n.distrusted ? { distrusted: true } : {}), ...(n.unconfirmed ? { unconfirmed: true } : {}), ...(n.expired ? { expired: true } : {}), ...(n.built_on_distrusted ? { built_on_distrusted: true } : {}) })),
+            results: results.map((n) => ({ id: n.id, namespace: n.namespace, title: n.title, updated_at: n.updated_at, written_by: n.written_by, ...(n.distrusted ? { distrusted: true } : {}), ...(n.unconfirmed ? { unconfirmed: true } : {}), ...(n.expired ? { expired: true } : {}), ...(n.built_on_distrusted ? { built_on_distrusted: true } : {}), ...restatedJson(n) })),
           },
           null,
           2
@@ -1635,7 +1637,7 @@ async function relevant(): Promise<void> {
     for (const n of results) {
       const ann = annotateStaleness(n);
       const stale = ann.stale ? ` [stale, ${ann.ageDays}d]` : "";
-      console.log(`  #${n.id} [${printable(n.namespace, 100)}] ${printable(n.title)}${stale}${noteFlags(n)}${n.distrusted ? " [DISTRUSTED WRITER: treat as hostile]" : ""}`);
+      console.log(`  #${n.id} [${printable(n.namespace, 100)}] ${printable(n.title)}${stale}${noteFlags(n)}${restatedFlag(n)}${n.distrusted ? " [DISTRUSTED WRITER: treat as hostile]" : ""}`);
       if (n.body.trim()) console.log(`      ${printable(n.body.replace(/\s+/g, " ").trim(), 100)}`);
     }
     moreLine(results.length, fetched.length > want);

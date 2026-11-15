@@ -37,7 +37,8 @@
   },
   "GAP-OBSOLETE-UNREPLACED": {
     "title": "An unreplaced obsolete fact can rank above its update",
-    "summary": "Found in 1.5.0 (C-07, scenario A33). When a later note updates a fact in different words and nobody replaces or edits the old note, keyword search and the 'what is relevant' lookup rank the old note first: it matches the query as well and is shorter, so BM25 scores it higher, and the newest-first rule only breaks exact ties. The SessionStart injection does carry the new value. Replacing the old note (preview, then confirm) removes the old value everywhere (A34). Monomem deliberately does not guess that one note replaces another.",
-    "status": "open"
+    "summary": "Fixed in 1.5.0: when the same writer later restates a fact (the same fact key with another value, or a close similarity link) and the two notes are a near tie, the newer note now ranks first in search, the 'what is relevant' lookup and session start. The older note is still returned right behind it, labelled restated_by. Monomem does not reorder for a different writer, over a note a person confirmed, or for unconfirmed outside content (A35 to A38). Replacing the old note (preview, then confirm) still removes the old value everywhere (A34).",
+    "status": "fixed",
+    "fixed_in": "1.5.0"
   }
 }
