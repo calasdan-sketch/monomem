@@ -139,8 +139,22 @@ limits, stated plainly:
 
 - **Titles, tags, timestamps and the writer (`written_by` / `created_by`,
   the token label that wrote a note) stay plaintext.** Search and namespace
-  isolation need them. Keyword search covers title + tags only while
-  encryption is on.
+  isolation need them. The on-disk search index holds titles and tags only
+  while encryption is on.
+- **Body search keeps decrypted words in memory (1.5.0).** To search sealed
+  bodies, each Monomem process that searches (the servers, from start-up;
+  never the hooks) builds an index of every body's words in RAM only. Nothing
+  of it is written to the database, the WAL or a temp file, so a stolen
+  database file still holds no body text. But the operating system can write
+  that memory to the swap or page file, the hibernation file, or a crash /
+  core dump, and an index with word positions is enough to rebuild much of
+  the text. Use whole-disk encryption (it covers all three), keep full crash
+  dumps off on encrypted stores (`ulimit -c 0` on Linux), or set
+  `MONOMEM_BODY_INDEX=off` to search titles and tags only. The new path is
+  for someone who gets the disk (or its swap, hibernation or dump files) but
+  not the key file, for example when the key is kept elsewhere with
+  `MONOMEM_KEY_FILE`: before 1.5.0 they found only the bodies a process
+  happened to have read; now every body's words can be there.
 - **Embeddings bypass encryption.** If you enable semantic search, the
   decrypted body is sent to your `MONOMEM_EMBED_URL` endpoint, and the
   resulting vectors are stored unencrypted (vectors can leak information

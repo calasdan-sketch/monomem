@@ -3572,8 +3572,10 @@ async function encryptCmd(): Promise<void> {
       console.log(`plaintext bodies: ${plain}${enabled && plain > 0 ? "  (seal them: monomem encrypt enable)" : ""}`);
       if (enabled) {
         console.log(
-          "note: keyword search covers title+tags only for encrypted notes " +
-            "(bodies are not indexed as ciphertext)."
+          "note: the on-disk search index holds titles and tags only. Body search uses an index kept in memory by each Monomem " +
+            "process that searches (servers build it at start; the hooks never do, so session-start context is chosen by " +
+            "titles and tags). The system can page that memory to swap or a hibernation file: use whole-disk encryption too. " +
+            "MONOMEM_BODY_INDEX=off turns it off. Details: monomem encrypt status --surfaces"
         );
       }
     } finally {
@@ -3595,7 +3597,10 @@ async function encryptCmd(): Promise<void> {
       const n = store.encryptAll(key);
       console.log(`Enabled at-rest encryption. Encrypted ${n} note ${n === 1 ? "body" : "bodies"}.`);
       console.log(`Key file: ${crypto.keyPath(keyDir)} -- back it up; losing it loses the bodies.`);
-      console.log("Keyword search now covers title+tags only (bodies cannot be indexed as ciphertext).");
+      console.log(
+        "Body search keeps working from an index held in memory only (never on disk); the session-start hook searches titles and tags. " +
+          "That memory can reach swap or a hibernation file: use whole-disk encryption too (monomem encrypt status --surfaces)."
+      );
       const copies = Store.preMigrationBackups(DB_PATH);
       if (copies.length) {
         console.log(
@@ -3642,7 +3647,7 @@ async function encryptCmd(): Promise<void> {
   // Delete the key only after every body decrypted and the transaction committed.
   rmSync(aside, { force: true });
   console.log(`Disabled at-rest encryption. Decrypted ${decrypted} note ${decrypted === 1 ? "body" : "bodies"}.`);
-  console.log("Key file removed. Keyword search again covers full body text.");
+  console.log("Key file removed. Bodies are plain again and in the on-disk search index; no in-memory body index is kept.");
 }
 
 /** `monomem supersede ...` and `monomem history ...` (see supersede-cli.ts). */

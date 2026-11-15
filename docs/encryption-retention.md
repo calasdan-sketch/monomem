@@ -41,7 +41,8 @@ name below is one line of that report:
 | **Code anchors** (`code_anchors`, 1.5.0) | No | The files a note says it is about (`files` on `state_write` / `POST /notes`): the repository folder, each file path and git's ids for the file and commit. Kept plain because every read compares them with git. They are names, not note text, but a file name can say what a note is about (`src/payroll-export.ts`), so leave `files` out of a note whose subject must stay private |
 | **Capture spool** (`capture-spool.jsonl` in the data folder) | Yes, when a key exists (1.5.0) | Each waiting hook event is sealed and bound to its line id. Lines spooled before 1.5.0 or before the key existed stay plain JSON until the next hook takes them in |
 | Captured tool names, event times, the model name | No | Needed to list sessions; not your text |
-| **Search index** (FTS) | No — and **sealed bodies are not indexed at all** | It holds every title and tag, and the body of any note still stored plain. See below |
+| **Search index** (FTS) | No — and **sealed bodies are not indexed on disk** | It holds every title and tag, and the body of any note still stored plain. See below |
+| **Body search index** (in memory, 1.5.0) | Not on disk | While encryption is on, each Monomem process that searches (the servers build it at start; the hooks never do) holds an index of every body's words, decrypted, in RAM only. Monomem never writes it to the database, the WAL or a temp file. The operating system **can** page it to swap or a hibernation file, and a crash dump can contain it. `MONOMEM_BODY_INDEX=off` turns it off. See below |
 | **Change feed log** (`change_log`) | No | The titles of recent changes, kept for the change feed (`monomem changes`) and pruned after its retention period |
 | **Access log** | Yes, when a key exists | The redacted, 120-character preview of what each read asked for ([access-log.md](./access-log.md)) |
 | **Audit log** (`audit.log`) | No note text | Operations, ids, namespaces and byte counts only, by design |
@@ -56,11 +57,28 @@ name below is one line of that report:
 external-content FTS5 index over `notes(title, body, tags)`, maintained by
 SQL triggers. You cannot index encrypted text. So when encryption is on,
 the plaintext `body` column is left **empty**, ciphertext lives in a
-separate `body_enc` column, and **keyword search covers title + tags only**.
-Search still works, but it searches much less: words that are only in a body are not found. On LongMemEval-S, where every title is a session id, keyword recall at 5 fell from 96.8 (plain) to 0.0 (encrypted); see [BENCHMARK.md](./BENCHMARK.md). Give notes titles and tags that say what they are about. This is the honest cost of
-at-rest encryption with a plaintext index — any tool claiming both full-text
-body search *and* encrypted-at-rest bodies without a native SQLite extension
-is quietly storing your body text in plaintext somewhere.
+separate `body_enc` column, and the **on-disk** index holds titles and tags only.
+
+Since 1.5.0, body search still works on an encrypted store, from a second index that exists **only in memory**:
+
+- **Who has it.** Any Monomem process that runs a keyword search while a key is present: the REST, MCP HTTP and stdio MCP
+  servers build it just after they start, and a one-off CLI `search` builds it on its first search. It indexes every
+  note's title, decrypted body and tags, so ranking is the same as on a plain store (LongMemEval-S keyword R@5 96.8
+  encrypted and plain; see [BENCHMARK.md](./BENCHMARK.md)). It is kept current as notes change, including changes made by
+  other Monomem processes.
+- **Who does not.** The hooks (session start, per-prompt recall, capture, file context) never build it, to keep session
+  start fast: on an encrypted store the context they add is chosen by titles, tags, files and recency, not body words.
+  Give notes titles and tags that say what they are about.
+- **Cost.** About 0.6-0.8 s to build per 10,000 notes, and about 30 MB of memory per 10,000 notes, in **each** process
+  that has it (five apps each running their own stdio server hold five copies). Above 100,000 notes it is not built:
+  search there covers titles and tags only, and the CLI search says so.
+- **What it changes for security.** Nothing new is written to disk by Monomem: someone who copies the database file, its
+  WAL or a database-only backup still gets no body text. But while a server runs, **every body's words are in its
+  memory**, with their positions (enough to rebuild much of the text). The operating system can write that memory to disk:
+  the swap file or `pagefile.sys`, the hibernation file (`hiberfil.sys`), and crash or core dumps. Whole-disk encryption
+  (below) covers all three; on Linux also consider `ulimit -c 0`. If you would rather not hold decrypted words in RAM at
+  all, set `MONOMEM_BODY_INDEX=off` (each process reads it when it opens the database): search then covers titles and
+  tags only, as before 1.5.0.
 
 For **full-file** protection (titles included, search index included), use
 OS disk encryption — BitLocker (Windows), FileVault (macOS), LUKS (Linux) —
