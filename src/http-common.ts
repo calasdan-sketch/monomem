@@ -4,7 +4,12 @@
 
 import type { IncomingMessage, Server } from "node:http";
 import { StringDecoder } from "node:string_decoder";
-import { envNum as num, type TokenEntry } from "./config.js";
+import { envNum as num, PACKAGE_VERSION, type TokenEntry } from "./config.js";
+import { SCHEMA_VERSION } from "./store.js";
+
+/** GET /health on both servers (no auth, no DB): liveness plus the build and schema, so `monomem doctor` can tell a server
+ * still running the old version after an upgrade (1.5.0, U-10). */
+export const healthBody = (): { status: "ok"; version: string; schema: number } => ({ status: "ok", version: PACKAGE_VERSION, schema: SCHEMA_VERSION });
 
 // 1MB cap so a bad client can't OOM the process. Shared by both servers.
 export const MAX_BODY_BYTES = 1_000_000;

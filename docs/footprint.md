@@ -20,6 +20,7 @@ folder). `monomem doctor` prints which one, and its size.
 | `.token`, `tokens.json` | first start (the API token) / by you | `uninstall --purge` |
 | `.key`, `.attest-key`, `.sync-key` | `encrypt enable` / first signed export / first `sync --git --encrypt` (`MONOMEM_KEY_FILE`, `MONOMEM_ATTEST_KEY_FILE`, `MONOMEM_SYNC_KEY_FILE` move them) | `uninstall --purge` (a key moved elsewhere: by hand) |
 | `audit.log`, `audit.log.1..5` | every API write; rotated at 5 MB, 5 kept (`MONOMEM_AUDIT_LOG`, `_MAX_BYTES`, `_KEEP`) | `uninstall --purge` |
+| `server.log`, `server.log.1..5` | a server with no terminal (`monomem open`, `monomem service`, `start --log`): what it prints (paths, ports, errors; no note text, no key); rotated like `audit.log` | `uninstall --purge` |
 | `capture-spool.jsonl` (+ `.draining`) | a capture hook could not open the database; capped at 10 MB, drained by the next hook | `uninstall --purge` |
 | `capture.json`, `spaces.json` | by you | `uninstall --purge` |
 | `setup-history.json` | each `setup` that changed a file (what `--undo` / `uninstall` replay) | `uninstall --purge` |
@@ -67,6 +68,7 @@ Monomem part. An entry setup did not add (one you wrote by hand) is listed, not 
 | Dashboard page (`src/dashboard.ts`) | opening the dashboard | the Monomem server that served the page (API calls, and the one-time sign-in code that `monomem open` hands over) |
 | `monomem open` (`src/cli.ts`) | running the command | `http://127.0.0.1:<api port>/health`, to see whether your own server is up |
 | `monomem restore` (`src/cli.ts`) | running the command | `http://127.0.0.1:<api port>/health`, only to print a hint when something answers there (whether the database is in use is judged by its lock) |
+| `monomem doctor` (`src/cli.ts`) | running the command | `http://127.0.0.1:<api port>/health`, to warn when the server running there is older than the CLI (`MONOMEM_NO_SERVER_PROBE=1` skips it) |
 
 Not Monomem's own calls: `npx monomem` downloads the package from npm, and `sync --git` runs `git`, which pushes where your
 repository's remote points.

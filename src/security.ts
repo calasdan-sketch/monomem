@@ -603,10 +603,15 @@ let auditWrites = 0;
  * every 50 writes (and on the first), so it costs almost nothing per request.
  */
 function rotateAuditIfNeeded(path: string): void {
+  rotateLogIfNeeded(path, auditWrites++);
+}
+
+/** The audit.log rotation for any append-only log (server.log too): `writes` is the caller's count, checked every 50th. */
+export function rotateLogIfNeeded(path: string, writes: number): void {
   const max = Number(process.env.MONOMEM_AUDIT_MAX_BYTES || 5_000_000);
   const keep = Math.max(1, Math.floor(Number(process.env.MONOMEM_AUDIT_KEEP || 5)));
   if (!(max > 0)) return;
-  if (auditWrites++ % 50 !== 0) return;
+  if (writes % 50 !== 0) return;
   let size = 0;
   try {
     size = statSync(path).size;

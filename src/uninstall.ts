@@ -72,7 +72,7 @@ export function dirBytes(dir: string, deadline: number = Date.now() + DIR_BYTES_
  * also holds anything else, so a MONOMEM_HOME pointed at a busy folder never loses files that are not Monomem's.
  */
 const OWN_ENTRY =
-  /^(?:state\.db.*|demo\.db.*|\.token.*|\.key.*|\.attest-key.*|\.sync-key.*|\.last-backup|tokens\.json.*|spaces\.json.*|setup-history\.json.*|setup-hooks-declined|capture\.json.*|capture-spool\.jsonl.*|claude-import-held\.json.*|runner-allow\.json.*|runner-seen\.json.*|runner\.lock|login-code.*|audit\.log.*|spool|backups|sync-conflicts|\.sync-work-.*|README\.txt)$/;
+  /^(?:state\.db.*|demo\.db.*|\.token.*|\.key.*|\.attest-key.*|\.sync-key.*|\.last-backup|tokens\.json.*|spaces\.json.*|setup-history\.json.*|setup-hooks-declined|capture\.json.*|capture-spool\.jsonl.*|claude-import-held\.json.*|runner-allow\.json.*|runner-seen\.json.*|runner\.lock|login-code.*|audit\.log.*|server\.log.*|spool|backups|sync-conflicts|\.sync-work-.*|README\.txt)$/;
 
 /** Entries of `dir` that are not Monomem's (empty when it cannot be read). */
 export function foreignEntries(dir: string): string[] {

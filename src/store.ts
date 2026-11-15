@@ -1778,6 +1778,8 @@ export class Store {
    * `opts.busyTimeoutMs` (see the constructor and bestEffortWrite).
    */
   private static readonly BUSY_TIMEOUT_MS = 20_000;
+  /** This connection's lock wait (opts.busyTimeoutMs or BUSY_TIMEOUT_MS): what bestEffortWrite puts back after its zero wait. */
+  private readonly busyTimeoutMs: number;
   /** SQLite page-cache cap: a negative value is KiB, so -65536 = 64 MB. */
   static readonly CACHE_SIZE_KIB = -65536;
   /** See the constructor: refuse instead of migrating. */
@@ -1791,6 +1793,7 @@ export class Store {
   constructor(dbPath: string, opts: { noMigrate?: boolean; busyTimeoutMs?: number } = {}) {
     this.dbPath = dbPath;
     this.noMigrate = opts.noMigrate === true;
+    this.busyTimeoutMs = Math.floor(opts.busyTimeoutMs ?? Store.BUSY_TIMEOUT_MS);
     if (dbPath !== ":memory:") {
       try {
         mkdirSync(dirname(dbPath), { recursive: true, mode: 0o700 });
@@ -1808,7 +1811,7 @@ export class Store {
       // busy_timeout FIRST: switching to WAL and migrating both need a lock
       // another process may be holding at the same moment. The pragmas are INSIDE the try: on a read-only mount the first
       // failure of an existing database is exactly here (the WAL switch), and it must get the readable message too.
-      this.db.exec(`PRAGMA busy_timeout = ${Math.floor(opts.busyTimeoutMs ?? Store.BUSY_TIMEOUT_MS)};`);
+      this.db.exec(`PRAGMA busy_timeout = ${this.busyTimeoutMs};`);
       this.db.exec("PRAGMA journal_mode = WAL;");
       // A checkpoint leaves the -wal file at its high-water size (old page images, deleted text included); cap what it keeps.
       this.db.exec("PRAGMA journal_size_limit = 4194304;");
@@ -3485,7 +3488,7 @@ export class Store {
       try {
         fn();
       } finally {
-        this.db.exec(`PRAGMA busy_timeout = ${Store.BUSY_TIMEOUT_MS};`);
+        this.db.exec(`PRAGMA busy_timeout = ${this.busyTimeoutMs};`);
       }
     } catch {
       /* best-effort: skip silently */

@@ -192,7 +192,7 @@ export function privateDir(dir: string, o: PrivateDirOptions = {}): void {
 }
 
 /** The data-dir files that hold notes or credentials: owner read/write only. */
-export const PRIVATE_FILES = ["state.db", "state.db-wal", "state.db-shm", "audit.log", ".token", "tokens.json", "spaces.json", ".key", ".attest-key"];
+export const PRIVATE_FILES = ["state.db", "state.db-wal", "state.db-shm", "audit.log", "server.log", ".token", "tokens.json", "spaces.json", ".key", ".attest-key"];
 
 /**
  * Run fn holding an exclusive lock file (created with O_EXCL, so only one

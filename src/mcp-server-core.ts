@@ -9,6 +9,7 @@
 // state store, not a mock or a second copy.
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { isBusyError } from "./restore.js";
 import { actorStore, currentCeiling, currentWriter } from "./actor.js";
 import { type Sensitivity, SENSITIVITY_LEVELS } from "./sensitivity.js";
 import { z } from "zod";
@@ -298,6 +299,8 @@ function withIgnored(r: unknown, tool: string, ignored: string[], shape: z.ZodRa
   return { ...res, content: [{ ...res!.content![0], text: banner + JSON.stringify({ ...payload, ...extra }) }, ...res!.content!.slice(1)] };
 }
 
+const BUSY_TOOL_MESSAGE = "The database is busy (another program is writing to it); nothing was saved. Try again in a few seconds.";
+
 function errorResult(message: string) {
   return {
     content: [
@@ -316,6 +319,8 @@ function errorResult(message: string) {
 // generic message so SQLite/internal details never leak to the MCP caller.
 function errorFor(e: unknown) {
   if (e instanceof ValidationError) return errorResult(e.message);
+  // 1.5.0 (U-09): another program held the database lock past the wait. Retryable, not a fault; same words as REST's 503.
+  if (isBusyError(e)) return errorResult(BUSY_TOOL_MESSAGE);
   // eslint-disable-next-line no-console
   console.error("[monomem] mcp tool error:", (e as Error).message);
   return errorResult("internal error");

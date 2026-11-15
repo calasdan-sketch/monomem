@@ -76,6 +76,7 @@ import {
   ValidationError,
   QuarantinedError,
   captureFieldsOf,
+  needsHumanConfirm,
   type NoteRecord,
 } from "./store.js";
 import { parseWriterRef } from "./trust.js";
@@ -255,6 +256,8 @@ export function renderNoteFile(
   if (extra.distrusted) lines.push("distrusted: true");
   // v17: only a labelled note (anything but the default "internal") carries a label, so other files are byte-identical to before.
   if (note.sensitivity) lines.push(`sensitivity: ${JSON.stringify(note.sensitivity)}`);
+  // 1.5.0 (U-11): an operator pin travels, so the other machine's agents cannot edit the note either. Only a pinned note's file has it.
+  if (note.pinned) lines.push("pinned: true");
   // v16: only a captured row carries these, so an ordinary note's file is byte-identical to before.
   if (note.kind && note.kind !== "note") {
     lines.push(`kind: ${JSON.stringify(note.kind)}`, `session_id: ${JSON.stringify(note.session_id ?? "")}`);
@@ -617,6 +620,12 @@ export async function importMarkdown(
     const remember = (id: number, hash: string): void => {
       if (!dry) store.setSyncBase(id, hash);
     };
+    // 1.5.0 (U-11): `pinned: true` in the file pins the note here. A pin only adds protection: a file never unpins, and never
+    // pins a note that still needs a human confirm (pinning is a confirm; a file is not a person), so taint and confirms stay.
+    const carryPin = (n: NoteRecord | null): void => {
+      if (dry || fm.pinned !== true || !n || n.pinned || needsHumanConfirm(n)) return;
+      store.setPinned(n.id, true);
+    };
 
     // Run a store write, mapping linter / validation outcomes to entries.
     const attempt = async (
@@ -658,6 +667,7 @@ export async function importMarkdown(
         const replaced = dropStale();
         await maybeEmbed(store, n);
         remember(n.id, contentHash(n));
+        carryPin(n);
         push(ok, { id: n.id, ...(detail || replaced ? { detail: (detail ?? ok) + replaced } : {}) });
       } catch (e) {
         if (e instanceof QuarantinedError) {
@@ -730,6 +740,7 @@ export async function importMarkdown(
     }
 
     const localHash = contentHash(local);
+    carryPin(local); // metadata, not content: applies whichever side's text wins below
     if (localHash === fileHash) {
       remember(local.id, localHash);
       push("unchanged", { id: local.id });

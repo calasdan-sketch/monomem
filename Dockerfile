@@ -24,6 +24,8 @@ ENV MONOMEM_DB_PATH=/data/state.db
 # The node:alpine image ships an unprivileged `node` user; give it the data dir
 # and run as it rather than root (defence in depth).
 RUN mkdir -p /data && chown -R node:node /data
+# `monomem` on PATH, so the guides' `docker compose exec monomem monomem token add ...` works as written.
+RUN printf '#!/bin/sh\nexec node /app/dist/src/cli.js "$@"\n' > /usr/local/bin/monomem && chmod 755 /usr/local/bin/monomem
 VOLUME ["/data"]
 USER node
 

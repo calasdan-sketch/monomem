@@ -49,6 +49,11 @@ Ship weekly on Thursdays.
 shown for information only: a file is stamped with whoever imports it, and the value arrives as the
 unverified `imported_written_by`; it never counts for distrust rules or `written_by` filters. Files are not signed.
 
+A note you pinned (`monomem pin`) is exported with `pinned: true`, and import pins it on the other store, so agents
+there cannot change it either. A pin only adds protection: a file without the line never unpins a note, and a file
+never pins a note from outside content that nobody has confirmed (pinning counts as your confirm; a file is not you).
+Pin it by hand there after you check it.
+
 Values are JSON-encoded, which is valid YAML. The body is stored verbatim
 (one trailing newline is added on export and removed on import; files are
 LF-only and CR/CRLF in a body counts as the same content, so a round trip

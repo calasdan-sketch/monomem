@@ -19,7 +19,7 @@ const COMMANDS = [
   "consolidate", "rebuild-edges", "relevant", "search", "token", "changes", "backup", "runner-status", "watch", "export", "import", "trust",
   "quarantine", "approve-first", "access", "flood", "resume", "decay", "archive", "restore", "delete", "quality", "conflicts", "facts", "fact",
   "encrypt", "meter", "receipts", "why", "never-show", "supersede", "history", "pin", "unpin", "rollback", "bench", "drill", "health", "audit",
-  "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet", "confirm", "review", "taint", "config",
+  "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet", "confirm", "review", "taint", "config", "service",
   "help", "--help", "-h", "--version", "-v", "version",
 ];
 
@@ -91,6 +91,7 @@ function shortUsage(): void {
       "",
       "Maintenance",
       "  backup [--out <dir>]    Copy the database safely, even while the server runs",
+      "  service install|status|uninstall [--print]   Keep the server running in the background after you sign in",
       "  export | import         Move notes in and out (JSON or Markdown)",
       "  quality                 Duplicates, stale notes and flagged notes worth a look",
       "  delete <id>             Delete a note permanently, with its earlier versions",
@@ -123,6 +124,10 @@ function usage(all = false): void {
       "            it cannot see private notes; --name sets that key's label; --print only prints the settings to paste in.",
       "  open [--print]",
       "            Open my notes in the browser with a one-time sign-in code (starts Monomem if needed).",
+      "  service install|status|uninstall [--print]",
+      "            Run the server in the background from sign-in: a Task Scheduler task (Windows), a LaunchAgent (macOS) or a",
+      "            systemd --user unit (Linux), each running this node with this cli.js; output in <data>/server.log.",
+      "            --print shows the file and the commands and changes nothing. setup never installs one.",
       "  uninstall [--dry-run] [--yes] [--purge] [--no-backup]",
       "            Take Monomem out of every app setup connected (same as setup --undo, for every setup run).",
       "            --purge also deletes the data folder, after a final backup it names (unless --no-backup).",
@@ -364,6 +369,14 @@ const DOCTOR_MAX_BACKLOG = 10_000;
 async function doctorSecurityChecks(dataDir: string, bindHost: string, warn: (m: string) => void): Promise<void> {
   const { securityFindings } = await import("./health.js");
   for (const f of await securityFindings(dataDir, bindHost)) if (f.status !== "info") warn(f.detail);
+}
+
+/** True when version `a` (x.y.z, a pre-release tag ignored) is below `b`. */
+function versionBelow(a: string, b: string): boolean {
+  const n = (v: string): number[] => v.split("-")[0].split(".").map((x) => Number(x) || 0);
+  const [x, y] = [n(a), n(b)];
+  for (let i = 0; i < 3; i++) if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) < (y[i] ?? 0);
+  return false;
 }
 
 async function doctor(): Promise<void> {
@@ -866,6 +879,29 @@ async function doctor(): Promise<void> {
     warn("capture status unavailable: " + (e as Error).message);
   }
 
+  // 1.5.0 (U-10): a server still running the build from before an upgrade keeps writing in the old shape. Ask it which it is.
+  // MONOMEM_NO_SERVER_PROBE=1 skips it (the test suite sets it, so a test never talks to a real server on this machine).
+  if (process.env.MONOMEM_NO_SERVER_PROBE !== "1") try {
+    const { PACKAGE_VERSION } = await import("./config.js");
+    const { SCHEMA_VERSION: BUILD } = await import("./store.js");
+    const res = await fetch(`http://127.0.0.1:${API_PORT}/health`, { signal: AbortSignal.timeout(1000) });
+    const h = (await res.json()) as { status?: unknown; version?: unknown; schema?: unknown };
+    if (h?.status === "ok") {
+      const v = typeof h.version === "string" ? h.version : null;
+      const older = v === null || versionBelow(v, PACKAGE_VERSION) || (typeof h.schema === "number" && h.schema < BUILD);
+      if (older) {
+        warn(
+          `the Monomem server on port ${API_PORT} (${v ? `${v}, schema v${h.schema}` : "1.4 or older"}) is older than this CLI (${PACKAGE_VERSION}, schema v${BUILD}): restart it.`,
+          "Stop the server (or the app that started it) and start it again, so it runs this version."
+        );
+      } else {
+        ok(`server on port ${API_PORT} runs ${v}${versionBelow(PACKAGE_VERSION, v!) ? ` (newer than this CLI ${PACKAGE_VERSION}: update the CLI)` : ""}`);
+      }
+    }
+  } catch {
+    /* no server running here, or not a Monomem one: nothing to compare */
+  }
+
   console.log(`\n  bind ${BIND_HOST}   api :${API_PORT}   mcp :${MCP_HTTP_PORT}`);
   console.log(
     "\n" +
@@ -993,7 +1029,7 @@ async function openCmd(): Promise<void> {
   if (!(await up()) && flags.print !== true) {
     console.log("Starting Monomem in the background...");
     const { spawn } = await import("node:child_process");
-    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), "start"], { detached: true, stdio: "ignore", windowsHide: true });
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), "start", "--log"], { detached: true, stdio: "ignore", windowsHide: true }); // no terminal: output goes to server.log
     child.unref();
     for (let i = 0; i < 40 && !(await up()); i++) await new Promise((r) => setTimeout(r, 250));
     if (!(await up())) {
@@ -3773,6 +3809,22 @@ async function main(): Promise<void> {
     case "connect":
       await connectCmd();
       break;
+    case "service": {
+      const { flags, rest } = parseFlags(process.argv.slice(3), { values: [], bools: ["print"] });
+      const { DATA_DIR } = await import("./config.js");
+      const { homedir } = await import("node:os");
+      const { serviceCmd } = await import("./service.js");
+      process.exitCode = serviceCmd(rest[0], flags.print === true, {
+        platform: process.platform,
+        node: process.execPath,
+        cli: fileURLToPath(import.meta.url),
+        home: homedir(),
+        dataDir: DATA_DIR,
+        uid: process.getuid?.(),
+        env: process.env,
+      });
+      break;
+    }
     case "open":
       await openCmd();
       break;

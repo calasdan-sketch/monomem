@@ -12,7 +12,7 @@ All environment variables are optional. This table lists **every** `MONOMEM_*` v
 | `MONOMEM_WAIT_MAX_TOTAL` | `64` | Live wait: max parked requests per process |
 | `MONOMEM_AUDIT_LOG` | `<data dir>/audit.log` | Audit log path (create/update/delete, task / handoff / catch_up / approve entries with the token label and kind; never note text or tokens) |
 | `MONOMEM_AUDIT_MAX_BYTES` | `5000000` | Rotate audit.log when it reaches this size (`0` = never) |
-| `MONOMEM_AUDIT_KEEP` | `5` | Rotated audit files kept (`audit.log.1` ... `.N`) |
+| `MONOMEM_AUDIT_KEEP` | `5` | Rotated audit files kept (`audit.log.1` ... `.N`). These two also rotate `server.log` (what a server started with `start --log`, `monomem open` or `monomem service` prints) |
 | `MONOMEM_ACCESS_LOG_DAYS` | `30` | Days the read access log is kept (who read memory, with which tool, a redacted 120-character query preview and a result count; never note text). `0` = nothing is logged and the next hourly sweep empties it. See [access-log.md](./access-log.md) |
 | `MONOMEM_FLOOD_WRITES_PER_HOUR` | `500` | Flood guard: a writer label that makes this many counted creates/updates in a rolling hour is paused (its writes are refused) until `monomem resume <label>`. `0` = off. See [access-log.md](./access-log.md) |
 | `MONOMEM_RUNNER_TASK_NAMESPACE` | unset | Runner and server: namespace whose admin-approved command tasks the runner executes. Unset = command tasks off. See [RUNNER.md](https://github.com/calasdan-sketch/monomem/blob/main/docs/RUNNER.md) |
@@ -66,6 +66,7 @@ All environment variables are optional. This table lists **every** `MONOMEM_*` v
 | `MONOMEM_EMBED_TIMEOUT_MS` | `30000` (`5000` with `MONOMEM_EMBEDDINGS=auto`) | Timeout per embedding call; raise if a local model's first (cold) call is slow |
 | `MONOMEM_SCAN_CACHE_SECONDS` | `60` | How long the dashboard reuses its quality and health scans (they read every note). `0` = never reuse. |
 | `MONOMEM_ALLOWED_HOSTS` | unset | Comma-separated host names this server may be reached under (ports ignored; `*` allows any). Without it, `localhost` and any IP address are accepted and a request under any other name is refused (403) as a guard against DNS rebinding. Forwarding headers (`X-Forwarded-For`, `X-Real-IP`) are not trusted, because a caller can send them itself. **Behind a tunnel or reverse proxy, set this to the public name** (the 403 message tells you the exact value). Set it to turn the check strict: then only `localhost` and the listed names pass. Example for a custom name on your network: `MONOMEM_ALLOWED_HOSTS=mynas.local` |
+| `MONOMEM_NO_SERVER_PROBE` | unset | `1` stops `monomem doctor` from asking the server on `127.0.0.1:<MONOMEM_PORT>/health` which version it runs (the test suite sets it) |
 | `MONOMEM_MAX_CONNECTIONS` | `512` | Most connections each server (API, MCP) holds open at once |
 | `MONOMEM_HEADERS_TIMEOUT_MS` | `20000` | How long a client has to send its request headers |
 | `MONOMEM_REQUEST_TIMEOUT_MS` | `300000` | How long a client has to send a whole request (a large `/import` over a slow link needs this) |
