@@ -59,6 +59,20 @@ describe("dashboard: Held view", () => {
     assert.equal(p.el("tab_held").ariaCurrent, "page");
     assert.equal(p.el("tab_list").ariaCurrent, null);
   });
+  // U-14: a person reads plain words, not the store's obs.origin:* tags; still escaped, still flagged (taint stays visible).
+  test("origin tags read as plain words on the held card", async () => {
+    const tagged = { ...held, tags: ["obs.origin:declared", "obs.origin:via:memory", "obs.origin:tool:" + XSS, "plain"] };
+    const p = page((path) => (path.startsWith("/quarantine") ? { quarantine: [tagged] } : {}));
+    p.ctx.loadHeld();
+    await settle();
+    const html = p.el("list").innerHTML as string;
+    assert.ok(!html.includes(">obs.origin"), "no raw origin tag as visible text");
+    assert.match(html, /<span class='tag why'[^>]*>from outside content \(the agent said so\)<\/span>/);
+    assert.match(html, /<span class='tag why'[^>]*>written after reading unconfirmed memory<\/span>/);
+    assert.match(html, /<span class='tag why'[^>]*>its session read outside content through &lt;img/);
+    assert.match(html, /<span class='tag'>plain<\/span>/);
+    assert.ok(!html.includes("<img"));
+  });
   test("empty state tells you what the view is for", async () => {
     const p = page(() => ({ quarantine: [] }));
     p.ctx.loadHeld();

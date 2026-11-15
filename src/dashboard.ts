@@ -279,7 +279,16 @@ function hue(s){ s = String(s); if(hueOf[s] !== undefined) return hueOf[s];
 function shownWriter(w){ return w === "primary" ? "admin (setup)" : w === "cli" ? "terminal" : w; } // display only: the stored label stays "primary" / "cli"
 function chip(label){ return "<span class='chip' style='--h:"+hue(label)+"'>"+esc(shownWriter(label))+(label === "cli" ? "<small class='tech'>cli</small>" : "")+"</span>"; }
 // A fact tag reads "deploy_target = render", not the raw fact:deploy_target=render.
+// U-14: an origin tag (obs.origin:*, taint.ts) reads in plain words and keeps the warning border; the raw tag is the tooltip.
+function originWords(t){
+  if(t === "obs.origin:declared"){ return "from outside content (the agent said so)"; }
+  if(t === "obs.origin:via:memory"){ return "written after reading unconfirmed memory"; }
+  if(t.indexOf("obs.origin:tool:") === 0){ return "its session read outside content through " + t.slice(16); }
+  return t.indexOf("obs.origin:") === 0 ? "from outside content" : "";
+}
 function tagChip(t){
+  var o = originWords(String(t).trim());
+  if(o){ return "<span class='tag why' title='"+esc(String(t).trim())+"'>"+esc(o)+"</span>"; }
   var m = /^fact:([^=]+)=(.*)$/.exec(String(t).trim());
   return m ? "<span class='tag fact'>"+esc(m[1].trim())+" = "+esc(m[2].trim())+"</span>" : "<span class='tag'>"+esc(t)+"</span>";
 }
