@@ -55,7 +55,9 @@ export function servicePlan(e: ServiceEnv): ServicePlan {
     // A task action cannot hold settings, so cmd.exe sets them and then runs node.exe (release-gate S1: without this the
     // task used the default data folder). `set "K=V"` keeps & and spaces literal; % expands even in quotes, so such a
     // value is left out and the note says to save it with setx. /v:off: ! stays literal too.
-    const sets: string[] = [];
+    // The first set is always there so the line after /c never starts with a quote: cmd /c strips the first and last
+    // quote of such a line, which breaks a quoted node.exe followed by a quoted cli.js path (all settings skipped).
+    const sets: string[] = ['set "MONOMEM_SERVICE=1"&& '];
     const skipped: string[] = [];
     for (const [k, v] of carried(e)) {
       if (/[%"]/.test(v)) skipped.push(k);
