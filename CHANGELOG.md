@@ -185,6 +185,9 @@ upgrading from 1.3.x takes one step (docs/upgrading.md).
   gives the same steps as docs/upgrading.md (close apps, `monomem restore <file> --yes`, install the older version);
   `why` and `receipts` say why times are local, what the offset means and which end comes first; `doctor` prints
   "encryption on: N bodies sealed with the key at ..." when that is true.
+- First-run walk as a new user: `doctor` now says when held writes wait for a decision instead of a bare "All good", and
+  `service status` with no service installed says so in plain words (it used to print the task manager's "cannot find the
+  file" as a failure).
 - `monomem drill` no longer prints a "NEW attestation key" warning for every server it starts on its throwaway copy.
 - git sync: a computer that resurrects a note another computer deleted (after losing its seen record) makes that other
   computer stop with the "older than one this computer already synced" message. Reproduced and pinned by a test; this is

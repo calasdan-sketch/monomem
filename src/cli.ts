@@ -580,11 +580,14 @@ async function doctor(): Promise<void> {
     const { meterStats, meterLine } = await import("./meter.js");
     const footprint = meterLine(meterStats(s));
     const ruleLines = s.confirmRuleLines();
+    // A held write is waiting on a person: "all good" must not hide it (it is not a fault, so an info line).
+    const heldCount = s.listQuarantine({ limit: 500 }).length;
     s.close();
     ok(`database OK at ${DB_PATH} (${total} notes)`);
     ok(footprint);
     // 1.4.0: one line per confirm rule, so "why isn't my note in session start?" has an answer here.
     for (const l of ruleLines) console.log("  [info] " + l);
+    if (heldCount) console.log(`  [info] ${heldCount >= 500 ? "500 or more writes are" : heldCount === 1 ? "1 write is" : `${heldCount} writes are`} held and waiting for your decision (not saved yet): monomem quarantine`);
     // Migration v4 adds the similarity-edge table but does not score
     // existing notes: a store upgraded from 1.0.0 has notes and no edges
     // until a one-time rebuild.
