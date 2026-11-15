@@ -146,5 +146,8 @@ monomem import --from claude-code-chats --path <folder>      # another projects 
 - **Same rules as the other imports:** read only, nothing leaves your computer, a message that looks like a secret is
   skipped (not stored, not shown), the memory linter may hold a message that reads like an instruction to an AI for your
   review, and running it again adds only new messages.
+- **With encryption on:** the message bodies are sealed like any note body, but a note's **title stays readable on disk** (as
+  for every note, see SECURITY.md), and a chat note's title is the speaker plus the first line of the message (up to 120
+  characters). If your first lines can hold private details, keep that in mind before importing.
 - **Size:** a busy machine can have tens of thousands of messages. Run `--dry-run` first to see the count. Session files
   over 256 MB are skipped.
