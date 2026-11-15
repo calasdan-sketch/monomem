@@ -108,6 +108,7 @@ import * as quarantineOps from "./store/quarantine.js";
 import * as confirmOps from "./store/confirm.js";
 import * as taintOps from "./store/taint.js";
 import * as receiptOps from "./store/write-receipt.js";
+import * as surfaceOps from "./store/surfaces.js";
 import { tagsToStorage, parseTags, dueBase, needsHumanConfirm, sealQuarantineCol, openQuarantineCol, isoOrNull, clampInt, envCount, floodWritesPerHour, isOperatorWrite, isPlainObject } from "./store/rows.js";
 export { dueBase, needsHumanConfirm, clampInt, floodWritesPerHour };
 export { ValidationError, NoteUnreadableError, StaleWriteError, RebuildBusyError, CandidateScanError, QuarantinedError, WriterPausedError };
@@ -5101,6 +5102,11 @@ export class Store {
   plaintextBodyCount(): number {
     const r = this.db.prepare("SELECT COUNT(*) AS c FROM notes WHERE body_enc IS NULL AND body <> ''").get() as { c: number };
     return Number(r.c);
+  }
+
+  /** C-04: every place note content can exist and whether it is encrypted here now (counts only; store/surfaces.ts). */
+  encryptionSurfaces(o: { dataDir: string; dbPath: string }): surfaceOps.EncryptionSurface[] {
+    return surfaceOps.encryptionSurfaces(this, o);
   }
 
   encryptedCount(): number {

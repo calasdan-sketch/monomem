@@ -20,21 +20,34 @@ monomem encrypt disable    # decrypt bodies and remove the key
 
 ### What is protected, and what is not
 
-This is the part most tools omit, so read it before enabling:
+This is the part most tools omit, so read it before enabling. `monomem encrypt status --surfaces` (1.5.0) prints this
+list for **your** store, with counts of what is sealed and what is plain right now (`--json` for a script). Every bold
+name below is one line of that report:
 
 | | Protected? | Why |
 |---|---|---|
-| Note **body** | **Yes** — AES-256-GCM at rest | The sensitive part (pasted secrets, private context) |
-| Note **title** | No | Keyword search and namespace isolation both need it in plaintext |
+| **Note bodies** | **Yes** — AES-256-GCM at rest | The sensitive part (pasted secrets, private context). Bodies written before the key existed stay plain until `encrypt enable` seals them; the report counts them |
+| **Note titles** | No | Keyword search and namespace isolation both need it in plaintext |
 | **`written_by` / `created_by`** (who wrote it) | No | Server-stamped token label or `stdio`/`cli`/`server`; filtering needs it in plaintext, and it is never note content |
-| **Tags**, timestamps, namespace | No | Same: filtering, search and isolation read them directly |
+| **Tags**, timestamps, namespace | No | Same: filtering, search and isolation read them directly. Facts are tags too |
+| **Sources** | No | The `source` a writer claims for a note, and the source named when confirming one |
 | Access counters | No | Ranking input; not sensitive |
+| **Old versions** (`note_history`) | Body: yes, when a key exists | Earlier versions of an edited note. The body is sealed like a note body; the old title and tags stay plain |
+| **Held writes** (`quarantine`) | Yes, when a key exists | Title, body and tags of a write waiting for approval are all sealed, bound to their queue row |
 | **Embeddings** (`note_vectors`) | No | Vectors are stored unencrypted, and with `MONOMEM_EMBEDDINGS=on` the **decrypted body is sent to your embeddings endpoint** when a note is embedded. Leave semantic search off if that matters |
-| **Captured session titles and tags** (automatic capture) | Kept out of them (1.5.0) | With a key present, a captured note gets a fixed title ("Decision (sealed)", "Session 2026-11-14"), the sentence it was built from goes into the sealed body, and no `obs.concept:<word>` tags are made. Notes captured **before** the key existed, or by a version before 1.5.0, keep their old titles and tags: `encrypt enable` seals bodies, it does not rewrite titles |
-| **Captured file paths and working folders** (`note_files.path`, `sessions.cwd`) | No | The files a session edited or read, and the folder it ran in, are kept as plain paths so "what does memory know about this file" works. A secret in a file or folder name stays readable |
+| **Captured prompts and tool output** (`capture_events`) | Yes, when a key exists | The raw events the capture hooks record (kept 7 days). Events recorded before the key existed are sealed by `encrypt enable` |
+| **Captured titles and tags** (automatic capture) | Kept out of them (1.5.0) | With a key present, a captured note gets a fixed title ("Decision (sealed)", "Session 2026-11-14"), the sentence it was built from goes into the sealed body, and no `obs.concept:<word>` tags are made. Notes captured **before** the key existed, or by a version before 1.5.0, keep their old titles and tags: `encrypt enable` seals bodies, it does not rewrite titles |
+| **Captured file paths and folders** (`note_files.path`, `sessions.cwd`) | No | The files a session edited or read, and the folder it ran in, are kept as plain paths so "what does memory know about this file" works. A secret in a file or folder name stays readable |
 | **Capture spool** (`capture-spool.jsonl` in the data folder) | Yes, when a key exists (1.5.0) | Each waiting hook event is sealed and bound to its line id. Lines spooled before 1.5.0 or before the key existed stay plain JSON until the next hook takes them in |
 | Captured tool names, event times, the model name | No | Needed to list sessions; not your text |
-| **The FTS search index** | No — and **body text is not indexed at all** when encryption is on | See below |
+| **Search index** (FTS) | No — and **sealed bodies are not indexed at all** | It holds every title and tag, and the body of any note still stored plain. See below |
+| **Change feed log** (`change_log`) | No | The titles of recent changes, kept for the change feed (`monomem changes`) and pruned after its retention period |
+| **Access log** | Yes, when a key exists | The redacted, 120-character preview of what each read asked for ([access-log.md](./access-log.md)) |
+| **Audit log** (`audit.log`) | No note text | Operations, ids, namespaces and byte counts only, by design |
+| **Server log** (`server.log`, `start --log`) | No note text | Paths, ports and error messages; Monomem writes no note text there, but the file itself is plain |
+| **Backups** | Not checked by the report | A backup is a copy of the database as it was: whatever was sealed then is sealed in it, and the key is only included with `--include-key`. Pre-upgrade copies made before encryption hold plain bodies; the report counts them |
+| **Exports** | No | `monomem export` (JSON or a Markdown folder) and `GET /export` write **decrypted** bodies (see Export below) |
+| **Sync files** | Not checked by the report | `monomem sync --git --encrypt` seals every file ([file-sync.md](./file-sync.md)); without `--encrypt` the repository holds plain Markdown |
 
 **The search tradeoff, stated plainly.** `notes_fts` is a SQLite
 external-content FTS5 index over `notes(title, body, tags)`, maintained by

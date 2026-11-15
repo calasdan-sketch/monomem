@@ -69,6 +69,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Claude Code `PreCompact` hook.** `monomem hook pre-compact` saves the session so far as its summary note before the
   context is compacted (same redaction, stamps and spool as the other capture hooks). `setup --capture` adds it for
   Claude Code only; `setup --undo` removes it. Run `setup --capture` again to add it to an existing install.
+- **`monomem encrypt status --surfaces`** lists every place note text can exist (bodies, titles, tags, sources, old
+  versions, held writes, captured events and titles, the capture spool, file paths, the search index, the change feed,
+  embeddings, the access and audit logs, the server log, backups, exports, sync files) and whether each is encrypted on
+  this store right now, with counts. Backups and sync folders are outside the database, so the report says "not checked"
+  for them. docs/encryption-retention.md now lists the same places.
 - `monomem show`, `ls` and `why` print the trust state: unconfirmed, expired and built-on-distrusted labels, a plain origin
   line, confirmations (counted or not, and why) and who approved a held write. `ls --archived` includes notes kept as history.
 - `monomem review --step`: one typed yes, then y / n / q per note.

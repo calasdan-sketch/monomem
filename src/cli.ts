@@ -344,12 +344,13 @@ function usage(all = false): void {
       "  import --rules [--project dir[,dir]] [--dry-run] [--namespace ns]   Bring in .cursorrules, .cursor/rules, AGENTS.md, GEMINI.md, .windsurfrules.",
       "  delete <id> [--yes]",
       "            Delete a note permanently, with all its earlier versions. Asks first; cannot be undone.",
-      "  encrypt <enable|status|disable>",
+      "  encrypt <enable|status [--surfaces] [--json]|disable>",
       "            enable   Create the AES-256-GCM key and encrypt every note",
       "                     body at rest. Keyword search then covers title+tags",
       "                     only (bodies cannot be indexed as ciphertext).",
       "            status   Report whether at-rest encryption is on, the key",
-      "                     path, and how many bodies are encrypted.",
+      "                     path, and how many bodies are encrypted. --surfaces lists",
+      "                     every place note text can exist and whether it is encrypted now.",
       "            disable  Decrypt every body and remove the key file.",
       "            When: running Monomem as a shared / multi-agent store.",
       "            See: docs/encryption-retention.md for the real tradeoffs.",
@@ -3347,7 +3348,7 @@ async function encryptCmd(): Promise<void> {
   const [action] = process.argv.slice(3);
 
   if (action !== "enable" && action !== "status" && action !== "disable") {
-    console.error("Usage: monomem encrypt <enable|status|disable>");
+    console.error("Usage: monomem encrypt <enable|status [--surfaces] [--json]|disable>");
     process.exit(1);
   }
 
@@ -3356,6 +3357,18 @@ async function encryptCmd(): Promise<void> {
     const enabled = crypto.encryptionEnabled(keyDir);
     const keyFile = crypto.keyPath(keyDir);
     try {
+      if (process.argv.includes("--surfaces")) {
+        // C-04: every place note content can exist, from counts on this store (docs/encryption-retention.md says the same).
+        const { DATA_DIR } = await import("./config.js");
+        const rows = store.encryptionSurfaces({ dataDir: DATA_DIR, dbPath: DB_PATH });
+        if (process.argv.includes("--json")) return void console.log(JSON.stringify({ key: enabled, key_file: keyFile, surfaces: rows }, null, 2));
+        console.log(`encryption key: ${enabled ? keyFile : "none (monomem encrypt enable)"}`);
+        const w = Math.max(...rows.map((r) => r.surface.length));
+        const count = (r: (typeof rows)[number]): string => (r.encrypted !== "nothing stored" && (r.sealed !== undefined || r.plain !== undefined) ? ` (${r.sealed !== undefined ? `${r.sealed} sealed, ` : ""}${r.plain ?? 0} plain)` : "");
+        for (const r of rows) console.log(`  ${r.surface.padEnd(w)}  ${(r.encrypted + count(r)).padEnd(34)}  ${r.detail}`);
+        console.log("Encryption here is confidentiality only: it does not stop an older sealed copy being put back. Whole-disk encryption covers titles, the index and logs too.");
+        return;
+      }
       console.log(`encryption: ${enabled ? "on" : "off"}`);
       console.log(`key file:   ${keyFile}${enabled ? "" : " (not present)"}`);
       console.log(`encrypted bodies: ${store.encryptedCount()}`);
