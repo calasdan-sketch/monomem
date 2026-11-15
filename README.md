@@ -440,7 +440,7 @@ monomem label <id> [public|internal|private]    # show or set a note's sensitivi
 monomem connect <app> [--restricted]     monomem open     # one app with its own key and limit; open the dashboard signed in
 monomem pii scan     monomem digest [--since 24h]     monomem scrub     monomem safety-report --out report.html     # checkups (docs/checkups.md)
 monomem consolidate | rebuild-edges | reindex | relevant "…" | recall
-monomem bench [--json] [--suite stale|contradiction|isolation|provenance] [--strict-gaps]   # provenance benchmark (docs/BENCHMARK.md)
+monomem bench [--json] [--suite stale|contradiction|isolation|provenance|poison] [--strict-gaps]   # provenance benchmark (docs/BENCHMARK.md)
 ```
 
 `monomem help` explains each. Upgrading an existing OneMemory 1.3.x install (the earlier name of this project, not monomem 1.2.0): [docs/upgrading.md](./docs/upgrading.md). The CLI runs with full local trust (no
@@ -644,7 +644,7 @@ remove it: [docs/footprint.md](./docs/footprint.md).
 | [docs/checkups.md](./docs/checkups.md) | `pii scan`, `digest`, `scrub`, `safety-report`, `audit` |
 | [docs/token-namespaces.md](./docs/token-namespaces.md) | per-token namespace permissions — one shared bridge, isolated agents |
 | [docs/replacing-memories.md](./docs/replacing-memories.md) | replacing a note in two steps, undo, version history and restore, confidence, the trust guard |
-| [docs/BENCHMARK.md](./docs/BENCHMARK.md) | `monomem bench`: stale memory, contradiction recovery, permission isolation, provenance retention; scenario format; adapting it to another memory system |
+| [docs/BENCHMARK.md](./docs/BENCHMARK.md) | `monomem bench`: stale memory, contradiction recovery, permission isolation, provenance retention, memory poisoning; scenario format; adapting it to another memory system |
 | [docs/footprint.md](./docs/footprint.md) | every file Monomem writes, where and when, how to remove it; `uninstall`; retry limits; every outbound call (none by default) and the token cost of memory |
 | [docs/architecture.md](./docs/architecture.md) | modules, tools, REST API, schema |
 | [SKILL.md](./SKILL.md) | when and how an agent should use the memory |
