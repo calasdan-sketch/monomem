@@ -572,7 +572,8 @@ async function doctor(): Promise<void> {
         fail(`${sealed} note${sealed === 1 ? " is" : "s are"} encrypted, but the key is missing at ${kp}`, "Put the key file back (from the computer or backup it came from). Without it those notes cannot be read.");
       } else if (existsSync(kp)) {
         const plain = s.plaintextBodyCount();
-        if (plain > 0) warn(`${plain} note bod${plain === 1 ? "y is" : "ies are"} not encrypted although encryption is on`, "Seal them: monomem encrypt enable");
+        if (plain > 0) warn(`${plain} note bod${plain === 1 ? "y is" : "ies are"} not encrypted although a key file exists (new notes are sealed; these older ones are still plain text)`, "Seal them: monomem encrypt enable");
+        else ok(`encryption on: ${sealed} note bod${sealed === 1 ? "y is" : "ies are"} sealed with the key at ${kp} (titles and tags stay readable; back the key up, losing it loses the bodies)`);
       }
     }
     distrustCount = s.distrustRules().length;

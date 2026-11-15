@@ -4,7 +4,7 @@
 import { isWriterMarker } from "./actor.js";
 import { accessLogDays, type NoteRecord, type Store } from "./store.js";
 import { printable, printableWords } from "./security.js";
-import { localTime, whyText } from "./receipts.js";
+import { localTime, timeLegend, whyText } from "./receipts.js";
 
 export interface WhyEvent {
   at: string;
@@ -191,6 +191,7 @@ export async function whyCmd(args: string[]): Promise<void> {
     console.log(`shown at ${plural(w.shown_to.total, "session start")} (receipts kept ${w.shown_to.retention_days} days)`);
     console.log(`read ${plural(w.reads.total, "time")}${w.reads.last ? `, last ${localTime(w.reads.last)}` : ""}; who read it is not recorded`);
     if (w.body !== undefined) console.log(`body:\n${w.body.split("\n").map((l) => printable(l, 500)).join("\n")}`);
+    console.log(timeLegend("Oldest first"));
     console.log(WRITER_LEGEND);
     console.log(w.not_recorded);
   } finally {

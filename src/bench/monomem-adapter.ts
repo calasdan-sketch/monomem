@@ -7,6 +7,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:f
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
+import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -129,6 +130,13 @@ export class MonomemAdapter implements MemoryAdapter {
       mkdirSync(folder, { recursive: true });
       if (this.seedDb && name === "main") {
         copyFileSync(this.seedDb, join(folder, "state.db"));
+        // The copy gets its own throwaway signing key: forget the original's key id so no "a NEW key was created" warning fires.
+        const meta = new DatabaseSync(join(folder, "state.db"));
+        try {
+          meta.exec("DELETE FROM _meta WHERE key = 'attest_key_id'");
+        } finally {
+          meta.close();
+        }
         const seedKey = join(dirname(this.seedDb), ".key"); // an encrypted store's key travels with its copy
         if (existsSync(seedKey)) copyFileSync(seedKey, join(folder, ".key"));
       }

@@ -1725,9 +1725,11 @@ export class Store {
         /* nothing to close */
       }
       throw new Error(
-        `monomem: this database is at schema version ${found}, newer than this build supports ` +
+        `this database is at schema version ${found}, newer than this build supports ` +
           `(${SCHEMA_VERSION}). Upgrade monomem (npm i -g monomem@latest) instead of opening it with an older version. ` +
-          `To go back to the older version on purpose, restore the copy the upgrade left beside the database (${this.dbPath}.pre-v${found}-backup) with a build that supports it: monomem restore <that file> (docs/upgrading.md).`
+          `To go back to the older version on purpose: close every app that uses Monomem and stop the server, run ` +
+          `monomem restore ${this.dbPath}.pre-v${found}-backup --yes, then install the older version (docs/upgrading.md, "To go back"). ` +
+          `Anything written after the upgrade is not in that copy; restore keeps your current database aside first.`
       );
     }
     if (found >= SCHEMA_VERSION) {
@@ -3724,7 +3726,7 @@ export class Store {
           if (r !== "live") {
             const aside = this.asideKeys().map((a) => a.path).join(", ");
             throw new Error(
-              `monomem: this database holds encrypted notes but the key file ${keyPath(this.keyDir)} is missing; ` +
+              `this database holds encrypted notes but the key file ${keyPath(this.keyDir)} is missing; ` +
                 `refusing to write plaintext next to ciphertext.` +
                 (aside ? ` A key copy exists at ${aside} -- rename it back to ${keyPath(this.keyDir)}.` : ` Restore the key from a backup.`)
             );

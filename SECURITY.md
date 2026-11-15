@@ -64,8 +64,10 @@ To check your own setup, run `monomem drill` (replays 20 known memory-poisoning 
   from the tool, which names the caller).
 - **Signed audit log and signed write receipts (1.5.0).** Every audit line carries `kid` and an Ed25519 `sig` over the
   line (so over its `prev` chain hash too), made with the store's own key: the same `.attest-key` (mode 0600) that signs
-  exports; there is no new key file. The first note write of a store makes the key if it has none; the audit code itself
-  never creates one, so a process that cannot read the key writes an unsigned line, as before. The first signed line of a
+  exports; there is no new key file. Opening a file store makes the key if it has none (not the first write); with
+  `MONOMEM_AUDIT_LOG` pointing to another folder, a copy of the key (kept in step by `trust rotate`) sits beside that log.
+  An in-memory store (tests, `--db :memory:`) writes unsigned lines: it has no key file, by design. The audit code itself
+  never creates a key, so a process that cannot read the key writes an unsigned line, as before. The first signed line of a
   log is a `sign-start` line naming the key and the head of the unsigned history before it: from then on that history
   cannot change without breaking the signed line after it. It proves nothing about edits made before the upgrade.
   `monomem trust rotate` writes a `key-rotate` line signed by the OLD key naming the new public key. A key is valid only
