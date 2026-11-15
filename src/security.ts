@@ -4,7 +4,7 @@
 // log. All dependency-free on purpose -- this code sits in front of a service
 // that can be exposed over a public tunnel, so less surface is safer.
 
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import type { IncomingMessage } from "node:http";
@@ -809,17 +809,25 @@ export function audit(entry: {
     } catch {
       mkdirSync(dirname(path), { recursive: true, mode: 0o700 }); // no file (yet, or the folder was removed)
     }
-    const last = auditTail && auditTail.path === path && auditTail.size === size && auditTail.mtime === mtime && tailStillOurs(auditTail) ? auditTail : lastAuditLine(path);
-    // R2-06: `seq` counts on from the line before (1 after a log from before 1.5.0). Two processes appending at once can
-    // write the same seq (a fork); a receipt is found by its hash, the seq is checked against that line.
-    const seq = last.seq + 1;
-    const line = JSON.stringify({ ts: new Date().toISOString(), prev: last.hash, seq, ...entry });
-    appendFileSync(path, line + "\n", { mode: 0o600 });
-    // Cache only when the file is exactly what we left (another process appending right now means: re-read next time).
-    const after = statSync(path);
-    const hash = sha(line);
-    auditTail = after.size === size + Buffer.byteLength(line) + 1 ? { path, size: after.size, mtime: after.mtimeMs, hash, seq, len: Buffer.byteLength(line) } : null;
-    return { seq, chain_hash: hash };
+    // One open per line: the same descriptor checks the cached tail and appends.
+    const fd = openSync(path, "a+", 0o600);
+    try {
+      const tail = auditTail;
+      const last = tail && tail.path === path && tail.size === size && tail.mtime === mtime && tailStillOurs(fd, tail) ? tail : lastAuditLine(path);
+      // R2-06: `seq` counts on from the line before (1 after a log from before 1.5.0). Two processes appending at once can
+      // write the same seq (a fork); a receipt is found by its hash, the seq is checked against that line.
+      const seq = last.seq + 1;
+      const line = JSON.stringify({ ts: new Date().toISOString(), prev: last.hash, seq, ...entry });
+      writeSync(fd, line + "\n");
+      // Cache only when the file is exactly what we left (another process appending right now means: re-read next time).
+      const after = fstatSync(fd);
+      const hash = sha(line);
+      const len = Buffer.byteLength(line);
+      auditTail = after.size === size + len + 1 ? { path, size: after.size, mtime: after.mtimeMs, hash, seq, len } : null;
+      return { seq, chain_hash: hash };
+    } finally {
+      closeSync(fd);
+    }
   } catch (e) {
     auditDirMade = undefined;
     auditTail = null;
@@ -841,15 +849,10 @@ let auditTail: { path: string; size: number; mtime: number; hash: string; seq: n
  * The cached last line is still the one on disk. Size and mtime alone miss a same-size rewrite inside one mtime tick
  * (a racing writer, a restore); re-reading just that one line (a few hundred bytes) and comparing its hash catches it.
  */
-function tailStillOurs(t: { path: string; size: number; hash: string; len: number }): boolean {
+function tailStillOurs(fd: number, t: { size: number; hash: string; len: number }): boolean {
   if (t.size < t.len + 1) return false;
   const buf = Buffer.alloc(t.len);
-  const fd = openSync(t.path, "r");
-  try {
-    readSync(fd, buf, 0, t.len, t.size - t.len - 1);
-  } finally {
-    closeSync(fd);
-  }
+  readSync(fd, buf, 0, t.len, t.size - t.len - 1);
   return sha(buf.toString("utf8")) === t.hash;
 }
 /** Audit entries this process could not write. */
