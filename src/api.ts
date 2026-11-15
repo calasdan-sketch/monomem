@@ -202,7 +202,7 @@ const PUT_READ_ONLY_FIELDS = [
   "imported_unverified", "attested_writer", "attested_by", "attested_writer_id", "merged_from_writers", "distrusted", "confidence_claimed_by",
   "status", "superseded_by", "superseded_at", "superseded_by_writer", "access_count", "last_accessed", "expires_at", "archived_at",
   "pinned", "session_id", "obs_type", "stale", "ageDays", "staleWarning", "unreadable", "encrypted", "neighbors", "history", "files", "score", "breakdown",
-  "grandfathered_at", "approved_at", "approved_by", "confirmed_at", "confirmed_by", "confirmed_kind", "confirmed_rev", "unconfirmed", "unconfirmed_label", "expired", "expired_label", "built_on_distrusted", "built_on_distrusted_label", "disputed", "disputed_label",
+  "grandfathered_at", "approved_at", "approved_by", "confirmed_at", "confirmed_by", "confirmed_kind", "confirmed_rev", "unconfirmed", "unconfirmed_label", "expired", "expired_label", "built_on_distrusted", "built_on_distrusted_label", "disputed", "disputed_label", "flagged", "flagged_label",
 ];
 /** A 400 message naming the unknown top-level fields of a note body, or null when there are none. */
 export function unknownNoteFields(body: unknown, allowed: readonly string[], ignored: readonly string[] = []): string | null {
@@ -1005,6 +1005,37 @@ export function createApiServer(
           // No title in the reply: to the caller (an agent's key, or the dashboard that already shows it) it is outside text.
           const { title: _title, ...reply } = r;
           sendJson(res, 200, reply);
+        } catch (e) {
+          sendError(res, e);
+        }
+        return;
+      }
+
+      // POST /notes/:id/flag { reason } -> 1.5.0 (R2-02) "this looks wrong". The note does not change. Same rules as the
+      // memory_flag tool: own namespace only, a hidden note is 404 like a missing one.
+      const flagMatch = /^\/notes\/(\d+)\/flag$/.exec(path);
+      if (req.method === "POST" && flagMatch) {
+        const id = Number(flagMatch[1]);
+        let body: { reason?: unknown };
+        try {
+          body = JSON.parse((await readBody(req)) || "{}") as { reason?: unknown };
+        } catch {
+          sendJson(res, 400, { error: "invalid JSON body" });
+          return;
+        }
+        const bad = unknownNoteFields(body, ["reason"]);
+        if (bad) {
+          sendJson(res, 400, { error: bad });
+          return;
+        }
+        try {
+          if (nsCtx.active && !denyUnwritable(nsCtx, res, store.read(id))) return; // gate-ok: namespace probe; flagNote re-reads through readVisible
+          const r = store.flagNote(id, body.reason);
+          if (!r) {
+            sendJson(res, 404, { error: "not found" });
+            return;
+          }
+          sendJson(res, 200, { flagged: true, id: r.note_id, rev: r.rev });
         } catch (e) {
           sendError(res, e);
         }

@@ -48,6 +48,7 @@ const EXPECTED_SITES: Record<string, string[]> = {
     "archive/restore: denyUnwritable probe, hidden note is 404",
     "GET /export is admin-only (a full backup)",
     "namespace check; confirm() re-reads through readVisible",
+    "namespace probe; flagNote re-reads through readVisible",
   ],
   "operator-gate.ts": ["the CLI is the operator"],
   "bench/engine.ts": ["bench adapter over HTTP GET /export (admin-only), not a Store read"],
@@ -78,6 +79,7 @@ const EXPECTED_SITES: Record<string, string[]> = {
     "consolidation candidates (admin): filtered with filterVisible",
     "admin consolidate: namespace check only",
     "namespace check only; confirm() re-reads through readVisible",
+    "namespace check only; flagNote re-reads through readVisible",
   ],
   "setup.ts": ["setup reads back the test note it wrote a moment ago"],
   "sync.ts": [
@@ -135,7 +137,7 @@ const INTERNAL_OPT_IN: Record<string, number> = {
 };
 
 /** SQL on a table the trust rules read or write: notes, their history, held writes, distrust/attester state, _meta (trust settings), confirmations, links. */
-const GATED_SQL_RE = /\b(?:FROM|JOIN|UPDATE|INTO)\s+(notes|note_history|quarantine|trust_distrust|trust_attesters|trust_log|_meta|confirmations|note_links)\b/gi;
+const GATED_SQL_RE = /\b(?:FROM|JOIN|UPDATE|INTO)\s+(notes|note_history|quarantine|trust_distrust|trust_attesters|trust_log|_meta|confirmations|note_links|note_flags|note_client_keys)\b/gi;
 /** Files outside the gate that touch a gated table directly, with the tables, each reviewed. */
 const SQL_ALLOWED: Record<string, string[]> = {
   // backup.ts counts the notes of the COPY it just made and strips local-only _meta keys from that copy.
@@ -221,7 +223,7 @@ describe("B: one gate for reading a note", () => {
     const mcp = read("mcp-server-core.ts");
     const tools = new Set<string>([...mcp.matchAll(/server\.registerTool\(\s*"([a-z_]+)"/g)].map((m) => m[1]));
     const NOTE_TOOLS = ["state_read", "state_search", "state_relevant", "state_list", "memory_stats", "memory_receipt", "memory_why", "memory_consolidation_candidates", "memory_since", "task_get", "task_list", "catch_up", "memory_ack", "memory_history", "memory_index", "memory_timeline", "memory_get", "session_list"];
-    const OTHER_TOOLS = ["state_write", "state_delete", "memory_consolidate", "memory_rebuild_edges", "task_put", "task_claim", "task_approve", "session_handoff", "memory_quarantine", "runner_status", "trust_policy", "memory_supersede_preview", "memory_supersede_confirm", "memory_supersede_undo", "memory_restore_version", "memory_history_purge", "memory_rollback", "memory_confirm"];
+    const OTHER_TOOLS = ["state_write", "state_delete", "memory_consolidate", "memory_rebuild_edges", "task_put", "task_claim", "task_approve", "session_handoff", "memory_quarantine", "runner_status", "trust_policy", "memory_supersede_preview", "memory_supersede_confirm", "memory_supersede_undo", "memory_restore_version", "memory_history_purge", "memory_rollback", "memory_confirm", "memory_flag"];
     assert.deepEqual([...tools].sort(), [...NOTE_TOOLS, ...OTHER_TOOLS].sort(), "an MCP tool was added: classify it here (and canary-test it below if it returns note content)");
   });
 });

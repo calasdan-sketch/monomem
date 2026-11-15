@@ -935,6 +935,34 @@ export function createMcpServer(
     }
   );
 
+  // 1.5.0 (R2-02): not in DEFAULT_TOOLS; turn it on with MONOMEM_TOOLS=memory_flag. Same rules as POST /notes/:id/flag.
+  server.registerTool(
+    "memory_flag",
+    {
+      title: "Flag a note that looks wrong",
+      description:
+        "Say that a note looks wrong or out of date, with a one-line reason, instead of overwriting it. The note does not change. Until a person looks at it, a note nobody confirmed is left out of session start; a note a person confirmed stays, labelled. You cannot flag your own note (change it instead); at most 20 flags a day.",
+      inputSchema: {
+        id: zInt().describe("Id of the note that looks wrong."),
+        reason: z.string().describe("One line: what looks wrong and why (at most 200 characters), e.g. \"package.json says pnpm\"."),
+      },
+    },
+    async ({ id, reason }) => {
+      try {
+        const denied = denyIfUnder("write");
+        if (denied) return errorResult(denied);
+        // A flag changes what session start shows in the note's namespace: like an edit, only in this server's own namespace.
+        const probe = store.read(id); // gate-ok: namespace check only; flagNote re-reads through readVisible
+        if (!probe || (nsActive && probe.namespace !== ownNs)) return errorResult(`no note with id ${id}`);
+        const r = store.flagNote(id, reason);
+        if (!r) return errorResult(`no note with id ${id}`);
+        return untrustedResult({ flagged: true, id: r.note_id, rev: r.rev, message: "Flag recorded. The note is unchanged; a person decides in monomem review." });
+      } catch (e) {
+        return errorFor(e);
+      }
+    }
+  );
+
   server.registerTool(
     "state_read",
     {

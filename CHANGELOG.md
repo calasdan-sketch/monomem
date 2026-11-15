@@ -67,6 +67,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and `memory_get` / `memory_index`; MCP shows a `DISPUTED key: #id says "value"` line. A side a person confirmed is listed
   first and the other side is labelled "disputed by a confirmed note". Nothing is hidden, and a note the reader may not see
   is never named. See docs/search.md.
+- **Agents can flag a note that looks wrong** instead of overwriting it: `memory_flag` (opt-in with `MONOMEM_TOOLS`) and
+  `POST /notes/:id/flag`, with a one-line reason. The note does not change. A flagged note no person confirmed leaves session
+  start; a person-confirmed note stays, labelled. Own-note flags are refused, distrusted writers' flags ignored, 20 a day per
+  writer. `monomem review` lists flagged notes; `monomem review keep <id>` keeps one. The reason is never shown at session
+  start. See docs/trust.md.
 - **Retry-safe note writes:** `client_key` on `state_write` and `POST /notes` (as tasks already had). A retry with the same key
   from the same writer gets back the note the first write made (`deduplicated: true`; REST answers 200 instead of 201) and
   writes nothing, so it does not count toward the flood guard. Keys are per writer and stored hashed. Not covered: a write

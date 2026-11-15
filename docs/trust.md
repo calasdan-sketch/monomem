@@ -309,6 +309,26 @@ itself. Links are only ever added: an update adds new ones, and `[]` or leaving 
 Limits: it only works when agents fill it in, it looks one hop back, a held write keeps its mark but loses its links, and
 there is no session-start count line for notes built on a distrusted writer.
 
+## Agent flags (1.5.0)
+
+An agent that thinks a note is wrong or out of date can say so without overwriting it: `memory_flag {id, reason}` (not in
+the default tool set; add it with `MONOMEM_TOOLS`) or REST `POST /notes/:id/flag {reason}`. The reason is one line of at
+most 200 characters. The note itself does not change.
+
+- A flag counts for the version (rev) it was about. Reads show `flagged: [{by, reason, at}]` and the label
+  `[flagged by stdio:codex]`; MCP adds `FLAGGED by "stdio:codex": "reason"` to the "who wrote this" block.
+- A flagged note that no person confirmed for its current version leaves session start (search and lists still show it). A
+  note a person confirmed stays at session start with the label: a poisoned agent cannot erase confirmed memory.
+- The reason is the agent's text: it is shown on reads, never at session start. With encryption on it is sealed at rest.
+- Refused or ignored: flagging your own note (change it instead), flags from a writer on the distrust list (ignored when
+  read, so a later distrust entry also cancels earlier flags), more than 20 flags per writer per day. Each flag counts toward
+  the flood guard. With a namespace-pinned key, only notes in its own namespace can be flagged.
+- A person decides: `monomem review` lists flagged notes with who flagged them and why. `monomem review keep <id>` keeps the
+  note as it is (clears the flags on that version; they stay on record); `monomem supersede --old <id> ...` replaces it.
+
+Limits: an edit that makes a new version leaves the old flags behind (flag again if it is still wrong); flags from a session
+that read outside content are not marked differently yet.
+
 ## The outside-content stamp on session summaries (1.3.5)
 
 Before 1.4.0 only captured session summaries were stamped. That path still works, and is one of the signals above.

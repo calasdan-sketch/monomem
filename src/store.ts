@@ -108,6 +108,9 @@ import * as quarantineOps from "./store/quarantine.js";
 import * as confirmOps from "./store/confirm.js";
 import * as taintOps from "./store/taint.js";
 import * as clientKeyOps from "./store/client-keys.js";
+import * as flagOps from "./store/flags.js";
+import type { FlaggedItem, NoteFlag } from "./store/flags.js";
+export type { FlaggedItem, NoteFlag };
 import { tagsToStorage, parseTags, dueBase, needsHumanConfirm, sealQuarantineCol, openQuarantineCol, isoOrNull, clampInt, envCount, floodWritesPerHour, isOperatorWrite, isPlainObject } from "./store/rows.js";
 export { dueBase, needsHumanConfirm, clampInt, floodWritesPerHour };
 export { ValidationError, NoteUnreadableError, StaleWriteError, RebuildBusyError, CandidateScanError, QuarantinedError, WriterPausedError };
@@ -784,6 +787,9 @@ export interface NoteRecord {
   /** 1.4.0 (1d): one of those notes was written or touched by a distrusted writer (one hop); with its label. */
   built_on_distrusted?: true;
   built_on_distrusted_label?: string;
+  /** 1.5.0 (R2-02): "this looks wrong" flags by other writers on this version (store/flags.ts); with its label. */
+  flagged?: NoteFlag[];
+  flagged_label?: string;
 }
 
 /** The re-confirmation expiry settings (_meta; Store.confirmSettings). `set_at`: when the mode was last changed. */
@@ -810,7 +816,7 @@ export interface ReviewRow {
   updated_at: string;
 }
 
-interface NoteRow {
+export interface NoteRow {
   id: number;
   namespace: string;
   title: string;
@@ -3476,7 +3482,7 @@ export class Store {
       r.access_count += p.n;
       if (!r.last_accessed || p.at > r.last_accessed) r.last_accessed = p.at;
     }
-    return this.annotateConfirmRules(row, annotateRetention(row, r));
+    return flagOps.annotateFlags(this, row, this.annotateConfirmRules(row, annotateRetention(row, r)));
   }
 
   /**
@@ -7951,6 +7957,21 @@ export class Store {
 
   // --- Flood guard (v17) -----------------------------------------------------
   // The paused set is a JSON list in _meta (like approve_first), so a restart does not clear it.
+
+  /** R2-02: flag a note this caller may see as looking wrong (the note does not change). Null = no such note. */
+  flagNote(id: number, reason: unknown): { note_id: number; rev: number; at: string } | null {
+    return flagOps.flagNote(this, id, reason);
+  }
+
+  /** R2-02: live notes with flags that count, for `monomem review`. */
+  flaggedList(namespaces?: string[]): FlaggedItem[] {
+    return flagOps.flaggedList(this, namespaces);
+  }
+
+  /** R2-02: a person keeps a flagged note: the flags on its current version are cleared. Returns how many. */
+  keepFlagged(id: number): number {
+    return flagOps.keepFlagged(this, id);
+  }
 
   /** R2-04: create, unless this writer's `clientKey` already made a note (then that note, deduplicated: true, no write). */
   createOnce(input: NoteInput, clientKey: string | undefined, opts: Parameters<Store["create"]>[1] = {}): { note: NoteRecord; deduplicated?: true } {

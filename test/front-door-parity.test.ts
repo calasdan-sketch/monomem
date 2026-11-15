@@ -194,6 +194,36 @@ describe("R2-01: REST and MCP mark a disputed note the same way", () => {
   });
 });
 
+describe("R2-02: REST and MCP decide a flag the same way", () => {
+  // [caller, note key, expected decision, text that must not appear in either reply]
+  type Row = [Who, keyof World["ids"] | "missing", boolean, string];
+  const rows: Row[] = [
+    ["writer", "work", true, ""],
+    ["writer", "hidden", false, "EVILNOTE"], // a distrusted writer's note reads as missing
+    ["writer", "archived", false, ""],
+    ["writer", "missing", false, ""],
+    ["pinned-writer", "work", true, ""],
+    ["pinned-writer", "shared", false, "shared note"], // a read grant never lets it change another namespace's session start
+  ];
+  test("the table, through POST /notes/:id/flag and memory_flag", async () => {
+    for (const [who, key, want, secret] of rows) {
+      const w = seed();
+      const id = key === "missing" ? 9999 : w.ids[key];
+      const io = await surfaces(w);
+      try {
+        const r = await io.rest(who, "POST", `/notes/${id}/flag`, { reason: "looks wrong" });
+        const m = await io.mcp(who, "memory_flag", { id, reason: "looks wrong" });
+        const label = `${who} ${key}`;
+        assert.equal(r.ok, want, `REST ${label}: ${r.text.slice(0, 200)}`);
+        assert.equal(m.ok, want, `MCP ${label}: ${m.text.slice(0, 200)}`);
+        if (secret) for (const t of [r.text, m.text]) assert.ok(!t.includes(secret), `${label} leaked ${secret}`);
+      } finally {
+        await io.close();
+      }
+    }
+  });
+});
+
 describe("R2-04: REST and MCP handle client_key the same way", () => {
   // [caller, first write's key, retry's key, the retry is deduplicated?]
   type Row = [Who, string, string, boolean];

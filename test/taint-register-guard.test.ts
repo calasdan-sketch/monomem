@@ -57,6 +57,7 @@ const REST_EXEMPT: Record<string, string> = {
   "POST /tokens": "admin: key management",
   "DELETE /tokens/:label": "admin: key management",
   "POST /notes": "creating route: the note in the reply is the caller's own",
+  "POST /notes/:id/flag": "reply is the flag verdict (id, rev), no note text",
   "POST /tasks": "creating route: the task in the reply is the caller's own",
   "POST /handoffs": "creating route: the handoff in the reply is the caller's own",
   "POST /notes/:id/confirm": "reply is the confirm verdict; the read_it rule reads the registry directly",
@@ -98,6 +99,7 @@ function restRoutesInSource(): string[] {
     tid: "/tasks/:id",
     sub: "/tasks/:id/claim",
     confirmMatch: "/notes/:id/confirm",
+    flagMatch: "/notes/:id/flag",
     archMatch: "/notes/:id/archive",
     restoreMatch: "/notes/:id/restore",
     histMatch: "/notes/:id/history",
@@ -199,6 +201,7 @@ const MCP_EXEMPT: Record<string, string> = {
   memory_history_purge: "admin",
   memory_rollback: "admin",
   memory_confirm: "reply is the confirm verdict; read_it reads the registry directly",
+  memory_flag: "reply is the flag verdict (id, rev), no note text",
 };
 
 async function mcp(store: Store, conn: Record<string, unknown> = { local: true }) {

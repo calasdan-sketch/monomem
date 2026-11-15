@@ -2895,13 +2895,42 @@ async function confirmCmd(args: string[]): Promise<void> {
   }
 }
 
+/** R2-02: the notes agents flagged as looking wrong, with who flagged them and why (the operator reads this at a terminal). */
+function printFlagged(list: Array<{ id: number; namespace: string; title: string; writer: string; flags: Array<{ by: string; reason: string }> }>): void {
+  console.log(`${list.length} note${list.length === 1 ? "" : "s"} flagged by an agent as looking wrong:`);
+  for (const f of list) {
+    console.log(`  #${f.id} [${printable(f.namespace, 100)}] ${printable(f.title, 120)} (by ${printable(f.writer || "unknown", 100)})`);
+    for (const x of f.flags.slice(0, 5)) console.log(`      flagged by ${printable(x.by, 60)}: "${printable(x.reason, 200)}"`);
+  }
+  console.log('  Keep one as it is: monomem review keep <id>. Replace it: monomem supersede --old <id> --title "..." --body "..." (shows what changes, then asks).\n');
+}
+
 /**
  * `monomem review [--ns <ns>] [--json] [--confirm-all [--source <s>]]`: the notes waiting for a person. Titles are shown
  * here because the reader is the operator at a terminal; they never go into session start or an MCP reply.
  */
 async function reviewCmd(args: string[]): Promise<void> {
   const { flags, rest } = parseFlags(args, { values: ["ns", "namespace", "source"], bools: ["json", "confirm-all", "step"] });
-  if (rest.length || (flags.step === true && (flags.json === true || flags["confirm-all"] === true))) {
+  // R2-02: `monomem review keep <id>`: a person keeps a flagged note as it is (the flags on this version are cleared).
+  if (rest[0] === "keep") {
+    const id = Number(rest[1]);
+    if (rest.length !== 2 || !Number.isInteger(id) || id < 1) {
+      console.error("Usage: monomem review keep <id>");
+      process.exit(1);
+    }
+    await requireOperator(`keep #${id} as it is (clears the agents' flags on this version)`, undefined, "person-confirm");
+    const { DB_PATH } = await import("./config.js");
+    const { Store } = await import("./store.js");
+    const store = new Store(DB_PATH);
+    try {
+      const n = store.keepFlagged(id);
+      console.log(n ? `Kept #${id}: cleared ${n} flag${n === 1 ? "" : "s"}. It is back in session start unless something else holds it.` : `#${id} has no flags on its current version. Nothing changed.`);
+    } finally {
+      store.close();
+    }
+    return;
+  }
+  if (rest.length ||(flags.step === true && (flags.json === true || flags["confirm-all"] === true))) {
     console.error('Usage: monomem review [--ns <namespace>] [--json] [--confirm-all [--source "what you checked"]]\n       monomem review --step [--ns <namespace>] [--source "what you checked"]   (one note at a time: y confirm, n skip, q stop)');
     process.exit(1);
   }
@@ -2927,13 +2956,18 @@ async function reviewCmd(args: string[]): Promise<void> {
       }
       return;
     }
+    const flagged = store.flaggedList(ns !== undefined ? [ns] : undefined);
     if (flags.json === true) {
-      console.log(JSON.stringify({ notes: items }, null, 2));
+      console.log(JSON.stringify({ notes: items, flagged }, null, 2));
       if (flags["confirm-all"] !== true) return;
-    } else if (!items.length) {
+    } else if (!items.length && !flagged.length) {
       console.log("Nothing waits for review.");
       return;
+    } else if (!items.length) {
+      printFlagged(flagged);
+      return;
     } else {
+      if (flagged.length) printFlagged(flagged);
       console.log(`${items.length} note${items.length === 1 ? "" : "s"} wait for a person:`);
       for (const r of items) {
         console.log(`  #${r.id} [${printable(r.namespace, 100)}] ${printable(r.title, 120)} (by ${printable(r.writer || "unknown", 100)})`);

@@ -31,13 +31,20 @@ describe("R2-04 client_key on note writes", () => {
 
   test("a retry is not a write: no flood count", () => {
     const s = new Store(":memory:");
-    as("stdio:a", () => s.createOnce({ title: "t", body: "b" }, "k"));
-    const db = s.captureDb();
-    const before = db.prepare("SELECT count(*) AS c FROM write_rate").get() as { c: number };
-    as("stdio:a", () => s.createOnce({ title: "t", body: "b" }, "k"));
-    const after = db.prepare("SELECT count(*) AS c FROM write_rate").get() as { c: number };
-    assert.equal(after.c, before.c);
-    s.close();
+    const prev = process.env.MONOMEM_FLOOD_WRITES_PER_HOUR;
+    process.env.MONOMEM_FLOOD_WRITES_PER_HOUR = "1000"; // setup-env turns the guard off
+    try {
+      as("stdio:a", () => s.createOnce({ title: "t", body: "b" }, "k"));
+      const db = s.captureDb();
+      const before = db.prepare("SELECT count(*) AS c FROM write_rate").get() as { c: number };
+      assert.equal(before.c, 1, "the first write counted");
+      as("stdio:a", () => s.createOnce({ title: "t", body: "b" }, "k"));
+      const after = db.prepare("SELECT count(*) AS c FROM write_rate").get() as { c: number };
+      assert.equal(after.c, before.c);
+    } finally {
+      process.env.MONOMEM_FLOOD_WRITES_PER_HOUR = prev;
+      s.close();
+    }
   });
 
   test("a bad key is refused; the raw key is never stored", () => {
