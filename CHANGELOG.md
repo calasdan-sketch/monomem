@@ -86,6 +86,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A 64 MB page-cache cap, a once-per-database check for old ciphertext, fewer counts at session start, an id-only profile
   step, one file open per audit line and a change feed that pages in constant time. On a 10,000-note encrypted store,
   session start went from about 108 ms to about 13 ms (measured on the development machine).
+- Database schema v22 (still one upgrade from 1.3.x, backup at `<database>.pre-v22-backup`): a redundant similarity-link
+  index is dropped (less work per write) and a live-notes index makes the unfiltered note count cheap.
 
 ## [1.4.0] - 2026-11-13
 

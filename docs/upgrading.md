@@ -1,30 +1,30 @@
 # Upgrading
 
-## Monomem 1.4.0 and 1.5.0 (database schema v19 to v21)
+## Monomem 1.4.0 and 1.5.0 (database schema v19 to v22)
 
-Applies to Monomem 1.3.x (and to a development build that already made the store v20). A fresh install needs none of this.
+Applies to Monomem 1.3.x (and to a development build that already made the store v20 or v21). A fresh install needs none of this.
 
 - **Close every app that uses Monomem first** (Claude Code, Claude Desktop, Cursor, Codex, the server), then upgrade and start
   them again. An app still running the old version keeps writing in the old shape after the file is upgraded; 1.3.x and 1.4.x
   cannot notice that. From 1.5.0 on, a running Monomem notices a newer upgrade and refuses to save ("restart this app") until
   you restart it. `monomem doctor` only reports an older database; it never upgrades it.
 
-- **What changes.** The first start migrates the database from schema v19 to **v21** (1.4.0 and 1.5.0 ship as one step): new columns on notes (when the upgrade ran,
+- **What changes.** The first start migrates the database from schema v19 to **v22** (1.4.0 and 1.5.0 ship as one step): new columns on notes (when the upgrade ran,
   who approved a held write and when, the latest confirm), two on held writes (their forget date and confidence), one on capture
-  sessions, and two new tables (confirms, and "derived from" links between notes), and, from 1.5.0, when a note's title or body last changed (the re-confirmation clock starts there, not at any edit) and the folder of the local process that wrote it. No note text is rewritten. Every note that exists
+  sessions, and two new tables (confirms, and "derived from" links between notes), and, from 1.5.0, when a note's title or body last changed (the re-confirmation clock starts there, not at any edit) and the folder of the local process that wrote it, plus two small tables (agents' "this looks wrong" flags, and the retry keys that stop a repeated write from saving a note twice) and two index changes. No note text is rewritten. Every note that exists
   at the upgrade is marked with the upgrade time, so nothing that showed before the upgrade is hidden after it.
-- **A verified backup is made first**, at `<database>.pre-v21-backup`. The upgrade does not run if that copy cannot be made.
+- **A verified backup is made first**, at `<database>.pre-v22-backup`. The upgrade does not run if that copy cannot be made.
   Remove it when you are happy: `monomem backup --prune-premigration`. `monomem doctor` warns once a copy is more than 14 days old.
 - **Your app keys are hashed on the first start of 1.5.0 (automatic).** Each plain-text key in `tokens.json` is replaced by its
   one-way hash; the rewrite is atomic, `tokens.json.bak` (which held the plain text) is deleted, and starting again changes nothing.
   Your apps keep working: they still send the key in their own config. The main key in `.token` stays in plain text (the CLI
   and the dashboard sign-in need it). **Going back is the catch:** Monomem 1.4.x and older cannot read a hashed entry, so after
   a downgrade those apps are refused until you run `monomem connect <app>` again to make each a new key. (Restoring the
-  `.pre-v21-backup` database does not bring back the old `tokens.json`.) `monomem token harden` hashes by hand; `monomem doctor`
+  `.pre-v22-backup` database does not bring back the old `tokens.json`.) `monomem token harden` hashes by hand; `monomem doctor`
   warns if a key is still in plain text.
-- **One way only.** Monomem 1.3.x and older refuse a v21 database instead of opening it. If several machines share one database,
+- **One way only.** Monomem 1.3.x and older refuse a v22 database instead of opening it. If several machines share one database,
   upgrade all of them.
-- **To go back to 1.3.x:** close every app that uses Monomem and stop the server, then `monomem restore <database>.pre-v21-backup --yes`
+- **To go back to 1.3.x:** close every app that uses Monomem and stop the server, then `monomem restore <database>.pre-v22-backup --yes`
   and install the older version (`npm i -g monomem@1.3.5`). Anything written after the upgrade is not in the backup; the copy-aside keeps it.
 - Afterwards run `monomem doctor`, then `monomem health`. What is new: [CHANGELOG.md](../CHANGELOG.md).
 

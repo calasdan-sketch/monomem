@@ -578,7 +578,7 @@ export const CHANGE_LOG_RETENTION_DAYS = 90;
 const FTS_PREFIX_OPT = "prefix='1'";
 
 /** Current schema version (PRAGMA user_version). See Store.migrate. */
-export const SCHEMA_VERSION = 21;
+export const SCHEMA_VERSION = 22;
 
 /**
  * Notes fetched per page by exportBatch(), which both streaming export
@@ -2854,6 +2854,49 @@ export class Store {
         END;
       `);
       this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_capture_spool ON capture_events(spool_id) WHERE spool_id IS NOT NULL");
+    }
+    if (v < 22) {
+      // v22 (1.5.0, round 2): one more step for the round-2 items (one backup, one transaction). Unreleased: later round-2
+      // items add their tables HERE. To add a table: CREATE it in this exec, add its "DELETE FROM <table> WHERE note_id =
+      // old.id;" line to the notes_links_ad trigger at the end, and drop it in test/legacy-db.ts (the v22 block). Idempotent.
+      //  - F-05: idx_note_edges_note_id is a prefix of note_edges' primary key (pure write cost): dropped. (archived_at, kind)
+      //    makes the unfiltered live COUNT covering.
+      //  - note_flags (R2-02): "this looks wrong" flags. Nothing in the note changes; a flag names the rev it was about.
+      //  - note_client_keys (R2-04): idempotency keys on note writes, per writer, stored hashed (never the raw key).
+      this.db.exec(`
+        DROP INDEX IF EXISTS idx_note_edges_note_id;
+        CREATE INDEX IF NOT EXISTS idx_notes_live_kind ON notes(archived_at, kind);
+        CREATE TABLE IF NOT EXISTS note_flags (
+          id INTEGER PRIMARY KEY,
+          note_id INTEGER NOT NULL,
+          note_rev INTEGER NOT NULL,
+          flagged_by TEXT NOT NULL,
+          reason TEXT NOT NULL DEFAULT '',
+          at TEXT NOT NULL,
+          tainted INTEGER NOT NULL DEFAULT 0,
+          cleared_at TEXT,
+          cleared_by TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_note_flags_note ON note_flags(note_id, note_rev);
+        CREATE INDEX IF NOT EXISTS idx_note_flags_by ON note_flags(flagged_by, at);
+        CREATE TABLE IF NOT EXISTS note_client_keys (
+          writer TEXT NOT NULL,
+          key_hash TEXT NOT NULL,
+          note_id INTEGER NOT NULL,
+          at TEXT NOT NULL,
+          PRIMARY KEY (writer, key_hash)
+        );
+        CREATE INDEX IF NOT EXISTS idx_note_client_keys_note ON note_client_keys(note_id);
+        DELETE FROM note_flags WHERE note_id NOT IN (SELECT id FROM notes);
+        DELETE FROM note_client_keys WHERE note_id NOT IN (SELECT id FROM notes);
+        DROP TRIGGER IF EXISTS notes_links_ad;
+        CREATE TRIGGER notes_links_ad AFTER DELETE ON notes BEGIN
+          DELETE FROM note_links WHERE note_id = old.id OR derived_from = old.id;
+          DELETE FROM confirmations WHERE note_id = old.id;
+          DELETE FROM note_flags WHERE note_id = old.id;
+          DELETE FROM note_client_keys WHERE note_id = old.id;
+        END;
+      `);
     }
   }
 
