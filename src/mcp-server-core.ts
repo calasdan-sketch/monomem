@@ -235,10 +235,10 @@ function quarantinedResult(e: QuarantinedError, extra?: Record<string, unknown>)
   const approval = e.findings.some((f) => f.category === "approval");
   const injected = [...new Set(e.findings.filter((f) => f.category === "injection" || f.category === "directive").map((f) => f.label))];
   const why = injected.length
-    ? `This write was held because it looks like an injected instruction (${injected.join(", ")})${approval ? ", and its namespace also requires approval (approve-first)" : ""}. It is not stored as a note yet. `
+    ? `This write was held because it looks like an injected instruction (${injected.join(", ")})${approval ? ", and its namespace also requires approval (approve-first)" : ""}. Nothing is stored or changed yet. `
     : approval && e.findings.length === 1
-      ? "This write was held for admin review because its namespace requires approval (approve-first), and is not stored as a note yet. "
-      : `This write was held for admin review by the memory linter${approval ? " (its namespace also requires approval, approve-first)" : ""} and is not stored as a note yet. `;
+      ? "This write was held for admin review because its namespace requires approval (approve-first); nothing is stored or changed yet. "
+      : `This write was held for admin review by the memory linter${approval ? " (its namespace also requires approval, approve-first)" : ""}; nothing is stored or changed yet. `;
   return textResult({
     quarantined: {
       id: e.quarantineId,

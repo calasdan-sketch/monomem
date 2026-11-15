@@ -39,3 +39,22 @@ test("a 0-result search on a store with encrypted bodies says bodies were not se
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("encrypt status with sealed bodies and the key file gone says the key is missing, not 'off'", () => {
+  const dir = mkdtempSync(join(tmpdir(), "om-enc-nokey-"));
+  try {
+    const db = join(dir, "state.db");
+    const env: NodeJS.ProcessEnv = { ...process.env, MONOMEM_HOME: dir, MONOMEM_DB_PATH: db };
+    delete env.MONOMEM_KEY_FILE;
+    ensureKey(dir);
+    const s = new Store(db);
+    s.create({ title: "sealed", body: "secret body", tags: [] });
+    s.close();
+    rmSync(join(dir, ".key"));
+    const r = spawnSync(process.execPath, [CLI, "encrypt", "status"], { encoding: "utf8", env });
+    assert.doesNotMatch(r.stdout, /^encryption: off$/m, r.stdout + r.stderr);
+    assert.match(r.stdout + r.stderr, /key file is missing at .*restore it from your backup/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

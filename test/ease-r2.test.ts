@@ -64,7 +64,7 @@ describe("U-01 writer names", () => {
     const text = o.lines.join("\n");
     assert.equal(code, 1, text);
     assert.match(text, /Did you mean "stdio:cursor" \(1 note/);
-    assert.doesNotMatch(text, /This code works once/);
+    assert.doesNotMatch(text, /can be confirmed once/);
     assert.doesNotMatch(text, /--yes/);
   });
 
@@ -76,7 +76,7 @@ describe("U-01 writer names", () => {
     const text = o.lines.join("\n");
     assert.equal(code, 0);
     assert.match(text, /Nothing to do/);
-    assert.doesNotMatch(text, /This code works once|--yes|Nothing is deleted/);
+    assert.doesNotMatch(text, /can be confirmed once|--yes|Nothing is deleted/);
   });
 
   test("trust distrust <app> refuses, suggests stdio:<app>, and saves nothing", () =>

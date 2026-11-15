@@ -190,7 +190,7 @@ function previewText(p: RollbackPlan, ttl: number, how: string, hint?: { writer:
   out.push(
     "Nothing is deleted: archived notes come back with `monomem restore <id>`, and each restored note keeps the text it replaces in its history " +
       "(`monomem history restore <id> <version>` undoes it).",
-    `This code works once, for ${Math.round(ttl / 60)} minute(s). ${how}`
+    `This plan can be confirmed once, within ${Math.round(ttl / 60)} minute(s). ${how}`
   );
   return out.join("\n");
 }
