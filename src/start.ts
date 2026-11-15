@@ -63,6 +63,7 @@ hardenTokensFile(); // 1.5.0: plain-text keys in tokens.json become hashes on th
 const tokens = resolveTokens();
 const store = openStoreOrExit(DB_PATH, { busyTimeoutMs: SERVER_BUSY_TIMEOUT_MS });
 warnUnlabelledExposure(store, tokens);
+setImmediate(() => store.warmBodyIndex()); // C-06: build the encrypted-body search index now, not on the first agent search
 startTokenReload(tokens);
 
 // Namespace resolution happens ONCE here, at startup, from the process cwd --

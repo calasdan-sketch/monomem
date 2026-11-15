@@ -35,6 +35,7 @@ try {
 const sweep = (): void => stdioSweep(store);
 sweep();
 setInterval(sweep, 3_600_000).unref();
+setImmediate(() => store.warmBodyIndex()); // C-06: build the encrypted-body search index now, not on the first agent search
 // Server-side namespace resolution: resolved ONCE at startup from the
 // process working directory. Null when unconfigured (legacy behavior).
 const nsOpts = resolveStartupNamespace(process.cwd());

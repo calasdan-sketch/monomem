@@ -241,3 +241,19 @@ describe("C-06 encrypted body search (in-memory index)", () => {
       }
     }));
 });
+
+const ROOT = join(import.meta.dirname, "..", "..");
+
+test("hook processes never build the body index (session-start time budget): every Store they open passes bodyIndex 'off'", () => {
+  for (const f of ["src/hook.ts", "src/recall.ts", "src/file-context.ts"]) {
+    const opens = readFileSync(join(ROOT, f), "utf8").match(/new Store\([^)]*\)/g) ?? [];
+    assert.ok(opens.length > 0, `${f} opens a Store`);
+    for (const o of opens) assert.match(o, /bodyIndex: "off"/, `${f}: ${o}`);
+  }
+});
+
+test("servers warm the body index just after start-up", () => {
+  for (const f of ["src/start.ts", "src/index.ts", "src/mcp-http.ts", "src/mcp-stdio.ts"]) {
+    assert.match(readFileSync(join(ROOT, f), "utf8"), /setImmediate\(\(\) => store\.warmBodyIndex\(\)\)/, f);
+  }
+});

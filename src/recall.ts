@@ -236,7 +236,7 @@ async function fetchRecentNotes(opts: RecallOptions): Promise<RecallData> {
     console.error(`monomem recall: MONOMEM_RECALL_MAX_SENSITIVITY must be ${SENSITIVITY_HELP}; returning empty context.`);
     return { memory: "", board: "" };
   }
-  const store = new Store(dbFile);
+  const store = new Store(dbFile, { bodyIndex: "off" }); // C-06: the session-start hook never builds the body index (time budget)
   try {
     const gather = async (): Promise<RecallData> => {
     // Tasks and handoffs get their own section (below), so they are kept
