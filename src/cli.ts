@@ -875,7 +875,8 @@ async function doctor(): Promise<void> {
   }
 
   // 1.5.0 (U-10): a server still running the build from before an upgrade keeps writing in the old shape. Ask it which it is.
-  try {
+  // MONOMEM_NO_SERVER_PROBE=1 skips it (the test suite sets it, so a test never talks to a real server on this machine).
+  if (process.env.MONOMEM_NO_SERVER_PROBE !== "1") try {
     const { PACKAGE_VERSION } = await import("./config.js");
     const { SCHEMA_VERSION: BUILD } = await import("./store.js");
     const res = await fetch(`http://127.0.0.1:${API_PORT}/health`, { signal: AbortSignal.timeout(1000) });

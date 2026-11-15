@@ -50,7 +50,7 @@ describe("version handshake (U-10)", () => {
       res.end(JSON.stringify(answer));
     });
     await new Promise<void>((r) => fake.listen(0, "127.0.0.1", r));
-    const env = { ...process.env, HOME: dir, USERPROFILE: dir, MONOMEM_HOME: join(dir, "data"), MONOMEM_PORT: String((fake.address() as AddressInfo).port) };
+    const env = { ...process.env, HOME: dir, USERPROFILE: dir, MONOMEM_HOME: join(dir, "data"), MONOMEM_PORT: String((fake.address() as AddressInfo).port), MONOMEM_NO_SERVER_PROBE: "" };
     try {
       let out = await runDoctor(env);
       assert.match(out, /\[warn\].*server .* is older .*restart/i, out);
