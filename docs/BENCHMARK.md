@@ -33,7 +33,7 @@ Five suites, written as plain JSON files in [`bench/scenarios/`](https://github.
   *unflagged* stale hit is one the system did not mark as stale. `stale-hit-rate@1` is the share of
   queries that name an old value whose first result is stale, `@5` the share with a stale value anywhere in the top five.
   `current-recall@1` is the share of queries (with a current note) where the current note is first. These are
-  rates over a small, hand-written set (15 and 14 queries at 1.6.0; 14 and 13 at 1.5.0): read them as a checklist, not as statistics.
+  rates over a small, hand-written set (15 and 14 queries at OneMemory 1.6.0; 14 and 13 at OneMemory 1.5.0): read them as a checklist, not as statistics.
 - A scenario passes only if all its checks hold. For stale-memory queries that means: current value first (when
   there is one) and no old value in the top five unless it is flagged stale.
 - `leakage-count` is the number of failed attack probes (a cross-tenant read that worked, a secret that
@@ -67,8 +67,8 @@ printed in its own section and does not fail the run (use `--strict-gaps` to fai
 scenario starts to pass, the run **fails** with "known gap now PASSES": remove the marker and mark the gap
 `fixed`. The current list is in the README's "Benchmark" section.
 
-**1.6.0 closed every gap 1.5.0 recorded** (`GAP-SUPERSEDE`, `GAP-RECENCY`, `GAP-HISTORY`, `GAP-CONFIDENCE`, all now `fixed`), so no
-shipped scenario carried a marker until 1.5.0 (this release) added **`GAP-OBSOLETE-UNREPLACED`** (scenario A33, open): when a later
+**OneMemory 1.6.0 closed every gap OneMemory 1.5.0 recorded** (`GAP-SUPERSEDE`, `GAP-RECENCY`, `GAP-HISTORY`, `GAP-CONFIDENCE`, all now `fixed`), so no
+shipped scenario carried a marker until Monomem 1.5.0 (this release) added **`GAP-OBSOLETE-UNREPLACED`** (scenario A33, open): when a later
 note updates a fact in different words and nobody replaces the old note, keyword search and the "what is relevant" lookup rank the
 **old** note first (it matches the query as well and is shorter, so BM25 scores it higher; newest-first only breaks exact ties). The
 SessionStart injection does carry the new value. With the replace step (A34) the old value is gone from all three. Two honest
@@ -76,8 +76,8 @@ notes on what "closed" means for the earlier gaps:
 
 - Five of the old gap scenarios (A05, A06, A10, A20, B03) now include the replace steps: the agent *replaces* the old note through
   the two-step preview and confirm. Monomem still does **not** guess that a new note replaces an old one and hide the old one by
-  itself; that is a deliberate safety choice (nothing disappears unless a person confirms). Run against the 1.5.0 scenario files,
-  1.6.0 still returns both notes for those five.
+  itself; that is a deliberate safety choice (nothing disappears unless a person confirms). Run against the OneMemory 1.5.0 scenario files,
+  OneMemory 1.6.0 still returns both notes for those five.
 - A11 (a 200-day-old twin) passes through the ranking fix alone, B08 through note history, D10 through the confidence field,
   and B09 through restoring the earlier version after distrusting the overwriter.
 
@@ -277,7 +277,7 @@ multi-session questions.
 | LoCoMo-10 session (1,982) | relevant | 90.5 | **81.6** | 95.5 | 87.7 | 80.5 | 78.8 | 1.6 / 5.6 ms |
 
 The honest headline for LongMemEval-S is therefore **84.0 strict / 96.8 any-hit at k = 5**. agentmemory 0.9.31 reports 84.7
-strict recall-all@5 with BM25 (its own figure, not re-run here), so on the strict metric the two are level, not the 12-point gap
+strict recall-all@5 with BM25 (its own figure, not re-run here), so on the strict metric Monomem is 0.7 lower, not 12 points ahead as
 the any-hit number suggests.
 
 **Speed at 10,000 notes (`monomem bench --scale 10k`), new in this round.** A synthetic store in a temp folder: 10,000 notes
@@ -570,7 +570,7 @@ nDCG@10 87.5, MRR 88.6, search p50 1.7 ms.
 Version numbers below are from before the 2026 rename to Monomem (the product was released as OneMemory 1.x-2.x).
 
 **The five provenance fields, honestly.** Against the usual list (source, timestamp, confidence, tenant, deletion policy), at 1.6.0:
-*source*: partly (`written_by` / `created_by` are server-stamped and cannot be faked; the `source` field is only a claim);
+*source*: partly (`written_by` / `created_by` are server-stamped and cannot be faked for token callers (a local stdio app's name is its own config claim); the `source` field is only a claim);
 *timestamp*: yes (`created_at`, `updated_at`, kept through export and import, plus a staleness flag); *tenant*: yes (namespaces pinned
 to tokens, read grants); *deletion policy*: partly (per-note `forget_after`, archive and sweep, explicit admin delete; no per-tenant default
 or legal hold); *confidence*: **yes, as a claim** (an optional 0 to 1 value, labelled with who claimed it, kept through edits, export and import,

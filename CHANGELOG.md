@@ -6,11 +6,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [1.5.0] - Unreleased
 
+This release includes 1.4.0 below, which was never published on its own: the last published release is 1.3.5, and
+upgrading from 1.3.x takes one step (docs/upgrading.md).
+
 ### Security
 
 - **App keys in `tokens.json` are stored as one-way hashes, and existing ones are hashed automatically on the first start.**
   The rewrite is atomic, no plain-text `tokens.json.bak` is left, and running it again changes nothing. Your apps keep working
-  with the keys they already hold. **Downgrading to 1.4.x or older cannot read hashed keys:** run `monomem connect <app>` again
+  with the keys they already hold. **Going back to 1.3.x (the last published release) cannot read hashed keys:** run `monomem connect <app>` again
   for each app. The main key (`.token`) stays in plain text. `monomem token harden` does it by hand; `monomem doctor` warns
   about any key still in plain text.
 - **Honest key disclosure.** SECURITY.md and docs/trust.md now list every place a key sits (`.token`, `tokens.json`, each
@@ -44,6 +47,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the older one says "restart this app" instead of writing rows in the old shape.
 - **`doctor` tells the truth about encryption:** it fails when encrypted notes have no key and warns about readable bodies
   next to a key; `encrypt status` counts them. `restore` recognises an encrypted backup again.
+- **`derived_from` no longer leaks across namespaces.** A note's `derived_from` list names only parents the reader may
+  see, so a parent's id in a namespace the reader cannot read is no longer shown. Deleting a note removes its links and
+  confirmations.
 
 ### Changed
 
@@ -133,6 +139,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - First run: an empty store scores 100 for tidiness, the first note is #1, and Windows shows one folder-permission line.
 - `doctor` warns about pre-upgrade copies older than 14 days and about failed background index builds.
 - The remote-access guide works as written (`MONOMEM_ALLOWED_HOSTS`, `tailscale serve`, `monomem` on the Docker image's PATH).
+- **An unchanged write is a no-op.** A write that changes nothing in the note (same text, title, tags and settings) no longer bumps
+  its `rev`, adds a history version or counts toward the write-flood limit. REST PUT and MCP `state_write` replies carry
+  `unchanged: true`. API callers that expected a new `rev` on every write see the old one.
+- **A retro-taint now bumps `rev` and `updated_at`.** When a note is marked as written after outside content after the
+  fact, the change feed and `sync` carry the mark. Feed consumers see one more change for that note.
+- **Races fixed.** Two processes confirming the same note at once can no longer both count (the confirm rules run inside
+  the write transaction). Approve, keep and reject of a held write are race-safe, and a damaged held write refuses to be
+  cleared instead of half-applying.
+- `quarantine` context lists every note saved since the hold, not only the newest 500.
 
 ### Performance
 
@@ -261,7 +276,7 @@ turn on `enforce`). Upgrade notes: docs/upgrading.md (schema v19 to v21, one way
 - A shell that looks like a terminal counts as a person: the terminal check (stdin and stdout are terminals) is the same
   as for typed-yes commands, and an agent tool that opens a pseudo-terminal passes it.
 
-### Not in this release (planned for 1.4.1)
+### Not in this release (not yet built)
 
 - Per-tag and per-writer expiry periods, per-namespace `enforce`, and a warning 7 days before notes expire.
 - Following `derived_from` more than one hop back, and a session-start count line for notes built on a distrusted writer.

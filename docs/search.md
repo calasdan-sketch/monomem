@@ -193,7 +193,7 @@ The same writer can confirm the same version again once its last confirm is olde
 
 `monomem doctor` and `monomem health` print the mode, the period and how many notes are past due.
 
-Not yet: per-tag or per-writer periods, per-namespace `enforce`, and a warning before notes expire (planned for 1.4.1).
+Not yet: per-tag or per-writer periods, per-namespace `enforce`, and a warning before notes expire (not yet built).
 
 ## Consolidation (dedup)
 

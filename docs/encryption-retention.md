@@ -48,6 +48,8 @@ name below is one line of that report:
 | **Server log** (`server.log`, `start --log`) | No note text | Paths, ports and error messages; Monomem writes no note text there, but the file itself is plain |
 | **Backups** | Not checked by the report | A backup is a copy of the database as it was: whatever was sealed then is sealed in it, and the key is only included with `--include-key`. Pre-upgrade copies made before encryption hold plain bodies; the report counts them |
 | **Exports** | No | `monomem export` (JSON or a Markdown folder) and `GET /export` write **decrypted** bodies (see Export below) |
+| **Sync conflicts** (`sync-conflicts/` in the data folder) | No | When `sync --git` meets an edit conflict, the losing side is kept here as plain Markdown, decrypted. Delete a folder once you have checked it |
+| **Project rules files** (`AGENTS.md` / `CLAUDE.md`) | No | `monomem project-rules` copies the **decrypted** bodies of confirmed notes into the repository's rules file, which is usually committed. It prints the namespaces it drew from; without a namespace setting for the folder it draws from every namespace, so pass `--ns <namespace>` to keep it to one |
 | **Sync files** | Not checked by the report | `monomem sync --git --encrypt` seals every file ([file-sync.md](./file-sync.md)); without `--encrypt` the repository holds plain Markdown |
 
 **The search tradeoff, stated plainly.** `notes_fts` is a SQLite

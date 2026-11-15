@@ -200,6 +200,30 @@ describe("R1-14 a person at a terminal is told the hold is missing before the ty
   });
 });
 
+describe("final ease panel: keep-history with nothing newer refuses before the typed yes", () => {
+  test("at a terminal, the person is not asked to type yes for a keep-history that cannot happen", () => {
+    const home = mkdtempSync(join(tmpdir(), "om-keephist-"));
+    try {
+      const db = join(home, "t.db");
+      const s = new Store(db);
+      s.setApproveFirst("pricing", true);
+      setProcessWriter("stdio:agent-a");
+      const qid = hold(() => s.create({ namespace: "pricing", title: "Acme price is $50", body: "per seat" }));
+      setProcessWriter("");
+      s.close();
+      const env = { ...process.env, MONOMEM_HOME: home, ONEMEMORY_HOME: home, MONOMEM_DB_PATH: db };
+      const cli = fileURLToPath(new URL("../src/cli.js", import.meta.url));
+      const tty = "data:text/javascript,Object.assign(process.stdin,{isTTY:true});Object.assign(process.stdout,{isTTY:true})";
+      const r = spawnSync(process.execPath, ["--import", tty, cli, "quarantine", "keep-history", String(qid)], { env, encoding: "utf8", input: "yes\n" });
+      assert.equal(r.status, 1, r.stdout + r.stderr);
+      assert.match(r.stderr, /nothing newer on the same topic/);
+      assert.doesNotMatch(r.stdout, /Type "yes"/);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("R1-22 L2 the gate says what a confirm is, not that it lowers protection", () => {
   test("monomem confirm from a script: refused with person-confirm wording", () => {
     const home = mkdtempSync(join(tmpdir(), "om-gatewording-"));

@@ -3,7 +3,7 @@
 // docs/encryption-retention.md: a test fails when a surface listed here is not named there.
 // Free function over the Store; Store keeps a one-line delegate. Imports `type { Store }` only.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Store } from "../store.js";
 import { SPOOL_FILE } from "../capture.js";
@@ -41,6 +41,15 @@ function spoolCounts(dataDir: string): [number, number] {
     }
   }
   return [sealed, plain];
+}
+
+/** Conflict folders kept by sync --git (each holds plain Markdown). */
+function conflicts(dataDir: string): number {
+  try {
+    return readdirSync(join(dataDir, "sync-conflicts")).length;
+  } catch {
+    return 0;
+  }
 }
 
 export function encryptionSurfaces(s: Store, o: { dataDir: string; dbPath: string }): EncryptionSurface[] {
@@ -81,6 +90,8 @@ export function encryptionSurfaces(s: Store, o: { dataDir: string; dbPath: strin
     { surface: "audit log", encrypted: "no note text", detail: "audit.log holds operations, ids, namespaces and byte counts, never note text" },
     { surface: "server log", encrypted: "no note text", detail: "server.log (start --log) holds paths, ports and errors; Monomem writes no note text there" },
     { surface: "backups", encrypted: "not checked", ...(copies ? { plain: copies } : {}), detail: `a backup is the database as it was then, sealed or not${copies ? `; ${copies} pre-upgrade cop${copies === 1 ? "y" : "ies"} may hold bodies from before the key` : ""}; the key is only in it with --include-key` },
+    never("sync conflicts", conflicts(o.dataDir), "sync-conflicts/<time>/ in the data folder: the losing side of a sync --git edit conflict, written decrypted"),
+    { surface: "project rules files", encrypted: "no", detail: "monomem project-rules copies the decrypted bodies of confirmed notes into the repository's AGENTS.md / CLAUDE.md, which is usually committed" },
     { surface: "exports", encrypted: "no", detail: "monomem export (JSON or a Markdown folder) and GET /export write decrypted bodies: store them accordingly" },
     { surface: "sync files", encrypted: "not checked", detail: "monomem sync --git --encrypt seals every file; without --encrypt the repository holds plain Markdown" },
   ];

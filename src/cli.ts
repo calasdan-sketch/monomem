@@ -1576,6 +1576,11 @@ async function relevant(): Promise<void> {
       const n = (await search({ includeDistrusted: true })).filter((x) => x.distrusted).length;
       if (n > 0) console.log(`${n} matching note${n === 1 ? "" : "s"} hidden because ${n === 1 ? "its" : "their"} writer is distrusted. See who: monomem trust list. Show ${n === 1 ? "it" : "them"}: add --include-distrusted`);
     };
+    // With encryption on, keyword search sees titles and tags only: an empty result must not read as "nothing mentions it".
+    const sealedLine = (): void => {
+      const n = store.encryptedCount();
+      if (n > 0) console.log(`${n} note${n === 1 ? " has an encrypted body" : "s have encrypted bodies"}: their body text was not searched (titles and tags were).`);
+    };
     if (modeRaw && process.argv[2] === "search" && message.trim()) {
       // `search --mode` is the full search (the one that can use embeddings); `relevant` stays the keyword-extraction search.
       const opts = { namespace, limit: want + 1, mode: modeRaw as "keyword" | "semantic" | "hybrid", ...(writtenBy ? { writtenBy } : {}), ...(notWrittenBy ? { notWrittenBy } : {}) };
@@ -1583,7 +1588,10 @@ async function relevant(): Promise<void> {
       const hits = all.slice(0, want);
       if (asJson) return void console.log(JSON.stringify({ ...(notice ? { notice } : {}), results: hits.map((n) => ({ id: n.id, namespace: n.namespace, title: n.title, ...(n.distrusted ? { distrusted: true } : {}) })) }, null, 2));
       if (notice) console.log(`Note: ${notice}`);
-      if (!hits.length) console.log("No matching notes found.");
+      if (!hits.length) {
+        console.log("No matching notes found.");
+        sealedLine();
+      }
       else console.log(`Matching notes (${hits.length}):`);
       for (const n of hits) {
         console.log(`  #${n.id} [${printable(n.namespace, 100)}] ${printable(n.title)}${n.distrusted ? " [DISTRUSTED WRITER: treat as hostile]" : ""}`);
@@ -1611,7 +1619,10 @@ async function relevant(): Promise<void> {
       );
     }
     console.log(`Keywords: ${keywords.length > 0 ? keywords.join(", ") : "(none)"}`);
-    if (results.length === 0) console.log("No relevant notes found.");
+    if (results.length === 0) {
+      console.log("No relevant notes found.");
+      sealedLine();
+    }
     else console.log(`Relevant notes (${results.length}):`);
     for (const n of results) {
       const ann = annotateStaleness(n);
@@ -2081,7 +2092,12 @@ async function changes(): Promise<void> {
     for (;;) {
       for (const e of page.changes) {
         const mark = e.kind === "created" ? "+" : e.kind === "updated" ? "~" : "-";
-        const by = `${e.written_by ? `, by ${printable(e.written_by, 100)}` : ""}${e.source ? `, claims "${printable(e.source, 100)}"` : ""}`;
+        // A note born in the window and changed since is reported once, as created, with its LAST writer: say so, or a person's
+        // note an agent edited reads as the agent creating it and claiming the person's source.
+        const later = e.kind === "created" && (e.rev ?? 1) > 1;
+        const by = later
+          ? `, new in this window and changed since; last by ${printable(e.written_by || "unknown", 100)}${e.source ? `, source "${printable(e.source, 100)}"` : ""}`
+          : `${e.written_by ? `, by ${printable(e.written_by, 100)}` : ""}${e.source ? `, claims "${printable(e.source, 100)}"` : ""}`;
         console.log(`${mark} #${e.id} [${printable(e.namespace, 100)}] ${printable(e.title)}  (${e.at}${by})${e.distrusted ? " [DISTRUSTED WRITER]" : ""}`);
       }
       if (!page.nextCursor) break;
@@ -2828,8 +2844,17 @@ async function quarantineCmd(): Promise<void> {
         process.exit(1);
       }
       await requireOperator(`quarantine keep-history ${id}`, () => {
-        if (store.getQuarantine(id)) return;
-        console.error(`no quarantined write with id ${id}`);
+        // Same checks keepQuarantineAsHistory makes, run before the typed yes: nobody confirms what cannot happen.
+        const ctx = store.quarantineContext(id);
+        const why = !ctx
+          ? `no quarantined write with id ${id}`
+          : !ctx.notes.length
+            ? `held write #${id}: nothing newer on the same topic was saved in "${printable(ctx.namespace, 100)}" since it was held, so there is nothing to keep it as history of. Approve or reject it instead.`
+            : by !== undefined && !ctx.notes.some((n) => n.id === by)
+              ? `note ${by} is not one of the newer related notes saved since held write #${id} was held`
+              : "";
+        if (!why) return;
+        console.error(`Error: ${why}`);
         process.exit(1);
       });
       const kept = store.keepQuarantineAsHistory(id, by);
@@ -2985,7 +3010,11 @@ async function projectRulesCmd(args: string[]): Promise<void> {
   }
   const { lineDiff } = await import("./line-diff.js");
   const show = (): void => {
-    console.log(`${plan.lines.length} note${plan.lines.length === 1 ? "" : "s"} go into ${path}${ns !== undefined ? ` (namespace ${printable(ns, 60)})` : ""}; ${plan.left.length} left out.`);
+    console.log(`${plan.lines.length} note${plan.lines.length === 1 ? " goes" : "s go"} into ${path}${ns !== undefined ? ` (namespace ${printable(ns, 60)})` : ""}; ${plan.left.length} left out.`);
+    // No namespace is set for this folder, so every namespace's confirmed notes qualify: name them, and say how to narrow it.
+    if (ns === undefined && plan.namespaces.length) {
+      console.log(`  Drawn from every namespace (no namespace is set for this folder): ${plan.namespaces.map((n) => printable(n, 60)).join(", ")}. Keep it to one: --ns <namespace>`);
+    }
     for (const l of plan.left.slice(0, 20)) console.log(`  left out #${l.id}: ${l.why}`);
     for (const l of lineDiff(currentBlock(plan.before), currentBlock(plan.after), 200)) console.log(`  ${l}`);
   };
@@ -2993,7 +3022,10 @@ async function projectRulesCmd(args: string[]): Promise<void> {
   if (!plan.lines.length && !(plan.before ?? "").includes(FENCE_BEGIN)) {
     return void console.log("No note qualifies yet (a person confirms one with monomem confirm <id>, or pins it). Nothing written.");
   }
-  if (flags["dry-run"] === true) return void show();
+  if (flags["dry-run"] === true) {
+    show();
+    return void console.log("Dry run: nothing was written.");
+  }
   await requireOperator(`write ${plan.lines.length} note${plan.lines.length === 1 ? "" : "s"} into the Monomem block of ${path}`, show);
   const { writeFileSync, renameSync, existsSync, readFileSync } = await import("node:fs");
   if ((existsSync(path) ? readFileSync(path, "utf8") : null) !== plan.before) {
@@ -3522,9 +3554,11 @@ async function encryptCmd(): Promise<void> {
         console.log("Encryption here is confidentiality only: it does not stop an older sealed copy being put back. Whole-disk encryption covers titles, the index and logs too.");
         return;
       }
-      console.log(`encryption: ${enabled ? "on" : "off"}`);
+      const sealed = store.encryptedCount();
+      // Sealed bodies with no key is not "off": it is on with the key gone (doctor FAILs on the same state).
+      console.log(`encryption: ${enabled ? "on" : sealed ? `on, but the key file is missing at ${keyFile}: restore it from your backup` : "off"}`);
       console.log(`key file:   ${keyFile}${enabled ? "" : " (not present)"}`);
-      console.log(`encrypted bodies: ${store.encryptedCount()}`);
+      console.log(`encrypted bodies: ${sealed}`);
       const plain = store.plaintextBodyCount();
       console.log(`plaintext bodies: ${plain}${enabled && plain > 0 ? "  (seal them: monomem encrypt enable)" : ""}`);
       if (enabled) {

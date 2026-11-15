@@ -129,6 +129,13 @@ describe("R2-07 project-rules: who may run it", () => {
       const dry = spawnSync(process.execPath, [cli, "project-rules", "--dry-run"], { cwd: dir, encoding: "utf8" });
       assert.equal(dry.status, 0, dry.stderr);
       assert.match(dry.stdout, /cli project rule/);
+      // Final security panel item 5: with no namespace set for the folder, say which namespaces it drew from and offer --ns.
+      assert.match(dry.stdout, /from every namespace .*: default\b/);
+      assert.match(dry.stdout, /--ns <namespace>/);
+      assert.match(dry.stdout, /Dry run: nothing was written\./);
+      const one = spawnSync(process.execPath, [cli, "project-rules", "--dry-run", "--ns", "default"], { cwd: dir, encoding: "utf8" });
+      assert.match(one.stdout, /\(namespace default\)/);
+      assert.doesNotMatch(one.stdout, /every namespace/);
       assert.equal(existsSync(join(dir, "AGENTS.md")), false, "--dry-run writes nothing");
     } finally {
       rmSync(dir, { recursive: true, force: true });

@@ -5,7 +5,7 @@ Monomem keeps to two places on its own: **its data folder** and **the config fil
 folder (`setup --project`, `export --dir`, `export --out`, `backup --out`, `sync --git`). It never writes a `CLAUDE.md` or
 `AGENTS.md` unless you run `monomem project-rules` (1.5.0) in that repository at a terminal and type yes; then it writes
 only between its own `<!-- monomem:begin v1 -->` and `<!-- monomem:end -->` lines (delete those lines and what is between
-them to remove it). It runs no background service you did not start, and every queue it keeps has a size or retry limit.
+them to remove it). It runs no background service you did not start (`monomem service install` adds one; see below), and every queue it keeps has a size or retry limit.
 
 To take it all out: `monomem uninstall` (configs) or `monomem uninstall --purge` (configs and data, after a final
 backup). Both show the plan first and change nothing until you type `y`; `--dry-run` only shows it.
@@ -28,6 +28,8 @@ folder). `monomem doctor` prints which one, and its size.
 | `setup-history.json` | each `setup` that changed a file (what `--undo` / `uninstall` replay) | `uninstall --purge` |
 | `claude-import-held.json` | `import --claude` (files you chose to hold back) | `uninstall --purge` |
 | `.sync-work-*`, `sync-conflicts/<time>/` | `sync --git --encrypt` (work folder, removed after); the losing side of an edit conflict | `uninstall --purge` |
+| `sync-git-seen-<id>.json` | `sync --git`: the highest version synced per file, one per repository | `uninstall --purge` |
+| `monomem-task.xml` | Windows only, `monomem service install` (the task definition it hands to Task Scheduler) | `service uninstall` / `uninstall --purge` |
 | `.migrate.lock` | a few ms while a 1.0.x database is moved out of the package | removed by itself |
 
 ## App config files (only with `monomem setup`)
@@ -43,6 +45,19 @@ changed since.
 since is put back byte for byte from its backup, and a file the app changed since keeps those changes and loses only the
 Monomem part. An entry setup did not add (one you wrote by hand) is listed, not removed. `--purge` also deletes the
 `.monomem-backup-*` copies setup recorded; `...-before-undo` copies are always kept for you to check.
+
+## The background service (only with `monomem service install`)
+
+| OS | Writes | Remove |
+|---|---|---|
+| Windows | Task Scheduler task `Monomem` (at sign-in, restarted if it stops) and `<data folder>/monomem-task.xml` | `monomem service uninstall`, or `uninstall --purge` |
+| macOS | `~/Library/LaunchAgents/io.monomem.server.plist` (RunAtLoad, KeepAlive) | `monomem service uninstall`, or `uninstall --purge` |
+| Linux | `~/.config/systemd/user/monomem.service` (Restart=always) | `monomem service uninstall`, or `uninstall --purge` |
+
+`uninstall --purge` finds the service and removes it (through `monomem service uninstall`) before it deletes any data:
+left behind, it would start the server again at the next sign-in and make a new data folder and token. If that removal
+fails, nothing is deleted and the command to run is printed. Plain `uninstall` lists the service and the command, and
+leaves it running. On Windows the task is found by its `monomem-task.xml` in the data folder.
 
 ## Written only where you point it
 

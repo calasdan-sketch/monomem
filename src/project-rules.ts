@@ -52,18 +52,22 @@ export function ruleLine(n: NoteRecord): string {
   return `- ${text.slice(0, LINE_CHARS)} (om:#${n.id})`;
 }
 
-/** The notes that go in, as lines (oldest id first), and the ones left out with why. */
-export function projectableNotes(store: Store, namespace?: string): { lines: string[]; left: Array<{ id: number; why: string }> } {
+/** The notes that go in, as lines (oldest id first), the namespaces they came from, and the ones left out with why. */
+export function projectableNotes(store: Store, namespace?: string): { lines: string[]; namespaces: string[]; left: Array<{ id: number; why: string }> } {
   const enforce = expiryEnforced(store);
   const notes = store.list({ namespace, limit: SCAN, count: false, withoutTags: [TASK_TAG, HANDOFF_TAG, NEVER_SHOW_TAG] }).notes;
   const lines: string[] = [];
   const left: Array<{ id: number; why: string }> = [];
+  const namespaces = new Set<string>();
   for (const n of [...notes].sort((a, b) => a.id - b.id)) {
     const why = exclusionReason(store, n, enforce);
     if (why) left.push({ id: n.id, why });
-    else lines.push(ruleLine(n));
+    else {
+      lines.push(ruleLine(n));
+      namespaces.add(n.namespace);
+    }
   }
-  return { lines, left };
+  return { lines, namespaces: [...namespaces].sort(), left };
 }
 
 /** The fenced block for these lines. */
@@ -97,8 +101,8 @@ export function currentBlock(text: string | null): string {
 }
 
 /** What a run would do: the file's text now and after, and the lines. `after === before` means nothing to write. */
-export function planProjectRules(store: Store, path: string, namespace?: string): { before: string | null; after: string; lines: string[]; left: Array<{ id: number; why: string }> } {
+export function planProjectRules(store: Store, path: string, namespace?: string): { before: string | null; after: string; lines: string[]; namespaces: string[]; left: Array<{ id: number; why: string }> } {
   const before = existsSync(path) ? readFileSync(path, "utf8") : null;
-  const { lines, left } = projectableNotes(store, namespace);
-  return { before, after: applyBlock(before, renderBlock(lines)), lines, left };
+  const { lines, namespaces, left } = projectableNotes(store, namespace);
+  return { before, after: applyBlock(before, renderBlock(lines)), lines, namespaces, left };
 }

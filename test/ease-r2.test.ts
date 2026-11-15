@@ -64,7 +64,7 @@ describe("U-01 writer names", () => {
     const text = o.lines.join("\n");
     assert.equal(code, 1, text);
     assert.match(text, /Did you mean "stdio:cursor" \(1 note/);
-    assert.doesNotMatch(text, /This code works once/);
+    assert.doesNotMatch(text, /can be confirmed once/);
     assert.doesNotMatch(text, /--yes/);
   });
 
@@ -76,7 +76,7 @@ describe("U-01 writer names", () => {
     const text = o.lines.join("\n");
     assert.equal(code, 0);
     assert.match(text, /Nothing to do/);
-    assert.doesNotMatch(text, /This code works once|--yes|Nothing is deleted/);
+    assert.doesNotMatch(text, /can be confirmed once|--yes|Nothing is deleted/);
   });
 
   test("trust distrust <app> refuses, suggests stdio:<app>, and saves nothing", () =>
@@ -225,6 +225,24 @@ describe("U-04 changes groups by the stamped writer; the claimed source is shown
       assert.doesNotMatch(r.stdout, /\(no source\)/);
       assert.match(r.stdout, /#2 .*by stdio:cursor, claims "claude-code"/);
       assert.match(r.stdout, /#1 .*by stdio:cursor\)/);
+    }));
+
+  test("a person's note an agent edited later is not shown as the agent creating it and claiming to be the person", () =>
+    withDir((dir) => {
+      const s = new Store(join(dir, "t.db"));
+      try {
+        setProcessWriter("cli");
+        const n = s.create({ namespace: "work", title: "Mine", body: "a", source: "cli" });
+        setProcessWriter("stdio:cursor");
+        s.update(n.id, { body: "b" });
+      } finally {
+        s.close();
+        setProcessWriter("");
+      }
+      const r = run(dir, ["changes", "--since", "1h"]);
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stdout, /#1 .*new in this window and changed since; last by stdio:cursor, source "cli"/);
+      assert.doesNotMatch(r.stdout, /claims "cli"/);
     }));
 });
 

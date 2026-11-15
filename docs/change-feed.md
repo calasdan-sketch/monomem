@@ -70,7 +70,8 @@ Scope: **read** (REST and MCP).
   the delete. Consolidation shows as one `created` plus the deleted sources.
 - `counts` / `bySource` / `byWriter` cover the **whole window**, not just the page.
   `source` is what the writer *claims*; `byWriter` groups by the writer the server stamped (`written_by`), which is
-  what `monomem changes` prints (each line shows `by <writer>` and, when set, `claims "<source>"`).
+  what `monomem changes` prints (each line shows `by <writer>` and, when set, `claims "<source>"`; a note created in the
+  window and changed since says `new in this window and changed since; last by <writer>, source "<source>"`).
   `quarantined` counts linter-held writes queued in the window (they are not
   notes; see [memory-linter.md](./memory-linter.md)).
 - The window is frozen when the first page is requested (it ends at the
