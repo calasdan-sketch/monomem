@@ -98,6 +98,10 @@ Verified in `test/token-namespace.test.ts` (in the source repository):
   resolved per request and never shared, so interleaved requests from
   different tokens cannot clobber each other's boundary mid-await.
 
+What a pin does not hide: **search ranking statistics are store-wide.** Ranking (bm25 and the keyword rarity weights) uses
+word counts over the whole store, so the order and scores of the results a pinned token sees can be shaped slightly by notes
+in namespaces it cannot read. No hidden note, title or text is returned; only the ranking of visible notes moves.
+
 ## Threat model
 
 **Protects against:** one agent's token reading or writing another agent's
