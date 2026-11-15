@@ -5551,7 +5551,7 @@ export class Store {
       this.db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS temp.om_vocab_${schema} USING fts5vocab(${schema}, ${table}, 'row')`);
       const n = this.liveNoteTotal();
       const st = this.db.prepare(`SELECT COALESCE(SUM(doc), 0) AS d FROM temp.om_vocab_${schema} WHERE term >= ? AND term < ?`);
-      for (const p of prefixes) df.set(p, Math.min(n, Number((st.get(p, p + "￿") as { d: number }).d)));
+      for (const p of prefixes) df.set(p, Math.min(n, Number((st.get(p, p + "\uffff") as { d: number }).d)));
       return { n, df };
     } catch {
       // No readable vocabulary (an old SQLite without fts5vocab, a closed store): every keyword weighs the same.
