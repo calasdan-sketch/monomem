@@ -869,6 +869,8 @@ describe("docs and CI stay in step with the code", () => {
       }
     };
     walk("src");
+    // The folders the large files were split into (Phase 0) hold code that used to sit in src/ itself.
+    for (const d of ["src/mcp", "src/api", "src/doctor", "src/cli"]) walk(d);
     const doc = read("docs", "configuration.md");
     const rows = [...doc.matchAll(/^\|\s*`(MONOMEM_[A-Z0-9_]+)`/gm)].map((m) => m[1]);
     const dupes = rows.filter((r, i) => rows.indexOf(r) !== i);

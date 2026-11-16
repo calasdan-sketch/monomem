@@ -25,7 +25,7 @@ import { TASK_TAG, HANDOFF_TAG, listTasks } from "./tasks.js";
 import { CHAT_TAG } from "./chat-import.js";
 import { NEVER_SHOW_TAG, isModelWritten, originFlag, originTools, originLegend } from "./reserved-tags.js";
 import { disputedLines } from "./facts.js";
-import { enabledToolNames } from "./mcp-server-core.js";
+import { enabledToolNames } from "./mcp/tool-names.js";
 import { expiredCountLine, heldFromSessionStart, isTainted, noteFlags, unconfirmedCountLine } from "./taint.js";
 
 /**

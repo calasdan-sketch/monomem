@@ -4,7 +4,7 @@
 import "./setup-env.js";
 import { test, describe, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
@@ -93,7 +93,10 @@ const REST_EXEMPT: Record<string, string> = {
 };
 
 function restRoutesInSource(): string[] {
-  const api = readFileSync(join(SRC, "api.ts"), "utf8");
+  // api.ts and the route files split out of it (src/api/).
+  const api = [join(SRC, "api.ts"), ...readdirSync(join(SRC, "api")).filter((f) => f.endsWith(".ts")).sort().map((f) => join(SRC, "api", f))]
+    .map((p) => readFileSync(p, "utf8"))
+    .join("\n");
   const found = new Set<string>();
   const named: Record<string, string> = {
     idMatch: "/notes/:id",
