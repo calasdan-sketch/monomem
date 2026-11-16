@@ -452,7 +452,7 @@ export async function mergeVault(io: GitSyncIO, v: VaultRun): Promise<Buffer | n
       if (imp.disputes > 0) io.out(`  ${imp.disputes} of them: the newer text is live and the other one is held for you to pick (monomem review).`);
       const ar = imp.archive;
       const n = (k: number, one: string): string => `${k} ${one}${k === 1 ? "" : "s"}`;
-      if (ar.archived) io.out(`  archived ${n(ar.archived, "note")} forgotten on another computer (kept, not deleted).`);
+      if (ar.archived) io.out(`  archived ${n(ar.archived, "note")} that another computer archived (kept, not deleted).`);
       if (ar.restored) io.out(`  brought back ${n(ar.restored, "archived note")} (restored or edited on another computer).`);
       if (ar.kept) io.out(`  kept ${n(ar.kept, "note")} live here that another computer archived:`);
       for (const l of ar.lines) io.out(`    ${l}`);

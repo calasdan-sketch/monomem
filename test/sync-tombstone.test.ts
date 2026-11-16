@@ -96,7 +96,7 @@ for (const encrypt of [false, true]) {
       withStore(w.a, (s) => s.archive(id));
       await sync(w.a, opts); // A writes the marker: one commit
       const outB = await sync(w.b, opts);
-      assert.match(outB, /archived 1 note forgotten on another computer/);
+      assert.match(outB, /archived 1 note that another computer archived/);
       const onB = byTitle(w.b, "Deploy target");
       assert.ok(onB, "B keeps the note (never a hard delete)");
       assert.ok(onB!.archived_at, "the forget reached B as an archive");
