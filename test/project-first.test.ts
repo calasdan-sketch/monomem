@@ -4,7 +4,7 @@
 import "./setup-env.js";
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -40,6 +40,18 @@ describe("project-first session start (C18)", () => {
     const plain = await rankContext(s, { signals: { branch: "", diffFiles: [] } });
     assert.equal(plain.ranked[0].id, other);
     s.close();
+  });
+
+  test("insideFolder compares real paths: a folder reached through a link is inside the real root (macOS /var -> /private/var)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "mm-link-"));
+    try {
+      mkdirSync(join(dir, "real", "sub"), { recursive: true });
+      symlinkSync(join(dir, "real"), join(dir, "link"), "junction");
+      assert.equal(insideFolder(join(dir, "link", "sub"), realpathSync.native(join(dir, "real"))), true);
+      assert.equal(insideFolder(join(dir, "real", "sub"), join(dir, "link")), true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("gitSignals reports the repository's top folder", async () => {

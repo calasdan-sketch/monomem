@@ -16,6 +16,7 @@
 // a note tagged never-show (NEVER_SHOW_TAG) is never injected. With a session id, the sizes go to the meter (meter.ts).
 // Operator-pinned notes (notes.pinned, set by `monomem pin` or an admin key) come before all of it, within PINNED_CHARS.
 import { execFile } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import type { Store, NoteRecord } from "./store.js";
 import { NOTE_KINDS } from "./store.js";
@@ -134,9 +135,20 @@ export async function gitSignals(cwd: string): Promise<ContextSignals> {
   return { branch: branch === "HEAD" ? "" : branch, diffFiles: d.split("\n").map((s) => s.trim()).filter(Boolean).slice(0, 50), ...(root ? { root } : {}) };
 }
 
-/** A folder in comparable form: absolute, "/" separators, no trailing "/", lowercased on Windows. */
+/** A folder in comparable form: real path (git reports /private/var for macOS /var), "/" separators, no trailing "/", lowercased on Windows. */
+const realDirs = new Map<string, string>();
 const normDir = (p: string): string => {
-  const r = resolvePath(p).replace(/\\/g, "/").replace(/\/+$/, "");
+  let real = realDirs.get(p);
+  if (real === undefined) {
+    try {
+      real = realpathSync.native(p);
+    } catch {
+      real = resolvePath(p); // gone or unreadable: compare as written
+    }
+    if (realDirs.size > 1000) realDirs.clear(); // ponytail: crude cap; folders seen per process are few
+    realDirs.set(p, real);
+  }
+  const r = real.replace(/\\/g, "/").replace(/\/+$/, "");
   return process.platform === "win32" ? r.toLowerCase() : r;
 };
 /**
