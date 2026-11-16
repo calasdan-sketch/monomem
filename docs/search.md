@@ -39,6 +39,9 @@ Supported phrases (case-insensitive, found anywhere in the string, so
 
 - `today`, `yesterday`, `3 days ago`, `a day ago`
 - `last week` / `this week` (weeks start **Monday**), `last month` / `this month`
+- `two weeks ago` (that Monday-start week), `a month ago` (that calendar month), `last Saturday`
+  (the most recent one before today)
+- Rolling spans up to the end of today: `past month`, `past week`, `past 3 days`, `last 2 weeks`
 - `in july`, `in july 2025` (bare month = most recent such month, never future)
 - Dayparts: `this morning`, `yesterday evening`, `tonight`, `last night`
   (morning 05–12, afternoon 12–17, evening 17–22, night 22–05 next day;

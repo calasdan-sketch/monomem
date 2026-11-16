@@ -331,3 +331,41 @@ describe("store range scoping (real DB)", () => {
     assert.deepEqual(outRange.notes, []);
   });
 });
+
+// C21: relative phrases people actually type. NOW is Friday 2026-10-16 (07:00 in Winnipeg, UTC-5): this Monday is Oct 12.
+describe("parseTimePhrase: relative weeks, months and weekdays (C21)", () => {
+  const span = (phrase: string): [string, string] => {
+    const r = parse(phrase);
+    return [iso(r.start), iso(r.end)];
+  };
+  test("two weeks ago = the Monday-start week two back", () => {
+    assert.deepEqual(span("two weeks ago"), ["2026-09-28T05:00:00.000Z", "2026-10-05T05:00:00.000Z"]);
+    assert.deepEqual(span("what did we decide 2 weeks ago about deploys"), span("two weeks ago"));
+  });
+  test("a week ago = last week", () => {
+    assert.deepEqual(span("a week ago"), span("last week"));
+  });
+  test("a month ago = the calendar month before this one; 3 months ago = July", () => {
+    assert.deepEqual(span("a month ago"), ["2026-09-01T05:00:00.000Z", "2026-10-01T05:00:00.000Z"]);
+    assert.deepEqual(span("three months ago"), ["2026-07-01T05:00:00.000Z", "2026-08-01T05:00:00.000Z"]);
+  });
+  test("last Saturday = the most recent Saturday before today", () => {
+    assert.deepEqual(span("last Saturday"), ["2026-10-10T05:00:00.000Z", "2026-10-11T05:00:00.000Z"]);
+    assert.deepEqual(span("notes from last sat"), span("last saturday"));
+  });
+  test("last Friday on a Friday = a week ago, never today", () => {
+    assert.deepEqual(span("last friday"), ["2026-10-09T05:00:00.000Z", "2026-10-10T05:00:00.000Z"]);
+  });
+  test("past month / past week / past 3 days / last 2 weeks: rolling, up to the end of today", () => {
+    assert.deepEqual(span("in the past month"), ["2026-09-16T05:00:00.000Z", "2026-10-17T05:00:00.000Z"]);
+    assert.deepEqual(span("past week"), ["2026-10-09T05:00:00.000Z", "2026-10-17T05:00:00.000Z"]);
+    assert.deepEqual(span("past 3 days"), ["2026-10-13T05:00:00.000Z", "2026-10-17T05:00:00.000Z"]);
+    assert.deepEqual(span("last 2 weeks"), ["2026-10-02T05:00:00.000Z", "2026-10-17T05:00:00.000Z"]);
+  });
+  test("calendar phrases keep their meaning; nonsense stays null", () => {
+    assert.deepEqual(span("last week"), ["2026-10-05T05:00:00.000Z", "2026-10-12T05:00:00.000Z"]);
+    assert.deepEqual(span("last month"), ["2026-09-01T05:00:00.000Z", "2026-10-01T05:00:00.000Z"]);
+    assert.equal(parseTimePhrase("0 weeks ago", { now: NOW, timeZone: TZ }), null);
+    assert.equal(parseTimePhrase("the past is past", { now: NOW, timeZone: TZ }), null);
+  });
+});
