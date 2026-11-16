@@ -170,6 +170,8 @@ export function setNeverShow(store: Store, id: number, on: boolean): NoteRecord 
  * `notWrittenBy` (the session's own writer, when known). "" when there is nothing new.
  */
 export const NEW_LINES = 5;
+/** Round 4: session start's "Showing X of N memories" counts at most this many rows, then says "N+" (100k gate). */
+export const SESSION_COUNT_CAP = 2000;
 export function newNotesSince(store: Store, sessionId: string, opts: { namespace?: string; notWrittenBy?: string } = {}): string {
   const db = store.captureDb();
   // The prompt this hook fires for is already recorded, so the previous one is the second newest.
@@ -333,7 +335,7 @@ export async function rankContext(
   const pinnedIds = new Set(pinned.map((n) => n.id));
   const ranked = rankHits(store, [...fused.entries()].filter(([id]) => !pinnedIds.has(id)).map(([id, score]) => ({ note: pool.get(id)!, score })));
   const summary = latestSummary && pinnedIds.has(latestSummary.id) ? null : latestSummary;
-  return { ranked, total: store.list({ ...base, limit: 1 }).total, latestSummary: summary, why, pinned };
+  return { ranked, total: store.list({ ...base, limit: 1, countCap: SESSION_COUNT_CAP }).total, latestSummary: summary, why, pinned };
 }
 
 /** The packed context text ("" when there is nothing to say). */
@@ -445,7 +447,8 @@ export async function injectContext(store: Store, opts: InjectOptions = {}): Pro
   const rawTok = Math.ceil(fullChars / CHARS_PER_TOKEN);
   // Estimates, ~4 characters a token. The block adds headers and index lines, so it can be longer than the notes it summarises: say that plainly.
   const open = openHint();
-  const lead = `Showing ${shown.length} of ${Math.max(total, shown.length)} memories in ~${shownTok} tokens (estimate)`;
+  const of = total > SESSION_COUNT_CAP ? `${SESSION_COUNT_CAP.toLocaleString("en-US")}+` : String(Math.max(total, shown.length));
+  const lead = `Showing ${shown.length} of ${of} memories in ~${shownTok} tokens (estimate)`;
   const footer =
     shownTok <= rawTok
       ? `${lead}, condensed from ~${rawTok} tokens of notes and captured events. ${open}`

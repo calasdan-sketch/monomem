@@ -133,7 +133,9 @@ export function setPinned(s: Store, id: number, on: boolean, namespaces?: string
 export function pinnedNotes(s: Store, namespaces?: string[]): Array<{ id: number; namespace: string; title: string }> {
   if (namespaces && namespaces.length === 0) return [];
   const where = namespaces ? ` AND namespace IN (${namespaces.map(() => "?").join(",")})` : "";
-  return s.db.prepare(`SELECT id, namespace, title FROM notes WHERE pinned = 1${where}${s.ceilingSql()} ORDER BY id`).all(...(namespaces ?? [])) as unknown as Array<{
+  // Round 4: the partial index (v22) holds the pinned rows only; named, as the planner would walk the namespace instead.
+  const from = s.hasIndex("idx_notes_pinned") ? "notes INDEXED BY idx_notes_pinned" : "notes";
+  return s.db.prepare(`SELECT id, namespace, title FROM ${from} WHERE pinned = 1${where}${s.ceilingSql()} ORDER BY id`).all(...(namespaces ?? [])) as unknown as Array<{
     id: number;
     namespace: string;
     title: string;

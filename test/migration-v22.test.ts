@@ -34,6 +34,7 @@ describe("schema v22", () => {
     assert.ok(names(db, "table").includes("code_anchors"));
     const idx = names(db, "index");
     assert.ok(idx.includes("idx_notes_live_kind"), "(archived_at, kind) index");
+    for (const i of ["idx_notes_obs", "idx_notes_tag_task", "idx_notes_tag_convention", "idx_notes_kind_summary", "idx_notes_pinned", "idx_notes_facts"]) assert.ok(idx.includes(i), `round-4 index ${i}`);
     assert.ok(!idx.includes("idx_note_edges_note_id"), "prefix of the note_edges primary key: dropped");
     s.close();
   });

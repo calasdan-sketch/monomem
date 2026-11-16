@@ -1481,6 +1481,17 @@ function tagClause(withTags?: string[], withoutTags?: string[], tagPrefix?: stri
   return { sql, params };
 }
 
+/** Round 4: rare rows with a partial index (v22), by tag or by kind. `term` is the index's WHERE clause, verbatim. */
+type ListIndex = { name: string; term: string };
+const TAG_INDEXES: Record<string, ListIndex | undefined> = {
+  task: { name: "idx_notes_tag_task", term: `instr(tags, '"task"') > 0` },
+  convention: { name: "idx_notes_tag_convention", term: `instr(tags, '"convention"') > 0` },
+};
+const SUMMARY_INDEX: ListIndex = { name: "idx_notes_kind_summary", term: "kind = 'summary'" };
+
+/** Round 4: recentFilePaths looks at this many newest notes (session start keywords; a path older than that is not "recent"). */
+const RECENT_FILE_NOTES = 2000;
+
 function tagsMatch(rawTags: string, withTags?: string[], withoutTags?: string[], tagPrefix?: string): boolean {
   if (!withTags?.length && !withoutTags?.length && !tagPrefix) return true;
   const have = parseTags(rawTags);
@@ -2271,6 +2282,14 @@ export class Store {
     );
   }
 
+  /** Index names in this file, read once (a store made before an index was added still works, just without it). */
+  private tagIndexCache: Set<string> | undefined;
+  /** @internal */
+  hasIndex(name: string): boolean {
+    this.tagIndexCache ??= new Set((this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as Array<{ name: string }>).map((r) => r.name));
+    return this.tagIndexCache.has(name);
+  }
+
   private addColumn(table: string, column: string, decl: string): void {
     if (!this.hasColumn(table, column)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);
   }
@@ -2900,9 +2919,19 @@ export class Store {
       //    the rows stay when a note is deleted (the count is about the writer, not the note).
       //  - code_anchors (R2-03): the files a note is about, each with its git blob, the commit and the repository root at
       //    write time. Plain paths (like note_files), never note text.
+      //  - idx_notes_obs, idx_notes_tag_task, idx_notes_tag_convention, idx_notes_kind_summary, idx_notes_pinned,
+      //    idx_notes_facts (round 4, 100k gate): session start's decisions, conventions, open-task count, latest summary, pinned
+      //    notes and fact notes read only those rows, not the whole namespace. The partial ones are named in the query (INDEXED
+      //    BY, see TAG_INDEXES, pinnedNotes, liveFactNotesIn) because the planner cannot tell a rare row from a common one.
       this.db.exec(`
         DROP INDEX IF EXISTS idx_note_edges_note_id;
         CREATE INDEX IF NOT EXISTS idx_notes_live_kind ON notes(archived_at, kind);
+        CREATE INDEX IF NOT EXISTS idx_notes_obs ON notes(obs_type, updated_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_notes_tag_task ON notes(updated_at DESC, id DESC) WHERE instr(tags, '"task"') > 0;
+        CREATE INDEX IF NOT EXISTS idx_notes_tag_convention ON notes(updated_at DESC, id DESC) WHERE instr(tags, '"convention"') > 0;
+        CREATE INDEX IF NOT EXISTS idx_notes_kind_summary ON notes(updated_at DESC, id DESC) WHERE kind = 'summary';
+        CREATE INDEX IF NOT EXISTS idx_notes_pinned ON notes(id) WHERE pinned = 1;
+        CREATE INDEX IF NOT EXISTS idx_notes_facts ON notes(id) WHERE tags LIKE '%"fact:%' AND archived_at IS NULL AND superseded_at IS NULL;
         CREATE TABLE IF NOT EXISTS note_flags (
           id INTEGER PRIMARY KEY,
           note_id INTEGER NOT NULL,
@@ -3353,7 +3382,8 @@ export class Store {
       where.push(f.sql);
       params.push(...f.params);
     }
-    const rows = this.db.prepare(`SELECT * FROM notes WHERE ${where.join(" AND ")}${this.ceilingSql()} ORDER BY id DESC LIMIT ${namespace === undefined ? 5000 : 500}`).all(...params) as unknown as NoteRow[];
+    const from = this.hasIndex("idx_notes_facts") ? "notes INDEXED BY idx_notes_facts" : "notes"; // round 4: named, see v22
+    const rows = this.db.prepare(`SELECT * FROM ${from} WHERE ${where.join(" AND ")}${this.ceilingSql()} ORDER BY id DESC LIMIT ${namespace === undefined ? 5000 : 500}`).all(...params) as unknown as NoteRow[];
     // newest kept when over the cap, handed back oldest first
     return this.filterVisible(rows.reverse().map((r) => this.rec(r)));
   }
@@ -4426,8 +4456,11 @@ export class Store {
   recentFilePaths(namespace: string | undefined, limit: number): string[] {
     const rows = this.db
       .prepare(
-        `SELECT nf.path, MAX(n.created_at) AS at FROM note_files nf JOIN notes n ON n.id = nf.note_id
-         WHERE n.archived_at IS NULL${namespace !== undefined ? " AND n.namespace = ?" : ""}${this.ceilingSql("n.sensitivity")} GROUP BY nf.path ORDER BY at DESC LIMIT ?`
+        // Round 4: only the RECENT_FILE_NOTES newest rows (was every row in the namespace: ~40 ms at 100k notes).
+        `SELECT nf.path, MAX(n.created_at) AS at FROM (SELECT id, created_at FROM notes
+           WHERE archived_at IS NULL${namespace !== undefined ? " AND namespace = ?" : ""}${this.ceilingSql("sensitivity")}
+           ORDER BY id DESC LIMIT ${RECENT_FILE_NOTES}) n
+         JOIN note_files nf ON nf.note_id = n.id GROUP BY nf.path ORDER BY at DESC LIMIT ?`
       )
       .all(...(namespace !== undefined ? [namespace] : []), limit) as Array<{ path: string }>;
     return rows.map((r) => r.path);
@@ -5420,6 +5453,8 @@ export class Store {
       order?: "created_desc" | "created_asc";
       /** 1.5.0 F-01: false skips the COUNT(*); `total` is then just the page size. Default true. */
       count?: boolean;
+      /** Round 4: count at most this many + 1 rows (a total above the cap means "more than cap"; no full scan). */
+      countCap?: number;
     } & RangeOpts = {}
   ): {
     notes: NoteRecord[];
@@ -5467,11 +5502,18 @@ export class Store {
       scope = "1 = 1";
       scopeArgs = [];
     }
-    const where = `${scope}${archSql}${range.sql}${tagF.sql}`;
+    // Round 4: a rare tag with its own partial index is read through it (the literal term is what makes the index usable).
+    const tagIdx = [...(o.withTags ?? []).map((t) => TAG_INDEXES[t]), o.kinds?.length === 1 && o.kinds[0] === "summary" ? SUMMARY_INDEX : undefined].find(
+      (i): i is ListIndex => i !== undefined && this.hasIndex(i.name)
+    );
+    const from = tagIdx ? `notes INDEXED BY ${tagIdx.name}` : "notes";
+    const where = `${scope}${archSql}${range.sql}${tagF.sql}${tagIdx ? ` AND ${tagIdx.term}` : ""}`;
     const rows = this.db
-      .prepare(`SELECT ${cols} FROM notes WHERE ${where} ORDER BY ${orderSql} LIMIT ? OFFSET ?`)
+      .prepare(`SELECT ${cols} FROM ${from} WHERE ${where} ORDER BY ${orderSql} LIMIT ? OFFSET ?`)
       .all(...scopeArgs, ...extra, limit, offset);
-    const count = (): number => (this.db.prepare(`SELECT COUNT(*) as c FROM notes WHERE ${where}`).get(...scopeArgs, ...extra) as { c: number }).c;
+    const capped = o.countCap !== undefined ? clampInt(o.countCap, 1000, 1, Number.MAX_SAFE_INTEGER) + 1 : 0;
+    const countSql = capped ? `SELECT COUNT(*) as c FROM (SELECT 1 FROM ${from} WHERE ${where} LIMIT ${capped})` : `SELECT COUNT(*) as c FROM ${from} WHERE ${where}`;
+    const count = (): number => (this.db.prepare(countSql).get(...scopeArgs, ...extra) as { c: number }).c;
     return { rows, exact, count };
   }
 
