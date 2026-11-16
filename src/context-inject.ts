@@ -216,12 +216,23 @@ export function newNotesSince(store: Store, sessionId: string, opts: { namespace
     .notes.filter((n) => n.updated_at > since && n.session_id !== sessionId && n.written_by !== "capture" && !heldFromSessionStart(n, expiryEnforced(store))); // 1.4.0: not even the title of a held-back note
   if (!fresh.length) return "";
   const on = enabledToolNames();
-  const more = fresh.length - NEW_LINES;
-  store.logAccess({ tool: "hook:new-notes", namespaces: opts.namespace !== undefined ? [opts.namespace] : [], results: Math.min(fresh.length, NEW_LINES) });
+  const since_ = on === null || on.has("memory_since") ? "memory_since" : "catch_up";
+  // r2-improvement #9: a busy writer is one line ("bot saved 60 notes, #3014-#3073"), not five of its titles every prompt.
+  const byWriter = new Map<string, NoteRecord[]>();
+  for (const n of fresh) (byWriter.get(n.written_by) ?? byWriter.set(n.written_by, []).get(n.written_by)!).push(n);
+  const busy = [...byWriter].filter(([, ns]) => ns.length > RECENT_WRITER_CAP);
+  const listed = fresh.filter((n) => (byWriter.get(n.written_by)?.length ?? 0) <= RECENT_WRITER_CAP);
+  const more = listed.length - NEW_LINES;
+  store.logAccess({ tool: "hook:new-notes", namespaces: opts.namespace !== undefined ? [opts.namespace] : [], results: Math.min(listed.length, NEW_LINES) });
+  const range = (ns: NoteRecord[]): string => {
+    const ids = ns.map((n) => n.id);
+    return `#${Math.min(...ids)}-#${Math.max(...ids)}`;
+  };
   return [
     `New since your last message (open with ${openToolName()}):`,
-    ...fresh.slice(0, NEW_LINES).map((n) => indexLine(n)),
-    ...(more > 0 ? [`and at least ${more} more (${on === null || on.has("memory_since") ? "memory_since" : "catch_up"})`] : []),
+    ...listed.slice(0, NEW_LINES).map((n) => indexLine(n)),
+    ...(more > 0 ? [`and at least ${more} more (${since_})`] : []),
+    ...busy.map(([w, ns]) => `${neutral(w).slice(0, 24) || "(no writer)"} saved ${ns.length}${ns.length >= 200 ? "+" : ""} notes (${range(ns)}); ${since_} lists them.`),
   ].join("\n");
 }
 

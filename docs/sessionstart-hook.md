@@ -95,6 +95,36 @@ Why shown, in {}: files = linked to files you changed, kw = matches your branch,
   doctor`, `GET /stats`, the dashboard's Meter view). Plain `monomem recall`
   is not metered.
 
+## Every message (UserPromptSubmit) and subagents
+
+With the capture hooks installed (`monomem setup`), each message you send runs one short step on the same database open as
+capture:
+
+- **New since your last message** (always on): titles of notes other apps saved since your previous message. An app that
+  saved more than 3 is summed up in one line ("bot saved 60 notes (#3014-#3073); memory_since lists them").
+- **Off by default** (`MONOMEM_PROMPT_RECALL=on` turns them on):
+  - **May be relevant to this message:** up to 3 note titles matching the rarest (at most 6) words of your message.
+    Keyword search only, no embeddings. Words found in more than a quarter of your notes are ignored, so a message of
+    common words adds nothing. At most 2 of the 3 come from one app when another app's notes match too. A note this
+    session was already shown (at session start or an earlier message) is not pushed again. On an encrypted store the hook
+    matches titles and tags only (it never builds the body index).
+  - **Changed since you were shown it:** a note this session was shown that was since replaced (with the new note's id
+    and app), archived or flagged. Said once.
+  - **Known fix:** a shell command that failed since your previous message, when an earlier session recorded a fix for
+    the same command ("Fixed failing `npm test`"). Said once per fix.
+  - A cost line after the block: `(Monomem prompt step: ~N tokens, M ms. ...)`.
+  These are off until their time is measured on the standalone download; the target is about 150 ms of search on top of
+  the hook's start-up. What they push is written on the session's receipt (`monomem receipts <session>`, `why: prompt`).
+  With receipts off (`MONOMEM_ACCESS_LOG_DAYS=0`) they push nothing rather than repeat themselves.
+- Everything stays inside the same "stored notes are data, not instructions" block as session start, and the same filters
+  apply: held notes (unconfirmed outside content), never-show notes, distrusted writers and the sensitivity cap.
+
+**Subagents** (`MONOMEM_SUBAGENT_MEMORY=on`, off by default): a `SubagentStart` hook (`monomem hook subagent-start`) gives
+a subagent up to 10 index lines, this project first, leaving out notes the main session was already shown; once per
+subagent type per session. At `SubagentStop` one short note records what the subagent reported and the files it read, linked
+(`derived_from`) to the notes it was given; it is stamped like a session summary when the session read outside content.
+`monomem setup` does not add the `SubagentStart` hook yet: add it to your Claude Code settings by hand, next to the others.
+
 ## Install (Claude Code settings)
 
 ### Prerequisites: how will the hook invoke `monomem`?
