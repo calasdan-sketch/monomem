@@ -65,6 +65,11 @@ describe("machine label on synced notes", () => {
       const listed = (await call("state_list", {})).notes as Array<{ id: number; from_computer?: string }>;
       assert.equal(listed.find((n) => n.id === there.id)?.from_computer, "laptop");
       assert.equal(listed.find((n) => n.id === here.id)?.from_computer, undefined);
+      const got = (await call("memory_get", { ids: [there.id, here.id] })).notes as Array<{ id: number; from_computer?: string }>;
+      assert.equal(got.find((n) => n.id === there.id)?.from_computer, "laptop");
+      assert.equal(got.find((n) => n.id === here.id)?.from_computer, undefined);
+      const found = (await call("state_search", { query: "synced" })).results as Array<{ id: number; from_computer?: string }>;
+      assert.equal(found.find((n) => n.id === there.id)?.from_computer, "laptop");
     } finally {
       await client.close();
       s.close();

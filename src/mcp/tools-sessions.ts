@@ -2,6 +2,7 @@
 // Moved out of createMcpServer (mcp-server-core.ts) unchanged; it calls these in a fixed order, which is the tools/list order.
 
 import { z } from "zod";
+import { listWithComputer } from "../sync/marks.js";
 import { memoryIndex, memoryTimeline, memoryGet, sessionList, sessionGet, GET_MAX_IDS, type ReadScope } from "../progressive.js";
 import { untrustedResult, INCLUDE_DISTRUSTED_SHAPE, errorResult, errorFor } from "./shared.js";
 import type { McpCtx } from "./context.js";
@@ -100,7 +101,7 @@ export function registerSessionTools(c: McpCtx): void {
       try {
         const denied = denyIfUnder("read");
         if (denied) return errorResult(denied);
-        return untrustedResult(memoryGet(store, capScope(undefined, include_distrusted), ids));
+        return untrustedResult(listWithComputer(store, memoryGet(store, capScope(undefined, include_distrusted), ids)));
       } catch (e) {
         return errorFor(e);
       }
