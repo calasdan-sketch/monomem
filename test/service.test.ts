@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { servicePlan, type ServiceEnv } from "../src/service.js";
+import { servicePlan, serviceCmd, type ServiceEnv } from "../src/service.js";
 
 const CLI = fileURLToPath(new URL("../src/cli.js", import.meta.url));
 const base = (platform: NodeJS.Platform, over: Partial<ServiceEnv> = {}): ServiceEnv => ({
@@ -187,4 +187,36 @@ describe("final3 INFRA-S1..S4: the Windows task and re-running install", () => {
     const l = servicePlan(base("linux"));
     assert.deepEqual(l.install.at(-1), ["systemctl", "--user", "restart", "monomem.service"]);
   });
+test("final4 infra L8: macOS retries bootstrap once after 1 s when it fails right after bootout (injected runner)", () => {
+    const home = mkdtempSync(join(tmpdir(), "om-svc-mac-"));
+    try {
+      const e = base("darwin", { home, dataDir: join(home, ".monomem") });
+      const calls: string[] = [];
+      const waits: number[] = [];
+      let fails = 1;
+      const runner = (c: string[]): boolean => {
+        calls.push(c.slice(0, 2).join(" "));
+        return !(c[1] === "bootstrap" && fails-- > 0);
+      };
+      assert.equal(serviceCmd("install", false, e, { run: runner, sleep: (ms) => void waits.push(ms) }), 0);
+      assert.deepEqual(calls, ["launchctl bootout", "launchctl bootstrap", "launchctl bootstrap"]);
+      assert.deepEqual(waits, [1000]);
+      // Fails twice: one retry only, and install says it failed.
+      calls.length = 0;
+      waits.length = 0;
+      fails = 2;
+      assert.equal(serviceCmd("install", false, e, { run: runner, sleep: (ms) => void waits.push(ms) }), 1);
+      assert.deepEqual(calls, ["launchctl bootout", "launchctl bootstrap", "launchctl bootstrap"]);
+      // Other OSes never retry.
+      calls.length = 0;
+      waits.length = 0;
+      const l = base("linux", { home, dataDir: join(home, ".monomem"), env: { XDG_CONFIG_HOME: join(home, ".config") } });
+      assert.equal(serviceCmd("install", false, l, { run: (c) => (calls.push(c.slice(0, 3).join(" ")), c[2] !== "daemon-reload"), sleep: (ms) => void waits.push(ms) }), 1);
+      assert.deepEqual(calls, ["systemctl --user daemon-reload"]);
+      assert.deepEqual(waits, []);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });
+

@@ -177,7 +177,7 @@ export function servicePlan(e: ServiceEnv): ServicePlan {
 
 const shown = (cmd: string[]): string => cmd.map((a) => (/[\s"]/.test(a) ? JSON.stringify(a) : a)).join(" ");
 
-function run(cmd: string[], quiet = false): boolean {
+function runCmd(cmd: string[], quiet = false): boolean {
   try {
     const out = execFileSync(cmd[0], cmd.slice(1), { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     if (!quiet && out.trim()) console.log(out.trimEnd());
@@ -189,8 +189,20 @@ function run(cmd: string[], quiet = false): boolean {
   }
 }
 
+/** Runs one command (true when it worked) and waits; tests pass stubs, so nothing is ever registered from a test. */
+export interface ServiceDeps {
+  run?: (cmd: string[], quiet?: boolean) => boolean;
+  sleep?: (ms: number) => void;
+}
+
+const sleepSync = (ms: number): void => {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+};
+
 /** `monomem service <install|status|uninstall> [--print]`. --print shows the file and the commands and changes nothing. */
-export function serviceCmd(action: string | undefined, print: boolean, e: ServiceEnv): number {
+export function serviceCmd(action: string | undefined, print: boolean, e: ServiceEnv, deps: ServiceDeps = {}): number {
+  const run = deps.run ?? runCmd;
+  const sleep = deps.sleep ?? sleepSync;
   if (action !== "install" && action !== "status" && action !== "uninstall") {
     console.error("Usage: monomem service install|status|uninstall [--print]   (--print shows what would be done and changes nothing)");
     return 1;
@@ -234,7 +246,14 @@ export function serviceCmd(action: string | undefined, print: boolean, e: Servic
     mkdirSync(dirname(plan.file.path), { recursive: true });
     writeFileSync(plan.file.path, plan.file.utf16 ? Buffer.from(String.fromCharCode(0xfeff) + plan.file.text, "utf16le") : plan.file.text);
     for (const c of plan.preInstall) run(c, true); // nothing running yet is fine
-    if (!plan.install.every((c) => run(c))) {
+    // macOS: bootstrap right after bootout can fail ("Bootstrap failed: 5") while the old job is still exiting: retry once after 1 s.
+    const runInstall = (c: string[]): boolean => {
+      if (e.platform !== "darwin" || c[1] !== "bootstrap") return run(c);
+      if (run(c, true)) return true;
+      sleep(1000);
+      return run(c);
+    };
+    if (!plan.install.every(runInstall)) {
       console.error(`The service was not installed. The file is at ${plan.file.path}; the commands above say what went wrong.`);
       return 1;
     }
