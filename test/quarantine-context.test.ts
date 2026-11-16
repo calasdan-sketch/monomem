@@ -146,7 +146,7 @@ describe("quarantine context", () => {
     const box = el("qctx4").innerHTML as string;
     assert.match(box, /Keep as history/);
     assert.match(box, /qQuarantine\(4,&quot;keep-history&quot;\)/);
-    assert.match(box, /Saved since this was held:/);
+    assert.match(box, /Saved on the same topic since:/);
     assert.match(box, /quoting-bot/);
     assert.ok(!box.includes("<b>"), "titles are escaped");
   });

@@ -545,16 +545,16 @@ describe("A5: the dashboard", async () => {
   });
 
   test("labels: badge with text, per-note selector, filter, new-note choice, who-am-I banner, apps panel, change window", () => {
-    assert.match(DASHBOARD_JS, /lvlBadge/);
-    assert.match(DASHBOARD_JS, /Who can see this\?/);
+    assert.match(DASHBOARD_JS, /role='menuitemradio'/);
+    assert.match(DASHBOARD_JS, /Who can see this/);
     assert.match(DASHBOARD_HTML, /id="lvlf"/);
     assert.match(DASHBOARD_HTML, /id="n_lvl"/);
     assert.match(DASHBOARD_JS, /\/whoami/);
     assert.match(DASHBOARD_JS, /Signed in as/);
     assert.match(DASHBOARD_JS, /NO LIMIT/);
     assert.match(DASHBOARD_JS, /\/tokens/);
-    assert.match(DASHBOARD_HTML, /id="chwin"/);
-    assert.match(DASHBOARD_HTML, /<option value="30d">/);
+    assert.match(DASHBOARD_JS, /id='chwin'/);
+    assert.match(DASHBOARD_JS, /\["24h","7d","30d"\]/);
   });
 
   test("accessible and themed: aria-live notice, labelled inputs, light/dark, no clickable anchors", () => {

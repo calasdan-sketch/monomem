@@ -1,0 +1,197 @@
+// Dashboard script, part 2: signing in, the Notes view, the calm note card with one "..." menu, archive with Undo, the
+// new-note sheet, and Archived notes (the one place a note is deleted for good).
+export const NOTES_JS = `
+// After sign-in: who am I, then Welcome (first run) or Notes.
+function start(){
+  show("app");
+  load();
+  api("/whoami").then(function(w){
+    var isAdmin = w.scope === "admin" && !w.namespace && !w.max_sensitivity;
+    if(isAdmin && !IS_ADMIN){ IS_ADMIN = true; if(VIEW === "list"){ load(); } }
+    if(!isAdmin){ say("Signed in as " + (w.label || "unnamed") + ": " + String(w.can_see || "").replace(/[.\\s]+$/, "") + "."); return; }
+    loadNeeds();
+    api("/ui/state").then(function(s){
+      STATE = s;
+      var h = ""; try { h = location.hash || ""; } catch(e){}
+      if(!s.welcome_done || h === "#welcome"){ showWelcome(0); }
+      else if(h === "#new"){ toggleNew(); } else if(h === "#review"){ loadReview(); }
+    }).catch(function(){});
+  }).catch(function(){ /* the notes call reports any problem */ });
+}
+var STATE = {};
+
+function inc(){ var c = $("inc"); return !!(c && c.checked); }
+function incRefused(e){ if(inc() && /admin/i.test(String(e && e.message))){ $("inc").checked = false; } }
+function nsQs(sep, noDistrusted){
+  var ns = String($("ns").value || "").trim();
+  var qs = (ns ? ("namespace=" + encodeURIComponent(ns)) : "") + (!noDistrusted && inc() ? ((ns ? "&" : "") + "include_distrusted=1") : "");
+  return qs ? (sep + qs) : "";
+}
+function applyFilter(){ if(VIEW === "list"){ load(); } }
+
+// One line per task runner that looks stopped (each target has its own heartbeat); the older servers' single notice otherwise.
+function loadRunner(){
+  var el = $("runner");
+  api("/runner/status").then(function(j){
+    var lines = [];
+    ((j && j.targets) || []).forEach(function(t){ if(t.notice){ lines.push(t.notice); } });
+    if(!lines.length && j && j.notice){ lines.push(j.notice); }
+    el.textContent = "";
+    lines.forEach(function(l){ var d = document.createElement("div"); d.textContent = l; el.appendChild(d); });
+    el.hidden = !lines.length;
+  }).catch(function(){ el.hidden = true; });
+}
+
+function load(){
+  setView("list");
+  loadRunner();
+  var q = String($("q").value || "").trim();
+  var path = q ? "/search?q=" + encodeURIComponent(q) + nsQs("&") : "/notes" + nsQs("?");
+  api(path).then(function(j){ render(j.results || j.notes || []); }).catch(function(e){ incRefused(e); failList(e); });
+}
+
+// Labels on a card, most important first; at most two show, the rest are listed in the card's menu.
+function labelsOf(n){
+  var out = [];
+  if(n.distrusted){ out.push(["danger", "Distrusted writer", "An owner distrusts the app that wrote this. Treat it as hostile."]); }
+  if(n.flagged){ out.push(["caution", "Flagged", n.flagged_label || "An app said this looks wrong."]); }
+  if(n.code_changed){ out.push(["caution", "Code changed", n.code_changed_label || "The code this note describes changed since it was written."]); }
+  if(n.unconfirmed){ out.push(["caution", "Not confirmed", n.unconfirmed_label || "From outside content; nobody confirmed it yet, so it is kept out of session start."]); }
+  if(n.built_on_distrusted){ out.push(["caution", "Built on a distrusted note", n.built_on_distrusted_label || ""]); }
+  if(n.disputed){ out.push(["caution", "Disputed", n.disputed_label || "Another app says something different."]); }
+  if(n.expired){ out.push(["", "Check again", n.expired_label || "Not re-confirmed in time: check it is still true."]); }
+  if(n.restated_by){ out.push(["", "Said again", n.restated_label || ""]); }
+  if(n.pinned){ out.push(["brand", "Pinned", "Shown first at every session start. Apps cannot change it."]); }
+  if((n.tags||[]).indexOf("never-show") >= 0){ out.push(["", "Not shown at start", "Kept out of session start; still searchable."]); }
+  return out;
+}
+function lbl(l){ return "<span class='lbl "+l[0]+"'>"+esc(l[1])+(l[2] ? "<span class='sr'>: "+esc(l[2])+"</span>" : "")+"</span>"; }
+function needsPerson(n){ return (n.tags||[]).some(function(t){ return String(t).indexOf("obs.origin:") === 0; }) && !(n.confirmed_kind === "human" && n.confirmed_rev === n.rev); }
+var LVL_OPT = { "public":"Everyone (public)", "internal":"Normal (internal)", "private":"Private (hidden from apps you limited)" };
+
+function noteMenu(n){
+  var id = Number(n.id), items = [], labels = labelsOf(n);
+  labels.forEach(function(l){ if(l[2]){ items.push("<p><b>"+esc(l[1])+":</b> "+esc(l[2])+"</p>"); } });
+  if(labels.some(function(l){ return l[2]; })){ items.push("<hr>"); }
+  if(IS_ADMIN && (n.unconfirmed || n.expired)){ items.push("<button role='menuitem' onclick='confirmNote("+id+")'>Confirm: I checked it</button>"); }
+  if(IS_ADMIN){
+    items.push(n.pinned ? "<button role='menuitem' onclick='setPin("+id+",false)'>Unpin</button>"
+      : needsPerson(n) ? "<p>To pin it, confirm it first (Review).</p>"
+      : "<button role='menuitem' onclick='setPin("+id+",true)'>Pin to every session start</button>");
+  }
+  items.push((n.tags||[]).indexOf("never-show") >= 0
+    ? "<button role='menuitem' aria-label='show note #"+id+" at session start again' onclick='neverShow("+id+",false)'>Show at session start again</button>"
+    : "<button role='menuitem' aria-label='never show note #"+id+"' onclick='neverShow("+id+",true)'>Don't show at session start</button>");
+  var l = LVL_OPT[n.sensitivity] ? n.sensitivity : "internal";
+  items.push("<hr><div class='cap'>Who can see this</div>" + ["public","internal","private"].map(function(o){
+    return "<button role='menuitemradio' aria-checked='"+(o === l)+"' onclick='setLabel("+id+",&quot;"+o+"&quot;)'>"+LVL_OPT[o]+"</button>"; }).join(""));
+  if(IS_ADMIN){ items.push("<hr><button role='menuitem' aria-label='archive note #"+id+"' onclick='archiveNote("+id+")'>Archive</button>"); }
+  return "<details class='menu'><summary aria-label='More for note #"+id+"' title='More'>&middot;&middot;&middot;</summary><div class='pop' role='menu'>"+items.join("")+"</div></details>";
+}
+function noteCard(n, extra){
+  var labels = labelsOf(n);
+  return "<article class='card' id='note"+Number(n.id)+"'><div class='nhead'><h3 class='t-head'>"+esc(n.title)+"</h3>"+noteMenu(n)+"</div>"+
+    "<div class='meta'>"+chip(n.written_by || "")+" &middot; "+esc(n.namespace)+" &middot; "+esc(ago(n.updated_at))+" &middot; #"+Number(n.id)+"</div>"+
+    chipsRow(labels.slice(0, 2).map(lbl).join("") + tagsInner(n.tags))+
+    (n.body ? "<div class='body clamp'>"+esc(n.body)+"</div>" : "")+(extra || "")+"</article>";
+}
+function render(notes){
+  var list = $("list");
+  if(!String($("q").value || "").trim()){ notes = notes.slice().sort(function(a, b){ return (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0); }); }
+  var lf = $("lvlf").value || "";
+  if(lf){ notes = notes.filter(function(n){ return (n.sensitivity || "internal") === lf; }); }
+  $("count").textContent = plural(notes.length, "note", "notes") + (lf ? " (" + lf + ")" : "");
+  if(!notes.length){
+    var q = String($("q").value || "").trim(), ns = String($("ns").value || "").trim();
+    list.innerHTML = lf ? empty("No notes at that level", "Choose another level in Filters.")
+      : q ? empty("No notes match", "Try fewer words, or clear the Project filter.")
+      : ns ? empty("No notes in this project", "Clear the Project filter to see every project.")
+      : empty("No notes yet", "In any connected app, type: Save to Monomem: we deploy with pnpm", "<div class='acts' style='justify-content:center'><button class='primary' onclick='toggleNew()'>Add a note</button></div>");
+    return;
+  }
+  list.innerHTML = notes.map(function(n){ return noteCard(n); }).join("");
+}
+
+// ---- note actions (each says what happened; reversible ones offer Undo) ----
+function closeMenus(){ try { [].forEach.call(document.querySelectorAll("details.menu[open]"), function(d){ d.open = false; }); } catch(e){} }
+function edit(id, change){
+  return api("/notes/" + id).then(function(j){ var n = j.note || j; return api("/notes/" + id, { method:"PUT", body: JSON.stringify(change(n)) }).then(function(r){ return { before: n, r: r }; }); });
+}
+function setLabel(id, level){
+  closeMenus();
+  edit(id, function(n){ return { sensitivity: level, if_rev: n.rev }; }).then(function(x){
+    var was = x.before.sensitivity || "internal"; refreshView();
+    toast("Now visible to: " + LVL_OPT[level].toLowerCase() + ".", was === level ? null : function(){ setLabel(id, was); });
+  }).catch(function(e){ refreshView(); say("Could not change who can see it: " + e.message, true); });
+}
+function neverShow(id, on){
+  closeMenus();
+  edit(id, function(n){ return { tags: (n.tags || []).filter(function(t){ return t !== "never-show"; }).concat(on ? ["never-show"] : []), if_rev: n.rev }; })
+    .then(function(){ refreshView(); toast(on ? "It won't be shown at session start." : "It can be shown at session start again.", function(){ neverShow(id, !on); }); })
+    .catch(fail);
+}
+function setPin(id, on){
+  closeMenus();
+  api("/pinned", { method:"PUT", body: JSON.stringify({ id: id, pinned: on }) })
+    .then(function(){ refreshView(); toast(on ? "Pinned: shown first at every session start." : "Unpinned.", function(){ setPin(id, !on); }); })
+    .catch(fail);
+}
+function confirmNote(id){
+  closeMenus();
+  api("/notes/" + Number(id) + "/confirm", { method:"POST", body: JSON.stringify({ source: "checked in the dashboard" }) })
+    .then(function(r){ refreshView(); loadNeeds(); toast(r && r.message ? r.message : "Confirmed."); })
+    .catch(fail);
+}
+// Archive, not delete: the note leaves search and session start, and Undo (or Archived notes) brings it back.
+function archiveNote(id){
+  closeMenus();
+  api("/notes/" + id + "/archive", { method:"POST" })
+    .then(function(){ refreshView(); toast("Archived.", function(){ restoreNote(id); }); })
+    .catch(fail);
+}
+function restoreNote(id){
+  api("/notes/" + id + "/restore", { method:"POST" }).then(function(){ refreshView(); toast("Restored."); }).catch(fail);
+}
+function refreshView(){ var f = { list: load, review: loadReview, held: loadHeld, archived: loadArchived, quality: loadQuality }[VIEW]; if(f){ f(); } }
+
+// ---- new note sheet ----
+function toggleNew(){
+  var d = $("newsheet");
+  if(d.open){ closeSheet("newsheet"); newClosed(); return; }
+  $("n_err").textContent = "";
+  $("btn_new").setAttribute("aria-expanded", "true");
+  openSheet("newsheet");
+  try { $("n_title").focus(); } catch(e){}
+}
+function newClosed(){ $("btn_new").setAttribute("aria-expanded", "false"); }
+function addNote(){
+  var title = String($("n_title").value || "").trim();
+  var err = $("n_err"); err.textContent = "";
+  if(!title){ err.textContent = "Give the note a title."; return; }
+  var tags = String($("n_tags").value || "").split(",").map(function(t){ return t.trim(); }).filter(Boolean);
+  var payload = { title: title, body: $("n_body").value, tags: tags, namespace: String($("n_ns").value || "").trim() || undefined, sensitivity: $("n_lvl").value };
+  api("/notes", { method:"POST", body: JSON.stringify(payload) }).then(function(j){
+    $("n_title").value = ""; $("n_body").value = ""; $("n_tags").value = "";
+    closeSheet("newsheet"); newClosed();
+    if(j && j.quarantined){ loadNeeds(); toast("Held for your review: it looked like a secret or an instruction."); loadHeld(); return; }
+    load();
+    var id = j && j.note && j.note.id;
+    toast("Saved.", IS_ADMIN && id ? function(){ archiveNote(id); } : null);
+  }).catch(function(e){ err.textContent = e.message; });
+}
+
+// ---- Archived notes (Settings): restore, or delete for good ----
+function loadArchived(){
+  setView("archived", openSettings);
+  api("/notes?archived=1&limit=200").then(function(j){
+    var ns = j.notes || [];
+    $("count").textContent = plural(ns.length, "archived note", "archived notes");
+    $("list").innerHTML = ns.length ? ns.map(function(n){
+      return "<article class='card'><h3 class='t-head'>"+esc(n.title)+"</h3><div class='meta'>"+chip(n.written_by || "")+" &middot; "+esc(n.namespace)+" &middot; archived "+esc(ago(n.archived_at || n.updated_at))+"</div>"+
+        (n.body ? "<div class='body clamp'>"+esc(n.body)+"</div>" : "")+
+        acts("<button class='primary' onclick='restoreNote("+Number(n.id)+")'>Restore</button><button class='destructive' aria-label='delete note #"+Number(n.id)+" for good' data-confirm='Delete for good?' onclick='arm(this,function(){del("+Number(n.id)+")})'>Delete for good</button>")+"</article>";
+    }).join("") : empty("Nothing archived", "Notes you archive wait here, and you can bring them back.");
+  }).catch(failList);
+}
+function del(id){ api("/notes/" + id, { method:"DELETE" }).then(function(){ refreshView(); toast("Deleted for good."); }).catch(fail); }
+`;

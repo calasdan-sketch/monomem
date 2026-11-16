@@ -82,7 +82,7 @@ leaves it running. On Windows the task is found by its `monomem-task.xml` in the
 | Session summary by a local model (`src/llm.ts`) | `MONOMEM_LLM_URL` and `MONOMEM_LLM_MODEL` | a loopback address only, unless `MONOMEM_LLM_ALLOW_REMOTE=1`; redirects refused |
 | Capture hook posting to a server (`src/hook.ts`) | `MONOMEM_HOOK_URL` and `MONOMEM_HOOK_TOKEN` | your own Monomem server |
 | Runner `--post` (`src/runner-sign.ts`) | `MONOMEM_URL` and `MONOMEM_TOKEN` | your own Monomem server |
-| Dashboard page (`src/dashboard.ts`) | opening the dashboard | the Monomem server that served the page (API calls, and the one-time sign-in code that `monomem open` hands over) |
+| Dashboard page (`src/ui/js-core.ts`, served by `src/dashboard.ts`) | opening the dashboard | the Monomem server that served the page (API calls, and the one-time sign-in code that `monomem open` hands over). Its Settings "Check for updates" and "Update now" buttons run `monomem update` only when pressed |
 | `monomem open` (`src/cli/connect.ts`) | running the command | `http://127.0.0.1:<api port>/health`, to see whether your own server is up |
 | `monomem restore` (`src/cli.ts`) | running the command | `http://127.0.0.1:<api port>/health`, only to print a hint when something answers there (whether the database is in use is judged by its lock) |
 | `monomem doctor` (`src/doctor/server.ts`) | running the command | `http://127.0.0.1:<api port>/health`, to warn when the server running there is older than the CLI (`MONOMEM_NO_SERVER_PROBE=1` skips it) |

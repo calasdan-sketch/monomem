@@ -3,7 +3,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import vm from "node:vm";
-import { DASHBOARD_HTML, DASHBOARD_JS } from "../src/dashboard.js";
+import { DASHBOARD_JS } from "../src/dashboard.js";
 
 const XSS = `<img src=x onerror=alert(1)>'"`;
 
@@ -40,7 +40,7 @@ function noLiveMarkup(html: string): void {
 
 describe("dashboard: Sessions view", () => {
   test("has a Sessions button", () => {
-    assert.match(DASHBOARD_HTML, /onclick="loadSessions\(\)"[^>]*>Sessions</);
+    assert.match(DASHBOARD_JS, /onclick='loadSessions\(\)'>App sessions/); // from the Activity tab
   });
 
   test("the session list escapes everything and passes the id through a data attribute", async () => {
@@ -72,7 +72,7 @@ describe("dashboard: Sessions view", () => {
     assert.ok(p.calls.includes("/sessions/a%2Fb"), p.calls.join());
     const html = p.el("list").innerHTML as string;
     noLiveMarkup(html);
-    const order = ["summary #7", "first &lt;img", "earlier fix", "later &lt;img"].map((s) => html.indexOf(s));
+    const order = ["<div class='body'>&lt;img", "first &lt;img", "earlier fix", "later &lt;img"].map((s) => html.indexOf(s));
     assert.ok(order.every((i) => i >= 0), JSON.stringify(order));
     assert.deepEqual([...order].sort((a, b) => a - b), order);
     assert.doesNotMatch(html, /dup summary row/, "the summary is shown once, on top");

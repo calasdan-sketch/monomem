@@ -33,6 +33,7 @@ import { sessionRoutes } from "./api/routes-sessions.js";
 import { taskRoutes } from "./api/routes-tasks.js";
 import { backupRoutes } from "./api/routes-backup.js";
 import { trustRoutes } from "./api/routes-trust.js";
+import { uiRoutes, uiAssetRoute, mintLocalSession } from "./api/routes-ui.js";
 export { DASHBOARD_SESSION_TTL_MS, unknownNoteFields } from "./api/shared.js";
 
 export function createApiServer(
@@ -142,6 +143,8 @@ export function createApiServer(
         res.end(FAVICON_PNG);
         return;
       }
+      // The installable-app files (manifest, icons): no key, no data (routes-ui.ts).
+      if (uiAssetRoute(req, res, path, anonLimited)) return;
       if (req.method === "GET" && path === "/dashboard.js") {
         if (anonLimited()) return;
         res.writeHead(200, {
@@ -168,14 +171,14 @@ export function createApiServer(
         }
         const key = resolveToken();
         if (!redeemed.terminal) {
-          sendJson(res, 200, { token: key, notice: "Signed in. Confirms here count as the key's, because this link wasn't opened from a terminal." });
+          sendJson(res, 200, { token: key, local_session: mintLocalSession(), notice: "Signed in. Confirms here count as the key's, because this link wasn't opened from a terminal." });
           return;
         }
         const session = randomBytes(24).toString("hex");
         const label = tokens.find((t) => tokenId(t) === sha256Hex(key))?.label ?? "";
         dashboardSessions.set(session, { label, exp: Date.now() + DASHBOARD_SESSION_TTL_MS });
         if (dashboardSessions.size > 100) dashboardSessions.delete(dashboardSessions.keys().next().value as string);
-        sendJson(res, 200, { token: key, dashboard_session: session });
+        sendJson(res, 200, { token: key, dashboard_session: session, local_session: mintLocalSession() });
         return;
       }
       // Phone command signer. No data in it; the secret never leaves the phone,
@@ -320,6 +323,7 @@ export function createApiServer(
       if (await taskRoutes(c, r)) return;
       if (await backupRoutes(c, r)) return;
       if (await trustRoutes(c, r)) return;
+      if (await uiRoutes(c, r)) return;
 
       sendJson(res, 404, { error: "no such route" });
     } catch (e) {
