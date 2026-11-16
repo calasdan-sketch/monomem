@@ -113,6 +113,9 @@ export function applyRestore(plan: RestorePlan, dbPath: string, now = new Date()
     if (existsSync(dbPath)) {
       const stamp = now.toISOString().replace(/[-:]/g, "").replace(/\..*$/, "").replace("T", "-");
       keptCurrentAt = `${dbPath}.before-restore-${stamp}`;
+      // Two restores in one second (a restore, then its undo) must not share a name: the second copy would overwrite the
+      // first, which is the very file being restored.
+      for (let i = 2; existsSync(keptCurrentAt); i++) keptCurrentAt = `${dbPath}.before-restore-${stamp}-${i}`;
       // Fold the write-ahead log into the file first, so a copy holds everything.
       let healthy = false;
       try {
