@@ -27,7 +27,7 @@ function loadChanges(){
     }).join("") + "</div></div>" : "";
     var rows = (j.changes || []).slice().reverse().map(function(e){
       var verb = e.kind === "created" ? "Added" : (e.kind === "updated" ? "Changed" : "Removed");
-      return "<article class='card'><h3 class='t-head'>"+esc(e.title)+"</h3><div class='meta'>"+verb+byLine(e.written_by)+" &middot; "+esc(e.namespace)+" &middot; "+esc(ago(e.at))+(e.distrusted ? " &middot; <span class='lbl danger'>Distrusted writer</span>" : "")+"</div></article>";
+      return "<article class='card'><h3 class='t-head'>"+(e.title ? esc(e.title) : "<span class='muted'>(a note you can no longer see)</span>")+"</h3><div class='meta'>"+verb+byLine(e.written_by)+" &middot; "+esc(e.namespace)+" &middot; "+esc(ago(e.at))+(e.distrusted ? " &middot; <span class='lbl danger'>Distrusted writer</span>" : "")+"</div></article>";
     }).join("");
     $("list").innerHTML = picker + byApp + tasksHtml(rs[1].tasks || []) + handoffHtml((rs[2].handoffs || [])[0]) +
       "<h3 class='section t-title'>What changed</h3>" + (rows || empty("Nothing changed", "Nothing changed in the last " + winText + ".")) +
