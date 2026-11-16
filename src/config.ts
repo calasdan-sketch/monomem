@@ -196,9 +196,14 @@ function withLockFile<T>(lock: string, fn: () => T): T {
 export function migrateLegacyData(from: string, to: string): string[] {
   const oldDb = join(from, "state.db");
   const newDb = join(to, "state.db");
-  if (resolve(from) === resolve(to) || !existsSync(oldDb) || existsSync(newDb)) return [];
+  const lock = join(to, ".migrate.lock");
+  if (resolve(from) === resolve(to) || !existsSync(oldDb)) return [];
+  // state.db alone is not "done": the publisher links it in, then removes its temporary name, then the lock. Opening the
+  // database in between made that removal fail on Windows (SQLite opens without FILE_SHARE_DELETE, and the temporary
+  // name is a second link to the same file), so the publisher exited 1. While a lock is held, wait for it instead.
+  if (existsSync(newDb) && !existsSync(lock)) return [];
   privateDir(to);
-  return withLockFile(join(to, ".migrate.lock"), () => {
+  return withLockFile(lock, () => {
     if (existsSync(newDb)) return []; // another process migrated while we waited
     const tmp = `${newDb}.migrating-${process.pid}`;
     rmSync(tmp, { force: true });

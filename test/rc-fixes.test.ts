@@ -6,11 +6,13 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import fs, {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
@@ -105,12 +107,41 @@ describe("7: concurrent legacy migration never swaps the db under a writer", () 
       await new Promise((r) => setTimeout(r, 700)); // let every child load and reach the barrier
       writeFileSync(go, "");
       const res = await pending;
-      assert.deepEqual(res.map((r) => r.code), Array(8).fill(0), res.map((r) => r.err).join("\n").slice(0, 400));
+      // The failing processes' own error (a harmless key warning from another process filled the old 400-character cut).
+      assert.deepEqual(res.map((r) => r.code), Array(8).fill(0), res.filter((r) => r.code !== 0).map((r) => r.err.slice(-1500)).join("\n---\n"));
       const db = new DatabaseSync(join(to, "state.db"));
       const n = (db.prepare("SELECT count(*) c FROM notes").get() as { c: number }).c;
       db.close();
       assert.equal(n, 1508);
       assert.deepEqual(readdirSync(to).filter((f) => /migrat|lock/.test(f)), []);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("7b: a finished database is not used while its migration still holds the lock", () => {
+  // CI (Windows): one of the 8 processes above exited 1. The publisher hard-links the copy to state.db and then removes
+  // its temporary name; a second process that saw state.db and skipped the lock already had the database open, and on
+  // Windows (SQLite opens without FILE_SHARE_DELETE) removing the other name of an open file fails. Seeing state.db is
+  // therefore only "done" when no migration lock is held: otherwise wait for the lock like everyone else.
+  test("state.db present + a migration lock present -> migrateLegacyData waits for the lock", async () => {
+    const { migrateLegacyData } = await import("../src/config.js");
+    const dir = mkdtempSync(join(tmpdir(), "om-mig-lock-"));
+    try {
+      const from = join(dir, "legacy");
+      const to = join(dir, "home");
+      mkdirSync(from);
+      mkdirSync(to);
+      new Store(join(from, "state.db")).close();
+      new Store(join(to, "state.db")).close();
+      const lock = join(to, ".migrate.lock");
+      writeFileSync(lock, "");
+      // A lock this old counts as left by a crashed process: taking the lock path removes it at once (no 30 s wait).
+      const old = Date.now() / 1000 - 600;
+      utimesSync(lock, old, old);
+      assert.deepEqual(migrateLegacyData(from, to), [], "nothing to copy: the database is already there");
+      assert.equal(existsSync(lock), false, "it went through the lock (and cleared the stale one) instead of skipping it");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
