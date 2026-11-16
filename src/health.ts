@@ -16,6 +16,9 @@ import { describeDbFailure } from "./db-problem.js";
 import { embeddingsConfig } from "./embeddings.js";
 import { acceptLegacyHeartbeats } from "./liveness.js";
 import { scanPii } from "./pii.js";
+import { qualityReport } from "./quality.js";
+import { backupFailure, backupsDir } from "./backup-schedule.js";
+import { backupAgeDays } from "./digest.js";
 
 /** info: a fact worth showing that never lowers the grade. */
 export type Status = "ok" | "warn" | "fail" | "info";
@@ -247,6 +250,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
   let notes = 0, held = 0, distrust = 0, marked = 0, dbOk = false;
   let meterText = "meter unavailable";
   let piiNotes = 0, privateNotes = 0, labelledNotes = 0;
+  let hygiene = "";
   let confirmLines: string[] = [];
   let backlog = "";
   let audit: Result | undefined;
@@ -298,6 +302,15 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
             const m = meterStats(s);
             meterText = `${plural(notes, "note")}, database ${(m.db_bytes / 1048576).toFixed(1)} MB; the meter counts ~${m.totals.saved_tokens} tokens saved over ${plural(m.totals.sessions, "session")} (estimate, ~4 characters a token)`;
           });
+          // Memory hygiene is heuristic, so it informs and never costs a grade step.
+          try {
+            const c = (await qualityReport(s)).counts;
+            hygiene = c.empty + c.restated + c.duplicate
+              ? `${plural(c.empty, "empty note")}, ${plural(c.restated, "note")} restated but never retired, ${c.duplicate} ${c.duplicate === 1 ? "group" : "groups"} of duplicates: monomem quality lists each with its fix`
+              : "no empty notes, no notes restated but never retired, no duplicates";
+          } catch (e) {
+            hygiene = `could not be checked: ${(e as Error).message}`;
+          }
           try {
             audit = auditCheck(o.auditPath, s.captureDb(), notes);
           } catch (e) {
@@ -411,6 +424,13 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
     if (backlog) add("confirm-backlog", "Unconfirmed backlog", "warn", `${backlog}: review them with monomem review (the grade is capped at B until they are dealt with)`);
     add("redacted", "Redacted notes", "info", `notes with a [REDACTED:...] marker (secret redaction replaced a credential): ${marked}`);
     add("memory", "Memory size", "ok", meterText);
+    add("hygiene", "Memory hygiene", "info", hygiene);
+    const failed = backupFailure(dbPath);
+    if (failed) add("backup", "Backups", "warn", `the automatic daily backup failed on ${failed.at.slice(0, 16).replace("T", " ")}: ${printable(failed.error, 200)}. Free some disk space or fix the folder ${backupsDir(dbPath)}, or run monomem backup by hand`);
+    else {
+      const age = backupAgeDays(dirname(dbPath));
+      add("backup", "Backups", "info", age === null ? `none yet: while the server runs it makes one a day in ${backupsDir(dbPath)} (7 daily + 4 weekly kept)` : `last backup ${age < 1 ? "today" : plural(Math.floor(age), "day") + " ago"}; the server keeps 7 daily + 4 weekly in ${backupsDir(dbPath)}`);
+    }
   }
 
   const grade = gradeOf(checks);
