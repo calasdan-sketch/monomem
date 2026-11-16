@@ -21,6 +21,7 @@ import { createRequire } from "node:module";
 import { applyOps, getMember, getPath, JsonEditError, opsAreApplied, parseDoc, parseJsonc, type Op } from "./jsonc-edit.js";
 import { applyTomlOps, findTable, hasServer, tomlOpsApplied } from "./toml-table.js";
 import { applyLegacyEnv, homeDataDir } from "./legacy-env.js";
+import { privateDir } from "./private-dir.js";
 
 // ---- environment (injectable, so tests never touch a real configuration) ---------------------------------------------
 
@@ -1544,7 +1545,8 @@ export function readHistory(e: SetupEnv): HistorySession[] {
 
 export function saveHistory(e: SetupEnv, all: HistorySession[]): void {
   const f = historyFile(e);
-  mkdirSync(dirname(f), { recursive: true, mode: 0o700 });
+  // privateDir, not mkdirSync: on Windows it locks a NEW folder to you and SYSTEM, and this is often setup's first write.
+  privateDir(dirname(f), { platform: e.platform, env: e.env });
   writeAtomic(f, JSON.stringify(all, null, 2) + "\n", 0o600);
 }
 
@@ -2004,7 +2006,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
     try {
       if (hookFor(claudeHost) || wantCapture || (capture !== "no" && upgradeHosts.has(claudeHost))) rmSync(marker, { force: true });
       else if (hookPlans.has(claudeHost) || capturePlans.has(claudeHost)) {
-        mkdirSync(dirname(marker), { recursive: true });
+        privateDir(dirname(marker));
         writeFileSync(marker, "The Claude Code hook was declined when setup ran. Run monomem setup --hook to add it.\n");
       }
     } catch {

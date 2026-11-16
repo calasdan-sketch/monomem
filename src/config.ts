@@ -4,15 +4,12 @@
 
 import { homeDataDir } from "./legacy-env.js"; // first: CLAUDE_BRIDGE_* (the old name) are read as MONOMEM_*
 import { createHash, randomBytes } from "node:crypto";
-import { execFileSync } from "node:child_process";
 import {
-  chmodSync,
   closeSync,
   constants as fsc,
   copyFileSync,
   existsSync,
   linkSync,
-  mkdirSync,
   openSync,
   readFileSync,
   readdirSync,
@@ -136,60 +133,8 @@ export function insideNodeModules(p: string): boolean {
   return resolve(p).split(sep).includes("node_modules");
 }
 
-/** chmod that is a no-op on Windows and never throws (permissions are best-effort hardening). */
-export function chmodQuiet(p: string, mode: number): void {
-  // MONOMEM_NO_CHMOD=1 leaves permissions alone (deliberately shared dirs,
-  // e.g. a Docker volume read by a backup sidecar running as another uid).
-  if (process.platform === "win32" || process.env.MONOMEM_NO_CHMOD === "1") return;
-  try {
-    chmodSync(p, mode);
-  } catch {
-    /* missing file or not ours: leave it */
-  }
-}
-
-/**
- * 1.5.0: the icacls arguments that leave a folder to its owner and SYSTEM (inheritance removed, so Users/Everyone lose it).
- * null when the user name is unknown: no guessing. Protects from other accounts on the PC, not from programs running as you.
- */
-export function lockdownArgs(dir: string, env: NodeJS.ProcessEnv = process.env): string[] | null {
-  const user = env.USERNAME?.trim();
-  if (!user) return null;
-  const domain = env.USERDOMAIN?.trim();
-  return [dir, "/inheritance:r", "/grant:r", `${domain ? domain + "\\" : ""}${user}:(OI)(CI)F`, "SYSTEM:(OI)(CI)F"];
-}
-
-const WIDE_GROUPS = ["BUILTIN\\Administrators", "BUILTIN\\Users", "NT AUTHORITY\\Authenticated Users", "Everyone"];
-/** The groups that reach beyond the owner in the output of `icacls <dir>` (`monomem doctor` names them on Windows). */
-export function wideAccessGroups(icaclsOutput: string): string[] {
-  return WIDE_GROUPS.filter((g) => new RegExp(`(^|\\s)${g.replace(/\\/g, "\\\\")}:`, "im").test(icaclsOutput));
-}
-
-export interface PrivateDirOptions {
-  platform?: NodeJS.Platform;
-  env?: NodeJS.ProcessEnv;
-  run?: (args: string[]) => void;
-}
-const runIcacls = (args: string[]): void => void execFileSync("icacls", args, { stdio: "ignore", timeout: 15_000, windowsHide: true });
-
-/**
- * Create `dir` owner-only (0700) and re-tighten it if it already existed looser. On Windows a folder created here is also
- * locked to its owner and SYSTEM with icacls (no shell, best effort: a failure is one warning, never fatal). An existing
- * folder is not touched here (no icacls call on the hot path); `monomem doctor` checks it.
- */
-export function privateDir(dir: string, o: PrivateDirOptions = {}): void {
-  const existed = existsSync(dir);
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  chmodQuiet(dir, 0o700);
-  if (existed || (o.platform ?? process.platform) !== "win32") return;
-  try {
-    const args = lockdownArgs(dir, o.env ?? process.env);
-    if (!args) throw new Error("the Windows user name is unknown");
-    (o.run ?? runIcacls)(args);
-  } catch (e) {
-    console.error(`[monomem] could not restrict ${dir} to your account with icacls (${(e as Error).message}); other accounts on this PC may be able to read it. Fix: icacls "${dir}" /inheritance:r /grant:r "%USERDOMAIN%\\%USERNAME%:(OI)(CI)F" "SYSTEM:(OI)(CI)F"`);
-  }
-}
+import { chmodQuiet, privateDir } from "./private-dir.js";
+export { chmodQuiet, lockdownArgs, wideAccessGroups, privateDir, type PrivateDirOptions } from "./private-dir.js";
 
 /** The data-dir files that hold notes or credentials: owner read/write only. */
 export const PRIVATE_FILES = ["state.db", "state.db-wal", "state.db-shm", "audit.log", "server.log", ".token", "tokens.json", "spaces.json", ".key", ".attest-key"];
