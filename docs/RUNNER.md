@@ -407,6 +407,10 @@ writes into its own namespace, so put your runner's namespace there).
    Queueing it again needs a fresh approval.
 5. The action is on this PC's allowlist and the params match their patterns,
    exactly as for a command note. No shell is involved (`shell:false`, argv only).
+6. The task does not need a person: it is not unconfirmed outside content, not built on a note from a distrusted writer
+   and not flagged, unless a person confirmed this version at a terminal (`monomem confirm <id>`). An admin-key or
+   dashboard confirm does not count. Approving such a task is refused with that step, and the runner checks again on every
+   pass, so a mark or a flag added after approval stops the run (runner status reason `held`). Revoking always works.
 
 Queue hygiene: the runner selects approved tasks in SQL and pages through all of
 them, a namespace holds at most 100 queued command tasks

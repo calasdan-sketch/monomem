@@ -4,7 +4,7 @@
 import { z } from "zod";
 import { QuarantinedError } from "../store.js";
 import type { LintFinding } from "../lint.js";
-import { putTask, listTasks, getTask, writeHandoff, catchUp, claimTask, approveTask, TASK_STATUSES, TaskNotFoundError, TASK_LIMITS } from "../tasks.js";
+import { putTask, listTasks, getTask, writeHandoff, catchUp, claimTask, approveTask, approveOrHold, TASK_STATUSES, TaskNotFoundError, TASK_LIMITS } from "../tasks.js";
 import { ackChanges } from "../changes.js";
 import { runnerStatus } from "../liveness.js";
 import { audit } from "../security.js";
@@ -78,7 +78,7 @@ export function registerTaskTools(c: McpCtx): void {
         );
         await maybeEmbed(store, put.note);
         let task = put.task;
-        if (approve && !put.replayed) task = approveTask(store, { id: task.id, if_rev: task.rev }, writeScope());
+        if (approve && !put.replayed) task = approveOrHold(store, task, writeScope(), warnings);
         audit({
           op: "task.put",
           id: task.id,

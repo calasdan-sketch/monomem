@@ -8,7 +8,7 @@ import { scopeAllows, audit } from "../security.js";
 import { runnerStatus } from "../liveness.js";
 import { readBody } from "../http-common.js";
 import { maybeEmbed } from "../search-service.js";
-import { putTask, listTasks, getTask, writeHandoff, listHandoffs, catchUp, claimTask, approveTask, TaskNotFoundError, ClaimConflictError } from "../tasks.js";
+import { putTask, listTasks, getTask, writeHandoff, listHandoffs, catchUp, claimTask, approveTask, approveOrHold, TaskNotFoundError, ClaimConflictError } from "../tasks.js";
 import { ackChanges } from "../changes.js";
 import type { LintFinding } from "../lint.js";
 import { sendError, sendJson, ackModeParam, writerFilter, feedWriterFilter, flagParam, intParam } from "./shared.js";
@@ -159,7 +159,7 @@ export async function taskRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
         const put = putTask(store, body as never, writeNs, warnings);
         await maybeEmbed(store, put.note);
         let task = put.task;
-        if (wantApprove && !put.replayed) task = approveTask(store, { id: task.id, if_rev: task.rev }, writeNs);
+        if (wantApprove && !put.replayed) task = approveOrHold(store, task, writeNs, warnings);
         audit({ op: "task.put", id: task.id, namespace: task.namespace, label: principal.label, kind: task.command ? "command-task" : "task", detail: put.replayed ? "replay" : "create" });
         sendJson(res, put.replayed ? 200 : 201, {
           task,

@@ -13,7 +13,7 @@ import "./legacy-env.js"; // second: read the old CLAUDE_BRIDGE_* variables as M
 import { createApiServer } from "./api.js";
 import { createMcpHttpServer } from "./mcp-http.js";
 import { hardenTokensFile } from "./tokens-admin.js";
-import { exitOnListenError } from "./http-common.js";
+import { listenErrorMessage } from "./http-common.js";
 import {
   DB_PATH,
   API_PORT,
@@ -34,6 +34,7 @@ import { abortAllWaiters } from "./change-wait.js";
 import { pruneStaleHeartbeats } from "./liveness.js";
 import { rotateLogIfNeeded } from "./security.js";
 import { appendFileSync } from "node:fs";
+import type { Server } from "node:http";
 import { dirname, join, resolve } from "node:path";
 
 /**
@@ -134,9 +135,22 @@ const mcpServer = createMcpHttpServer(store, tokens, nsOpts ?? undefined);
 // listen callback counts down), and the pass itself is cooperative, so
 // startup latency is unaffected and a large scan never stalls serving.
 let transportsUp = 0;
-function scheduleJanitor(): void {
+// r2-improvement #5: one busy port does not take the other transport down. Each one that cannot listen says why and what
+// to do; the process exits only when neither could start.
+let transportsFailed = 0;
+function transportFailed(server: Server, port: number, envVar: string, what: string): Server {
+  return server.on("error", (e: NodeJS.ErrnoException) => {
+    console.error(listenErrorMessage(e, port, envVar, what));
+    transportsFailed += 1;
+    if (transportsFailed === 2) process.exit(1);
+    console.error(`[monomem] started without ${what}: everything else is running. Fix the port and restart to get ${what} back.`);
+    scheduleJanitor(false);
+  });
+}
+function scheduleJanitor(up: boolean): void {
+  if (up) transportsUp += 1;
   if (!(AUTO_CONSOLIDATE_INTERVAL_MS && AUTO_CONSOLIDATE_INTERVAL_MS > 0)) return;
-  if (++transportsUp !== 2) return;
+  if (transportsUp + transportsFailed !== 2 || transportsUp === 0) return;
   void runAutoConsolidation();
   const timer = setInterval(() => {
     void runAutoConsolidation();
@@ -144,7 +158,7 @@ function scheduleJanitor(): void {
   timer.unref(); // never keep the process alive on the scheduler's account
 }
 
-exitOnListenError(apiServer, API_PORT, "MONOMEM_PORT", "API").listen(API_PORT, BIND_HOST, () => {
+transportFailed(apiServer, API_PORT, "MONOMEM_PORT", "API + dashboard").listen(API_PORT, BIND_HOST, () => {
   console.error(`[monomem] API + dashboard on http://${BIND_HOST}:${API_PORT}`);
   if (!isLoopback(BIND_HOST)) {
     console.error(`[monomem] warning: listening on ${BIND_HOST}, not loopback, over plain HTTP (tokens and notes cross the network unencrypted). Put it behind your own TLS / authenticated tunnel: see INFRA.md.`);
@@ -157,14 +171,14 @@ exitOnListenError(apiServer, API_PORT, "MONOMEM_PORT", "API").listen(API_PORT, B
   console.error(
     `[monomem] try: curl -H "Authorization: Bearer ${tokenExpr}" "http://127.0.0.1:${API_PORT}/notes?limit=5"`
   );
-  scheduleJanitor();
+  scheduleJanitor(true);
 });
 
-exitOnListenError(mcpServer, MCP_HTTP_PORT, "MONOMEM_MCP_PORT", "MCP").listen(MCP_HTTP_PORT, BIND_HOST, () => {
+transportFailed(mcpServer, MCP_HTTP_PORT, "MONOMEM_MCP_PORT", "MCP over HTTP").listen(MCP_HTTP_PORT, BIND_HOST, () => {
   console.error(
     `[monomem] MCP over HTTP on http://${BIND_HOST}:${MCP_HTTP_PORT}/mcp (for apps that connect over HTTP with a key; see docs/give-an-app-limited-access.md)`
   );
-  scheduleJanitor();
+  scheduleJanitor(true);
 });
 
 if (AUTO_CONSOLIDATE_INTERVAL_MS && AUTO_CONSOLIDATE_INTERVAL_MS > 0) {

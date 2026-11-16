@@ -8,6 +8,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { Store, NoteRecord } from "./store.js";
 import { RESERVED_TAG_PREFIX } from "./reserved-tags.js";
+import { needsHumanConfirm } from "./store/rows.js";
 
 export const TASK_STATUSES = ["idea", "planned", "running", "blocked", "done", "queued", "failed"] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
@@ -22,6 +23,8 @@ export const TAG_BLOCKED = `${T}blocked_by:`;
 export const TAG_CKEY = `${T}ckey:`;
 export const TAG_LEASE = `${T}lease:`;
 export const TAG_APPROVAL = `${T}approval:`;
+/** Who took the live lease (the server-stamped writer, not the free-text owner), when, and the status before: `<ms>:<status>:<writer>`. Lets a rollback release it. */
+export const TAG_CLAIM = `${T}claim:`;
 
 export interface TaskCommand {
   action: string;
@@ -48,6 +51,13 @@ export interface TaskState {
   lease: { owner: string; expMs: number } | null;
   ckey: string | null;
   approval: string | null; // "<nonce>.<mac>"
+  /** Kept only while a lease is held (tagsFromState drops it with the lease). */
+  claim: { atMs: number; prev: TaskStatus; by: string } | null;
+}
+
+export function parseClaim(tag: string): TaskState["claim"] {
+  const m = /^(\d{1,16}):([a-z]+):(.+)$/.exec(tag);
+  return m && (TASK_STATUSES as readonly string[]).includes(m[2]) ? { atMs: Number(m[1]), prev: m[2] as TaskStatus, by: m[3] } : null;
 }
 
 export function parseLease(tag: string): { owner: string; expMs: number } | null {
@@ -75,6 +85,7 @@ export function stateOf(n: NoteRecord): TaskState {
     lease: lease ? parseLease(lease) : null,
     ckey: tag(TAG_CKEY) ?? null,
     approval: tag(TAG_APPROVAL) ?? null,
+    claim: parseClaim(tag(TAG_CLAIM) ?? ""),
   };
 }
 
@@ -197,7 +208,32 @@ export function envRunnerTaskNamespace(): string {
   return process.env.MONOMEM_RUNNER_TASK_NAMESPACE || "";
 }
 
-export type SkipReason = "not_command" | "other_namespace" | "other_target" | "unapproved" | "leased" | "distrusted";
+export type SkipReason = "not_command" | "other_namespace" | "other_target" | "unapproved" | "leased" | "distrusted" | "held";
+
+/**
+ * THE one "needs a person" check for work an agent may act on (approve, claim, the runner): unconfirmed outside content,
+ * a note built on a distrusted writer, or a flagged note -- unless a PERSON confirmed this version (same bar as pins; an
+ * admin-key or dashboard confirm does not count). Expiry is left out on purpose: an expired note is stale, not foreign.
+ */
+export function heldForPerson(
+  n: Pick<NoteRecord, "tags" | "rev" | "confirmed_kind" | "confirmed_rev" | "built_on_distrusted" | "flagged">
+): boolean {
+  const personConfirmed = n.confirmed_kind === "human" && n.confirmed_rev === n.rev;
+  return needsHumanConfirm(n) || (!personConfirmed && (n.built_on_distrusted === true || (Array.isArray(n.flagged) && n.flagged.length > 0)));
+}
+
+/** The refusal for a held task: why, and the one step that releases it. */
+export function heldTaskMessage(n: Pick<NoteRecord, "id" | "tags" | "built_on_distrusted" | "flagged">, verb: string): string {
+  const why = n.built_on_distrusted
+    ? "was built on a note from a distrusted writer"
+    : Array.isArray(n.flagged) && n.flagged.length > 0 && !needsHumanConfirm(n as never)
+      ? "was flagged"
+      : "came from outside content";
+  return (
+    `Can't ${verb} task #${n.id}: it ${why}, so an app key cannot ${verb} it. ` +
+    `A person must read it and confirm it at a terminal first: monomem confirm ${n.id} (a dashboard or admin-key confirm does not count).`
+  );
+}
 
 export type QueuedVerdict =
   /** The runner may run it now (approval valid, unexpired, addressed to it, not leased, writer not distrusted). */
@@ -233,6 +269,8 @@ export function classifyQueuedCommand(
   if (who.unconfirmed ? false : !who.namespace || n.namespace !== who.namespace) return { kind: "skip", why: "other_namespace" };
   if (cmd.target !== who.me) return { kind: "skip", why: "other_target" };
   if (distrusted(n)) return { kind: "skip", why: "distrusted" };
+  // A mark added after approval (retro-taint, a flag) is not covered by the approval MAC: checked here on every run.
+  if (heldForPerson(n)) return { kind: "skip", why: "held" };
   const m = APPROVAL_RE.exec(stateOf(n).approval ?? "");
   if (!m) return { kind: "skip", why: "unapproved" };
   const expMs = Number(m[2]);

@@ -74,6 +74,9 @@ Over REST (admin token, not namespace-pinned): `GET /flood` returns `{ paused, w
 
 The paused set is stored in the database, so restarting the server does not clear it.
 
+**Never paused:** the `monomem` CLI and the main key (`primary`, the key the dashboard signs in with). The guard is there to
+stop a runaway agent, not you. So do not hand the main key to an agent: give each app its own app key, which the guard counts.
+
 **What is counted:** every create and update call from that writer that reaches the guard, whether it is then stored,
 held in the quarantine queue, or refused by validation (a loop sending bad writes is still a flood). Replacing a note
 counts as the create it makes.

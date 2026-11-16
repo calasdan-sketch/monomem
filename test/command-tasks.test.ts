@@ -11,7 +11,8 @@ import type { AddressInfo } from "node:net";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Store } from "../src/store.js";
-import { putTask, approveTask, getTask, claimTask } from "../src/tasks.js";
+import { putTask, approveTask, getTask, claimTask, classifyQueuedCommand } from "../src/tasks.js";
+import { actorStore, setProcessWriter } from "../src/actor.js";
 import { Ledger, RUNNER, type Allowlist, type RunnerDeps } from "../src/runner.js";
 import { pollTasks } from "../src/runner-tasks.js";
 import { createMcpServer } from "../src/mcp-server-core.js";
@@ -67,6 +68,15 @@ describe("command tasks", () => {
 
   test("a write-scope task cannot run: unapproved is ignored", async () => {
     const t = queue();
+    assert.equal(await pollTasks(deps), 0);
+    assert.equal(existsSync(marker), false);
+    assert.equal(getTask(store, t.id).status, "queued");
+  });
+
+  test("A1: a flag raised AFTER approval stops the run (the runner re-checks every time)", async () => {
+    const t = queue();
+    approveTask(store, { id: t.id, if_rev: store.read(t.id)!.rev });
+    actorStore.run({ label: "reviewer", authed: true }, () => store.flagNote(t.id, "this command looks wrong"));
     assert.equal(await pollTasks(deps), 0);
     assert.equal(existsSync(marker), false);
     assert.equal(getTask(store, t.id).status, "queued");
@@ -342,4 +352,88 @@ describe("who may approve", () => {
     await new Promise<void>((r) => server.close(() => r()));
     store.close();
   });
+});
+
+describe("held command tasks need a person (A1)", () => {
+  const as = <T>(label: string, f: () => T, extra: Record<string, unknown> = {}): T => actorStore.run({ label, authed: true, ...extra }, f);
+  const who = (ns: string) => ({ me: "pc-1", namespace: ns });
+
+  test("outside-content command task: key cannot approve, runner will not run, person confirm releases", () => {
+    const s = new Store(":memory:");
+    try {
+      const t = as("agent", () =>
+        putTask(s, { title: "tip", namespace: NS, command: { action: "mark", params: { p: "x" } }, target: "pc-1" }).task, { taint: ["obs.origin:via:memory"] });
+      assert.equal(s.read(t.id)!.unconfirmed, true);
+      // 1. an admin key cannot approve it; the refusal says what to do
+      assert.throws(() => as("admin", () => approveTask(s, { id: t.id, if_rev: s.read(t.id)!.rev })), /outside content[\s\S]*monomem confirm/);
+      // 2. an admin (dashboard-style) confirm is not enough
+      as("admin", () => s.confirm(t.id, { admin: true }));
+      assert.equal(s.read(t.id)!.confirmed_kind, "admin");
+      assert.throws(() => as("admin", () => approveTask(s, { id: t.id, if_rev: s.read(t.id)!.rev })), /outside content/);
+      // 3. revoke always works
+      as("admin", () => approveTask(s, { id: t.id, revoke: true }));
+      // 4. a person at a terminal confirms -> approve works -> runnable
+      setProcessWriter("cli");
+      s.confirm(t.id, { source: "read it" });
+      setProcessWriter("");
+      const a = as("admin", () => approveTask(s, { id: t.id, if_rev: s.read(t.id)!.rev }));
+      assert.equal(classifyQueuedCommand(s, s.read(a.id)!, who(NS), Date.now()).kind, "runnable");
+      // 5. a mark added AFTER approval (retro-taint writes the raw tag column) -> runner skips it as "held"
+      s.db.prepare("UPDATE notes SET tags = ?, rev = rev + 1 WHERE id = ?").run(JSON.stringify([...s.read(a.id)!.tags, "obs.origin:declared"]), a.id);
+      assert.deepEqual(classifyQueuedCommand(s, s.read(a.id)!, who(NS), Date.now()), { kind: "skip", why: "held" });
+    } finally {
+      setProcessWriter("");
+      s.close();
+    }
+  });
+
+  test("approve:true on create leaves a queued, unapproved task when the creator read outside content", () => {
+    const s = new Store(":memory:");
+    try {
+      const t = as("agent", () => putTask(s, { title: "tip", namespace: NS, command: { action: "mark", params: { p: "x" } }, target: "pc-1" }).task, { taint: ["obs.origin:declared"] });
+      assert.throws(() => as("admin", () => approveTask(s, { id: t.id, if_rev: t.rev })), /outside content/);
+      assert.equal(classifyQueuedCommand(s, s.read(t.id)!, who(NS), Date.now()).kind, "skip");
+      assert.equal(getTask(s, t.id).status, "queued");
+    } finally {
+      s.close();
+    }
+  });
+
+  test("a flagged task cannot be claimed until a person confirms it; release always works", () => {
+    const s = new Store(":memory:");
+    try {
+      const t = putTask(s, { title: "plain task", namespace: NS }).task;
+      as("reviewer", () => s.flagNote(t.id, "looks wrong"));
+      assert.ok((s.read(t.id)!.flagged ?? []).length > 0);
+      assert.throws(() => as("worker", () => claimTask(s, { id: t.id, owner: "worker" })), /flagged[\s\S]*monomem confirm/);
+      as("worker", () => claimTask(s, { id: t.id, owner: "worker", release: true }));
+      setProcessWriter("cli");
+      s.confirm(t.id, { source: "checked" });
+      setProcessWriter("");
+      assert.equal(as("worker", () => claimTask(s, { id: t.id, owner: "worker" })).task.owner, "worker");
+    } finally {
+      setProcessWriter("");
+      s.close();
+    }
+  });
+});
+
+test("A1: MCP task_put approve:true by an admin key on held content: task created, left queued + unapproved, warning says why", async () => {
+  const s = new Store(":memory:");
+  const server = createMcpServer(s, "admin", {}, { label: "admin", authed: true, readsOutside: true });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  await server.connect(st);
+  const client = new Client({ name: "t", version: "1" });
+  await client.connect(ct);
+  try {
+    const r: any = await client.callTool({ name: "task_put", arguments: { title: "tip", namespace: NS, command: { action: "mark", params: { p: "x" } }, target: "pc-1", approve: true } });
+    assert.ok(!r.isError, r.content?.[0]?.text);
+    const out = parseTool(r);
+    assert.equal(out.task.status, "queued");
+    assert.equal(out.task.approval, "none");
+    assert.match(JSON.stringify(out.warnings), /monomem confirm/);
+  } finally {
+    await client.close();
+    s.close();
+  }
 });

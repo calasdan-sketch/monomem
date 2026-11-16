@@ -228,11 +228,17 @@ export function didYouMean(k: string, shape: z.ZodRawShape): string {
 
 /** A call that would do the wrong thing because of an ignored argument: refuse it instead. */
 export function ignoredRefusal(tool: string, raw: Record<string, unknown>, args: Record<string, unknown>, ignored: string[]): string | null {
-  if (tool !== "state_write" || args.id !== undefined) return null;
+  if (tool !== "state_write") return null;
   const hasText = (v: unknown): boolean => typeof v === "string" && v.trim() !== "";
-  if (hasText(args.title) || hasText(args.body)) return null;
-  const sent = ignored.find((k) => hasText(raw[k]));
-  return sent ? `a new note needs a title or a body (you sent \`${sent}\`; use \`body\`)` : null;
+  // A3: the text went to a name the tool does not have (content/text/note) and `body` is empty: saving would store a note
+  // without it (or, for an update, leave the old text and say "saved"). Refuse: no note, no receipt.
+  if (args.id === undefined && !hasText(args.title) && !hasText(args.body)) {
+    const sent = ignored.find((k) => hasText(raw[k]));
+    return sent ? `a new note needs a title or a body (you sent \`${sent}\`; use \`body\`)` : null;
+  }
+  if (hasText(args.body)) return null;
+  const lost = ignored.find((k) => ARG_ALIASES[k.toLowerCase()] === "body" && hasText(raw[k]));
+  return lost ? `nothing was saved: the note text goes in \`body\` (you sent \`${lost}\`; use \`body\`)` : null;
 }
 
 /** Adds ignored_arguments (and what each probably meant) to a tool's JSON result. */
@@ -273,6 +279,11 @@ export function errorResult(message: string, extra?: Record<string, unknown>) {
     ],
     isError: true,
   };
+}
+
+/** An error whose reply carries note text (a stale write's diff): the untrusted banner goes first, as on every read. */
+export function untrustedError(message: string, extra: Record<string, unknown>) {
+  return { content: [{ type: "text" as const, text: UNTRUSTED_BANNER + JSON.stringify({ error: message, ...extra }) }], isError: true };
 }
 
 // Map a thrown error to a tool result. Mirrors the REST layer's policy: a

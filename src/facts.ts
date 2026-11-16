@@ -345,7 +345,8 @@ export function factsTable(notes: readonly NoteRecord[]): Record<string, FactRow
     const writersOfKey = new Map<string, Set<string>>();
     for (const [sk, mine] of stated) {
       const [key, w] = sk.split("\u0000");
-      (writersOfKey.get(key) ?? writersOfKey.set(key, new Set()).get(key)!).add(w);
+      // r2-innovation #1: a writer whose every note on this key is an echo of a note it was shown is not a second source.
+      if (!mine.every((m) => m.n.echo_of !== undefined)) (writersOfKey.get(key) ?? writersOfKey.set(key, new Set()).get(key)!).add(w);
       mine.sort((a, b) => newestFirst(a.n, b.n));
       if (!mine.some((m) => m.norm !== mine[0].norm)) continue;
       keys.get(key)!.get(mine[0].norm)!.current = true;
@@ -354,7 +355,7 @@ export function factsTable(notes: readonly NoteRecord[]): Record<string, FactRow
     out[ns] = [...keys].sort(([a], [b]) => a.localeCompare(b)).map(([key, vals]) => {
       const values = [...vals.values()].map((e) => ({ value: e.value, writers: [...e.writers].sort(), ids: e.ids.sort((a, b) => a - b), since: e.since, older: e.older.sort((a, b) => a - b), current: e.current }));
       const spelt = [...(spellings.get(key) ?? [])].filter((x) => x !== key).sort();
-      return { key, disputed: disputedKeys.has(key), agreed: values.length === 1 && writersOfKey.get(key)!.size >= 2, values, spellings: spelt };
+      return { key, disputed: disputedKeys.has(key), agreed: values.length === 1 && (writersOfKey.get(key)?.size ?? 0) >= 2, values, spellings: spelt };
     });
   }
   return out;

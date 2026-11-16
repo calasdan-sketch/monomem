@@ -280,7 +280,11 @@ upgrade that carry a 1.3.5 outside-content stamp: they keep their session-start 
 - pinned (`monomem pin`, REST `PUT /pinned`, the dashboard);
 - used as the replacement in a replace (`monomem supersede`, the replace preview and confirm on every surface);
 - used in **Keep as history**, as the held write or as the note that replaces it
-  ([memory-linter.md](./memory-linter.md#quarantine)).
+  ([memory-linter.md](./memory-linter.md#quarantine));
+- approved as a command for the runner, or claimed as a task (`task_approve`, `task_claim`, the REST routes, `approve: true`
+  on create). This one also covers a task built on a note from a distrusted writer, and a flagged task. The runner checks
+  again on every pass, so a mark or flag added after approval stops the run (reason `held`). Revoking an approval and
+  releasing a claim always work. `approve: true` on create leaves the task queued and unapproved, with a warning.
 
 The refusal reads:
 
@@ -305,6 +309,17 @@ itself. Links are only ever added: an update adds new ones, and `[]` or leaving 
   `[built on a distrusted writer]` and kept out of session start. Unlike the distrusted writer's own notes, it is still
   listed and searchable.
 - A writer that built a note from the target cannot confirm the target.
+
+### Echoes
+
+A new note that restates a note its writer was just shown is an **echo**, not new evidence. "Shown" means what Monomem
+recorded giving that writer: the unconfirmed notes that connection read, and what session start showed an open session in
+the same folder (local apps only). When the new title and body match one of those closely (and are not too short to tell),
+the note gets `obs.echo_of:<id>`, the label `[echo of #<id>: restates a note this writer was shown; not a second source]`,
+and a `derived_from` link to the original. So it keeps the original's unconfirmed or distrusted status, its writer cannot
+confirm the original, and `monomem facts` does not count it as a second writer agreeing. It is a label only: an echo is
+never refused. The match is word overlap, so a reworded restatement can slip through, and a short generic note is never
+called an echo.
 
 Limits: it only works when agents fill it in, it looks one hop back, a held write keeps its mark but loses its links, and
 there is no session-start count line for notes built on a distrusted writer.
