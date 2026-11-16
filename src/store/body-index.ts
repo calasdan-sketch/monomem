@@ -19,6 +19,7 @@ import { decryptIfEncrypted, noteAad } from "../crypto.js";
 /** Above this many notes the index is not built (about 7 s and 240 MB at 100k): search stays title and tags. */
 export const BODY_INDEX_MAX_NOTES = 100_000;
 const TABLE = "notes_fts_mem";
+const BUILD_BATCH = 1000;
 
 export interface BodyIndexInfo {
   /** off: disabled for this process (hooks, MONOMEM_BODY_INDEX=off). not built: no key, or not needed yet. */
@@ -48,6 +49,8 @@ export class BodyIndex {
   private buildMs = 0;
   private fallbacks = 0;
   private lastFallback: string | null = null;
+  /** Notes in the store when last counted, keyed by total_changes and data_version: the cap check costs no scan per search. */
+  private counted: { key: string; n: number } | null = null;
 
   constructor(
     private readonly s: Store,
@@ -87,6 +90,12 @@ export class BodyIndex {
     }
     const tooLarge = (): string => this.fallBack(`the in-memory body index is not built above ${this.maxNotes.toLocaleString("en-US")} notes`);
     if (this.tooLarge) return tooLarge();
+    // The cap holds after the build too: this process's own writes (triggers) and other processes' (catch-up) add notes.
+    if (this.ready && this.noteCount() > this.maxNotes) {
+      this.tooLarge = true;
+      this.teardown();
+      return tooLarge();
+    }
     try {
       if (this.ready ? this.catchUp() : this.build()) return TABLE;
       return this.tooLarge ? tooLarge() : this.fallBack("the search ran inside a write, before the body index was built; the next search builds it");
@@ -121,6 +130,13 @@ export class BodyIndex {
     }
   }
 
+  private noteCount(): number {
+    const db = this.s.db;
+    const key = `${(db.prepare("SELECT total_changes() AS t").get() as { t: number }).t}:${this.dv()}`;
+    if (this.counted?.key !== key) this.counted = { key, n: Number((db.prepare("SELECT COUNT(*) AS c FROM notes").get() as { c: number }).c) };
+    return this.counted.n;
+  }
+
   private dv(): number {
     return Number((this.s.db.prepare("PRAGMA data_version").get() as { data_version: number }).data_version);
   }
@@ -132,9 +148,9 @@ export class BodyIndex {
   private build(): boolean {
     const db = this.s.db;
     if (db.isTransaction) return false;
-    const count = Number((db.prepare("SELECT COUNT(*) AS c FROM notes").get() as { c: number }).c);
-    if (count > this.maxNotes) {
+    if (this.noteCount() > this.maxNotes) {
       this.tooLarge = true;
+      this.teardown(); // a rebuild refused for size: let go of the old index and its triggers (RAM, and every write's cost)
       return false;
     }
     const t0 = performance.now();
@@ -149,7 +165,11 @@ export class BodyIndex {
       db.exec(`DROP TABLE IF EXISTS bodyidx.${TABLE};
         CREATE VIRTUAL TABLE bodyidx.${TABLE} USING fts5(title, body, tags, content='', contentless_delete=1, prefix='1');`);
       this.watermark = this.s.maxChangeSeq();
-      db.exec(`INSERT INTO ${TABLE}(rowid, title, body, tags) SELECT id, title, om_index_body(id, namespace, body, body_enc), tags FROM notes`);
+      // In id ranges of BUILD_BATCH: one statement over every row kept each row's decrypted body alive until it finished
+      // (+505 MB RSS at 100k); per batch it settles (measured 675 -> 308 MB, same build time).
+      const ins = db.prepare(`INSERT INTO ${TABLE}(rowid, title, body, tags) SELECT id, title, om_index_body(id, namespace, body, body_enc), tags FROM notes WHERE id > ? AND id <= ?`);
+      const top = Number((db.prepare("SELECT COALESCE(MAX(id), 0) AS m FROM notes").get() as { m: number }).m);
+      for (let a = 0; a < top; a += BUILD_BATCH) ins.run(a, a + BUILD_BATCH);
     });
     // TEMP triggers live on this connection only: other tools and older binaries never see them. A TEMP trigger may name a
     // table in an attached database (unqualified), and the attached database is part of the same transaction, so a rolled

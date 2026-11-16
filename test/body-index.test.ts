@@ -425,3 +425,58 @@ test("servers warm the body index just after start-up", () => {
     assert.match(readFileSync(join(ROOT, f), "utf8"), /setImmediate\(\(\) => store\.warmBodyIndex\(\)\)/, f);
   }
 });
+
+describe("final3: the size cap holds after the build, and a refused build lets go of the index (ARCH-L1/L2, PERF-S2)", () => {
+  const tempTriggers = (s: Store): number => Number((s.db.prepare("SELECT COUNT(*) AS c FROM sqlite_temp_master WHERE type = 'trigger' AND name LIKE 'om_bodyidx_%'").get() as { c: number }).c);
+
+  test("this process's own writes past the cap: the next search says too large and the index and its triggers are gone", () =>
+    withDirs((_pd, ed) => {
+      ensureKey(ed);
+      const s = new Store(join(ed, "state.db"), { bodyIndexMaxNotes: 3 });
+      try {
+        for (const w of ["one", "two"]) s.create({ title: `t ${w}`, body: `a ${w} heron`, tags: [] });
+        assert.equal(ids(s, "heron").length, 2);
+        assert.equal(s.bodyIndexInfo().state, "ready");
+        assert.equal(tempTriggers(s), 3);
+        for (const w of ["three", "four"]) s.create({ title: `t ${w}`, body: `a ${w} heron`, tags: [] });
+        assert.deepEqual(ids(s, "heron"), []);
+        assert.equal(s.bodyIndexInfo().state, "too large");
+        assert.equal(tempTriggers(s), 0, "writes no longer pay for an index no search reads");
+      } finally {
+        s.close();
+      }
+    }));
+
+  test("another process's writes past the cap, then a rebuild refused for size: index and triggers torn down", () =>
+    withDirs((_pd, ed) => {
+      ensureKey(ed);
+      const s1 = new Store(join(ed, "state.db"), { bodyIndexMaxNotes: 3 });
+      const s2 = new Store(join(ed, "state.db"));
+      try {
+        s1.create({ title: "x", body: "an ibis", tags: [] });
+        assert.equal(ids(s1, "ibis").length, 1);
+        for (const w of ["b", "c", "d"]) s2.create({ title: w, body: `an ibis ${w}`, tags: [] });
+        s2.purgeChangeLogAll(); // only a full rebuild can be right now, and it is over the cap
+        assert.deepEqual(ids(s1, "ibis"), []);
+        assert.equal(s1.bodyIndexInfo().state, "too large");
+        assert.equal(tempTriggers(s1), 0);
+      } finally {
+        s1.close();
+        s2.close();
+      }
+    }));
+
+  test("the build covers every note when ids are far apart (it runs in id ranges)", () =>
+    withDirs((_pd, ed) => {
+      const s = encStore(ed);
+      try {
+        const first = s.create({ title: "a", body: "a lone egret", tags: [] });
+        s.db.exec("UPDATE sqlite_sequence SET seq = 4500 WHERE name = 'notes'");
+        const far = s.create({ title: "b", body: "another egret", tags: [] });
+        assert.ok(far.id > 4500, String(far.id));
+        assert.deepEqual(ids(s, "egret").sort((a, b) => a - b), [first.id, far.id]);
+      } finally {
+        s.close();
+      }
+    }));
+});
