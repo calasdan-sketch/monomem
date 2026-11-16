@@ -67,3 +67,45 @@ test("a stale write names who changed the note, how, the current rev and a short
     s.close();
   }
 });
+
+// REST PUT /notes/:id says the same as MCP state_write: an overwrite notice, and a stale write that names who, how and what.
+test("REST PUT /notes/:id: overwrite notice and the rich stale-write error, as over MCP", async () => {
+  const { createApiServer } = await import("../src/api.js");
+  const s = new Store(":memory:");
+  const A = "tok-claude-1234567890abcdef";
+  const B = "tok-codex-1234567890abcdefg";
+  const server = createApiServer(s, [
+    { token: A, scope: "write", label: "claude" },
+    { token: B, scope: "write", label: "codex" },
+  ]);
+  await new Promise<void>((r) => server.listen(0, r));
+  const base = `http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}`;
+  const call = async (tok: string, method: string, path: string, body: unknown) => {
+    const res = await fetch(base + path, { method, headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    return { status: res.status, json: (await res.json()) as any };
+  };
+  try {
+    const n = (await call(A, "POST", "/notes", { title: "deploy", body: "line one\nfly.io" })).json.note;
+    const r = await call(B, "PUT", `/notes/${n.id}`, { body: "line one\nrender.com" });
+    assert.equal(r.status, 200);
+    assert.equal(r.json.replaced_other_writer.by, "claude");
+    assert.equal(r.json.replaced_other_writer.old_rev, n.rev);
+    assert.ok(r.json.replaced_other_writer.line_diff.some((l: string) => l.startsWith("- ") && l.includes("fly.io")));
+    assert.match(r.json.notice, /claude/);
+    // codex editing again: its own text, no notice
+    const r2 = await call(B, "PUT", `/notes/${n.id}`, { body: "line one\nrender.com (eu)" });
+    assert.equal(r2.json.replaced_other_writer, undefined);
+    // claude writes with the rev it read: stale, and the error says who, how and what
+    const st = await call(A, "PUT", `/notes/${n.id}`, { body: "line one\nheroku", if_rev: n.rev });
+    assert.equal(st.status, 409);
+    assert.match(st.json.error, /stale write/);
+    assert.match(st.json.error, /codex/);
+    assert.equal(st.json.stale.current_rev, n.rev + 2);
+    assert.equal(st.json.stale.changed_by, "codex");
+    assert.ok(st.json.stale.line_diff.some((l: string) => l.startsWith("+ ") && l.includes("render.com")));
+    assert.match(st.json.security_notice, /UNTRUSTED/, "note text in the error carries the untrusted notice");
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+    s.close();
+  }
+});

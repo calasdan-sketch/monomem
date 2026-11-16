@@ -2,7 +2,7 @@
 // Moved out of createApiServer's request handler (api.ts) unchanged; handle() tries the route files in a fixed order.
 // Each returns true when it answered the request, false to let the next one try.
 
-import { NoteInput, NotePatch, NoteRecord, ValidationError, validateForgetAfter, coerceNumeric } from "../store.js";
+import { NoteInput, NotePatch, NoteRecord, StaleWriteError, ValidationError, validateForgetAfter, coerceNumeric } from "../store.js";
 import { RECEIPT_CHECK } from "../store/write-receipt.js";
 import { checkFilesInput } from "../code-anchor.js";
 import { readBody } from "../http-common.js";
@@ -11,7 +11,9 @@ import { annotateStaleness } from "../staleness.js";
 import { supersedePreview, supersedeConfirm, supersedeUndo, noteHistory, restoreVersion, purgeNoteHistory, type Caller } from "../supersede.js";
 import { withFacts, factFeedback } from "../facts.js";
 import { assertPlainWriteTags, assertReviewedTag } from "../reserved-tags.js";
-import { prepareNoteUpdate } from "../note-update.js";
+import { prepareNoteUpdate, overwriteNotice, staleDetail } from "../note-update.js";
+import { currentWriter } from "../actor.js";
+import { UNTRUSTED_BANNER } from "../security.js";
 import { ReadTaint, unconfirmedIdsIn } from "../taint.js";
 import type { LintFinding } from "../lint.js";
 import { POST_NOTE_FIELDS, PUT_NOTE_FIELDS, PUT_READ_ONLY_FIELDS, unknownNoteFields, sendError, sendJson, flagParam } from "./shared.js";
@@ -199,10 +201,17 @@ export async function noteRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
         sendJson(res, 404, { error: "not found" });
         return true;
       }
+      // r2-improvement #3, as MCP state_write: replacing another writer's text without if_rev is said out loud.
+      const overwrite = !unchanged && ifRev === undefined ? overwriteNotice(check.target, note as NoteRecord, currentWriter()) : null;
       if (!unchanged) await maybeEmbed(store, note);
-      sendJson(res, 200, { note, ...(unchanged ? { unchanged: true } : {}), ...(receipt ? { receipt, receipt_check: RECEIPT_CHECK } : {}), ...(warnings.length ? { warnings } : {}), ...(putFacts === undefined ? {} : factFeedback(store, note)) });
+      sendJson(res, 200, { note, ...(unchanged ? { unchanged: true } : {}), ...(overwrite ?? {}), ...(receipt ? { receipt, receipt_check: RECEIPT_CHECK } : {}), ...(warnings.length ? { warnings } : {}), ...(putFacts === undefined ? {} : factFeedback(store, note)) });
     } catch (e) {
-      sendError(res, e, store.refusedWriteReceipt(e, id));
+      const receipt = store.refusedWriteReceipt(e, id);
+      // As MCP state_write: a stale if_rev names who changed the note, how, the current rev and a short diff. The diff is
+      // note text, so the reply carries the untrusted-content notice.
+      const d = e instanceof StaleWriteError && ifRev !== undefined ? staleDetail(store, id, ifRev) : null;
+      if (d) sendJson(res, 409, { error: d.message, stale: d.stale, security_notice: UNTRUSTED_BANNER.trim(), ...(receipt ? { receipt, receipt_check: RECEIPT_CHECK } : {}) });
+      else sendError(res, e, receipt);
     }
     return true;
   }

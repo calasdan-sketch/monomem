@@ -11,7 +11,7 @@
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Store } from "./store.js";
-import { backupStore } from "./backup.js";
+import { backupStore, backupStoreOffThread } from "./backup.js";
 import { keyPath } from "./crypto.js";
 import { readBackupStatus, writeBackupStatus } from "./ui/settings.js";
 import { uiSwitch } from "./prompt/switches.js";
@@ -68,25 +68,59 @@ export function backupFailure(dbPath: string): { at: string; error: string } | n
   return s && !s.ok ? { at: s.at, error: s.error ?? "unknown error" } : null;
 }
 
-/** Make today's backup if there is none yet, then rotate. Never throws: a failure is recorded and returned. */
+/** Make today's backup if there is none yet, then rotate. Never throws: a failure is recorded and returned. Copies on this thread. */
 export function runDailyBackup(store: Store, dbPath: string, now = new Date()): DailyBackupResult {
+  const d = dailyTarget(dbPath, now);
+  if (!d) return { made: false, removed: [] };
+  try {
+    mkdirSync(d.root, { recursive: true, mode: 0o700 });
+    backupStore(store, dbPath, d.dir);
+  } catch (e) {
+    return failed(dbPath, now, e);
+  }
+  return afterDailyBackup(dbPath, now, d);
+}
+
+/** runDailyBackup with the copy on a worker thread (the server's timer): serving does not pause while it copies. */
+export async function runDailyBackupAsync(dbPath: string, now = new Date()): Promise<DailyBackupResult> {
+  const d = dailyTarget(dbPath, now);
+  if (!d) return { made: false, removed: [] };
+  try {
+    mkdirSync(d.root, { recursive: true, mode: 0o700 });
+    await backupStoreOffThread(dbPath, d.dir);
+  } catch (e) {
+    return failed(dbPath, now, e);
+  }
+  return afterDailyBackup(dbPath, now, d);
+}
+
+/** The server timer's call, off the main thread: null when daily backups are off. */
+export async function maybeDailyBackupAsync(dbPath: string, o: { env?: NodeJS.ProcessEnv; dataDir: string; now?: Date }): Promise<DailyBackupResult | null> {
+  return dailyBackupsOn(o.env ?? process.env, o.dataDir) ? runDailyBackupAsync(dbPath, o.now) : null;
+}
+
+/** Today's backup folder, or null when it already exists. */
+function dailyTarget(dbPath: string, now: Date): { root: string; day: string; dir: string } | null {
   const root = backupsDir(dbPath);
   const day = now.toISOString().slice(0, 10); // ponytail: UTC day; a local-midnight boundary only shifts when the copy is made
   const dir = join(root, day);
-  if (existsSync(join(dir, "state.db"))) return { made: false, removed: [] };
-  const data = dirname(dbPath);
+  return existsSync(join(dir, "state.db")) ? null : { root, day, dir };
+}
+
+function failed(dbPath: string, now: Date, e: unknown): DailyBackupResult {
+  const error = (e as Error).message;
   try {
-    mkdirSync(root, { recursive: true, mode: 0o700 });
-    backupStore(store, dbPath, dir);
-  } catch (e) {
-    const error = (e as Error).message;
-    try {
-      writeBackupStatus({ ok: false, at: now.toISOString(), error }, data);
-    } catch {
-      /* the data folder itself is not writable: health reports that on its own */
-    }
-    return { made: false, removed: [], error };
+    writeBackupStatus({ ok: false, at: now.toISOString(), error }, dirname(dbPath));
+  } catch {
+    /* the data folder itself is not writable: health reports that on its own */
   }
+  return { made: false, removed: [], error };
+}
+
+/** Status, the one-time key warning and rotation, after a good copy. */
+function afterDailyBackup(dbPath: string, now: Date, d: { root: string; day: string; dir: string }): DailyBackupResult {
+  const { root, day, dir } = d;
+  const data = dirname(dbPath);
   try {
     writeBackupStatus({ ok: true, at: now.toISOString(), dir }, data);
   } catch {

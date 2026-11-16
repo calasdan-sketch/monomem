@@ -141,8 +141,10 @@ count, unreadable bodies and how many searches fell back to titles and tags (wit
 it for a verified server of this store.
 
 `PUT /notes/:id` takes an optional `if_rev` (the `rev` you last read), as the MCP tool `state_write` does: if the note has
-been changed since, the edit is refused with `409 { error: "stale write: ..." }` instead of replacing the newer write. Without
-`if_rev` the last write wins, as before.
+been changed since, the edit is refused with `409 { error: "stale write: ...", stale: { current_rev, changed_by, how, line_diff, ... },
+security_notice }` instead of replacing the newer write (the diff is note text, so the reply carries the untrusted-content notice).
+Without `if_rev` the last write wins, as before, and replacing another writer's text adds `replaced_other_writer { by, at, old_rev,
+line_diff }` and a `notice` to the 200 reply, as `state_write` does.
 `POST /relevant` takes `{ message, limit?, namespace? }` and mirrors the
 `state_relevant` tool (read-scoped, despite the POST method).
 `GET /stats` mirrors the `memory_stats` tool (read scope, namespace-gated

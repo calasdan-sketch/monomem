@@ -15,6 +15,7 @@ import { DatabaseSync } from "node:sqlite";
 import { Store } from "./store.js";
 import { keyPath } from "./crypto.js";
 import { attestKeyPath, copyKeyFileExclusive, peekSigningKey } from "./attest.js";
+import { copyInWorker, verifyCopy } from "./backup-worker.js";
 
 export interface BackupResult {
   dir: string;
@@ -32,12 +33,10 @@ export interface BackupResult {
   attestKeyLeftOut: boolean;
 }
 
-export function backupStore(
-  store: Store,
-  dbPath: string,
-  outDir: string,
-  opts: { includeApprovalKey?: boolean; includeAttestKey?: boolean; includeKey?: boolean } = {}
-): BackupResult {
+type BackupOpts = { includeApprovalKey?: boolean; includeAttestKey?: boolean; includeKey?: boolean };
+
+/** The output folder, the final state.db path and a temporary name of our own for the copy in progress. */
+function beginBackup(outDir: string): { dir: string; db: string; part: string; dropPart: () => void } {
   const dir = resolve(outDir);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const db = join(dir, "state.db");
@@ -56,44 +55,54 @@ export function backupStore(
       }
     }
   };
+  return { dir, db, part, dropPart };
+}
+
+/** The verified copy becomes state.db (never over one that appeared meanwhile). */
+function landCopy(b: { db: string; part: string }): void {
+  try {
+    chmodSync(b.part, 0o600);
+  } catch {
+    /* windows */
+  }
+  if (existsSync(b.db)) throw new Error(`${b.db} appeared while the backup ran; choose another --out directory (backups never overwrite)`);
+  renameSync(b.part, b.db);
+}
+
+export function backupStore(store: Store, dbPath: string, outDir: string, opts: BackupOpts = {}): BackupResult {
+  const b = beginBackup(outDir);
   let notes = 0;
   try {
-    store.backupTo(part);
-    try {
-      chmodSync(part, 0o600);
-    } catch {
-      /* windows */
-    }
-    // The command-task approval key lets its holder mint approvals the runner
-    // honours. A backup must not carry it unless asked: restored without it,
-    // existing approvals fail their check ("stale") -- fail closed -- and the
-    // admin simply re-approves.
-    // What `monomem health` remembered about the audit log (line count, last hash) never travels: restored next to
-    // another log it would read as tampering.
-    {
-      const strip = new DatabaseSync(part);
-      try {
-        strip.prepare(`DELETE FROM _meta WHERE key IN ('health_audit_seen'${opts.includeApprovalKey ? "" : ", 'approval_key'"})`).run();
-        strip.exec("VACUUM");
-      } finally {
-        strip.close();
-      }
-    }
-    // Prove the copy opens and is internally consistent before reporting success.
-    const copy = new DatabaseSync(part, { readOnly: true });
-    try {
-      const ic = copy.prepare("PRAGMA integrity_check").get() as { integrity_check: string };
-      if (ic.integrity_check !== "ok") throw new Error(`backup failed its integrity check: ${ic.integrity_check}`);
-      notes = Number((copy.prepare("SELECT COUNT(*) AS c FROM notes").get() as { c: number }).c);
-    } finally {
-      copy.close();
-    }
-    if (existsSync(db)) throw new Error(`${db} appeared while the backup ran; choose another --out directory (backups never overwrite)`);
-    renameSync(part, db);
+    store.backupTo(b.part);
+    notes = verifyCopy(DatabaseSync, b.part, Boolean(opts.includeApprovalKey));
+    landCopy(b);
   } catch (e) {
-    dropPart();
+    b.dropPart();
     throw e;
   }
+  return finishBackup(b, dbPath, notes, opts);
+}
+
+/**
+ * backupStore with the copy made on a worker thread from its own connection to `dbPath` (the server's daily backup), so the
+ * caller's thread keeps serving during the copy. Same folder, same checks, same result.
+ */
+export async function backupStoreOffThread(dbPath: string, outDir: string, opts: BackupOpts = {}): Promise<BackupResult> {
+  const b = beginBackup(outDir);
+  let notes = 0;
+  try {
+    notes = await copyInWorker(dbPath, b.part, Boolean(opts.includeApprovalKey));
+    landCopy(b);
+  } catch (e) {
+    b.dropPart();
+    throw e;
+  }
+  return finishBackup(b, dbPath, notes, opts);
+}
+
+/** Keys (copied only on request), README.txt and the .last-backup stamp. */
+function finishBackup(b: { dir: string; db: string; dropPart: () => void }, dbPath: string, notes: number, opts: BackupOpts): BackupResult {
+  const { dir, db, dropPart } = b;
   dropPart();
   let key: string | null = null;
   const kp = keyPath(dirname(dbPath));

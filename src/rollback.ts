@@ -172,12 +172,17 @@ function planSideEffects(
   }
   const now = Date.now();
   const sinceMs = Date.parse(w.since);
-  // ponytail: first 500 claimed tasks only; page like scanQueuedCommands if a store ever holds more live claims.
-  for (const t of store.list({ namespaces: w.namespaces, limit: 500, withTags: [TASK_TAG], withTagPrefix: TAG_CLAIM, count: false }).notes) {
-    const st = stateOf(t);
-    if (!st.claim || !st.lease || st.lease.expMs <= now || st.claim.atMs < sinceMs || !nameIs(st.claim.by, w.writer, w.family)) continue;
-    if (operatorOnly(t)) continue;
-    actions.push({ ...base(t), rev: t.rev, action: "release", back_to: st.claim.prev });
+  // Every claimed task, paged (a plan reads only: the pages do not shift under it).
+  const page = 500;
+  for (let offset = 0; ; offset += page) {
+    const notes = store.list({ namespaces: w.namespaces, limit: page, offset, withTags: [TASK_TAG], withTagPrefix: TAG_CLAIM, count: false }).notes;
+    for (const t of notes) {
+      const st = stateOf(t);
+      if (!st.claim || !st.lease || st.lease.expMs <= now || st.claim.atMs < sinceMs || !nameIs(st.claim.by, w.writer, w.family)) continue;
+      if (operatorOnly(t)) continue;
+      actions.push({ ...base(t), rev: t.rev, action: "release", back_to: st.claim.prev });
+    }
+    if (notes.length < page) break;
   }
 }
 
