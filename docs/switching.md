@@ -137,7 +137,7 @@ monomem import --from claude-code-chats --path <folder>      # another projects 
 - **One note per message, with the message it replied to.** The question and its answer usually sit in two different
   messages ("which port does staging use?" ... "9443"), so each note also carries the first 400 characters of the message
   before it. A search for the question's words then finds the answer. On the LoCoMo-10 benchmark by turn this raised
-  recall@5 on the held-out half from 58.8 % to 64.6 % ([BENCHMARK.md](./BENCHMARK.md#retrieval-longmemeval-s-and-locomo));
+  recall@5 on the validation half (not used for tuning) from 58.8 % to 64.6 % ([BENCHMARK.md](./BENCHMARK.md#retrieval-longmemeval-s-and-locomo));
   the benchmark builds its notes with the same code as this import.
 - **Where it goes:** the `chats` namespace (`--namespace` to change it). Every note is tagged `imported:claude-code-chats` and
   `chat.session:<id>`, and Claude's messages also carry the model-written label. Chat notes are **never shown at session

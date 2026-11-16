@@ -280,7 +280,8 @@ multi-session questions.
 | LoCoMo-10 session (1,982) | relevant | 90.5 | **81.6** | 95.5 | 87.7 | 80.5 | 78.8 | 1.6 / 5.6 ms |
 
 On that run the strict LongMemEval-S figure was 84.0, 0.7 below agentmemory 0.9.31's reported 84.7 (BM25, its own figure, not
-re-run here). The next block is the change that closed the gap.
+re-run here). The next block is the change that closed that gap. It did not close the gap to Vestige, which reports a higher
+figure (see the comparison after the full-set table).
 
 **Search stems and rarity-weighted coverage, 2026-11-15 (round 3, item 4).** Two ranking changes in the any-keyword search,
 nothing else: (1) the FTS query uses suffix-trimmed stems, so "camping" also finds "camped" (plural s/es, ed, ing only, at
@@ -288,21 +289,23 @@ least 4 letters left, letters-only words); (2) the "share of the question's keyw
 keyword by how rare it is in the store (idf from the FTS vocabulary; on an encrypted store, from the in-memory body index), so a
 note holding the one rare word of a question beats one holding two common ones. Coverage still matches the keywords as typed.
 
-Tuned on half the questions only. `monomem bench ... --split a|b` splits by `sha256(question id)`; every candidate was tried on
+Tuned on half the questions only. `monomem bench ... --split a|b` runs half the data: LongMemEval-S by a hash of the
+question id (`sha256`), LoCoMo by conversation (1-5 = a, 6-10 = b), so a checked question never shares a conversation with a
+tuning one. Every candidate was tried on
 half **a**; half **b** never set a parameter, but each candidate that passed **a** was checked on **b** to decide keep or drop
 (about 8 checks). So **b** is a validation half, not an untouched test set. Dropped on half a: stem length 5 and 6,
 pseudo-relevance feedback at two of three weights. A coverage re-rank changed nothing on either half. Dropped on half b: stems alone (LoCoMo-10 session R@5 -0.4, over the
 0.3-point drop guard), pseudo-relevance feedback at the third weight, and idf counted on stems. The kept change sits exactly on
-that guard (-0.3, below). Held-out half **b**, keyword: R@5 and
+that guard (-0.3, below). Validation half **b**, keyword: R@5 and
 Rall@5 as before / after, the other columns as the change in points:
 
 | Half b | R@5 | **Rall@5** | R@10 | Rall@10 | nDCG@10 | MRR |
 |---|---|---|---|---|---|---|
 | LongMemEval-S session | 97.1 / 97.5 | **84.9 / 87.0** | +0.4 | +0.8 | +1.6 | +1.4 |
 | LoCoMo-10 turn | 56.0 / 58.7 | **47.3 / 49.6** | +1.3 | +1.5 | +1.1 | +1.0 |
-| LoCoMo-10 session | 90.2 / 89.9 | **80.9 / 81.3** | 0.0 | +1.1 | +0.7 | +0.6 |
+| LoCoMo-10 session | 90.2 / 89.9 | **80.9 / 81.3** | 0.0 | +1.0 | +0.7 | +0.6 |
 
-One number went down on the held-out half: LoCoMo-10 session R@5, -0.3 (about 3 of 985 questions). It is reported, not hidden;
+One number went down on the validation half: LoCoMo-10 session R@5, -0.3 (about 3 of 985 questions). It is reported, not hidden;
 on the full set the same metric goes up (90.4 to 90.9).
 
 Full set, measured one run at a time on an otherwise idle PC (2026-11-15, same hardware as above), keyword and relevant:
@@ -316,24 +319,39 @@ Full set, measured one run at a time on an otherwise idle PC (2026-11-15, same h
 | LoCoMo-10 session (1,982) | keyword | 90.9 | **82.4** | 96.0 | 89.0 | 81.0 | 79.1 | 1.6 / 2.2 ms |
 | LoCoMo-10 session (1,982) | relevant | 91.1 | **82.5** | 96.0 | 88.9 | 81.1 | 79.4 | 1.3 / 1.8 ms |
 
-The honest headline for LongMemEval-S is now **85.7 strict / 97.2 any-hit at k = 5**, keyword-only, no embeddings. That is 1.0
-above agentmemory 0.9.31's reported 84.7 (its own figure, not re-run here; we score 470 of the 500 questions, dropping the 30
-abstention ones, by session, and did not check that agentmemory's setup matches; 1.0 point is about 5 questions, near the 0.1-0.2
-a re-run can move from ties). LoCoMo-10 by turn is still our weakest number.
+The honest headline for LongMemEval-S is now **85.7 strict / 97.2 any-hit at k = 5**, keyword-only, no embeddings. It is not
+the highest published figure. Other systems' own numbers (none re-run by us), read 2026-11-15:
+
+- **Vestige v6.2.1** (github.com/samvallad33/vestige, `benchmarks/README.md`; also no embeddings and no LLM) reports
+  LongMemEval-S strict recall-all@5 **91.28** on the same 470 questions (5.6 above our 85.7), any-hit recall@5 98.6 and
+  recall@10 99.4 on all 500 questions (we score 470), and in v6.2.2's release notes LoCoMo-10 by session R@5 **93.24** on
+  "ALL" questions (2.3 above our 90.9; the question count is not stated there). Caveats, from its own pages: its weights and
+  word-cluster mappings were refined against the benchmark queries during development, and it reports no held-out half for
+  LongMemEval-S (for LoCoMo it reports conversations 1-5 to tune and 6-10 to test); how it stores sessions and turns is not
+  stated beyond turns being pooled with their neighbours. Ours were tuned on half **a** and checked on half **b** (above).
+- **agentmemory 0.9.31** reports 84.7 (BM25). Ours is 1.0 above it: we score 470 of the 500 questions, dropping the 30
+  abstention ones, by session, and did not check that agentmemory's setup matches; 1.0 point is about 5 questions, near the
+  0.1-0.2 a re-run can move from ties. agentmemory 0.9.33 (2026-11-09) removed a three-results-per-query search cap, so its
+  figure may change; it has published no new one.
+
+LoCoMo-10 by turn is still our weakest number.
 
 **LoCoMo-10 by turn: each turn stored with the turn it replied to (2026-11-15).** The by-turn rows above use the notes
 `monomem import --from claude-code-chats` stores ([switching.md](./switching.md#your-past-claude-code-conversations)): one note
 per message, titled with the speaker and its first line, its body followed by `(replying to <speaker>: <first 400 characters of
-the previous turn>)`. The benchmark calls the same `chatNotes()` as the import, so it scores what a user's imported chats
-look like, not a layout made for the test. Before, each turn was a note on its own (body `Speaker: text`, title the dialog id):
-60.8 / 52.2 / 67.7 / 58.3 / 49.6 / 48.0 on the full set. The reason it helps: the question and its answer usually sit in two
-turns, so the answer's note now also holds the question's words. Checked on the halves before it was kept, keyword R@5 /
+the previous turn>)`. The benchmark calls the same `chatNotes()` as the import, so it scores the same note layout a user's
+imported chats get, not a layout made for the test (the content differs: LoCoMo is two people chatting, and the import also
+runs the linter and skips secrets). To compare with a "by turn" figure that stores each turn on its own,
+use our raw-turn figure below (60.8 R@5), not 67.4. Before, each turn was a note on its own (body `Speaker: text`, title the dialog id):
+60.8 / 52.2 / 67.7 / 58.3 / 49.6 / 48.0 on the full set. The reason it helps (most of it; the speaker-and-first-line title adds
+about 2 points on top): the question and its answer usually sit in two turns, so the answer's note now also holds the
+question's words. Checked on the halves before it was kept, keyword R@5 /
 Rall@5 / R@10 / Rall@10:
 
 | LoCoMo-10 turn | before | after |
 |---|---|---|
 | half a (conversations 1-5, tuning) | 62.9 / 54.8 / 70.3 / 61.2 | 70.2 / 61.3 / 79.4 / 69.1 |
-| half b (conversations 6-10, held out) | 58.8 / 49.6 / 65.1 / 55.3 | **64.6 / 55.4 / 73.2 / 62.4** |
+| half b (conversations 6-10, validation: never tuned on, but used to reject the next-turn variant) | 58.8 / 49.6 / 65.1 / 55.3 | **64.6 / 55.4 / 73.2 / 62.4** |
 
 The 400-character cut was set once and not tuned. Adding the turn *after* each turn as well was tried on both halves and
 made things worse (half b Rall@5 48.3 with the next turn only, 54.5 with both), so it is not done. LongMemEval-S and LoCoMo
@@ -365,6 +383,28 @@ not read edges, but a smaller file caches better. The time for a whole `monomem 
 657-760 ms in the performance seat's before table) was not re-measured. Encrypted search was faster only because it searched less
 text (before C-06; next section has the re-run). 1,000 notes for comparison: session start 5.3 / 8.8 ms plain / encrypted p50.
 
+**Speed at 100,000 notes (`monomem bench --scale 100k`), 2026-11-15.** The same synthetic store at 100,000 notes, measured by
+three review seats on the development PC while other agents loaded it (so read the ranges, not one figure). 100,000 notes is
+the design ceiling: above it the in-memory body index is not built.
+
+| Path at 100,000 notes | plain | encrypted |
+|---|---|---|
+| Session start (`injectContext`) p50 | 7.3-7.6 ms | **7-11 ms** (release gate 50 ms: **PASS**) |
+| Write (`create`, edges on) p50 | about 3-4 ms | about 3-4 ms |
+| Keyword search p50, words in under 5 % of notes | 0.6-8 ms | 0.6-8 ms |
+| Keyword search p50, words in most notes | about 110-190 ms | about 110-190 ms |
+| Store build / database file | 170 s / 305 MB | 196 s / 313 MB |
+| In-memory body index (encrypted only) | - | see the C-06 body-index line below |
+
+Keyword search cost follows how many notes contain the query's words, not how many notes there are: ranking costs about
+1.2 microseconds per matching note. The bench's own query mix is the slow case: it draws 2 words from a made-up Zipf vocabulary
+of about 3,600 words, so the average query matches about 82 % of the notes (about 82,000 rows to rank), and the bench's search
+line read about 140-220 ms p50 in these runs. Words that appear in under 5 % of notes, as most content words in real text do, measured
+0.6-8 ms p50. A query whose every word is in most notes (close to a stop word) stays in the 110-190 ms range; dropping such
+words from the match is a possible later change, not in 1.5.0. Not measured at this size: a whole hook process with Node
+start-up. Hybrid search (embeddings on; off by default) was timed once with a stand-in embedding server, about 320-365 ms p50,
+most of it a scan over every stored vector in the namespace.
+
 **Recall with encryption on vs off (`--encrypted`), new in this round.** The same commands with `--encrypted`, which puts a key
 file beside every throwaway database before the notes are written; same corpus, same questions, keyword-only. Re-run after the
 in-memory body index (C-06, below) was built, 2026-11-15:
@@ -379,9 +419,10 @@ in-memory body index (C-06, below) was built, 2026-11-15:
 (Re-run 2026-11-15 after the stems and rarity-weighted coverage above; the first C-06 run, before them, was likewise identical
 between plain and encrypted at 96.8 / 84.0 / 98.3 / 91.0 on LongMemEval-S.)
 
-Every metric (keyword and relevant, all of R@5, Rall@5, R@10, Rall@10, nDCG@10, MRR, per question type) is **byte-identical**
-between the plain and the encrypted run: the index covers every note with its decrypted body, so the bm25 statistics are the
-plain store's. Before C-06 the encrypted column read 0.0 / 0.0 / 0.0 / 0.0 (0.1 on LoCoMo turn): the on-disk index holds titles
+On LongMemEval-S and LoCoMo-10 by session, every metric (keyword and relevant, all of R@5, Rall@5, R@10, Rall@10, nDCG@10,
+MRR, per question type) is **byte-identical** between the plain and the encrypted run: the index covers every note with its
+decrypted body, so the bm25 statistics are the plain store's. LoCoMo-10 by turn is not identical: the encrypted store stores
+chat turns with the fixed sealed title, so its notes differ (see above). Before C-06 the encrypted column read 0.0 / 0.0 / 0.0 / 0.0 (0.1 on LoCoMo turn): the on-disk index holds titles
 and tags only, and in these datasets every title is a session id. What this does **not** cover: the session-start hook never
 builds the index (time budget), so on an encrypted store the context it adds at session start is still matched on titles,
 tags, files and recency, not body words.
@@ -430,6 +471,20 @@ local reader through Ollama on 127.0.0.1:11434 would have been allowed, but (1) 
 route, so it would mean patching it, (2) the local Ollama did not answer even an embedding request within 120 s during this
 round, and (3) a run with a substituted local reader would not be comparable with the published leaderboard (BM25 60.5 on
 accurate retrieval used its authors' hosted reader models). So no MemoryAgentBench number is reported; nothing was sent anywhere.
+The leaderboard needs a reader, but a retrieval-only run (does the right passage come back, no reader) is possible, and at
+least one other memory system publishes such figures on MemoryAgentBench subsets. We have not done that run yet.
+
+**Hybrid, 2026-11-15, 1.5.0 code.** `monomem bench --locomo --mode hybrid [--granularity session]` with
+`MONOMEM_EMBEDDINGS=on` and `nomic-embed-text` via a local Ollama, full runs, R@5 / R@10, search p50:
+
+| Run | Hybrid |
+|---|---|
+| LoCoMo-10 session (1,982) | 92.2 / 96.9, 18 ms |
+| LoCoMo-10 turn (1,982), chat-import layout (each turn with the one it replied to) | 75.9 / 84.6, 25 ms |
+
+Measured once by the developer when the chat layout landed; the review panel could not re-run it (no embedding service was
+allowed in its sandbox). LongMemEval-S hybrid was not re-run on 1.5.0: its latest figure is the 2026-11-09 one below
+(98.5 / 99.4), from before the 1.5.0 keyword ranking changes.
 
 ### Results, 2026-11-09 (expert round 4)
 

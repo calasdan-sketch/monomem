@@ -68,8 +68,9 @@ upgrading from 1.3.x takes one step (docs/upgrading.md).
   finds "camped"; plural s/es, ed and ing only), and a note's keyword-coverage share now weighs each keyword by how rare it is in
   the store, so the note holding a question's one rare word beats one holding two common ones. Full runs, keyword-only,
   before / after: LongMemEval-S strict recall-all@5 84.0 to 85.7 (R@5 96.8 to 97.2), LoCoMo-10 by turn R@5 57.8 to 60.8, by
-  session 90.4 to 90.9. Tuned on half the questions; on the held-out half every metric rose or held (LoCoMo-10 session R@10 unchanged), except LoCoMo-10
-  session R@5, which fell 0.3 (about 3 questions). Identical with encryption on. docs/BENCHMARK.md has both halves.
+  session 90.4 to 90.9. Tuned on half the questions; on the validation half (never tuned on, but used to keep or drop each candidate) every metric rose or held (LoCoMo-10 session R@10 unchanged), except LoCoMo-10
+  session R@5, which fell 0.3 (about 3 questions). Identical with encryption on at the time; LoCoMo-10 by turn later moved to the
+  chat layout and differs slightly when encrypted (below). docs/BENCHMARK.md has both halves.
 
 - **`monomem setup --yes` adds the start-of-session hook for Claude Code** (it is what makes remembered notes reach a new
   session). It says what it added; leave it out with `--no-hook`, take it back with `setup --undo`. When the hook is not
@@ -91,7 +92,7 @@ upgrading from 1.3.x takes one step (docs/upgrading.md).
   label, and **chat notes are never shown at session start or in the "new notes" line**. Same rules as the other imports:
   dry run first, secrets skipped and never shown, the linter may hold a message, re-runs add only new messages; the dry run
   also counts files over 256 MB and damaged lines it skipped. The LoCoMo-10 by-turn benchmark now builds its notes with the
-  same code: keyword R@5 / strict Rall@5 / R@10 60.8 / 52.2 / 67.7 -> **67.4 / 58.4 / 76.3** (held-out half b
+  same code: keyword R@5 / strict Rall@5 / R@10 60.8 / 52.2 / 67.7 -> **67.4 / 58.4 / 76.3** (validation half b, never tuned on but used to reject a next-turn variant:
   58.8 / 49.6 / 65.1 -> 64.6 / 55.4 / 73.2); LongMemEval-S and LoCoMo by session unchanged. On an encrypted store a chat note gets the fixed title
   `Chat message (sealed)` and its real title becomes the sealed body's first line (as captured notes do), so no message
   text sits in plaintext titles; encrypted by turn 67.6 / 58.2 / 76.9.
@@ -146,7 +147,8 @@ upgrading from 1.3.x takes one step (docs/upgrading.md).
   run by setup) and `start --log` writing a rotated `server.log`.
 - `monomem bench --longmemeval | --locomo` prints strict recall-all@5 (`Rall@5`, every gold session in the top 5) next to
   the any-hit `R@5`. LongMemEval-S keyword: 97.2 any-hit, 85.7 strict (docs/BENCHMARK.md). `--split a|b` runs half the
-  questions (by a hash of the question id), so a ranking change can be tuned on one half and checked on the other.
+  data: LongMemEval-S by a hash of the question id, LoCoMo by conversation (1-5 = a, 6-10 = b), so a ranking change can be
+  tuned on one half and checked on the other, and a checked question never shares a conversation with a tuning one.
 - `monomem bench --scale 10k`: session start, search and write p50/p95 on a synthetic store in a temp folder, plain and
   encrypted, with the 50 ms encrypted session-start gate (exit 1 when it fails). On the development PC at 10k notes:
   encrypted session start 12-18 ms p50, plain 9-10 ms (docs/BENCHMARK.md).
@@ -156,9 +158,11 @@ upgrading from 1.3.x takes one step (docs/upgrading.md).
   searches now keeps a second index of every note's decrypted body **in memory only** (an attached in-memory SQLite database
   on its own connection; nothing is written to the database, the WAL or a temp file, and a test checks the files). It covers
   every note, so ranking is the plain store's: encrypted recall is now identical to plain on LongMemEval-S (97.2 / 85.7 R@5 /
-  Rall@5) and LoCoMo-10 turn and session. Kept current for this process's writes by connection-only triggers, and for other
+  Rall@5) and LoCoMo-10 by session. LoCoMo-10 by turn differs slightly (67.6 / 58.2 / 76.9 vs 67.4 / 58.4 / 76.3 R@5 / Rall@5 /
+  R@10) because chat notes get a fixed sealed title on an encrypted store. Kept current for this process's writes by connection-only triggers, and for other
   processes' writes from the change log. The REST and MCP servers build it just after start-up (0.6-0.8 s and about 30 MB
-  of memory per 10,000 notes, measured); the hooks never build it, so session start stays fast. On an encrypted store session start
+  of memory per 10,000 notes, measured at 10,000 notes; memory does not grow in a straight line, so for 100,000 notes see
+  the body-index line in docs/BENCHMARK.md); the hooks never build it, so session start stays fast. On an encrypted store session start
   matches titles and tags itself and, when a Monomem server for the same store runs on this computer, asks that server
   (127.0.0.1 only, at most 0.3 s) which notes' bodies match; with no server, or a slow one, it stays on titles and tags.
   The hook sends its main key only after the server proves, over a fresh nonce, that it holds the same key and store
@@ -253,7 +257,19 @@ upgrading from 1.3.x takes one step (docs/upgrading.md).
   step, one file open per audit line and a change feed that pages in constant time. On a 10,000-note encrypted store,
   session start went from about 108 ms to about 13 ms (measured on the development machine).
 - Database schema v22 (still one upgrade from 1.3.x, backup at `<database>.pre-v22-backup`): a redundant similarity-link
-  index is dropped (less work per write) and a live-notes index makes the unfiltered note count cheap.
+  index is dropped (less work per write) and a live-notes index makes the unfiltered note count cheap. v22 also adds indexes
+  for capture types, open tasks, conventions, the latest summary, pinned notes and fact notes (`idx_notes_obs`,
+  `idx_notes_tag_task`, `idx_notes_tag_convention`, `idx_notes_kind_summary`, `idx_notes_pinned`, `idx_notes_facts`); they
+  cost a little disk space and write time on every store, including one upgraded from 1.3.x.
+- Session start on a 100,000-note store: about 430 ms before, 7-11 ms p50 after (encrypted; release gate 50 ms, PASS), from
+  the v22 indexes above. Recent file paths now come from the newest 2,000 notes, and the "Showing X of N memories" line
+  counts up to 2,000 and then says "2,000+" (for example "Showing 12 of 2,000+ memories").
+- At 100,000 notes, keyword search time follows how many notes contain the query's words, not how many notes there are:
+  words in under 5 % of notes 0.6-8 ms p50, words in most notes about 110-190 ms p50 (`monomem bench --scale 100k`; its
+  made-up vocabulary makes the average query match about 82 % of notes, so its own search figure is the slow case).
+  docs/BENCHMARK.md has the numbers.
+- Repeated searches with embeddings on reuse the query's embedding: each process keeps the last 256 query vectors (keyed by
+  embedding URL, model and query text; failures are not kept), which saves one call to the embedding server per repeat.
 
 ### Also in 1.5.0: the trust work first planned as 1.4.0 (never published on its own)
 
@@ -274,7 +290,7 @@ turn on `enforce`). Upgrade notes: docs/upgrading.md (schema v19 to v21, one way
   the last 12 hours and has not ended (`MONOMEM_TAINT_WINDOW_HOURS`, `0` = off); the connection writing it had read an
   unconfirmed note; or the writer declared it (`outside: true` on MCP `state_write`, REST `POST`/`PUT /notes`,
   `monomem add --outside`, or `"reads_outside": true` on a token). The local `monomem` command counts as the person
-  only at a real terminal: run from an agent's shell tool or a script (`monomem remember`, `monomem add`), its notes are
+  only at a real terminal: run from an agent's shell tool or a script (`monomem add`), its notes are
   marked like any other writer's. The mark only grows: no update path, import or agent
   write removes it. An unconfirmed note is kept out of session start (text and title; one count line says
   `Monomem: N notes from outside content wait for confirmation (not shown). Review: monomem review`), labelled
