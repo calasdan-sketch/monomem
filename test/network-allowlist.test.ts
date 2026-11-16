@@ -11,7 +11,9 @@ const ALLOWED = new Map([
   ["src/hook.ts", 1],
   ["src/runner-sign.ts", 1],
   ["src/dashboard.ts", 2], // browser-side fetches to the server that served the page (the API calls, and the one-time sign-in code)
-  ["src/cli.ts", 4], // `monomem open`, `monomem restore` and `monomem doctor` (its version, and its /status body-index line): is my own server up? (127.0.0.1 only)
+  ["src/cli.ts", 1], // `monomem restore`: is my own server up? (127.0.0.1 only)
+  ["src/cli/connect.ts", 1], // `monomem open`: is my own server up? (127.0.0.1 only)
+  ["src/doctor/server.ts", 2], // `monomem doctor`: the local server's version, and its /status body-index line (127.0.0.1 only)
   ["src/local-server.ts", 1], // session start proves a local server holds this store's main key (GET /proof, loopback only)
   ["src/recall.ts", 1], // the recall hook asks that proven local server for body matches (POST /relevant)
 ]);
