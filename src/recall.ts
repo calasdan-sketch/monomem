@@ -72,6 +72,8 @@ export interface RecallOptions {
   cwd?: string;
   /** The hook payload's session_id: what was injected is counted on the meter (meter.ts). */
   sessionId?: string;
+  /** The writer this session's agent writes as, for the overwrite notice (default: hookSelfWriter of this process). */
+  selfWriter?: string;
   /** Test hook: these git signals instead of asking git. */
   signals?: ContextSignals;
   /** Test hook: the loopback port of a Monomem server to ask for body matches (default MONOMEM_PORT, 8790). */
@@ -342,6 +344,11 @@ async function fetchRecentNotes(opts: RecallOptions): Promise<RecallData> {
       // One line, only when approved commands wait on an offline runner.
       const notice = runnerNotice(store, ns);
       if (notice) board = [notice, board].filter(Boolean).join("\n\n");
+      // Trust lane: text this app's agent wrote that another writer replaced in the last week (catch_up says the same).
+      const { hookSelfWriter, overwriteLines, OVERWRITE_LOOKBACK_MS } = await import("./context-inject.js");
+      const self = opts.selfWriter ?? hookSelfWriter();
+      const over = self ? overwriteLines(store, self, new Date(Date.now() - OVERWRITE_LOOKBACK_MS).toISOString(), namespace) : "";
+      if (over) board = [board, over].filter(Boolean).join("\n\n");
     } catch (e) {
       // The board is a bonus: never let it cost the recent-notes recall.
       console.error("monomem recall: task board skipped: " + (e as Error).message);

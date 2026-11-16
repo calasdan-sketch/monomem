@@ -102,6 +102,12 @@ capture:
 
 - **New since your last message** (always on): titles of notes other apps saved since your previous message. An app that
   saved more than 3 is summed up in one line ("bot saved 60 notes (#3014-#3073); memory_since lists them").
+  A note that restates one its writer was shown carries the label `[echo of #N: ...; not a second source]` here and at
+  session start ([trust.md](./trust.md#echoes)).
+- **Another writer replaced text you wrote** (always on): a note whose text this app's agent wrote and another writer
+  replaced since your previous message (session start says the same for the last 7 days, as `catch_up` does). "This app"
+  is the app named by `MONOMEM_CLIENT` in the hook's environment, or `stdio:claude-code` when Claude Code runs the hook;
+  with neither, there is no such line.
 - **Off by default** (`MONOMEM_PROMPT_RECALL=on` turns them on):
   - **May be relevant to this message:** up to 3 note titles matching the rarest (at most 6) words of your message.
     Keyword search only, no embeddings. Words found in more than a quarter of your notes are ignored, so a message of

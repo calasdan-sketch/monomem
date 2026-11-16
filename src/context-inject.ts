@@ -44,7 +44,8 @@ export function openToolName(): string {
 }
 import { meterAdd } from "./meter.js";
 import { receiptAdd } from "./receipts.js";
-import { currentWriter } from "./actor.js";
+import { currentWriter, stdioWriter } from "./actor.js";
+import { overwritesOf } from "./store/overwrites.js";
 import { nameIs, stdioFamily } from "./trust.js";
 
 export const DEFAULT_RECALL_TOKENS = 1500;
@@ -245,6 +246,31 @@ export function newNotesSince(store: Store, sessionId: string, opts: { namespace
     ...listed.slice(0, NEW_LINES).map((n) => indexLine(n)),
     ...(more > 0 ? [`and at least ${more} more (${since_})`] : []),
     ...busy.map(([w, ns]) => `${neutral(w).slice(0, 24) || "(no writer)"} saved ${ns.length}${ns.length >= 200 ? "+" : ""} notes (${range(ns)}); ${since_} lists them.`),
+  ].join("\n");
+}
+
+/** Session start looks this far back for overwrites (the same window as catch_up). */
+export const OVERWRITE_LOOKBACK_MS = 7 * 86_400_000;
+
+/**
+ * The writer a hook's agent writes as, for its overwrite notices: the app the hook's environment names (MONOMEM_CLIENT), else
+ * `stdio:claude-code` when Claude Code runs the hook (setup labels its MCP entry so). Undefined = unknown: no notice.
+ */
+export function hookSelfWriter(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  if (env.MONOMEM_CLIENT?.trim()) return stdioWriter(env).writer;
+  return env.CLAUDECODE === "1" || env.CLAUDE_PROJECT_DIR !== undefined ? "stdio:claude-code" : undefined;
+}
+
+/**
+ * Trust lane (r2-improvement #3) at session start and the prompt step: notes whose text `writer` wrote and another writer
+ * replaced since `sinceIso` (store/overwrites.ts; only notes this reader may see). "" when there are none.
+ */
+export function overwriteLines(store: Store, writer: string, sinceIso: string, namespace?: string): string {
+  const over = overwritesOf(store, writer, sinceIso, namespace !== undefined ? [namespace] : undefined, 5);
+  if (!over.length) return "";
+  return [
+    "Another writer replaced text you wrote (read the note and its history if the change looks wrong, and tell the user):",
+    ...over.map((o) => `#${o.id} "${neutral(o.title).slice(0, 80)}" by ${neutral(o.by).slice(0, 24) || "(no writer)"}, ${o.at.slice(0, 10)}`),
   ].join("\n");
 }
 

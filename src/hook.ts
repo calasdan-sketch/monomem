@@ -203,11 +203,18 @@ async function newNotesHook(payload: Record<string, unknown>, env: NodeJS.Proces
     const { actorStore, stdioWriter } = await import("./actor.js");
     // The session's own writer is only known when the hook's environment names the app (MONOMEM_CLIENT, as the MCP entry does).
     const self = env.MONOMEM_CLIENT?.trim() ? stdioWriter(env).writer : undefined;
+    // Overwrite notices need a writer too; Claude Code's own (stdio:claude-code) is known without MONOMEM_CLIENT.
+    const selfWriter = (await import("./context-inject.js")).hookSelfWriter(env);
     const store = open ?? new Store(dbPath, { noMigrate: true, busyTimeoutMs: HOOK_BUSY_MS, bodyIndex: "off" });
     try {
       const prompt = typeof payload.prompt === "string" ? payload.prompt : "";
       const run = () =>
-        promptStep(store, sid, prompt, { ...(res.kind === "resolved" ? { namespace: res.namespace } : {}), ...(self ? { notWrittenBy: self, client: self } : {}), recall: promptRecallOn(env) });
+        promptStep(store, sid, prompt, {
+          ...(res.kind === "resolved" ? { namespace: res.namespace } : {}),
+          ...(self ? { notWrittenBy: self, client: self } : {}),
+          ...(selfWriter ? { self: selfWriter } : {}),
+          recall: promptRecallOn(env),
+        });
       const r = cap ? actorStore.run({ label: "", maxSensitivity: cap, canDeclassify: false }, run) : run();
       if (!r.text) return "";
       const nonce = newBlockNonce();

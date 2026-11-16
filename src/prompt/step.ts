@@ -12,7 +12,7 @@ import type { NoteRecord, Store } from "../store.js";
 import { NOTE_KINDS } from "../store.js";
 import { extractKeywords } from "../keywords.js";
 import { anyKeywordHits, expiryEnforced } from "../search-service.js";
-import { indexLine, newNotesSince, openToolName } from "../context-inject.js";
+import { indexLine, newNotesSince, openToolName, overwriteLines } from "../context-inject.js";
 import { NEVER_SHOW_TAG } from "../reserved-tags.js";
 import { CHAT_TAG } from "../chat-import.js";
 import { TASK_TAG, HANDOFF_TAG } from "../tasks.js";
@@ -39,6 +39,8 @@ export interface PromptStepOpts {
   namespace?: string;
   /** The session's own writer, when the hook knows it: its own new notes are not news. */
   notWrittenBy?: string;
+  /** The writer this session's agent writes as (hookSelfWriter): another writer replacing its text is said once. */
+  self?: string;
   /** Steps 2-4 on (MONOMEM_PROMPT_RECALL). */
   recall: boolean;
   client?: string;
@@ -169,6 +171,16 @@ export function promptStep(store: Store, sessionId: string, prompt: string, opts
     if (fresh) parts.push(fresh);
   } catch (e) {
     process.stderr.write(`monomem prompt step (new notes): ${(e as Error).message}\n`);
+  }
+  // Overwrites since the previous prompt (session start covered the time before): always on, like step 1; the window moves on.
+  try {
+    const prev = opts.self
+      ? (store.captureDb().prepare("SELECT at FROM capture_events WHERE session_id = ? AND event = 'user-prompt' ORDER BY seq DESC LIMIT 1 OFFSET 1").get(sessionId) as { at: string } | undefined)
+      : undefined;
+    const over = prev && opts.self ? overwriteLines(store, opts.self, prev.at, opts.namespace) : "";
+    if (over) parts.push(over);
+  } catch (e) {
+    process.stderr.write(`monomem prompt step (overwrites): ${(e as Error).message}\n`);
   }
   // Steps 2-4 need the receipt to say things once; without it they stay quiet.
   if (!opts.recall || accessLogDays() === 0) return { text: parts.join("\n\n"), cost: "", recalled };
