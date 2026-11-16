@@ -7,6 +7,7 @@
 // visible to the API and vice versa.
 import "./quiet-sqlite.js"; // first: hide the node:sqlite ExperimentalWarning
 import "./legacy-env.js"; // second: read the old CLAUDE_BRIDGE_* variables as MONOMEM_*
+import { fileURLToPath } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { Store } from "./store.js";
 import { createMcpServer, stdioSweep } from "./mcp-server-core.js";
@@ -49,13 +50,27 @@ if (stdioCeiling && !stdioMax) {
   console.error(`[monomem] MONOMEM_STDIO_MAX_SENSITIVITY must be ${SENSITIVITY_HELP} (got ${JSON.stringify(stdioCeiling)}); not starting.`);
   process.exit(1);
 }
-const server = createMcpServer(store, "admin", nsOpts ?? undefined, stdioMax ? { maxSensitivity: stdioMax, local: true, cwd: process.cwd() } : { local: true, cwd: process.cwd() });
+// The connection's folder is read per call, so adopting the client's workspace root (below) applies to later writes.
+const conn: { local: true; cwd: string; maxSensitivity?: NonNullable<typeof stdioMax> } = stdioMax ? { maxSensitivity: stdioMax, local: true, cwd: process.cwd() } : { local: true, cwd: process.cwd() };
+const server = createMcpServer(store, "admin", nsOpts ?? undefined, conn);
 const transport = new StdioServerTransport();
 // The client's own name from the initialize handshake goes to the audit log, labelled as a claim: any program can
 // send any clientInfo. It is never used for written_by or for any access decision.
 server.server.oninitialized = (): void => {
   const c = server.server.getClientVersion();
   audit({ op: "mcp.connect", label: stdio.writer, kind: "connection", detail: `claimed clientInfo: ${printable(c?.name, 60)} ${printable(c?.version, 30)}` });
+  // C18: an app that launches this server outside the project (Cursor's global config, Claude Desktop, Codex) can still say
+  // which workspace it has open (MCP roots). The first file:// root becomes the folder later writes record (notes.writer_cwd),
+  // so session start can rank this project's notes first. No roots, an error or a slow answer: the launch folder stays.
+  // Like the launch folder, it is the app's own claim.
+  if (!server.server.getClientCapabilities()?.roots) return;
+  server.server
+    .listRoots(undefined, { timeout: 2000 })
+    .then((r) => {
+      const uri = r.roots.find((x) => x.uri.startsWith("file:"))?.uri;
+      if (uri) conn.cwd = fileURLToPath(uri);
+    })
+    .catch(() => {});
 };
 
 await server.connect(transport);

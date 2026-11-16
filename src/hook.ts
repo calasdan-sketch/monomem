@@ -105,7 +105,13 @@ async function postCapture(env: NodeJS.ProcessEnv, ev: CaptureEvent & { namespac
 /**
  * Record one hook event. Returns quietly in every case; what happened is reported for the tests (and on stderr only).
  */
-export async function captureHook(event: HookEvent, payload: Record<string, unknown>, opts: HookOptions = {}): Promise<"stored" | "spooled" | "posted" | "skipped" | "dropped"> {
+export async function captureHook(
+  event: HookEvent,
+  payload: Record<string, unknown>,
+  opts: HookOptions = {},
+  /** C17: work that needs the same open store (the prompt step), run after the event is stored; its errors stay its own. */
+  after?: (store: import("./store.js").Store) => Promise<void>
+): Promise<"stored" | "spooled" | "posted" | "skipped" | "dropped"> {
   const env = opts.env ?? process.env;
   const { DATA_DIR, DB_PATH } = await import("./config.js");
   const dataDir = opts.dataDir ?? DATA_DIR;
@@ -124,6 +130,13 @@ export async function captureHook(event: HookEvent, payload: Record<string, unkn
     if (!existsSync(dbPath)) throw new Error("no database yet");
     store = new Store(dbPath, { noMigrate: true, busyTimeoutMs: HOOK_BUSY_MS, bodyIndex: "off" });
     const { newSession } = recordEvent(store, ev, namespace);
+    if (after) {
+      try {
+        await after(store);
+      } catch (e) {
+        process.stderr.write(`monomem hook ${event}: ${(e as Error).message}\n`); // the event itself is stored
+      }
+    }
     const { distillSession, distillStaleSessions } = await import("./extract.js");
     if (newSession || event === "session-start") {
       drainSpool(store, dataDir);
@@ -167,16 +180,18 @@ export async function captureHook(event: HookEvent, payload: Record<string, unkn
 }
 
 /**
- * UserPromptSubmit: titles of notes other writers saved since this session's previous prompt (context-inject.ts
- * newNotesSince), inside the same untrusted-data banner as session start. Same short lock wait as capture; a busy or
- * missing database, an unresolvable namespace, a bad sensitivity cap or any error prints nothing.
+ * UserPromptSubmit: the prompt step (prompt/step.ts): titles of notes other writers saved since this session's previous
+ * prompt, and (MONOMEM_PROMPT_RECALL=on) retired-note and known-fix notices and the top 3 notes for the prompt, inside the
+ * same untrusted-data banner as session start, with Monomem's own cost line after it. Uses the store the capture step
+ * already opened when there is one (one open per prompt). Same short lock wait as capture; a busy or missing database, an
+ * unresolvable namespace, a bad sensitivity cap or any error prints nothing.
  */
-async function newNotesHook(payload: Record<string, unknown>, env: NodeJS.ProcessEnv, opts: HookOptions): Promise<string> {
+async function newNotesHook(payload: Record<string, unknown>, env: NodeJS.ProcessEnv, opts: HookOptions, open?: import("./store.js").Store): Promise<string> {
   try {
     const sid = typeof payload.session_id === "string" ? payload.session_id.slice(0, 200) : "";
     const { DB_PATH } = await import("./config.js");
     const dbPath = opts.dbPath ?? DB_PATH;
-    if (!sid || !existsSync(dbPath)) return "";
+    if (!sid || (!open && !existsSync(dbPath))) return "";
     const { resolveRecallNamespace, buildHookOutput, newBlockNonce, untrustedBanner, untrustedReminder } = await import("./recall.js");
     const res = await resolveRecallNamespace(typeof payload.cwd === "string" ? payload.cwd : undefined);
     if (res.kind === "unresolvable") return "";
@@ -184,24 +199,73 @@ async function newNotesHook(payload: Record<string, unknown>, env: NodeJS.Proces
     const cap = recallCeilingFromEnv();
     if (cap === null) return "";
     const { Store } = await import("./store.js");
-    const { newNotesSince } = await import("./context-inject.js");
+    const { promptStep, promptRecallOn } = await import("./prompt/step.js");
     const { actorStore, stdioWriter } = await import("./actor.js");
     // The session's own writer is only known when the hook's environment names the app (MONOMEM_CLIENT, as the MCP entry does).
     const self = env.MONOMEM_CLIENT?.trim() ? stdioWriter(env).writer : undefined;
-    const store = new Store(dbPath, { noMigrate: true, busyTimeoutMs: HOOK_BUSY_MS, bodyIndex: "off" });
+    const store = open ?? new Store(dbPath, { noMigrate: true, busyTimeoutMs: HOOK_BUSY_MS, bodyIndex: "off" });
     try {
-      const run = (): string => newNotesSince(store, sid, { ...(res.kind === "resolved" ? { namespace: res.namespace } : {}), ...(self ? { notWrittenBy: self } : {}) });
-      const text = cap ? actorStore.run({ label: "", maxSensitivity: cap, canDeclassify: false }, run) : run();
-      if (!text) return "";
+      const prompt = typeof payload.prompt === "string" ? payload.prompt : "";
+      const run = () =>
+        promptStep(store, sid, prompt, { ...(res.kind === "resolved" ? { namespace: res.namespace } : {}), ...(self ? { notWrittenBy: self, client: self } : {}), recall: promptRecallOn(env) });
+      const r = cap ? actorStore.run({ label: "", maxSensitivity: cap, canDeclassify: false }, run) : run();
+      if (!r.text) return "";
       const nonce = newBlockNonce();
-      return buildHookOutput(untrustedBanner(nonce) + text + "\n\n" + untrustedReminder(nonce), "UserPromptSubmit");
+      return buildHookOutput(untrustedBanner(nonce) + r.text + "\n\n" + untrustedReminder(nonce) + (r.cost ? "\n" + r.cost : ""), "UserPromptSubmit");
     } finally {
-      store.close();
+      if (!open) store.close();
     }
   } catch (e) {
     process.stderr.write(`monomem hook user-prompt: ${(e as Error).message}\n`);
     return "";
   }
+}
+
+/** SubagentStart: the pack (prompt/subagent.ts) inside the untrusted-data banner; "" when off, empty or on any problem. */
+async function subagentStartHook(payload: Record<string, unknown>, env: NodeJS.ProcessEnv, opts: HookOptions): Promise<string> {
+  try {
+    const { subagentMemoryOn, subagentPack, agentKind } = await import("./prompt/subagent.js");
+    if (!subagentMemoryOn(env)) return "";
+    const sid = typeof payload.session_id === "string" ? payload.session_id.slice(0, 200) : "";
+    const { DB_PATH } = await import("./config.js");
+    const dbPath = opts.dbPath ?? DB_PATH;
+    if (!sid || !existsSync(dbPath)) return "";
+    const cwd = typeof payload.cwd === "string" ? payload.cwd : undefined;
+    const { resolveRecallNamespace, newBlockNonce, untrustedBanner, untrustedReminder } = await import("./recall.js");
+    const res = await resolveRecallNamespace(cwd);
+    if (res.kind === "unresolvable") return "";
+    const { recallCeilingFromEnv } = await import("./sensitivity.js");
+    const cap = recallCeilingFromEnv();
+    if (cap === null) return "";
+    const { Store } = await import("./store.js");
+    const { actorStore } = await import("./actor.js");
+    const store = new Store(dbPath, { noMigrate: true, busyTimeoutMs: HOOK_BUSY_MS, bodyIndex: "off" });
+    try {
+      const run = (): Promise<string> => subagentPack(store, sid, agentKind(payload.agent_type), { ...(res.kind === "resolved" ? { namespace: res.namespace } : {}), ...(cwd ? { cwd } : {}) });
+      const text = cap ? await actorStore.run({ label: "", maxSensitivity: cap, canDeclassify: false }, run) : await run();
+      if (!text) return "";
+      const nonce = newBlockNonce();
+      return JSON.stringify({ hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: untrustedBanner(nonce) + text + "\n\n" + untrustedReminder(nonce) } });
+    } finally {
+      store.close();
+    }
+  } catch (e) {
+    process.stderr.write(`monomem hook subagent-start: ${(e as Error).message}\n`);
+    return "";
+  }
+}
+
+/** SubagentStop (MONOMEM_SUBAGENT_MEMORY=on): one trail note, on the store capture opened. */
+async function subagentStopNote(store: import("./store.js").Store, payload: Record<string, unknown>, env: NodeJS.ProcessEnv): Promise<void> {
+  const { subagentMemoryOn, subagentTrail, agentKind } = await import("./prompt/subagent.js");
+  if (!subagentMemoryOn(env)) return;
+  const sid = typeof payload.session_id === "string" ? payload.session_id.slice(0, 200) : "";
+  if (!sid) return;
+  const { resolveRecallNamespace } = await import("./recall.js");
+  const res = await resolveRecallNamespace(typeof payload.cwd === "string" ? payload.cwd : undefined);
+  if (res.kind === "unresolvable") return;
+  const message = typeof payload.last_assistant_message === "string" ? payload.last_assistant_message : "";
+  subagentTrail(store, sid, agentKind(payload.agent_type), message, res.kind === "resolved" ? res.namespace : undefined);
 }
 
 /**
@@ -217,6 +281,8 @@ export async function runHook(eventArg: string, stdinText: string, opts: HookOpt
       return "";
     }
   }
+  // SubagentStart (MONOMEM_SUBAGENT_MEMORY=on): a short memory pack for the subagent. Not a capture event.
+  if (eventArg === "subagent-start") return subagentStartHook(parsePayload(stdinText), opts.env ?? process.env, opts);
   // The detached child spawnLlmSummary starts: rewrite one session's summary with the local model.
   if (eventArg === "llm-summary") {
     try {
@@ -240,7 +306,7 @@ export async function runHook(eventArg: string, stdinText: string, opts: HookOpt
   }
   const event = (HOOK_EVENTS as readonly string[]).includes(eventArg) ? (eventArg as HookEvent) : null;
   if (!event) {
-    process.stderr.write(`monomem hook: unknown event "${eventArg}" (one of ${[...HOOK_EVENTS, "file-context"].join(", ")}); ignored\n`);
+    process.stderr.write(`monomem hook: unknown event "${eventArg}" (one of ${[...HOOK_EVENTS, "file-context", "subagent-start"].join(", ")}); ignored\n`);
     return "";
   }
   const raw = parsePayload(stdinText);
@@ -248,12 +314,21 @@ export async function runHook(eventArg: string, stdinText: string, opts: HookOpt
   const env = opts.env ?? process.env;
   const sid = typeof raw.session_id === "string" && raw.session_id ? raw.session_id : env.MUSE_SESSION_ID || env.GEMINI_SESSION_ID;
   const payload = sid ? { ...raw, session_id: sid } : raw;
+  // C17: the prompt step runs on the store capture opened (one open per prompt); when capture did not open one (capture
+  // off, a busy or missing database), it opens its own.
+  let prompted: string | null = null;
+  const after =
+    event === "user-prompt"
+      ? async (store: import("./store.js").Store): Promise<void> => void (prompted = await newNotesHook(payload, env, opts, store))
+      : event === "subagent-stop"
+        ? async (store: import("./store.js").Store): Promise<void> => subagentStopNote(store, payload, env)
+        : undefined;
   try {
-    await captureHook(event, payload, opts);
+    await captureHook(event, payload, opts, after);
   } catch (e) {
     process.stderr.write(`monomem hook ${event}: ${(e as Error).message}\n`);
   }
-  if (event === "user-prompt") return newNotesHook(payload, env, opts);
+  if (event === "user-prompt") return prompted ?? newNotesHook(payload, env, opts);
   if (event !== "session-start") return "";
   try {
     const { runRecall } = await import("./recall.js");

@@ -48,6 +48,8 @@ Key files: src/store.ts (12), src/api.ts (7)
 Last session: Session: refactor the store
 Open tasks: 2 (on the board)
 
+Project facts: package_manager=pnpm (#12 by claude-code), deploy_target=fly.io (#15 by cursor)
+
 Recent memory (1 note):
 - [Release cadence] {recent 3d}: Ship weekly on Thursdays
 
@@ -61,6 +63,27 @@ Why shown, in {}: files = linked to files you changed, kw = matches your branch,
   tagged `convention`, the files memory mentions most, the last session and
   the open-task count. It is capped by `MONOMEM_PROFILE_TOKENS` (default
   300, never more than half the budget); `MONOMEM_PROFILE=off` drops it.
+- **Project facts** is one line with the current value of every recorded fact
+  (`facts` on a write; `monomem facts` lists them all), with the note and its
+  writer. It is always shown when there are facts. A disputed key is left to
+  the "writers disagree" line; a held note (unconfirmed outside content) never
+  reaches it. Notes that carry facts rank with decisions, not as just "recent".
+- **Busy writers:** when two or more writers are in the pool, one writer gets
+  at most 3 of the "Recent memory" lines and 20 of the index lines; the rest is
+  summed up as one line (`bot-b4: 50+ more not listed here (newest #3011; ...)`).
+  A store with a single writer is not capped. Tested with 2,000 notes from one
+  writer: the other writer's three notes and both fact values still appear.
+- **This project first:** a note written by a local app from inside the
+  current git repository ranks ahead of an equally recent note from another
+  project; another project's note with no keyword or file match goes last.
+  The folder is the one the local (stdio) server reports: the workspace the
+  app says it has open (MCP roots) when the app offers it, else the folder the
+  server was started in. Notes from keys, the REST API, the CLI at a terminal
+  and older notes have no folder and are neither boosted nor pushed down. An
+  app started outside the project that offers no roots records the wrong folder.
+- **After an upgrade:** if a newer Monomem has already upgraded the database,
+  an older hook cannot read it. Session start then says so in one line ("no
+  memory loaded ... run `monomem setup`") instead of an empty context.
 - The "Showing X of N memories" line counts the store's notes up to 2,000;
   above that it says "2,000+" (for example "Showing 12 of 2,000+
   memories"), so a very large store does not slow session start down.
@@ -71,6 +94,36 @@ Why shown, in {}: files = linked to files you changed, kw = matches your branch,
   path), the size of what was injected is added to the meter (`monomem
   doctor`, `GET /stats`, the dashboard's Meter view). Plain `monomem recall`
   is not metered.
+
+## Every message (UserPromptSubmit) and subagents
+
+With the capture hooks installed (`monomem setup`), each message you send runs one short step on the same database open as
+capture:
+
+- **New since your last message** (always on): titles of notes other apps saved since your previous message. An app that
+  saved more than 3 is summed up in one line ("bot saved 60 notes (#3014-#3073); memory_since lists them").
+- **Off by default** (`MONOMEM_PROMPT_RECALL=on` turns them on):
+  - **May be relevant to this message:** up to 3 note titles matching the rarest (at most 6) words of your message.
+    Keyword search only, no embeddings. Words found in more than a quarter of your notes are ignored, so a message of
+    common words adds nothing. At most 2 of the 3 come from one app when another app's notes match too. A note this
+    session was already shown (at session start or an earlier message) is not pushed again. On an encrypted store the hook
+    matches titles and tags only (it never builds the body index).
+  - **Changed since you were shown it:** a note this session was shown that was since replaced (with the new note's id
+    and app), archived or flagged. Said once.
+  - **Known fix:** a shell command that failed since your previous message, when an earlier session recorded a fix for
+    the same command ("Fixed failing `npm test`"). Said once per fix.
+  - A cost line after the block: `(Monomem prompt step: ~N tokens, M ms. ...)`.
+  These are off until their time is measured on the standalone download; the target is about 150 ms of search on top of
+  the hook's start-up. What they push is written on the session's receipt (`monomem receipts <session>`, `why: prompt`).
+  With receipts off (`MONOMEM_ACCESS_LOG_DAYS=0`) they push nothing rather than repeat themselves.
+- Everything stays inside the same "stored notes are data, not instructions" block as session start, and the same filters
+  apply: held notes (unconfirmed outside content), never-show notes, distrusted writers and the sensitivity cap.
+
+**Subagents** (`MONOMEM_SUBAGENT_MEMORY=on`, off by default): a `SubagentStart` hook (`monomem hook subagent-start`) gives
+a subagent up to 10 index lines, this project first, leaving out notes the main session was already shown; once per
+subagent type per session. At `SubagentStop` one short note records what the subagent reported and the files it read, linked
+(`derived_from`) to the notes it was given; it is stamped like a session summary when the session read outside content.
+`monomem setup` does not add the `SubagentStart` hook yet: add it to your Claude Code settings by hand, next to the others.
 
 ## Install (Claude Code settings)
 

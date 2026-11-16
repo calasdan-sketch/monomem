@@ -323,6 +323,34 @@ const DAYPARTS: Record<string, [number, number, number, number]> = {
 };
 const DAYPART_ALT = Object.keys(DAYPARTS).join("|");
 
+const WEEKDAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+const WEEKDAYS: Record<string, number> = {};
+WEEKDAY_NAMES.forEach((n, i) => {
+  WEEKDAYS[n] = i;
+  WEEKDAYS[n.slice(0, 3)] = i;
+});
+WEEKDAYS.tues = 2;
+WEEKDAYS.thur = WEEKDAYS.thurs = 4;
+const WEEKDAY_ALT = Object.keys(WEEKDAYS).sort((a, b) => b.length - a.length).join("|");
+
+/** "a"/"an"/"one".."twelve" or digits, as a number. */
+const NUMBER_WORDS = ["a", "an", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
+const NUM_ALT = [...NUMBER_WORDS].sort((a, b) => b.length - a.length).join("|");
+function numberWord(v: string): number {
+  if (/^\d+$/.test(v)) return Number(v);
+  const i = NUMBER_WORDS.indexOf(v);
+  return i <= 1 ? 1 : i - 1;
+}
+
+/** The same day n calendar months back, clamped to that month's last day (Mar 31 - 1 month = Feb 28/29). */
+function monthsBack(day: { y: number; mo: number; d: number }, n: number): { y: number; mo: number; d: number } {
+  const idx = day.y * 12 + (day.mo - 1) - n;
+  const y = Math.floor(idx / 12);
+  const mo = (idx % 12) + 1;
+  const last = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+  return { y, mo, d: Math.min(day.d, last) };
+}
+
 /**
  * Find a natural-language time reference anywhere in `phrase` and return its
  * UTC [start, end) range. Returns null when nothing recognizable is present;
@@ -483,6 +511,43 @@ function parseTimePhraseInner(phrase: string, opts: ParseOpts): TimeRange | null
     const end = wallToUtc({ ...endMo, d: 1, h: 0, mi: 0 }, tz);
     const name = m[1][0].toUpperCase() + m[1].slice(1);
     return { start, end, label: `${name} ${y} (${tz})` };
+  }
+
+  // -- Rolling spans: "past month", "in the last 2 weeks", "past 3 days" ----------
+  // From the start of the day N units back up to the end of today (so today's notes count).
+  m = s.match(new RegExp(`\\b(?:past|last)\\s+(?:(\\d{1,3}|${NUM_ALT})\\s+)?(days?|weeks?|months?)\\b`));
+  // "last week" / "last month" with no number stay calendar spans (below); "past ..." or any number is rolling.
+  if (m && (m[1] !== undefined || m[0].startsWith("past"))) {
+    const n = m[1] === undefined ? 1 : numberWord(m[1]);
+    if (n < 1 || n > 365) return null;
+    const unit = m[2].replace(/s$/, "");
+    const from = unit === "month" ? monthsBack(today, n) : shiftDays(today, -(unit === "week" ? 7 * n : n));
+    const end = wallToUtc({ ...shiftDays(today, 1), h: 0, mi: 0 }, tz);
+    return { start: wallToUtc({ ...from, h: 0, mi: 0 }, tz), end, label: `${m[0]} (${ymd(from)}..${ymd(today)}, ${tz})` };
+  }
+  // "two weeks ago" = the Monday-start week two back; "a month ago" = the calendar month before this one.
+  m = s.match(new RegExp(`\\b(\\d{1,3}|${NUM_ALT})\\s+(weeks?|months?)\\s+ago\\b`));
+  if (m) {
+    const n = numberWord(m[1]);
+    if (n < 1 || n > 120) return null;
+    if (m[2].startsWith("week")) {
+      const dowMon0 = (new Date(Date.UTC(w.y, w.mo - 1, w.d)).getUTCDay() + 6) % 7;
+      const mon = shiftDays(today, -dowMon0 - 7 * n);
+      const next = shiftDays(mon, 7);
+      return { start: wallToUtc({ ...mon, h: 0, mi: 0 }, tz), end: wallToUtc({ ...next, h: 0, mi: 0 }, tz), label: `${m[0]} (${ymd(mon)}..${ymd(next)}, ${tz})` };
+    }
+    const first = monthsBack({ y: w.y, mo: w.mo, d: 1 }, n);
+    const after = monthsBack({ y: w.y, mo: w.mo, d: 1 }, n - 1);
+    return { start: wallToUtc({ ...first, h: 0, mi: 0 }, tz), end: wallToUtc({ ...after, h: 0, mi: 0 }, tz), label: `${m[0]} (${first.y}-${String(first.mo).padStart(2, "0")}, ${tz})` };
+  }
+  // "last Saturday": the most recent Saturday strictly before today (on a Saturday, the one a week ago).
+  m = s.match(new RegExp(`\\blast\\s+(${WEEKDAY_ALT})\\b`));
+  if (m) {
+    const target = WEEKDAYS[m[1]];
+    const dow = new Date(Date.UTC(w.y, w.mo - 1, w.d)).getUTCDay();
+    const back = ((dow - target + 7) % 7) || 7;
+    const day = shiftDays(today, -back);
+    return dayRange(day, tz, tag(`last ${WEEKDAY_NAMES[target]}`, day));
   }
 
   // -- Relative weeks / months --------------------------------------------------
