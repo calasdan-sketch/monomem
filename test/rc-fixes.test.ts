@@ -78,6 +78,68 @@ describe("1: multi-process create() never throws SQLITE_BUSY", () => {
       }
     });
   }
+
+  // CI run 43931988177 (Windows, Node 26, a slow runner): 2 of the 8x15 creates failed with "database is locked" after
+  // the 20 s busy timeout while the other writers kept committing. SQLite's busy handler is not fair: a writer that
+  // commits and begins again at once wins the lock over a sleeping waiter. Made deterministic here: a child process
+  // re-takes the lock right after every commit for 1.6 s, while this store's wait is 1 s. Before, the create threw after
+  // ~1 s; now a wait fails only when nobody commits for the whole wait (store/write-lock.ts), so it gets in afterwards.
+  test("a waiting writer does not fail while another writer keeps committing", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "om-starve-"));
+    const path = join(dir, "s.db");
+    const s = new Store(path, { busyTimeoutMs: 1000 });
+    let hog: ReturnType<typeof spawn> | undefined;
+    let exited: Promise<unknown> = Promise.resolve();
+    try {
+      hog = spawn(process.execPath, ["--no-warnings", "-e", `
+        const { DatabaseSync } = require("node:sqlite");
+        const db = new DatabaseSync(process.argv[1]); db.exec("PRAGMA busy_timeout = 5000; CREATE TABLE IF NOT EXISTS hog (x)");
+        const end = Date.now() + 1600; let first = true;
+        while (Date.now() < end) {
+          db.exec("BEGIN IMMEDIATE"); db.exec("INSERT INTO hog VALUES (1)");
+          if (first) { process.stdout.write("held"); first = false; }
+          const t = Date.now(); while (Date.now() - t < 100);
+          db.exec("COMMIT");
+        }
+        db.close();`, path], { stdio: ["ignore", "pipe", "inherit"] });
+      const child = hog;
+      exited = new Promise((r) => child.on("close", r));
+      // If the child dies before it holds the lock, say so (instead of waiting forever or failing in cleanup).
+      await new Promise<void>((resolve, reject) => {
+        child.stdout!.once("data", () => resolve());
+        child.once("close", (code) => reject(new Error(`the lock-holding child exited (${code}) before it held the lock`)));
+      });
+      const t = Date.now();
+      s.create({ title: "victim", body: "waits behind the hog" });
+      assert.ok(Date.now() - t > 1000, "the create really waited past its busy timeout");
+      await exited;
+    } finally {
+      // Windows cannot delete a database another process still has open: stop the child first, so a real failure
+      // above is reported instead of an EPERM from this cleanup (seen on CI).
+      if (hog && hog.exitCode === null) hog.kill();
+      await exited;
+      s.close();
+      rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    }
+  });
+
+  test("a lock held with no commit still fails after the wait, not later", () => {
+    const dir = mkdtempSync(join(tmpdir(), "om-stuck-"));
+    const path = join(dir, "s.db");
+    const s = new Store(path, { busyTimeoutMs: 800 });
+    const holder = new DatabaseSync(path);
+    try {
+      holder.exec("BEGIN IMMEDIATE");
+      const t = Date.now();
+      assert.throws(() => s.create({ title: "t", body: "b" }), /locked/);
+      const waited = Date.now() - t;
+      assert.ok(waited >= 700 && waited < 5000, `waited ${waited} ms`);
+    } finally {
+      holder.close();
+      s.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 const posix = process.platform !== "win32";

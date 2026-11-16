@@ -39,6 +39,7 @@ import { isStale, stalenessConfig, annotateStaleness } from "./staleness.js";
 // only node: builtins, never store.ts.
 import { BodyIndex, type BodyIndexInfo } from "./store/body-index.js";
 import { migrate as migrateSchema } from "./store/migrate.js";
+import { beginImmediate } from "./store/write-lock.js";
 import { CHANGE_LOG_RETENTION_DAYS, FTS_PREFIX_OPT, SQL_NOW, DEFAULT_NAMESPACE } from "./store/schema-constants.js";
 export { CHANGE_LOG_RETENTION_DAYS, DEFAULT_NAMESPACE } from "./store/schema-constants.js";
 import { encrypt, decryptIfEncrypted, isEncrypted, loadKey, keyPath, noteAad, captureAad } from "./crypto.js";
@@ -1753,7 +1754,7 @@ export class Store {
       return;
     }
     if (found >= 1) this.preMigrationBackup(found);
-    this.db.exec("BEGIN IMMEDIATE");
+    beginImmediate(this.db);
     try {
       const v = version();
       if (v < SCHEMA_VERSION) {
@@ -1924,7 +1925,7 @@ export class Store {
     if (this.getMeta("labels_clean_v1") === "1") return;
     const own = !this.db.isTransaction;
     try {
-      if (own) this.db.exec("BEGIN IMMEDIATE");
+      if (own) beginImmediate(this.db);
       try {
         const plain: Array<[string, string]> = [
           ["notes", "written_by"],
@@ -4660,7 +4661,7 @@ export class Store {
    * upgraded the file from another process can't slip in between the check and the write; this process then refuses.
    */
   /** @internal */ beginWrite(): void {
-    this.db.exec("BEGIN IMMEDIATE");
+    beginImmediate(this.db);
     const uv = Number((this.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
     if (uv > SCHEMA_VERSION) {
       this.db.exec("ROLLBACK");
