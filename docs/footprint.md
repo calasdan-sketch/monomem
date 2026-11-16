@@ -87,6 +87,7 @@ leaves it running. On Windows the task is found by its `monomem-task.xml` in the
 | `monomem restore` (`src/cli.ts`) | running the command | `http://127.0.0.1:<api port>/health`, only to print a hint when something answers there (whether the database is in use is judged by its lock) |
 | `monomem doctor` (`src/doctor/server.ts`) | running the command | `http://127.0.0.1:<api port>/health`, to warn when the server running there is older than the CLI (`MONOMEM_NO_SERVER_PROBE=1` skips it) |
 | Encrypted session start (`src/local-server.ts`, `src/recall.ts`) | the store is encrypted and a Monomem server for this store runs on this computer | that server on `127.0.0.1`: `GET /proof` (to check it holds the same main key; the key itself is never sent) and `POST /relevant` (to match note bodies; falls back to titles and tags if nothing answers) |
+| `monomem update` (`src/update.ts`) | typing the command (never automatic, never in a hook) | `api.github.com` for the latest release of `calasdan-sketch/monomem`, then that release's archive for this platform and its `SHA256SUMS` (checked before anything is replaced); an npm install only prints the npm command and calls nothing |
 
 Not Monomem's own calls: `npx monomem` downloads the package from npm, and `sync --git` runs `git`, which pushes where your
 repository's remote points.
