@@ -180,7 +180,7 @@ describe("setup puts the launcher folder on PATH (asked, recorded, undone exactl
     const home = join(root, "home");
     const dl = fakeBundle(join(root, "Downloads", "Monomem"), "1.7.0", platform);
     put(join(home, ".claude.json"), "{}\n");
-    const reg = { v: "C:\Tools;%USERPROFILE%\bin", read(): string { return this.v; }, write(x: string): void { this.v = x; } };
+    const reg = { v: "C:\Tools;%USERPROFILE%\bin", get(): string { return this.v; }, set(x: string): void { this.v = x; } };
     const e: SetupEnv = {
       home,
       platform,
@@ -242,11 +242,14 @@ describe("setup puts the launcher folder on PATH (asked, recorded, undone exactl
     const again = makeIO();
     assert.equal(await runSetup(s.e, again, { ...o, dryRun: true }), 0);
     assert.doesNotMatch(again.all(), /user PATH/);
-    const t = sandbox("linux", { SHELL: "/bin/zsh" });
-    t.e.env.PATH = `/usr/bin:${t.inst}`;
-    const io2 = makeIO();
-    assert.equal(await runSetup(t.e, io2, { ...o, dryRun: true }), 0);
-    assert.doesNotMatch(io2.all(), /\.zshrc/);
+    // A POSIX PATH splits on ":", so this half needs a POSIX scratch path (a Windows runner's C:\... has a drive colon).
+    if (process.platform !== "win32") {
+      const t = sandbox("linux", { SHELL: "/bin/zsh" });
+      t.e.env.PATH = `/usr/bin:${t.inst}`;
+      const io2 = makeIO();
+      assert.equal(await runSetup(t.e, io2, { ...o, dryRun: true }), 0);
+      assert.doesNotMatch(io2.all(), /\.zshrc/);
+    }
   });
 });
 

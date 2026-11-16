@@ -146,8 +146,8 @@ export function createShortcut(p: ShortcutPlan, platform: NodeJS.Platform): stri
 
 /** The Windows per-user Path value. Injected in tests: they never touch the real registry or PATH. */
 export interface UserPathIO {
-  read(): string;
-  write(value: string): void;
+  get(): string;
+  set(value: string): void;
 }
 
 export interface PathEntry {
@@ -172,8 +172,8 @@ export function pathPlan(e: PlaceEnv, dir: string, reg?: UserPathIO): PathEntry 
     (v ?? "").split(win ? ";" : ":").some((p) => p.trim() !== "" && samePath(win ? expandWin(p.trim(), e.env) : p.trim(), dir, e.platform));
   if (has(e.env.PATH ?? e.env.Path)) return null;
   if (win) {
-    if (!reg || has(reg.read())) return null;
-    return { kind: "registry", dir, where: "your user PATH (HKCU\Environment)" };
+    if (!reg || has(reg.get())) return null;
+    return { kind: "registry", dir, where: "your user PATH (HKCU\\Environment)" };
   }
   const shell = (e.env.SHELL ?? "").split("/").pop();
   const file =
@@ -189,8 +189,8 @@ export function pathPlan(e: PlaceEnv, dir: string, reg?: UserPathIO): PathEntry 
 export function addToPath(p: PathEntry, reg?: UserPathIO): void {
   if (p.kind === "registry") {
     if (!reg) throw new Error("no access to the user PATH");
-    const cur = reg.read().replace(/;+$/, "");
-    reg.write(cur ? `${cur};${p.dir}` : p.dir);
+    const cur = reg.get().replace(/;+$/, "");
+    reg.set(cur ? `${cur};${p.dir}` : p.dir);
     return;
   }
   const cur = existsSync(p.file!) ? readFileSync(p.file!, "utf8") : "";
@@ -202,11 +202,11 @@ export function addToPath(p: PathEntry, reg?: UserPathIO): void {
 export function removeFromPath(p: PathEntry, reg?: UserPathIO): boolean {
   if (p.kind === "registry") {
     if (!reg) throw new Error("no access to the user PATH");
-    const parts = reg.read().split(";");
+    const parts = reg.get().split(";");
     const i = parts.map((x) => x.trim().toLowerCase()).lastIndexOf(p.dir.toLowerCase());
     if (i < 0) return false;
     parts.splice(i, 1);
-    reg.write(parts.join(";"));
+    reg.set(parts.join(";"));
     return true;
   }
   if (!existsSync(p.file!)) return false;
@@ -232,5 +232,5 @@ const PS_WRITE =
 export function windowsUserPath(): UserPathIO {
   const ps = (script: string, env: NodeJS.ProcessEnv = {}): string =>
     execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { env: { ...process.env, ...env }, encoding: "utf8", windowsHide: true, timeout: 30_000, stdio: ["ignore", "pipe", "pipe"] });
-  return { read: () => ps(PS_READ), write: (v) => void ps(PS_WRITE, { MM_PATH: v }) };
+  return { get: () => ps(PS_READ), set: (v) => void ps(PS_WRITE, { MM_PATH: v }) };
 }
