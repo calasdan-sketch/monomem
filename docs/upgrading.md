@@ -13,6 +13,13 @@
 Since 1.6.0 the server also makes a backup every day by itself (`<data>/backups`, see [footprint.md](./footprint.md)), and a
 backup goes back with `monomem backup restore <folder>` (it was `monomem restore <folder>`, which still works for now).
 
+**Syncing computers (`monomem sync` / `sync --git` / a shared folder)?** Since 1.6.0 a forgotten or deleted note keeps its
+sync file with two extra lines (`archived_at`, `archived_by`) instead of the file being removed, and the other computer archives
+its copy (never deletes it); see "Tombstones" in [file-sync.md](./file-sync.md#layout). While one computer still runs
+1.5.x, that computer writes each such file back without the two lines and the newer one adds them again, so **every sync makes
+one extra commit (or file write) per archived note** until both are upgraded. Nothing is lost or changed in your notes; it is
+only noise in the repository history. Upgrade every computer that syncs to stop it.
+
 ## Monomem 1.4.0 and 1.5.0 (database schema v19 to v22)
 
 Applies to Monomem 1.3.x (and to a development build that already made the store v20 or v21). A fresh install needs none of this.

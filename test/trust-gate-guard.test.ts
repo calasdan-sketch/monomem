@@ -247,7 +247,7 @@ describe("B: one gate for reading a note", () => {
     if (/req\.method === "GET" && qCtxMatch/.test(api)) routes.add("/quarantine/:id/context");
     const NOTE_ROUTES = ["/notes", "/notes/:id", "/search", "/stats", "/changes", "/tasks", "/tasks/:id", "/handoffs", "/catch-up", "/export", "/index", "/timeline", "/sessions", "/sessions/:id", "/files/timeline", "/quality", "/quarantine", "/quarantine/:id/context", "/ui/review"];
     // /access: the read access log holds writer labels and redacted query previews, never note text.
-    const NO_NOTE_CONTENT = ["/health", "/proof", "/status", "/ready", "/", "/dashboard.js", "/favicon.ico", "(sign pages)", "/runner/status", "/trust", "/access", "/whoami", "/audit", "/insights", "/tokens", "/ui/state", "/ui/needs-you", "/ui/apps"];
+    const NO_NOTE_CONTENT = ["/health", "/proof", "/status", "/ready", "/", "/dashboard.js", "/favicon.ico", "(sign pages)", "/runner/status", "/trust", "/access", "/whoami", "/audit", "/insights", "/tokens", "/ui/state", "/ui/needs-you", "/ui/apps", "/ui/sync"];
     assert.deepEqual([...routes].sort(), [...NOTE_ROUTES, ...NO_NOTE_CONTENT].sort(), "a GET route was added: add it to NOTE_ROUTES (and to the canary test below) or NO_NOTE_CONTENT");
 
     const mcp = readGroup("mcp-server-core.ts");

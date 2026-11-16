@@ -37,6 +37,7 @@ function openSettings(){
     "<section><h3>Your apps</h3><div class='group' id='set_apps'><div class='item muted'>Looking for apps...</div></div>"+
       "<div class='acts'><button class='plain' onclick='undoConnect()'>Undo the last connect</button></div><div id='set_out'></div></section>"+
     "<section><h3>Automatic</h3><div class='group'>"+autoSwitches(s)+"</div></section>"+
+    syncSection()+
     "<section><h3>Backups</h3><div class='group'><div class='item'><div id='bk_line'>"+last+"</div><button onclick='backupNow()'>Back up now</button></div>"+
       "<div class='item'><div>A copy you can read (.json). It holds every note this key can see, not encrypted.</div><button onclick='doExport()'>Download</button></div>"+
       "<div class='item'><div>Add notes from a .json copy</div><button onclick='document.getElementById(&quot;imp&quot;).click()'>Choose file</button></div>"+
@@ -48,6 +49,38 @@ function openSettings(){
       "<div class='item'><div>Sign out of this page</div><button class='plain' onclick='closeSheet(&quot;settings&quot;);logout()'>Sign out</button></div></div></section>";
   openSheet("settings");
   loadApps2("set_apps", false);
+  loadSync();
+}
+// Use Monomem on another computer: plain words for monomem sync setup; the button runs it (local sign-in, like Connect).
+function syncSection(){
+  return "<section><h3>Use Monomem on another computer</h3><div class='group'><div class='item'><div>"+
+    "<p>Keep your notes the same on your laptop and your desktop. You need a folder both computers already share (OneDrive, Dropbox, iCloud Drive, Google Drive, a network or USB drive) or a private git repository you own. There is no Monomem account and no Monomem server: every file put there is sealed (encrypted).</p>"+
+    "<ol class='t-callout'><li>Here: type the shared folder (or the git address) and press Set up. This runs <code>monomem sync setup</code>.</li>"+
+    "<li>Monomem makes a sync key, the file <code>.sync-key</code> in your Monomem folder. Copy it to the other computer with a USB stick or your password manager. Never put it in the shared folder or the repository: anyone with the key and the folder can read your notes.</li>"+
+    "<li>On the other computer: put the key in its Monomem folder, then run <code>monomem sync setup</code> there with the same folder or address.</li>"+
+    "<li>After that, run <code>monomem sync</code> when you switch computers, or turn on automatic sync with <code>monomem sync setup --auto on</code>.</li></ol>"+
+    "<p class='help'>A note you forget or delete on one computer is archived on the other, never deleted there. When both changed the same note, one text is held for you to choose.</p>"+
+    "<div id='sync_now' class='help'></div>"+
+    "<label class='field'><span>Shared folder or private git address</span><input id='sync_target' placeholder='For example: your OneDrive folder'></label>"+
+    "<label class='field'><span>Name for this computer (optional)</span><input id='sync_name' maxlength='40' placeholder='For example: Work laptop'></label>"+
+    "<div class='acts'><button class='primary' onclick='syncSetup()'>Set up</button></div><div id='sync_out'></div></div></div></div></section>";
+}
+function loadSync(){
+  api("/ui/sync").then(function(j){
+    var el = $("sync_now"); if(!el){ return; }
+    el.textContent = j.set ? "Set up on this computer (" + (j.kind === "git" ? "git: " : "folder: ") + j.where + "). " + (j.auto ? "Syncs by itself every " + j.every_minutes + " minutes." : "Run monomem sync to sync.") : "Not set up on this computer yet.";
+  }).catch(function(e){ var el = $("sync_now"); if(el){ el.textContent = localMissing(e) ? "To set this up from here, open Monomem from its Start menu entry, or run monomem open on this computer." : ""; } });
+}
+function syncSetup(){
+  var t = ($("sync_target").value || "").trim(), n = ($("sync_name").value || "").trim();
+  if(!t){ say("Type the shared folder or the git address first.", true); return; }
+  toast("Setting up sync...");
+  var b = { target: t }; if(n){ b.name = n; }
+  return api("/ui/sync/setup", { method:"POST", body: JSON.stringify(b) }).then(function(r){
+    var out = $("sync_out"); if(out){ out.innerHTML = "<pre class='out'>"+esc(r.output || "")+"</pre>"; }
+    toast(r.ok ? "Sync is set up. Copy the key to your other computer next." : "That did not work; see the details.");
+    if(r.ok){ loadSync(); }
+  }).catch(function(e){ say(e.message, true); });
 }
 // Detected apps with Connect / Not this one (the same detection and setup as monomem setup).
 function appRow(a, welcome){

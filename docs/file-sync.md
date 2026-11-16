@@ -17,6 +17,8 @@ holds no readable note, title or computer name.
    `monomem sync setup git@github.com:you/my-private-memory.git` (a private repository; git must be installed and able to sign
    in to it). Add `--name "Work laptop"` to choose how this computer is named on the others (the default is a neutral
    `computer-1a2b`, not your computer's name).
+   The dashboard can do this step too: Settings, "Use Monomem on another computer" (it runs the same command, and only when
+   you opened the dashboard on this computer with `monomem open` or its Start menu entry).
 2. Setup syncs once and prints where your **sync key** is: `.sync-key` in your Monomem data folder.
 3. Copy that key file to your other computer with a USB stick or your password manager. **Never put it in the shared folder or
    the repository**: anyone with the key and the folder can read your notes.

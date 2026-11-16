@@ -213,6 +213,32 @@ export async function uiRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
     sendJson(res, 200, { ok: out.code === 0, ...out });
     return true;
   }
+  // GET /ui/sync -> whether `monomem sync setup` was run here, how, and whether it runs by itself. Never the key file, and an
+  // address is shown without any password inside it.
+  if (req.method === "GET" && path === "/ui/sync") {
+    if (needLocal()) return true;
+    const { readSyncConfig } = await import("../sync/device.js");
+    const { scrubUrls } = await import("../sync-git.js");
+    const cfg = readSyncConfig(dirname(DB_PATH));
+    sendJson(res, 200, cfg ? { set: true, kind: cfg.kind, where: scrubUrls(cfg.target), auto: cfg.auto, every_minutes: cfg.everyMinutes } : { set: false });
+    return true;
+  }
+  // POST /ui/sync/setup { target, name? } -> `monomem sync setup <target> [--name <name>]` (its own checks apply: an address
+  // with a password inside is refused, the key never goes into the folder). One line each; never starts with "-".
+  if (req.method === "POST" && path === "/ui/sync/setup") {
+    if (needLocal()) return true;
+    const b = await jsonBody(req);
+    const target = b && typeof b.target === "string" ? b.target.trim() : "";
+    const name = b && typeof b.name === "string" ? b.name.trim() : "";
+    const plain = (s: string, max: number): boolean => s.length <= max && !s.startsWith("-") && !/[\x00-\x1f\x7f]/.test(s);
+    if (!target || !plain(target, 1000) || !plain(name, 40)) {
+      sendJson(res, 400, { error: "Give a shared folder (such as your OneDrive folder) or a private git address, on one line." });
+      return true;
+    }
+    const out = await runner(["sync", "setup", target, ...(name ? ["--name", name] : [])], 600_000);
+    sendJson(res, 200, { ok: out.code === 0, ...out });
+    return true;
+  }
   // POST /ui/backup -> a copy of the database now, in <data dir>/backups/<time>; the result is recorded for "Needs you".
   if (req.method === "POST" && path === "/ui/backup") {
     if (needLocal()) return true;
