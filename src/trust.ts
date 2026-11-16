@@ -19,6 +19,7 @@
 // a later content edit by someone else makes THEM the author, and a claim is
 // only a claim. (Documented in docs/trust.md.)
 import { cleanWriter, squashWriter } from "./actor.js";
+import { didYouMean } from "./suggest.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -152,6 +153,20 @@ export function suggestWriter(writer: string, count: (name: string) => number): 
     if (notes > 0) return { writer: name, notes };
   }
   return undefined;
+}
+
+/**
+ * The stamped writer closest to a mistyped name ("curser" -> stdio:cursor) among `known`, when `count` finds notes for it.
+ * A local app is known by its bare name too: "curser" is near "cursor", which is stamped stdio:cursor. Suggest only.
+ */
+export function nearWriter(writer: string, known: readonly string[], count: (name: string) => number): { writer: string; notes: number } | undefined {
+  const byName = new Map<string, string>(known.map((w) => [w, w]));
+  for (const w of known) if (w.startsWith("stdio:") && !byName.has(w.slice(6))) byName.set(w.slice(6), w);
+  const guess = didYouMean(writer, [...byName.keys()]);
+  const stamped = guess === null ? undefined : byName.get(guess);
+  if (!stamped || stamped === writer) return undefined;
+  const notes = count(stamped);
+  return notes > 0 ? { writer: stamped, notes } : undefined;
 }
 
 /** SQL twin of nameIs. GLOB is exact (case-sensitive) and safe here: a family name is "stdio" or "<uuid>/stdio". */

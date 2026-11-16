@@ -34,3 +34,25 @@ describe("EASE-SF1: no stray signing-key warning from the throwaway bench stores
     });
   }
 });
+
+describe("EASE-SF2: rollback --writer with a typo says Did you mean, like trust distrust", () => {
+  test('"curser" suggests stdio:cursor instead of a silent "Nothing to do"', async () => {
+    const { Store } = await import("../src/store.js");
+    const { setProcessWriter } = await import("../src/actor.js");
+    const { rollbackPreview } = await import("../src/rollback.js");
+    const store = new Store(":memory:");
+    try {
+      const since = new Date(Date.now() - 1000).toISOString();
+      setProcessWriter("stdio:cursor");
+      store.create({ title: "from cursor" });
+      store.create({ title: "again from cursor" });
+      setProcessWriter("cli");
+      const p = rollbackPreview(store, { scope: "admin" }, { writer: "curser", since });
+      assert.deepEqual(p.actions, []);
+      assert.deepEqual(p.did_you_mean, { writer: "stdio:cursor", notes: 2 });
+      assert.match(p.warning, /stdio:cursor/);
+    } finally {
+      store.close();
+    }
+  });
+});
