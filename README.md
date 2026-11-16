@@ -348,12 +348,12 @@ the same store.
 
 ## How it compares
 
-The closest well-known alternative is the official
+The common baseline is the official
 [MCP memory server](https://github.com/modelcontextprotocol/servers/tree/main/src/memory)
 (`@modelcontextprotocol/server-memory`), a small knowledge graph kept in one file.
 It is a good fit if you want that and nothing more. This table only lists things you can check:
 the left column against [its README](https://github.com/modelcontextprotocol/servers/blob/main/src/memory/README.md)
-(read on 5 November 2026; check it again, it changes), the right against this repository.
+(read on 15 November 2026; check it again, it changes), the right against this repository.
 
 | | Official MCP memory server | Monomem |
 |---|---|---|
@@ -523,11 +523,11 @@ and no judge (does the right conversation come back?). On one Windows PC, 2026-1
 |---|---|---|---|---|
 | LongMemEval-S, 470 of 500 questions (the 30 abstention questions have no right answer to find) | 97.2 % | 85.7 % | 98.7 % | 3.9 ms |
 | LoCoMo-10, 1,982 questions, by session | 90.9 % | 82.4 % | 96.0 % | 1.6 ms |
-| LoCoMo-10, 1,982 questions, by turn (the hard one: our weakest number), each turn stored with the turn it replied to, as `import --from claude-code-chats` does | 67.4 % | 58.4 % | 76.3 % | 3.2 ms |
+| LoCoMo-10, 1,982 questions, by turn (the hard one: our weakest number), each turn stored with the turn it replied to, as `import --from claude-code-chats` does (one turn per note without the replied-to text: 60.8 % / 52.2 % / 67.7 %) | 67.4 % | 58.4 % | 76.3 % | 3.2 ms |
 
 The same numbers with encryption on, except by turn: 67.6 % / 58.2 % / 76.9 % (chat notes get a fixed sealed title there). The search index of decrypted bodies is kept in memory only (see Encryption below).
-The ranking settings were tuned on half the questions and checked on the other half; docs/BENCHMARK.md shows both halves,
-including the one figure that dipped on the held-out half.
+The ranking settings were tuned on half the questions and checked on the other half (never tuned on, but used to keep or
+drop each change); docs/BENCHMARK.md shows both halves, including the one figure that dipped on the checking half.
 
 Optional hybrid search (keywords plus a local embedding model, `nomic-embed-text` via Ollama) does better still (recall@5 / @10, full runs):
 LoCoMo-10 by session 92.2 % / 96.9 % and by turn 75.9 % / 84.6 % (measured 2026-11-15 on this release, 18 and 25 ms per
@@ -535,7 +535,8 @@ search, p50); LongMemEval-S 98.5 % / 99.4 % (measured 2026-11-09, before the 1.5
 can move a by-turn figure by about 0.1 to 0.2 points.
 
 These are retrieval numbers, not the end-to-end QA accuracy memory vendors usually publish, so they are not comparable with
-those. Every number, the per-type breakdown, where hybrid is worse, and the caveats: [docs/BENCHMARK.md](./docs/BENCHMARK.md#retrieval-longmemeval-s-and-locomo).
+those. They are not the highest published retrieval numbers either: Vestige reports higher LongMemEval-S and LoCoMo session
+figures (its own, not re-run by us); docs/BENCHMARK.md names them with their caveats. Every number, the per-type breakdown, where hybrid is worse, and the caveats: [docs/BENCHMARK.md](./docs/BENCHMARK.md#retrieval-longmemeval-s-and-locomo).
 
 **What it does not measure.** The provenance suites above are not a retrieval-quality or semantic-search benchmark (keyword search, made-up unique words, no
 embeddings). It does not measure speed, scale or concurrency, and "0 leaks" means none of *these* probes leaked; it is a regression gate,
@@ -567,7 +568,8 @@ Limits no scenario can show (what the benchmark cannot see) are listed next, und
   links) are left in search order. Replace the old note to retire it for good.
 - Notes are marked as from outside content only when Monomem sees the outside read. `Read`, `Bash` (`curl`) and apps
   without the hooks are not seen, and a confirm's stated source is a claim Monomem does not check.
-- With encryption on (`monomem encrypt enable`), search finds words in note bodies from an index kept **in memory only** by the process that searches (LongMemEval-S keyword R@5: 97.2 encrypted, the same as plain; [BENCHMARK.md](https://github.com/calasdan-sketch/monomem/blob/main/docs/BENCHMARK.md)). Monomem writes no body text to disk for it, but the system can page that memory to swap or a hibernation file and a crash dump can hold it: use whole-disk encryption too. It costs about 30 MB of RAM and 0.6-0.8 s to build per 10,000 notes in each server process, and is not built above 100,000 notes. The session-start hook does not build it: on an encrypted store it matches titles and tags, and asks a running Monomem server for the same store (on this computer, within 0.3 s) for body matches. `MONOMEM_BODY_INDEX=off` turns it off.
+- With encryption on (`monomem encrypt enable`), search finds words in note bodies from an index kept **in memory only** by the process that searches (LongMemEval-S keyword R@5: 97.2 encrypted, the same as plain; [BENCHMARK.md](https://github.com/calasdan-sketch/monomem/blob/main/docs/BENCHMARK.md)). Monomem writes no body text to disk for it, but the system can page that memory to swap or a hibernation file and a crash dump can hold it: use whole-disk encryption too. It costs about 30 MB of RAM and 0.6-0.8 s to build per 10,000 notes in each server process (measured at 10,000 notes; it does not grow in a straight line, see docs/BENCHMARK.md for 100,000), and is not built above 100,000 notes. The session-start hook does not build it: on an encrypted store it matches titles and tags, and asks a running Monomem server for the same store (on this computer, within 0.3 s) for body matches. `MONOMEM_BODY_INDEX=off` turns it off.
+- Measured at 100,000 notes (`monomem bench --scale 100k`, one PC): encrypted session start about 7-11 ms p50. Keyword search time follows how many notes contain the words, not store size: words in under 5 % of notes 0.6-8 ms p50, words in most notes about 110-190 ms. The body index's memory at that size: see the C-06 body-index line in [BENCHMARK.md](https://github.com/calasdan-sketch/monomem/blob/main/docs/BENCHMARK.md).
 - Keyword search finds words, not meaning. Semantic search needs a local embedding service (Ollama); without one you get keyword results.
 - Upgrading the database is one way (older versions refuse a newer file). A backup copy is made first and `monomem restore` goes back.
 - Needs Node 22.16 or newer, because it uses Node's built-in SQLite (Node 20 does not have it; checked). Docker is the way around that.
