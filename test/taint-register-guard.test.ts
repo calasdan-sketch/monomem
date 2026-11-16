@@ -102,6 +102,8 @@ const REST_EXEMPT: Record<string, string> = {
   "POST /ui/remove": "main key plus a local sign-in; replies command output",
   "POST /ui/service": "main key plus a local sign-in; replies command output",
   "POST /ui/backup": "main key plus a local sign-in; replies the backup folder",
+  "GET /ui/sync": "main key plus a local sign-in; sync kind, folder or scrubbed address, no note content",
+  "POST /ui/sync/setup": "main key plus a local sign-in; replies command output",
 };
 
 function restRoutesInSource(): string[] {
