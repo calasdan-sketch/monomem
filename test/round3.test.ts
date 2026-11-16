@@ -402,10 +402,12 @@ describe("R3-9: doctor", () => {
     try {
       spawnSync("chmod", ["500", home]);
       if (spawnSync("sh", ["-c", `touch '${join(home, "probe")}'`]).status === 0) return; // this file system ignores permissions
-      const r = cli(home, "doctor");
+      // doctor deliberately creates nothing, so use a command that does create the data folder.
+      const r = cli(home, "ls");
       spawnSync("chmod", ["700", home]);
-      assert.match(String(r.stdout), /permission/i);
-      assert.ok(!/Set MONOMEM_TOKEN to a long random value/.test(String(r.stdout)));
+      const out = String(r.stdout) + String(r.stderr);
+      assert.match(out, /permission/i);
+      assert.ok(!/Set MONOMEM_TOKEN to a long random value/.test(out));
       spawnSync("chmod", ["500", home]);
       const mod = pathToFileURL(fileURLToPath(new URL("../src/tokens-admin.js", import.meta.url))).href;
       const t = spawnSync(process.execPath, ["--no-warnings", "--input-type=module", "-e", `const t = await import(process.argv[1]); try { t.addApp({ label: "x" }); } catch (e) { console.error(e.message); process.exit(1); }`, mod], { env: { ...process.env, MONOMEM_HOME: home, MONOMEM_TOKEN: "t".repeat(40) }, encoding: "utf8" });
