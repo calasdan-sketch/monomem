@@ -78,3 +78,28 @@ test("rollback leaves another writer's later claim alone", async () => {
     store.close();
   }
 });
+
+test("rollback releases every live claim of the writer, also past 500 (paged scan, no cap)", async () => {
+  const prev = process.env.MONOMEM_FLOOD_WRITES_PER_HOUR;
+  process.env.MONOMEM_FLOOD_WRITES_PER_HOUR = "100000"; // this test writes ~1,000 times on purpose
+  const store = new Store(":memory:");
+  try {
+    const N = 520;
+    const ids = as("alice", () => Array.from({ length: N }, (_, i) => putTask(store, { title: `job ${i}`, status: "planned" }).task.id));
+    await tick();
+    const since = new Date().toISOString();
+    await tick();
+    as("codex", () => ids.forEach((id) => claimTask(store, { id, owner: "codex" })));
+    setProcessWriter("cli");
+    const plan = rollbackPreview(store, ADMIN, { writer: "codex", since });
+    assert.equal(plan.actions.filter((a: any) => a.action === "release").length, N);
+    rollbackConfirm(store, ADMIN, { token: plan.token });
+    setProcessWriter("");
+    assert.equal(getTask(store, ids[0]).lease, null);
+    assert.equal(getTask(store, ids[N - 1]).lease, null);
+  } finally {
+    if (prev === undefined) delete process.env.MONOMEM_FLOOD_WRITES_PER_HOUR;
+    else process.env.MONOMEM_FLOOD_WRITES_PER_HOUR = prev;
+    store.close();
+  }
+});
