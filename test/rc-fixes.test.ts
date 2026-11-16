@@ -10,6 +10,7 @@ import fs, {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   rmSync,
   statSync,
   utimesSync,
@@ -358,10 +359,21 @@ describe("3: deleting another machine's note doesn't resurrect it on import", ()
       assert.equal(r.counts.restored, 1);
       assert.equal(r.counts.created, 0);
       assert.equal((await importMarkdown(B, repo)).counts.unchanged, 1);
-      // B deletes it again; B's export prunes the unedited foreign file
+      // B deletes it again. Since tombstones (A8) B's export no longer removes the foreign files: it marks them archived, so
+      // A archives its copies on its next import instead of writing the files back forever. Still nothing comes back on B.
       B.delete(B.list({}).notes[0].id);
-      assert.equal(exportMarkdown(B, repo).removed, 2);
+      assert.equal(exportMarkdown(B, repo).removed, 0);
+      const marked = readdirSync(repo, { recursive: true })
+        .map(String)
+        .filter((f) => f.endsWith(".md") && !f.endsWith("README.md"))
+        .filter((f) => /\narchived_at: ".+"\narchived_by: ".+"\n---\n/.test(readFileSync(join(repo, f), "utf8")));
+      assert.equal(marked.length, 2, "both deleted notes' files carry the archive marker");
       assert.equal((await importMarkdown(B, repo)).counts.created, 0);
+      // A applies the markers as archives: its notes keep their text (nothing silently lost) and can be restored.
+      await importMarkdown(A, repo);
+      const onA = A.exportAll().filter((n) => n.title === "One" || n.title === "Two");
+      assert.equal(onA.length, 2);
+      assert.ok(onA.every((n) => n.archived_at), "A archived both, never deleted them");
     } finally {
       A.close();
       B.close();

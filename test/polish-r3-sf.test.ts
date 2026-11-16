@@ -110,15 +110,33 @@ describe("SF-5: git sync replay stop (pinned behaviour)", { skip: !haveGit && "g
     for (const f of readdirSync(b.dataDir)) if (f.startsWith("sync-git-seen-")) rmSync(join(b.dataDir, f));
     const rb = await run(b);
     const ra = await run(a);
-    // Pinned (SF-5, reproduced): b resurrects the note a deleted, as version 1; a's seen record says it had version 2, which
-    // is indistinguishable from a replayed old file, so a stops. Not a false stop in the sense of a bug: no tombstone says the
-    // note was deleted on purpose. Nothing is changed, the message names the recovery step, and following it works.
+    // Pinned (SF-5, after tombstones): a's delete no longer removes the file; it stays (version 2) with an archive marker.
+    // b, even with no seen record, reads that marker and archives its old copy: the delete is never resurrected, so a sees no
+    // older file and never stops. The safety property is unchanged: nothing is silently lost. b keeps the text (archived,
+    // restorable with `monomem restore`), a's delete stays a delete, and neither computer stops or needs a manual step.
     assert.equal(rb.code, 0, rb.text);
-    assert.equal(ra.code, 1, ra.text);
-    assert.match(ra.text, /older than one this computer already synced/);
-    const seenFile = /delete (.*sync-git-seen-[0-9a-f]+.json) and sync again/.exec(ra.text)?.[1];
-    assert.ok(seenFile, ra.text);
-    rmSync(seenFile!);
-    assert.equal((await run(a)).code, 0, "after the step the message names, a syncs again");
+    assert.equal(ra.code, 0, ra.text);
+    assert.doesNotMatch(ra.text, /older than one this computer already synced/);
+    const onB = (() => {
+      const s = new Store(b.db);
+      try {
+        return s.exportAll().find((x) => x.title === "Shared") ?? null;
+      } finally {
+        s.close();
+      }
+    })();
+    assert.ok(onB, "b still holds the text: a delete never deletes on another computer");
+    assert.ok(onB!.archived_at, "b archived its copy (the delete reached it as an archive, not a resurrection)");
+    const onA = (() => {
+      const s = new Store(a.db);
+      try {
+        return s.exportAll().find((x) => x.title === "Shared") ?? null;
+      } finally {
+        s.close();
+      }
+    })();
+    assert.equal(onA, null, "a's delete is not undone by b's old copy");
+    assert.equal((await run(b)).code, 0, "and the next syncs stay quiet");
+    assert.equal((await run(a)).code, 0);
   });
 });
