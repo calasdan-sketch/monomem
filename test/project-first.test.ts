@@ -90,7 +90,7 @@ describe("writer project from MCP roots (C18)", () => {
         // The server asks for roots right after initialize; give it a moment to hear back before writing.
         let cwd: string | null = null;
         for (let i = 0; i < 50 && !(cwd && insideFolder(cwd, work)); i++) {
-          await client.callTool({ name: "state_write", arguments: { title: `probe ${i}`, content: "x" } });
+          await client.callTool({ name: "state_write", arguments: { title: `probe ${i}`, body: "x" } });
           const s = new Store(db);
           try {
             cwd = (s.captureDb().prepare("SELECT writer_cwd FROM notes ORDER BY id DESC LIMIT 1").get() as { writer_cwd: string | null }).writer_cwd;
@@ -100,6 +100,45 @@ describe("writer project from MCP roots (C18)", () => {
           if (!(cwd && insideFolder(cwd, work))) await new Promise((r) => setTimeout(r, 100));
         }
         assert.ok(cwd && insideFolder(cwd, work), `writer_cwd ${cwd}`);
+      } finally {
+        await client.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("trust: a client with several roots keeps the launch folder (picking one could miss a tainted session in another)", async () => {
+    const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+    const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");
+    const { ListRootsRequestSchema } = await import("@modelcontextprotocol/sdk/types.js");
+    const { pathToFileURL, fileURLToPath } = await import("node:url");
+    const { dirname } = await import("node:path");
+    const CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "cli.js");
+    const dir = mkdtempSync(join(tmpdir(), "mm-roots2-"));
+    const launch = join(dir, "launch");
+    mkdirSync(launch);
+    const db = join(dir, "state.db");
+    try {
+      let asked!: () => void;
+      const answered = new Promise<void>((r) => (asked = r));
+      const client = new Client({ name: "roots-test", version: "1" }, { capabilities: { roots: {} } });
+      client.setRequestHandler(ListRootsRequestSchema, async () => {
+        setImmediate(asked);
+        return { roots: [{ uri: pathToFileURL(join(dir, "a")).href }, { uri: pathToFileURL(join(dir, "b")).href }] };
+      });
+      const env = { PATH: process.env.PATH ?? "", HOME: join(dir, "home"), USERPROFILE: join(dir, "home"), MONOMEM_HOME: join(dir, "om"), MONOMEM_DB_PATH: db, MONOMEM_CLIENT: "cursor" };
+      await client.connect(new StdioClientTransport({ command: process.execPath, args: [CLI, "mcp"], env, cwd: launch, stderr: "ignore" }));
+      try {
+        await answered; // the server has its answer before this write reaches it (one ordered stream)
+        await client.callTool({ name: "state_write", arguments: { title: "probe", body: "x" } });
+        const s = new Store(db);
+        try {
+          const cwd = (s.captureDb().prepare("SELECT writer_cwd FROM notes ORDER BY id DESC LIMIT 1").get() as { writer_cwd: string | null }).writer_cwd;
+          assert.ok(cwd && insideFolder(cwd, launch), `writer_cwd ${cwd}`);
+        } finally {
+          s.close();
+        }
       } finally {
         await client.close();
       }

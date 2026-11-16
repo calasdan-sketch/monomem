@@ -310,6 +310,17 @@ itself. Links are only ever added: an update adds new ones, and `[]` or leaving 
   listed and searchable.
 - A writer that built a note from the target cannot confirm the target.
 
+### The writer folder (stdio)
+
+A local stdio server is matched to hook sessions by its folder: the folder it was launched in, or, when the app offers
+exactly one workspace folder over MCP (`roots`), that folder. The same folder drives the live hook-session mark, the late
+mark of a spooled outside read (`notes.writer_cwd`), the echo guard and project-first ranking at session start. Both are
+the app's own claim: the app chose the launch folder too, and an agent cannot set either. An app that offers several
+folders keeps its launch folder, because picking one could miss a session that read outside content in another; a launch
+folder that matches no open session gets the worst case (every open window applies). Adopting a root is written to the
+audit log (`mcp.root`). Limit: an app that names a folder it is not really working in can avoid that folder's marks, as
+it could by launching the server there.
+
 ### Echoes
 
 A new note that restates a note its writer was just shown is an **echo**, not new evidence. "Shown" means what Monomem

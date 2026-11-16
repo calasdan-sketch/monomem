@@ -60,15 +60,21 @@ server.server.oninitialized = (): void => {
   const c = server.server.getClientVersion();
   audit({ op: "mcp.connect", label: stdio.writer, kind: "connection", detail: `claimed clientInfo: ${printable(c?.name, 60)} ${printable(c?.version, 30)}` });
   // C18: an app that launches this server outside the project (Cursor's global config, Claude Desktop, Codex) can still say
-  // which workspace it has open (MCP roots). The first file:// root becomes the folder later writes record (notes.writer_cwd),
+  // which workspace it has open (MCP roots). A single file:// root becomes the folder later writes record (notes.writer_cwd),
   // so session start can rank this project's notes first. No roots, an error or a slow answer: the launch folder stays.
-  // Like the launch folder, it is the app's own claim.
+  // Trust: this folder also matches hook-session taint (live and late, retroTaint) and the echo guard. Like the launch folder
+  // it is the app's own claim (the app is the party that chose the launch folder too; an agent cannot set either). With
+  // SEVERAL roots the agent may work in any of them, so picking one could miss a tainted session in another: the launch
+  // folder stays (a home or app folder matches every session or none; none = the worst case, every open window applies).
+  // Adopting a root is audited, so a person can see the claim.
   if (!server.server.getClientCapabilities()?.roots) return;
   server.server
     .listRoots(undefined, { timeout: 2000 })
     .then((r) => {
-      const uri = r.roots.find((x) => x.uri.startsWith("file:"))?.uri;
-      if (uri) conn.cwd = fileURLToPath(uri);
+      const files = r.roots.filter((x) => x.uri.startsWith("file:"));
+      if (files.length !== 1) return;
+      conn.cwd = fileURLToPath(files[0].uri);
+      audit({ op: "mcp.root", label: stdio.writer, kind: "connection", detail: `writer folder from the app's MCP root: ${printable(conn.cwd, 200)}` });
     })
     .catch(() => {});
 };
