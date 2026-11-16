@@ -34,7 +34,7 @@ import { openStoreOrExit, SERVER_BUSY_TIMEOUT_MS } from "./db-problem.js";
 import { abortAllWaiters } from "./change-wait.js";
 import { pruneStaleHeartbeats } from "./liveness.js";
 import { rotateLogIfNeeded } from "./security.js";
-import { maybeDailyBackup, autoBackupOn } from "./backup-schedule.js";
+import { maybeDailyBackupAsync, autoBackupOn } from "./backup-schedule.js";
 import { appendFileSync } from "node:fs";
 import type { Server } from "node:http";
 import { dirname, join, resolve } from "node:path";
@@ -215,14 +215,22 @@ setTimeout(purgeNow, Math.min(30_000, purgeEveryMs)).unref();
 // Automatic daily backup (backup-schedule.ts): checked a minute after start, then hourly; at most one copy a day,
 // 7 daily + 4 weekly kept in <data>/backups. The dashboard's Settings switch is read on every tick; MONOMEM_AUTO_BACKUP=off
 // (read once, here) stops the timer and wins over the switch.
-// ponytail: VACUUM INTO runs on this thread, so a very large store pauses serving for the copy (once a day); move it to a
-// worker if that ever shows up.
+// The copy runs on a worker thread (backup-worker.ts), so serving does not pause for it; one at a time.
+let backupRunning = false;
 const backupNow = (): void => {
-  const r = maybeDailyBackup(store, DB_PATH, { dataDir: DATA_DIR });
-  if (!r) return;
-  if (r.error) console.error(`[monomem] automatic backup failed: ${r.error} (monomem health shows it; monomem backup makes one by hand)`);
-  else if (r.made) console.error(`[monomem] automatic backup made in ${r.dir}${r.removed.length ? ` (${r.removed.length} older removed)` : ""}`);
-  if (r.keyWarning) console.error(`[monomem] ${r.keyWarning}`);
+  if (backupRunning) return;
+  backupRunning = true;
+  void maybeDailyBackupAsync(DB_PATH, { dataDir: DATA_DIR })
+    .then((r) => {
+      if (!r) return;
+      if (r.error) console.error(`[monomem] automatic backup failed: ${r.error} (monomem health shows it; monomem backup makes one by hand)`);
+      else if (r.made) console.error(`[monomem] automatic backup made in ${r.dir}${r.removed.length ? ` (${r.removed.length} older removed)` : ""}`);
+      if (r.keyWarning) console.error(`[monomem] ${r.keyWarning}`);
+    })
+    .catch((e: unknown) => console.error(`[monomem] automatic backup failed: ${(e as Error).message}`))
+    .finally(() => {
+      backupRunning = false;
+    });
 };
 const backupTimer = autoBackupOn() ? setInterval(backupNow, 3_600_000) : undefined;
 backupTimer?.unref();
