@@ -73,6 +73,14 @@ Why shown, in {}: files = linked to files you changed, kw = matches your branch,
   summed up as one line (`bot-b4: 50+ more not listed here (newest #3011; ...)`).
   A store with a single writer is not capped. Tested with 2,000 notes from one
   writer: the other writer's three notes and both fact values still appear.
+- **This project first:** a note written by a local app from inside the
+  current git repository ranks ahead of an equally recent note from another
+  project; another project's note with no keyword or file match goes last.
+  The folder is the one the local (stdio) server reports: the workspace the
+  app says it has open (MCP roots) when the app offers it, else the folder the
+  server was started in. Notes from keys, the REST API, the CLI at a terminal
+  and older notes have no folder and are neither boosted nor pushed down. An
+  app started outside the project that offers no roots records the wrong folder.
 - The "Showing X of N memories" line counts the store's notes up to 2,000;
   above that it says "2,000+" (for example "Showing 12 of 2,000+
   memories"), so a very large store does not slow session start down.

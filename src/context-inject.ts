@@ -16,6 +16,7 @@
 // a note tagged never-show (NEVER_SHOW_TAG) is never injected. With a session id, the sizes go to the meter (meter.ts).
 // Operator-pinned notes (notes.pinned, set by `monomem pin` or an admin key) come before all of it, within PINNED_CHARS.
 import { execFile } from "node:child_process";
+import { resolve as resolvePath } from "node:path";
 import type { Store, NoteRecord } from "./store.js";
 import { NOTE_KINDS } from "./store.js";
 import { extractKeywords } from "./keywords.js";
@@ -66,6 +67,8 @@ export interface ContextSignals {
   branch?: string;
   /** Files with uncommitted changes (relative to the repository root). */
   diffFiles?: string[];
+  /** C18: the repository's top folder (git rev-parse --show-toplevel); notes written from inside it rank first. */
+  root?: string;
 }
 
 export interface InjectOptions {
@@ -121,9 +124,30 @@ function git(cwd: string, args: string[]): Promise<string> {
 }
 
 export async function gitSignals(cwd: string): Promise<ContextSignals> {
-  const [b, d] = await Promise.all([git(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]), git(cwd, ["diff", "--no-ext-diff", "--name-only", "HEAD"])]);
+  const [b, d, r] = await Promise.all([
+    git(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]),
+    git(cwd, ["diff", "--no-ext-diff", "--name-only", "HEAD"]),
+    git(cwd, ["rev-parse", "--show-toplevel"]),
+  ]);
   const branch = b.trim();
-  return { branch: branch === "HEAD" ? "" : branch, diffFiles: d.split("\n").map((s) => s.trim()).filter(Boolean).slice(0, 50) };
+  const root = r.trim();
+  return { branch: branch === "HEAD" ? "" : branch, diffFiles: d.split("\n").map((s) => s.trim()).filter(Boolean).slice(0, 50), ...(root ? { root } : {}) };
+}
+
+/** A folder in comparable form: absolute, "/" separators, no trailing "/", lowercased on Windows. */
+const normDir = (p: string): string => {
+  const r = resolvePath(p).replace(/\\/g, "/").replace(/\/+$/, "");
+  return process.platform === "win32" ? r.toLowerCase() : r;
+};
+/**
+ * C18: `dir` is `root` or inside it. One-way on purpose: a server launched in the home folder (some apps do) contains every
+ * project, and must not count as "this project".
+ */
+export function insideFolder(dir: string | null | undefined, root: string | null | undefined): boolean {
+  if (!dir || !root) return false;
+  const a = normDir(dir);
+  const b = normDir(root);
+  return a === b || a.startsWith(b + "/");
 }
 
 const tokensOf = (n: NoteRecord): number => Math.max(1, Math.ceil((n.title.length + n.body.length) / CHARS_PER_TOKEN));
@@ -393,9 +417,26 @@ export async function rankContext(
     if (!pool.has(n.id)) pool.set(n.id, opts.includeDistrusted ? store.markDistrusted([n])[0] : n);
     mark(n.id, "decision");
   }
-  const byRecency = [...pool.values()].sort((a, b) => (a.updated_at < b.updated_at ? 1 : a.updated_at > b.updated_at ? -1 : b.id - a.id)).map((n) => n.id);
+  let byRecency = [...pool.values()].sort((a, b) => (a.updated_at < b.updated_at ? 1 : a.updated_at > b.updated_at ? -1 : b.id - a.id)).map((n) => n.id);
+  // C18 project-first: notes written from inside this repository (notes.writer_cwd, the local server's folder) get their own
+  // list; another project's note with no keyword or file match leaves the recency list. NULL (REST, tokens, CLI, old notes) is neutral.
+  const here: number[] = [];
+  if (signals.root && byRecency.length) {
+    const cwdOf = new Map<number, string | null>();
+    for (let i = 0; i < byRecency.length; i += 500) {
+      const ids = byRecency.slice(i, i + 500);
+      for (const r of db.prepare(`SELECT id, writer_cwd FROM notes WHERE id IN (${ids.map(() => "?").join(",")})`).all(...ids) as Array<{ id: number; writer_cwd: string | null }>) cwdOf.set(Number(r.id), r.writer_cwd);
+    }
+    const elsewhere = new Set<number>();
+    for (const id of byRecency) {
+      const c = cwdOf.get(id);
+      if (insideFolder(c, signals.root)) here.push(id);
+      else if (c && !why.get(id)?.has("kw") && !why.get(id)?.has("files")) elsewhere.add(id);
+    }
+    byRecency = [...byRecency.filter((id) => !elsewhere.has(id)), ...byRecency.filter((id) => elsewhere.has(id))];
+  }
   for (const id of byRecency.slice(0, 10)) mark(id, "recent");
-  const fused = rrfScores([bm25, overlap, byRecency, settled.map((n) => n.id)]);
+  const fused = rrfScores([bm25, overlap, byRecency, settled.map((n) => n.id), here]);
   // Operator-pinned notes (the notes.pinned COLUMN, never the agent-settable "pinned" tag): shown first by injectContext, so
   // they leave the ranked pass. pinnedNotes applies the sensitivity ceiling; readVisible + fits the distrust and session filters.
   const pinned = store
