@@ -82,15 +82,6 @@ export function runDailyBackup(store: Store, dbPath: string, now = new Date()): 
   } catch {
     /* there was no failure */
   }
-  let removed: string[] = [];
-  try {
-    const names = readdirSync(root);
-    const keep = keepSet(names);
-    removed = names.filter((n) => NAME.test(n) && !keep.has(n));
-    for (const n of removed) rmSync(join(root, n), { recursive: true, force: true });
-  } catch (e) {
-    return { made: true, dir, removed, error: `backup made, but older ones could not be removed: ${(e as Error).message}` };
-  }
   let keyWarning: string | undefined;
   const kp = keyPath(data);
   if (existsSync(kp) && !existsSync(join(data, KEY_WARNED))) {
@@ -102,6 +93,17 @@ export function runDailyBackup(store: Store, dbPath: string, now = new Date()): 
     } catch {
       /* said again next time: better than never */
     }
+  }
+  let removed: string[] = [];
+  try {
+    // Only folders dated today or earlier take part: after a clock change, today's copy is never removed and a folder dated
+    // in the future is left alone instead of pushing real backups out.
+    const names = readdirSync(root).filter((n) => NAME.test(n) && n <= day);
+    const keep = keepSet(names).add(day);
+    removed = names.filter((n) => !keep.has(n));
+    for (const n of removed) rmSync(join(root, n), { recursive: true, force: true });
+  } catch (e) {
+    return { made: true, dir, removed, error: `backup made, but older ones could not be removed: ${(e as Error).message}`, ...(keyWarning ? { keyWarning } : {}) };
   }
   return { made: true, dir, removed, ...(keyWarning ? { keyWarning } : {}) };
 }

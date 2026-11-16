@@ -43,6 +43,9 @@ describe("card check: no false alarms on numbers that are not cards", () => {
     assert.equal(cards("amex 3782 822463 10005"), 1);
     assert.equal(cards("my visa is 4111111111111111"), 1);
     assert.equal(cards("credit card number: 5555555555554444"), 1);
+    assert.equal(cards("card=4242424242424242"), 1, "key=value in a log or query string");
+    assert.equal(cards("card_number=4111111111111111"), 1);
+    assert.equal(cards("Card:4111111111111111"), 1);
     assert.equal(cards("card 4111 1111 1111 1112"), 0, "fails Luhn");
     assert.equal(cards("card 9111 1111 1111 1111"), 0, "no card starts with 9");
     assert.equal(cards("order id 4111111111111111"), 0, "a bare digit run with no card word is an id, not a card");

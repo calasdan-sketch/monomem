@@ -52,6 +52,21 @@ describe("automatic daily backups", () => {
     }
   });
 
+  test("a clock that went backwards never removes the copy just made, nor the folders dated after it", () => {
+    const w = scratch();
+    try {
+      const start = Date.parse("2026-11-10T09:00:00Z");
+      for (let d = 0; d < 16; d++) runDailyBackup(w.store, w.db, new Date(start + d * DAY));
+      const r = runDailyBackup(w.store, w.db, new Date("2026-11-01T09:00:00Z"));
+      assert.equal(r.made, true);
+      assert.deepEqual(r.removed, []);
+      assert.ok(existsSync(join(backupsDir(w.db), "2026-11-01", "state.db")));
+      assert.ok(existsSync(join(backupsDir(w.db), "2026-11-25", "state.db")));
+    } finally {
+      w.done();
+    }
+  });
+
   test("keepSet: 7 newest days, then the newest of each older week, at most 4 weeks", () => {
     const names = Array.from({ length: 30 }, (_, i) => new Date(Date.parse("2026-01-01T00:00:00Z") + i * DAY).toISOString().slice(0, 10));
     const keep = keepSet(names);

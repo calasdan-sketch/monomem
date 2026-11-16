@@ -189,7 +189,7 @@ export async function qualityReport(store: Store, namespaces?: string[]): Promis
   }
 
   let restated = 0;
-  for (const [o, n] of restatedPairs(store, notes)) {
+  for (const [o, n] of restatedPairs(store, notes, PER_TYPE * 2)) {
     if (restated >= PER_TYPE) break;
     if (seen.has(pairKey(o.id, n.id))) continue;
     seen.add(pairKey(o.id, n.id));
@@ -248,7 +248,7 @@ const personConfirmed = (n: NoteRecord): boolean => (n.confirmed_kind === "human
  * same subject (a fact key with another value, or a similarity link >= RESTATE_MIN_SIM); N not replaced, distrusted or held;
  * O not confirmed by a person unless N is too. One pair per O: the newest such N.
  */
-export function restatedPairs(store: Store, notes: NoteRecord[]): Array<[NoteRecord, NoteRecord]> {
+export function restatedPairs(store: Store, notes: NoteRecord[], max = Infinity): Array<[NoteRecord, NoteRecord]> {
   const enforce = expiryEnforced(store);
   const plain = notes.filter((n) => (n.kind ?? "note") === "note" && !n.superseded_by);
   // One group per namespace + writer (only same-writer pairs count), so a store with many writers stays cheap.
@@ -273,7 +273,7 @@ export function restatedPairs(store: Store, notes: NoteRecord[]): Array<[NoteRec
       const sameSubject = factClash(o.tags ?? [], n.tags ?? []) || ((sims ??= store.neighbourScores(o.id)).get(n.id) ?? 0) >= RESTATE_MIN_SIM;
       if (sameSubject && !(typeof store.isDistrusted === "function" && store.isDistrusted(n))) best = n;
     }
-    if (best) out.push([o, best]);
+    if (best && out.push([o, best]) >= max) break;
   }
   return out;
 }
