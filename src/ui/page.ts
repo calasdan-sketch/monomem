@@ -44,6 +44,7 @@ export const PAGE_HTML = `<!doctype html>
     <p id="viewd" class="t-callout muted"></p>
   </div>
   <div id="needs" class="banner" role="status" hidden></div>
+  <div id="runner" class="banner" role="status" hidden></div>
   <details id="filters" class="filters">
     <summary>Filters</summary>
     <div class="row" role="group" aria-label="Filters">

@@ -29,8 +29,22 @@ function nsQs(sep, noDistrusted){
 }
 function applyFilter(){ if(VIEW === "list"){ load(); } }
 
+// One line per task runner that looks stopped (each target has its own heartbeat); the older servers' single notice otherwise.
+function loadRunner(){
+  var el = $("runner");
+  api("/runner/status").then(function(j){
+    var lines = [];
+    ((j && j.targets) || []).forEach(function(t){ if(t.notice){ lines.push(t.notice); } });
+    if(!lines.length && j && j.notice){ lines.push(j.notice); }
+    el.textContent = "";
+    lines.forEach(function(l){ var d = document.createElement("div"); d.textContent = l; el.appendChild(d); });
+    el.hidden = !lines.length;
+  }).catch(function(){ el.hidden = true; });
+}
+
 function load(){
   setView("list");
+  loadRunner();
   var q = String($("q").value || "").trim();
   var path = q ? "/search?q=" + encodeURIComponent(q) + nsQs("&") : "/notes" + nsQs("?");
   api(path).then(function(j){ render(j.results || j.notes || []); }).catch(function(e){ incRefused(e); failList(e); });
