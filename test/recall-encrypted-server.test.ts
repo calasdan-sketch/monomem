@@ -51,7 +51,9 @@ describe("session start on an encrypted store asks a local server for body match
     const srv = createApiServer(serverStore, TOKEN);
     try {
       const port = await listen(srv);
-      const ctx = contextOf(await runRecall({ dbPath: db, cwd: dir, signals, serverPort: port }));
+      // This checks the answer, not the clock: the server runs in this same process, so on a loaded CI machine it can miss
+      // the 300 ms budget and session start correctly falls back (the never-answers case below checks that budget).
+      const ctx = contextOf(await runRecall({ dbPath: db, cwd: dir, signals, serverPort: port, serverAskMs: 5000 }));
       // An empty context means session start's 5 s cap fired (a loaded machine), not a wrong match: say so plainly.
       assert.notEqual(ctx, "", "session start returned no context: its 5 s cap fired before the notes were read");
       assert.match(ctx, new RegExp(`#${target}\\b[^\\n]*Old deploy notes[^\\n]*\\{[^}]*kw`), ctx);
@@ -68,9 +70,17 @@ describe("session start on an encrypted store asks a local server for body match
     const port = await listen(free);
     await close(free); // a port nothing listens on
     try {
+      // "No server costs almost nothing", measured against the same session start with no server probe at all (a fixed
+      // 800 ms failed on a loaded Windows runner where session start itself took longer).
+      process.env.MONOMEM_NO_SERVER_PROBE = "1";
+      const t1 = Date.now();
+      await runRecall({ dbPath: db, cwd: dir, signals });
+      const base = Date.now() - t1;
+      delete process.env.MONOMEM_NO_SERVER_PROBE;
       const t0 = Date.now();
       const ctx = contextOf(await runRecall({ dbPath: db, cwd: dir, signals, serverPort: port }));
-      assert.ok(Date.now() - t0 < 800, "within the hook's soft budget");
+      const took = Date.now() - t0;
+      assert.ok(took < base + 500, `no server took ${took} ms; session start without asking took ${base} ms`);
       assert.doesNotMatch(ctx, new RegExp(`#${target}\\b`), "the body-only note is not found without the server");
       assert.match(ctx, /filler/, "the rest of session start is unchanged");
     } finally {

@@ -76,6 +76,8 @@ export interface RecallOptions {
   signals?: ContextSignals;
   /** Test hook: the loopback port of a Monomem server to ask for body matches (default MONOMEM_PORT, 8790). */
   serverPort?: number;
+  /** Test hook: how long to wait for that server (default SERVER_ASK_MS). Lets a test check the answer, not the clock. */
+  serverAskMs?: number;
 }
 
 /** 1.5.0: the longest session start waits for a local server's body matches on an encrypted store (askServerForBodyHits). */
@@ -214,11 +216,11 @@ export async function askServerForBodyHits(
   storeId: string,
   port: number,
   keywords: string[],
-  o: { namespace?: string; writtenBy?: string; notWrittenBy?: string; includeDistrusted?: boolean } = {}
+  o: { namespace?: string; writtenBy?: string; notWrittenBy?: string; includeDistrusted?: boolean; askMs?: number } = {}
 ): Promise<number[] | null> {
   if (!keywords.length) return null;
   const { provenLocalServer } = await import("./local-server.js");
-  const signal = AbortSignal.timeout(SERVER_ASK_MS);
+  const signal = AbortSignal.timeout(o.askMs ?? SERVER_ASK_MS);
   try {
     const server = await provenLocalServer(port, storeId, signal);
     if (!server) return null;
@@ -310,7 +312,7 @@ async function fetchRecentNotes(opts: RecallOptions): Promise<RecallData> {
     // 1.5.0: body matches from a local server for this store, when the bodies are sealed (askServerForBodyHits).
     const port = opts.serverPort ?? (process.env.MONOMEM_NO_SERVER_PROBE === "1" ? null : (await import("./config.js")).API_PORT);
     const storeId = store.storeId();
-    const bodyHits = port !== null && store.sealsWrites() ? (keywords: string[]) => askServerForBodyHits(storeId, port, keywords, { namespace, ...wf }) : undefined;
+    const bodyHits = port !== null && store.sealsWrites() ? (keywords: string[]) => askServerForBodyHits(storeId, port, keywords, { namespace, ...wf, ...(opts.serverAskMs ? { askMs: opts.serverAskMs } : {}) }) : undefined;
     const memory = await injectContext(store, { ...(bodyHits ? { bodyHits } : {}),  namespace, limit, cwd: opts.cwd, ...(opts.sessionId ? { sessionId: opts.sessionId } : {}), ...(opts.signals ? { signals: opts.signals } : {}), ...(claudeCode ? { skipTags: CLAUDE_OWN_TAGS } : {}), ...wf });
     let board = "";
     try {
