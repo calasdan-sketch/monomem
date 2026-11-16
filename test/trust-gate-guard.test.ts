@@ -154,8 +154,8 @@ const INTERNAL_OPT_IN: Record<string, number> = {
 const GATED_SQL_RE = /\b(?:FROM|JOIN|UPDATE|INTO)\s+(notes|note_history|quarantine|trust_distrust|trust_attesters|trust_log|_meta|confirmations|note_links|note_flags|note_client_keys|code_anchors)\b/gi;
 /** Files outside the gate that touch a gated table directly, with the tables, each reviewed. */
 const SQL_ALLOWED: Record<string, string[]> = {
-  // backup.ts counts the notes of the COPY it just made and strips local-only _meta keys from that copy.
-  "backup.ts": ["_meta", "notes"],
+  // backup-worker.ts (moved out of backup.ts) counts the notes of the COPY it just made and strips local-only _meta keys from that copy.
+  "backup-worker.ts": ["_meta", "notes"],
   // bench/monomem-adapter.ts clears the copied key-id marker (_meta) of the throwaway drill copy of a database it just made.
   "bench/monomem-adapter.ts": ["_meta"],
   // bench/scale.ts counts sealed bodies (body_enc IS NOT NULL, a COUNT only) in the synthetic temp-folder store it just built.
