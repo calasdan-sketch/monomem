@@ -601,7 +601,24 @@ export function authenticate(req: IncomingMessage, tokens: TokenEntry[]): Scope 
 // MONOMEM_AUDIT_LOG set at runtime and is unit-testable. The entry records
 // only the operation and metadata (op/id/namespace/byte count) -- never the
 // note title or body, so the audit trail can't itself become a leak.
+let auditPathOverride: string | undefined;
+/**
+ * Run fn (synchronous) with auditPath() answering `path`. For a Store opened with its own audit log (`auditLog`): the
+ * benchmark runs several throwaway servers in one process, and MONOMEM_AUDIT_LOG is process-wide.
+ */
+export function withAuditPath<T>(path: string | undefined, fn: () => T): T {
+  if (!path) return fn();
+  const prev = auditPathOverride;
+  auditPathOverride = path;
+  try {
+    return fn();
+  } finally {
+    auditPathOverride = prev;
+  }
+}
+
 export function auditPath(): string {
+  if (auditPathOverride) return auditPathOverride;
   if (process.env.MONOMEM_AUDIT_LOG) return process.env.MONOMEM_AUDIT_LOG;
   // The log lives beside the database in use: a pinned MONOMEM_DB_PATH (a temp or second store) must never append
   // to the default store's audit.log.

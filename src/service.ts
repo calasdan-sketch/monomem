@@ -29,6 +29,10 @@ export interface ServicePlan {
   /** The file install writes (UTF-16 for the Windows task XML, as Task Scheduler writes it). */
   file: { path: string; text: string; utf16?: boolean };
   install: string[][];
+  /** Run before install with failures ignored: stops a server that is already running, so a re-install (after an upgrade) restarts it. */
+  preInstall: string[][];
+  /** Set when this machine's paths cannot be put in the service safely: install refuses with these words. */
+  refuse?: string;
   status: string[][];
   uninstall: string[][];
   /** Said after install, in plain words. */
@@ -63,14 +67,25 @@ export function servicePlan(e: ServiceEnv): ServicePlan {
       if (/[%"]/.test(v)) skipped.push(k);
       else sets.push(`set "${k}=${v}"&& `);
     }
-    const quoted = (a: string): string => (/\s/.test(a) ? `"${a}"` : a);
-    const cmdArgs = `/d /v:off /c ${sets.join("")}"${e.node}" ${args.map(quoted).join(" ")}`;
+    // node and cli.js are always quoted: outside quotes cmd.exe reads & as "next command" and ^ as an escape (a user folder
+    // named R&D broke the task). % expands even inside quotes and a quote cannot be escaped, so such a path is refused.
+    const odd = [e.node, e.cli].find((x) => /[%"]/.test(x));
+    const refuse = odd
+      ? `The Windows task cannot run Monomem from a path that contains % or a quote (${odd}). Install Node.js and Monomem in a folder without them, then run monomem service install again.`
+      : undefined;
+    const cmdArgs = `/d /v:off /c ${sets.join("")}"${e.node}" "${e.cli}" ${args.slice(1).join(" ")}`;
+    // The task belongs to this user: a logon trigger with no user means "any user", which needs an administrator to register.
+    const user = e.env.USERNAME?.trim();
+    const domain = e.env.USERDOMAIN?.trim();
+    const userId = user ? `<UserId>${xml(domain ? `${domain}\\${user}` : user)}</UserId>` : "";
     const text = [
       '<?xml version="1.0" encoding="UTF-16"?>',
       '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">',
       "  <RegistrationInfo><Description>Monomem memory server (monomem service install)</Description></RegistrationInfo>",
-      "  <Triggers><LogonTrigger><Enabled>true</Enabled></LogonTrigger></Triggers>",
-      "  <Principals><Principal id=\"Author\"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>",
+      // RestartOnFailure covers only a task that fails to START; a crash or a closed console window is not a failure to
+      // Task Scheduler. The 5-minute repeat (with IgnoreNew) starts it again then, and does nothing while it runs.
+      `  <Triggers><LogonTrigger><Repetition><Interval>PT5M</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition><Enabled>true</Enabled>${userId}</LogonTrigger></Triggers>`,
+      `  <Principals><Principal id="Author">${userId}<LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>`,
       "  <Settings>",
       "    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>",
       "    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>",
@@ -87,11 +102,14 @@ export function servicePlan(e: ServiceEnv): ServicePlan {
     ].join("\r\n");
     return {
       file: { path, text, utf16: true },
+      ...(refuse ? { refuse } : {}),
+      // /End first: with IgnoreNew, /Run does nothing while the old version still runs.
+      preInstall: [["schtasks", "/End", "/TN", TASK_NAME]],
       install: [["schtasks", "/Create", "/TN", TASK_NAME, "/XML", path, "/F"], ["schtasks", "/Run", "/TN", TASK_NAME]],
       status: [["schtasks", "/Query", "/TN", TASK_NAME, "/V", "/FO", "LIST"]],
       uninstall: [["schtasks", "/End", "/TN", TASK_NAME], ["schtasks", "/Delete", "/TN", TASK_NAME, "/F"]],
       notes: [
-        "It starts when you sign in to Windows, in a console window. Minimise that window: closing it stops Monomem (Task Scheduler starts it again within a minute).",
+        "It starts when you sign in to Windows, in a console window. Minimise that window: closing it stops Monomem (Task Scheduler starts it again within 5 minutes).",
         `It uses the data folder ${e.dataDir} and the MONOMEM_* settings set in this terminal now; a key never goes into the task.`,
         ...skipped.map((k) => `${k} contains % or a quote, which the task cannot carry: save it for your user instead (setx ${k} "<value>").`),
       ],
@@ -118,6 +136,8 @@ export function servicePlan(e: ServiceEnv): ServicePlan {
     const domain = `gui/${e.uid ?? 501}`;
     return {
       file: { path, text },
+      // bootstrap fails on an agent that is already loaded: take the old one out first (fails harmlessly when absent).
+      preInstall: [["launchctl", "bootout", `${domain}/${LAUNCHD_LABEL}`]],
       install: [["launchctl", "bootstrap", domain, path]],
       status: [["launchctl", "print", `${domain}/${LAUNCHD_LABEL}`]],
       uninstall: [["launchctl", "bootout", `${domain}/${LAUNCHD_LABEL}`]],
@@ -144,7 +164,9 @@ export function servicePlan(e: ServiceEnv): ServicePlan {
   ].join("\n");
   return {
     file: { path, text },
-    install: [["systemctl", "--user", "daemon-reload"], ["systemctl", "--user", "enable", "--now", SYSTEMD_UNIT]],
+    preInstall: [],
+    // restart, not enable --now: it starts a stopped unit and restarts a running one (the new version after an upgrade).
+    install: [["systemctl", "--user", "daemon-reload"], ["systemctl", "--user", "enable", SYSTEMD_UNIT], ["systemctl", "--user", "restart", SYSTEMD_UNIT]],
     status: [["systemctl", "--user", "status", SYSTEMD_UNIT, "--no-pager"]],
     uninstall: [["systemctl", "--user", "disable", "--now", SYSTEMD_UNIT]],
     notes: [
@@ -174,10 +196,15 @@ export function serviceCmd(action: string | undefined, print: boolean, e: Servic
     return 1;
   }
   const plan = servicePlan(e);
+  if (action === "install" && plan.refuse) {
+    console.error(plan.refuse);
+    return 1;
+  }
   if (print) {
     if (action === "install") console.log(`Would write ${plan.file.path}:\n\n${plan.file.text}`);
     if (action === "uninstall") console.log(`Would remove ${plan.file.path}`);
-    console.log(`Would run:\n${plan[action].map((c) => "  " + shown(c)).join("\n")}`);
+    const cmds = action === "install" ? [...plan.preInstall, ...plan.install] : plan[action];
+    console.log(`Would run:\n${cmds.map((c) => "  " + shown(c)).join("\n")}`);
     return 0;
   }
   if (action === "status") {
@@ -206,6 +233,7 @@ export function serviceCmd(action: string | undefined, print: boolean, e: Servic
   if (action === "install") {
     mkdirSync(dirname(plan.file.path), { recursive: true });
     writeFileSync(plan.file.path, plan.file.utf16 ? Buffer.from(String.fromCharCode(0xfeff) + plan.file.text, "utf16le") : plan.file.text);
+    for (const c of plan.preInstall) run(c, true); // nothing running yet is fine
     if (!plan.install.every((c) => run(c))) {
       console.error(`The service was not installed. The file is at ${plan.file.path}; the commands above say what went wrong.`);
       return 1;

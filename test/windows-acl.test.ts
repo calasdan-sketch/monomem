@@ -9,6 +9,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { privateDir, lockdownArgs, wideAccessGroups } from "../src/config.js";
+import { realEnv, saveHistory } from "../src/setup.js";
 
 const ENV = { USERDOMAIN: "DESK", USERNAME: "dan" } as NodeJS.ProcessEnv;
 
@@ -79,6 +80,19 @@ describe("R1-11 data folder ACL", () => {
       assert.ok(!/BUILTIN\\Users/i.test(out), out);
       assert.ok(!/Everyone/i.test(out), out);
       assert.ok(out.toLowerCase().includes((process.env.USERNAME ?? "?").toLowerCase()), out);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test("win32 only: setup's first write (its history file) creates the data folder locked, not inherited (final3 EASE-B1)", { skip: process.platform !== "win32" }, () => {
+    const base = mkdtempSync(join(tmpdir(), "mm-acl-setup-"));
+    try {
+      const d = join(base, "data");
+      const e = { ...realEnv("0.0.0", "cli.js"), home: base, env: { ...process.env, MONOMEM_HOME: d } };
+      saveHistory(e, []);
+      const out = execFileSync("icacls", [d], { encoding: "utf8" });
+      assert.deepEqual(wideAccessGroups(out), [], out);
     } finally {
       rmSync(base, { recursive: true, force: true });
     }

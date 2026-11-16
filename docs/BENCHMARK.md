@@ -395,7 +395,7 @@ indexes "" and never aborts the write); other processes' commits are noticed thr
 never do; above 100,000 notes it is not built. Measured with `monomem bench --scale 10k` (synthetic made-up words, a worse case
 for index size than real text): build 0.81 s and 0.58 s in two runs, process RSS +31.5 MB and +29.5 MB; session start (hook, no index) 15.3 and 12.4 ms p50 encrypted (10.2 and 10.7 plain),
 gate PASS; keyword search on the server store 10.7 and 7.7 ms p50 encrypted vs 9.0 and 8.1 plain; a write 7.8 and 5.9 ms p50 encrypted vs 7.2 and 7.6 plain (one extra decrypt
-and FTS insert). The design's scratch prototype measured 7.4 s and about 240 MB at 100,000 notes; not re-measured here. Security:
+and FTS insert). At 100,000 notes (`bench --scale 100k`, 15 Nov 2026, two runs, batched build): 4.90 s and 4.02 s, process RSS +151.7 MB and +154.2 MB (+509 MB before the build ran in id batches). Security:
 nothing new on disk, but the words are in RAM for the life of the process and can reach swap, hibernation and crash-dump files
 (docs/encryption-retention.md).
 

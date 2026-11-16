@@ -72,7 +72,7 @@ Since 1.5.0, body search still works on an encrypted store, from a second index 
   most 0.3 s; the hook sends its key only after the server proves it holds the same key and store, and takes back only
   note ids). With no server running, body words do not reach session start: give notes titles and tags that say what
   they are about.
-- **Cost.** About 0.6-0.8 s to build per 10,000 notes, and about 30 MB of memory per 10,000 notes, in **each** process
+- **Cost.** About 0.5 s to build and about 22 MB of memory at 10,000 notes, 4-5 s and about 155 MB at the 100,000 cap, in **each** process
   that has it (five apps each running their own stdio server hold five copies). Above 100,000 notes it is not built:
   search there covers titles and tags only, and the CLI search says so. Any search that runs on titles and tags only
   while bodies are sealed (over the cap, a search inside a write before the index is built, or a failed build) says so in

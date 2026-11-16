@@ -151,7 +151,7 @@ describe("9: leftovers", () => {
     const r = run(dir, ["service", "status"], { APPDATA: join(dir, "a"), LOCALAPPDATA: join(dir, "l"), XDG_CONFIG_HOME: join(dir, "c") });
     if (r.status === 0) return; // a real Monomem service is installed on this machine: nothing to check
     assert.equal(r.status, 1);
-    assert.match(r.stdout, /Not installed\. Install it: monomem service install/, r.stdout + r.stderr);
+    assert.match(r.stdout, /Not installed( \(no [^)]+\))?\. Install it: monomem service install/, r.stdout + r.stderr);
     assert.doesNotMatch(r.stdout + r.stderr, /said:|cannot find the file/);
   });
 

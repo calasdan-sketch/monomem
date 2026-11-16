@@ -15,7 +15,7 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, statSync, statfsSync, readdirSync, renameSync, linkSync, existsSync, unlinkSync, copyFileSync, readFileSync } from "node:fs";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { dirname, basename, join, resolve } from "node:path";
-import { checkSizes, checkNames, audit, auditHead, auditPath, beginKeyRotation, ADMIN_SCOPE_NEEDED } from "./security.js";
+import { checkSizes, checkNames, audit, auditHead, auditPath, beginKeyRotation, withAuditPath, ADMIN_SCOPE_NEEDED } from "./security.js";
 import { chmodQuiet } from "./config.js";
 import { SECRET_ASSIGN_LABEL } from "./security.js";
 import { lintContent, lintPolicy, describeFindings, type LintFinding, type LintAction, type LintCategory } from "./lint.js";
@@ -1628,6 +1628,7 @@ export class Store {
   static readonly CACHE_SIZE_KIB = -65536;
   /** See the constructor: refuse instead of migrating. */
   private readonly noMigrate: boolean;
+  private readonly auditLog: string | undefined;
   /** C-06: the in-memory index of decrypted bodies (store/body-index.ts). */
   private readonly bodyIndex: BodyIndex;
 
@@ -1636,8 +1637,9 @@ export class Store {
    * is refused with a SchemaMismatchError instead (the hook then spools the event). `opts.busyTimeoutMs` shortens the lock
    * wait for callers that would rather give up fast than block an agent.
    */
-  constructor(dbPath: string, opts: { noMigrate?: boolean; busyTimeoutMs?: number; bodyIndex?: "lazy" | "off"; /** Test hook: the body index's note cap. */ bodyIndexMaxNotes?: number } = {}) {
+  constructor(dbPath: string, opts: { noMigrate?: boolean; busyTimeoutMs?: number; bodyIndex?: "lazy" | "off"; /** Test hook: the body index's note cap. */ bodyIndexMaxNotes?: number; /** This store's own audit log, whatever MONOMEM_AUDIT_LOG says (the benchmark's several servers in one process). */ auditLog?: string } = {}) {
     this.dbPath = dbPath;
+    this.auditLog = opts.auditLog;
     // C-06: hooks pass "off" (one prompt's life is too short to build it); MONOMEM_BODY_INDEX=off turns it off everywhere.
     this.bodyIndex = new BodyIndex(this, opts.bodyIndex !== "off" && (process.env.MONOMEM_BODY_INDEX ?? "").trim().toLowerCase() !== "off", opts.bodyIndexMaxNotes);
     this.noMigrate = opts.noMigrate === true;
@@ -7848,7 +7850,7 @@ export class Store {
       throw e;
     } finally {
       try {
-        this.mirrorKeyToLog(); // a log elsewhere keeps signing with the key beside it: hand that copy over in the same window
+        withAuditPath(this.auditLog, () => this.mirrorKeyToLog()); // a log elsewhere keeps signing with the key beside it: hand that copy over in the same window
       } catch {
         /* the copy beside the log is refreshed again at the next open */
       }
@@ -8305,13 +8307,13 @@ export class Store {
     // Inside a transaction the write may still be rolled back: the line is written only once it commits (commitTx).
     if (this.db.isTransaction) return void this.pendingAudit.push([e, receipt]);
     this.flushAudit();
-    receiptOps.noteAudited(this, e.op, audit(e), receipt);
+    receiptOps.noteAudited(this, e.op, withAuditPath(this.auditLog, () => audit(e)), receipt);
   }
 
   private flushAudit(): void {
     const q = this.pendingAudit;
     this.pendingAudit = [];
-    for (const [e, r] of q) receiptOps.noteAudited(this, e.op, audit(e), r);
+    for (const [e, r] of q) receiptOps.noteAudited(this, e.op, withAuditPath(this.auditLog, () => audit(e)), r);
   }
 
   /**
@@ -8324,7 +8326,7 @@ export class Store {
     this.auditKeyChecked = true;
     try {
       this.signing();
-      this.mirrorKeyToLog(false);
+      withAuditPath(this.auditLog, () => this.mirrorKeyToLog(false));
     } catch (e) {
       console.error(`[monomem] audit lines stay unsigned: could not create the signing key (${(e as Error).message})`);
     }

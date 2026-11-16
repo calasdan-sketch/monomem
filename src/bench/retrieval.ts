@@ -4,6 +4,7 @@
 import { BENCH_HOME } from "./retrieval-env.js"; // first: isolate MONOMEM_HOME before config.js loads
 import { createHash } from "node:crypto";
 import { chatNotes, sealedChatNote } from "../chat-import.js";
+import { replyContextIsClean } from "../claude-import.js";
 import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
@@ -114,7 +115,7 @@ export function locomoHaystacks(data: unknown, g: Granularity): Haystack[] {
       // By turn: the notes `import --from claude-code-chats` stores for a conversation (each with what it replied to).
       else {
         const turns = lines.map((l, j) => ({ id: l.dia || `#${j}`, speaker: l.speaker, text: l.said }));
-        for (const n of chatNotes(turns)) if (!n.id.startsWith("#")) docs.push({ unit: n.id, title: n.title, body: n.body, date });
+        for (const n of chatNotes(turns, replyContextIsClean)) if (!n.id.startsWith("#")) docs.push({ unit: n.id, title: n.title, body: n.body, date });
       }
     }
     const sid = str(sample.sample_id) || `conv${out.length}`;

@@ -22,7 +22,7 @@ import { Store, StaleWriteError, historyLimits, type NoteRecord } from "./store.
 import { SupersedeError, callerKey, supersedeTtlSeconds, type Caller } from "./supersede.js";
 import { safe } from "./supersede-text.js";
 import { maybeEmbed } from "./search-service.js";
-import { nameIs, stdioFamily, suggestWriter } from "./trust.js";
+import { nameIs, nearWriter, stdioFamily, suggestWriter } from "./trust.js";
 
 const TOKEN_DOMAIN = "rollback-v1";
 /** How many lines of each list the plain-text preview prints (the JSON always has all of them). */
@@ -207,7 +207,8 @@ export function rollbackPreview(
   const since = parseSince(req.since);
   const plan = planRollback(store, writer, since, req.include_conflicts === true, namespaces);
   // Counted within the caller's namespaces only, so the hint reveals nothing a preview of that name would not.
-  const hint = plan.actions.length === 0 && plan.skipped.length === 0 ? suggestWriter(writer, (w) => store.rollbackCandidates(w, false, since, namespaces).length) : undefined;
+  const count = (w: string): number => store.rollbackCandidates(w, false, since, namespaces).length;
+  const hint = plan.actions.length === 0 && plan.skipped.length === 0 ? suggestWriter(writer, count) ?? nearWriter(writer, store.writerNames(), count) : undefined;
   const ttl = supersedeTtlSeconds();
   const expMs = Date.now() + ttl * 1000;
   const token = store.mintToken(TOKEN_DOMAIN, {

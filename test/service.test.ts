@@ -3,7 +3,7 @@
 import "./setup-env.js";
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -27,7 +27,7 @@ describe("monomem service (U-16)", () => {
     const p = servicePlan(base("win32"));
     const cmd = /<Command>([^<]+)<\/Command>/.exec(p.file.text)![1];
     assert.match(cmd, /^[A-Z]:\\.*\\cmd\.exe$/i, "cmd.exe sets the carried settings, then runs node.exe");
-    assert.match(p.file.text, /&amp;&amp; "C:\\Program Files\\nodejs\\node\.exe" C:\\Users\\u\\AppData\\Roaming\\npm\\node_modules\\monomem\\dist\\src\\cli\.js start --log<\/Arguments>/);
+    assert.match(p.file.text, /&amp;&amp; "C:\\Program Files\\nodejs\\node\.exe" "C:\\Users\\u\\AppData\\Roaming\\npm\\node_modules\\monomem\\dist\\src\\cli\.js" start --log<\/Arguments>/);
     assert.doesNotMatch(p.file.text, /\.ps1|\.cmd|monomem\.exe/);
     assert.match(p.file.text, /<LogonTrigger>/);
     assert.match(p.file.text, /<RestartOnFailure>/);
@@ -102,7 +102,7 @@ describe("monomem service (U-16)", () => {
     assert.match(p.file.text, /^Restart=always$/m);
     assert.match(p.file.text, /^WantedBy=default\.target$/m);
     assert.doesNotMatch(p.file.text, /ProtectHome/);
-    assert.deepEqual(p.install.at(-1), ["systemctl", "--user", "enable", "--now", "monomem.service"]);
+    assert.deepEqual(p.install.slice(1), [["systemctl", "--user", "enable", "monomem.service"], ["systemctl", "--user", "restart", "monomem.service"]]);
   });
 
   test("`monomem service install --print` shows the file and commands and writes nothing; setup never mentions installing one", () => {
@@ -126,5 +126,65 @@ describe("monomem service (U-16)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("final3 INFRA-S1..S4: the Windows task and re-running install", () => {
+  test("S1: node and cli.js are always quoted, so & and ^ in a path without a space stay literal; % or a quote in them is refused", () => {
+    const p = servicePlan(base("win32", { cli: "C:\\Users\\R&D\\npm\\cli.js" }));
+    assert.ok(p.file.text.includes('"C:\\Users\\R&amp;D\\npm\\cli.js" start --log</Arguments>'), p.file.text);
+    assert.equal(p.refuse, undefined);
+    for (const bad of [{ cli: "C:\\p%PATH%q\\cli.js" }, { node: 'C:\\a"b\\node.exe' }]) {
+      assert.match(servicePlan(base("win32", bad)).refuse ?? "", /% or a quote/);
+    }
+  });
+
+  test("S1 (win32 only): the generated line, run through cmd.exe as Task Scheduler does, reaches node with the right path for R&D and a^b", { skip: process.platform !== "win32" }, () => {
+    const root = mkdtempSync(join(tmpdir(), "mm-svc-cmd-"));
+    try {
+      for (const name of ["R&D", "a^b"]) {
+        const dir = join(root, name);
+        mkdirSync(dir);
+        const out = join(root, `${name.replace(/\W/g, "_")}.json`);
+        writeFileSync(join(dir, "cli.js"), `require("fs").writeFileSync(${JSON.stringify(out)}, JSON.stringify({ argv: process.argv.slice(1), home: process.env.MONOMEM_HOME }));`);
+        const p = servicePlan(base("win32", { node: process.execPath, cli: join(dir, "cli.js"), dataDir: join(root, "data"), env: { ComSpec: process.env.ComSpec } }));
+        const xmlText = (s: string): string => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+        const cmd = xmlText(/<Command>([^<]+)<\/Command>/.exec(p.file.text)![1]);
+        const args = xmlText(/<Arguments>([^<]+)<\/Arguments>/.exec(p.file.text)![1]);
+        const r = spawnSync(cmd, [args], { windowsVerbatimArguments: true, encoding: "utf8", windowsHide: true });
+        assert.ok(existsSync(out), `${name}: ${r.stdout}${r.stderr}`);
+        const got = JSON.parse(readFileSync(out, "utf8")) as { argv: string[]; home: string };
+        assert.deepEqual(got.argv, [join(dir, "cli.js"), "start", "--log"]);
+        assert.equal(got.home, join(root, "data"));
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("S2: the logon trigger and the principal name this user, so a non-admin can register it and it starts only at your sign-in", () => {
+    const p = servicePlan(base("win32", { env: { USERDOMAIN: "DESK", USERNAME: "R&D" } }));
+    assert.match(p.file.text, /<LogonTrigger>[\s\S]*<UserId>DESK\\R&amp;D<\/UserId>[\s\S]*<\/LogonTrigger>/);
+    assert.match(p.file.text, /<Principal id="Author"><UserId>DESK\\R&amp;D<\/UserId>/);
+    assert.doesNotMatch(servicePlan(base("win32")).file.text, /<UserId>/, "no user name known: no guessing");
+  });
+
+  test("S3: a 5-minute repeat starts it again after a crash or a closed window; the note says 5 minutes, not a minute", () => {
+    const p = servicePlan(base("win32"));
+    assert.match(p.file.text, /<LogonTrigger><Repetition><Interval>PT5M<\/Interval><StopAtDurationEnd>false<\/StopAtDurationEnd><\/Repetition>/);
+    assert.match(p.file.text, /<MultipleInstancesPolicy>IgnoreNew<\/MultipleInstancesPolicy>/);
+    assert.ok(p.notes.some((n) => /within 5 minutes/.test(n)), p.notes.join("\n"));
+    assert.ok(!p.notes.some((n) => /within a minute/.test(n)));
+  });
+
+  test("S4: running install again (after an upgrade) restarts a running server on every OS", () => {
+    const w = servicePlan(base("win32"));
+    assert.deepEqual(w.preInstall, [["schtasks", "/End", "/TN", "Monomem"]]);
+    assert.deepEqual(w.install.at(-1), ["schtasks", "/Run", "/TN", "Monomem"]);
+    const m = servicePlan(base("darwin"));
+    assert.deepEqual(m.preInstall, [["launchctl", "bootout", "gui/501/io.monomem.server"]]);
+    assert.deepEqual(m.install, [["launchctl", "bootstrap", "gui/501", m.file.path]]);
+    const l = servicePlan(base("linux"));
+    assert.deepEqual(l.install.at(-1), ["systemctl", "--user", "restart", "monomem.service"]);
   });
 });

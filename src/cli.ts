@@ -428,19 +428,6 @@ function versionBelow(a: string, b: string): boolean {
   return false;
 }
 
-/** The stamped writer closest to a mistyped name ("curser" -> stdio:cursor) that has notes in `ns`, for a "Did you mean". */
-function nearWriter(store: InstanceType<typeof import("./store.js").Store>, ns: string, writer: string): { writer: string; notes: number } | undefined {
-  const known = store.writerNames();
-  // A local app is known by its bare name too: "curser" is near "cursor", which is stamped stdio:cursor.
-  const byName = new Map<string, string>(known.map((w) => [w, w]));
-  for (const w of known) if (w.startsWith("stdio:") && !byName.has(w.slice(6))) byName.set(w.slice(6), w);
-  const guess = didYouMean(writer, [...byName.keys()]);
-  const stamped = guess === null ? undefined : byName.get(guess);
-  if (!stamped || stamped === writer) return undefined;
-  const notes = store.distrustMatchCount(ns, stamped);
-  return notes > 0 ? { writer: stamped, notes } : undefined;
-}
-
 /** No data folder, no database and no 1.0.x data to move in: say "not set up" (exit 1) instead of creating a fresh store. */
 async function notSetUp(): Promise<boolean> {
   const { DATA_DIR, DB_PATH, LEGACY_DATA_DIR } = await import("./config.js");
@@ -923,9 +910,15 @@ async function doctor(): Promise<void> {
 
   // An app entry or hook that points at a removed install, or launches another version with npx.
   try {
-    const { appEntryProblems, realEnv } = await import("./setup.js");
+    const { appEntryProblems, connectedApps, realEnv } = await import("./setup.js");
     const { PACKAGE_VERSION } = await import("./config.js");
-    for (const p of appEntryProblems(realEnv(PACKAGE_VERSION, fileURLToPath(import.meta.url)))) warn(p, "run monomem setup");
+    const env = realEnv(PACKAGE_VERSION, fileURLToPath(import.meta.url));
+    for (const p of appEntryProblems(env)) warn(p, "run monomem setup");
+    // The commonest real failure, "my assistant does not see Monomem", must show up here (final3 EASE-SF4).
+    const apps = connectedApps(env);
+    if (apps.connected.length) console.log(`  [info] connected apps: ${apps.connected.join(", ")}`);
+    else if (apps.found.length) warn(`no app is connected to Monomem (found: ${apps.found.join(", ")})`, "monomem setup (or monomem connect <app>)");
+    else console.log("  [info] connected apps: none found on this machine (monomem connect <app> when you install one)");
   } catch {
     /* configs could not be inspected: not a problem with Monomem */
   }
@@ -2721,8 +2714,9 @@ async function trustCmd(): Promise<void> {
           // (a saved rule that hides nothing would leave the person believing the app is distrusted).
           // A near miss ("curser" for stdio:cursor) is refused the same way, like rollback's hint; --force saves it as typed.
           if (store.distrustMatchCount(ns!, writer) === 0 && !flags.force) {
-            const { suggestWriter } = await import("./trust.js");
-            const hint = suggestWriter(writer.trim(), (w) => store.distrustMatchCount(ns!, w)) ?? nearWriter(store, ns!, writer.trim());
+            const { suggestWriter, nearWriter } = await import("./trust.js");
+            const count = (w: string): number => store.distrustMatchCount(ns!, w);
+            const hint = suggestWriter(writer.trim(), count) ?? nearWriter(writer.trim(), store.writerNames(), count);
             if (hint) {
               console.error(
                 `No notes are written by "${printable(writer, 60)}", so nothing was saved. Did you mean "${hint.writer}" (${hint.notes} note${hint.notes === 1 ? "" : "s"})?\n` +
