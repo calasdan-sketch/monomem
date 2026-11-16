@@ -99,10 +99,11 @@ async function runMode(notes: number, encrypted: boolean, o: { iterations: numbe
   mkdirSync(dir, { recursive: true });
   if (encrypted) ensureKey(dir); // the key file beside the DB is what turns encryption on
   const db = join(dir, "state.db");
+  const auditLog = join(dir, "audit.log"); // beside its own key: plain and encrypted runs must not share one log (final3 PERF-L3)
   try {
     const r = rng(42);
     const t0 = performance.now();
-    let store = new Store(db);
+    let store = new Store(db, { auditLog });
     try {
       // ponytail: bulk build skips similarity edges (as the retrieval bench does) so 10k builds in seconds; the timed writes
       // below keep edges on, so write cost is the real one.
@@ -123,14 +124,14 @@ async function runMode(notes: number, encrypted: boolean, o: { iterations: numbe
     const ns = NAMESPACES[0];
     const signals = { diffFiles: [] }; // no git: same work in every run
     const open = await timed(o.iterations, async () => {
-      const s = new Store(db, { bodyIndex: "off" }); // as the hook opens it
+      const s = new Store(db, { bodyIndex: "off", auditLog }); // as the hook opens it
       try {
         await injectContext(s, { namespace: ns, signals });
       } finally {
         s.close();
       }
     });
-    const hook = new Store(db, { bodyIndex: "off" });
+    const hook = new Store(db, { bodyIndex: "off", auditLog });
     let session: number[];
     try {
       await injectContext(hook, { namespace: ns, signals }); // warm-up
@@ -138,7 +139,7 @@ async function runMode(notes: number, encrypted: boolean, o: { iterations: numbe
     } finally {
       hook.close();
     }
-    store = new Store(db); // a server's store: builds the body index (C-06) when encrypted
+    store = new Store(db, { auditLog }); // a server's store: builds the body index (C-06) when encrypted
     try {
       // ponytail: RSS growth around the build is approximate (V8 may grow or shrink alongside); good to tens of MB.
       const rss0 = process.memoryUsage().rss;

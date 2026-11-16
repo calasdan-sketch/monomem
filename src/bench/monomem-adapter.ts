@@ -140,7 +140,9 @@ export class MonomemAdapter implements MemoryAdapter {
         const seedKey = join(dirname(this.seedDb), ".key"); // an encrypted store's key travels with its copy
         if (existsSync(seedKey)) copyFileSync(seedKey, join(folder, ".key"));
       }
-      const store = new Store(join(folder, "state.db"));
+      // Its own audit log beside its own key: one shared log made every server after the first warn that the key beside
+      // the log "belongs to another store" (final3 EASE-SF1), on stderr of demo, drill and health.
+      const store = new Store(join(folder, "state.db"), { auditLog: join(folder, "audit.log") });
       const http = createApiServer(store, tokens, this.serverOpts());
       await new Promise<void>((resolve, reject) => {
         http.once("error", reject);
