@@ -4,16 +4,16 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.5.0] - Unreleased
+## [1.5.0] - 2026-11-16
 
-This release includes 1.4.0 below, which was never published on its own: the last published release is 1.3.5, and
+This release includes 1.4.0 below, which was never published on its own: the release before it is 1.3.5, and
 upgrading from 1.3.x takes one step (docs/upgrading.md).
 
 ### Security
 
 - **App keys in `tokens.json` are stored as one-way hashes, and existing ones are hashed automatically on the first start.**
   The rewrite is atomic, no plain-text `tokens.json.bak` is left, and running it again changes nothing. Your apps keep working
-  with the keys they already hold. **Going back to 1.3.x (the last published release) cannot read hashed keys:** run `monomem connect <app>` again
+  with the keys they already hold. **Going back to 1.3.x (the previous release) cannot read hashed keys:** run `monomem connect <app>` again
   for each app. The main key (`.token`) stays in plain text. `monomem token harden` does it by hand; `monomem doctor` warns
   about any key still in plain text.
 - **Honest key disclosure.** SECURITY.md and docs/trust.md now list every place a key sits (`.token`, `tokens.json`, each

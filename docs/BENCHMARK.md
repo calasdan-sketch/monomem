@@ -259,7 +259,7 @@ monomem bench --locomo      [--data file] [--limit N] [--mode keyword|hybrid] [-
   `nDCG@10` with binary relevance. `MRR` over the top 50. Search latency p50/p95 per query; indexing time per
   haystack (single process, SQLite in a temp folder).
 
-### Results, 2026-11-14 (1.5.0 work; measured, not yet published)
+### Results, 2026-11-14 (measured for 1.5.0)
 
 Measured on 2026-11-14 on the development PC: Windows 11 Home, AMD Ryzen 7 9800X3D (8 cores / 16 threads), 31 GB RAM, NVMe,
 Node v24.18.0, feat/1.5.0 code. Other build agents were running on the same PC at the same time, so the search times here are
