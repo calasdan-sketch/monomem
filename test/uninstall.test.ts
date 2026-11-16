@@ -153,6 +153,27 @@ describe("uninstall", () => {
     assert.ok(!existsSync(s.om));
   });
 
+  test("final4 infra L3: on Windows --purge also finds the task by its name when monomem-task.xml is gone", async () => {
+    const s = sandbox();
+    const e: SetupEnv = { ...s.e, platform: "win32" };
+    mkdirSync(s.om, { recursive: true });
+    writeFileSync(join(s.om, "capture-spool.jsonl"), "{}\n");
+    let asked = 0;
+    let calls = 0;
+    lines.length = 0;
+    assert.equal(await runUninstall(e, io(), opts({ purge: true, dryRun: true, taskExists: () => (asked++, true) })), 0);
+    assert.ok(asked > 0, "schtasks /Query was asked (stub)");
+    assert.ok(lines.some((l) => l.includes("background service") && l.includes('scheduled task "Monomem"')), lines.join("\n"));
+    assert.equal(await runUninstall(e, io(), opts({ purge: true, noBackup: true, taskExists: () => true, removeService: () => (calls++, 0) })), 0);
+    assert.equal(calls, 1, "the task is removed before the data folder");
+    assert.ok(!existsSync(s.om));
+    // No task registered and no file: nothing to remove, and not on other OSes either.
+    lines.length = 0;
+    assert.equal(await runUninstall(e, io(), opts({ purge: true, dryRun: true, taskExists: () => false })), 0);
+    assert.ok(!lines.some((l) => l.includes("background service")), lines.join("\n"));
+    assert.equal(await runUninstall(s.e, io(), opts({ purge: true, dryRun: true, taskExists: () => assert.fail("only asked on Windows") })), 0);
+  });
+
   test("without --purge the service is listed with the command, not removed", async () => {
     const s = sandbox();
     const unit = join(s.home, ".config", "systemd", "user", "monomem.service");

@@ -10,7 +10,8 @@ import { cpSync, existsSync, readdirSync, readFileSync, rmSync, statSync, unlink
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
-import { servicePlan } from "./service.js";
+import { execFileSync } from "node:child_process";
+import { servicePlan, TASK_NAME } from "./service.js";
 import { dataHome, detectClients, hookHosts, readHistory, saveHistory, stamp, undoSession, type HistorySession, type SetupEnv, type SetupIO } from "./setup.js";
 
 export interface UninstallOptions {
@@ -20,6 +21,8 @@ export interface UninstallOptions {
   noBackup: boolean;
   /** Runs `monomem service uninstall` (tests pass a stub; nothing real is ever called from a test). Returns its exit code. */
   removeService?: () => number;
+  /** Windows: is a task by Monomem's name registered (`schtasks /Query /TN Monomem`)? Tests pass a stub. */
+  taskExists?: () => boolean;
 }
 
 type Change = HistorySession["changes"][number];
@@ -137,9 +140,21 @@ async function finalBackup(dir: string, out: string): Promise<void> {
  * keeps in the data folder). A service left behind would start `monomem start` again at the next sign-in and make a new
  * data folder and token, so --purge removes it first.
  */
-function installedService(e: SetupEnv, dir: string): string {
+function installedService(e: SetupEnv, dir: string, taskExists: () => boolean): string {
   const path = servicePlan({ platform: e.platform, node: e.execPath, cli: e.cliPath, home: e.home, dataDir: dir, env: e.env }).file.path;
-  return existsSync(path) ? path : "";
+  if (existsSync(path)) return path;
+  // The task XML deleted by hand: the task itself would still start Monomem (and recreate the data folder) every 5 minutes.
+  return e.platform === "win32" && taskExists() ? `the scheduled task "${TASK_NAME}"` : "";
+}
+
+/** `schtasks /Query /TN Monomem` exits 0 when the task is registered. Read only. */
+function defaultTaskExists(): boolean {
+  try {
+    execFileSync("schtasks", ["/Query", "/TN", TASK_NAME], { stdio: "ignore", windowsHide: true });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function defaultRemoveService(e: SetupEnv, dir: string): Promise<number> {
@@ -166,7 +181,7 @@ export async function runUninstall(e: SetupEnv, io: SetupIO, opts: UninstallOpti
     return 1;
   }
   const others = opts.purge && existsSync(dir) ? foreignEntries(dir) : [];
-  const service = installedService(e, dir);
+  const service = installedService(e, dir, opts.taskExists ?? defaultTaskExists);
   if (service && opts.purge) io.out(`  ${n++}. Stop and remove the background service (monomem service install): ${service}`);
   else if (service) io.out(`  (left alone) a background service starts Monomem when you sign in (${service}); remove it: monomem service uninstall`);
   if (opts.purge) {
