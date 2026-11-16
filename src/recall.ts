@@ -260,7 +260,14 @@ interface RecallData {
   memory: string;
   /** Open-task + latest-handoff text ("" when there are none). */
   board: string;
+  /** Monomem's own line about why there is no memory (never note content): printed outside the notes block. */
+  notice?: string;
 }
+
+/** r2-engineering #5: what session start says when the database was moved to a newer schema by a newer Monomem. */
+export const newerDbNotice = (found: number, mine: number): string =>
+  `Monomem: no memory loaded. The memory database was upgraded by a newer Monomem (database v${found}, this hook reads v${mine}). ` +
+  "Tell the user to run `monomem setup` (it points the hooks at the new version), then start a new session.";
 
 async function fetchRecentNotes(opts: RecallOptions): Promise<RecallData> {
   const { DB_PATH } = await import("./config.js");
@@ -295,6 +302,10 @@ async function fetchRecentNotes(opts: RecallOptions): Promise<RecallData> {
         "not upgrading it from the hook. Run any `monomem` command (for example `monomem doctor`) to upgrade it."
     );
     return { memory: "", board: "" };
+  }
+  if (onDisk !== null && onDisk > SCHEMA_VERSION) {
+    console.error(`monomem recall: the database is at schema v${onDisk}, newer than this release (v${SCHEMA_VERSION}); run \`monomem setup\`.`);
+    return { memory: "", board: "", notice: newerDbNotice(onDisk, SCHEMA_VERSION) };
   }
   // MONOMEM_RECALL_MAX_SENSITIVITY caps what this hook may put into the session: the same ceiling a token can carry, for
   // an agent whose context leaves the machine. A value that is not a label injects nothing (fail closed), never everything.
@@ -388,6 +399,7 @@ export async function runRecall(opts: RecallOptions = {}): Promise<string> {
     if (summary.length > RECALL_MAX_CHARS) summary = summary.slice(0, RECALL_MAX_CHARS - 1) + "…";
     // The warning also goes at the END, after the notes: an instruction hidden inside a note is read last, so the last
     // thing the agent sees is the reminder that all of it is data (added after the cut so it is never trimmed away).
+    if (!summary && data.notice) return buildHookOutput(data.notice);
     const nonce = newBlockNonce();
     return buildHookOutput(summary ? untrustedBanner(nonce) + summary + "\n\n" + untrustedReminder(nonce) : "");
   } catch (e) {

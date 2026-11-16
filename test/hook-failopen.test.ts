@@ -98,6 +98,11 @@ describe("hook fail-open", () => {
       const s = hook(home, "session-start", payload());
       assert.equal(s.status, 0);
       validOut(s.stdout);
+      // r2-engineering #5: never a silent empty context. Session start says, outside the notes block, what to run.
+      const ctx = JSON.parse(s.stdout).hookSpecificOutput.additionalContext as string;
+      assert.match(ctx, new RegExp(`newer Monomem \\(database v${SCHEMA_VERSION + 1}, this hook reads v${SCHEMA_VERSION}\\)`));
+      assert.match(ctx, /run `monomem setup`/);
+      assert.doesNotMatch(ctx, /SECURITY NOTICE/);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

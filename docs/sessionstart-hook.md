@@ -81,6 +81,9 @@ Why shown, in {}: files = linked to files you changed, kw = matches your branch,
   server was started in. Notes from keys, the REST API, the CLI at a terminal
   and older notes have no folder and are neither boosted nor pushed down. An
   app started outside the project that offers no roots records the wrong folder.
+- **After an upgrade:** if a newer Monomem has already upgraded the database,
+  an older hook cannot read it. Session start then says so in one line ("no
+  memory loaded ... run `monomem setup`") instead of an empty context.
 - The "Showing X of N memories" line counts the store's notes up to 2,000;
   above that it says "2,000+" (for example "Showing 12 of 2,000+
   memories"), so a very large store does not slow session start down.
