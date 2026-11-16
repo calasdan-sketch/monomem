@@ -3,7 +3,7 @@
 import "./setup-env.js";
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SELF_CLI, assetsRoot, modeFor, quoteShellArg, selfCommand, selfFacts, selfShellLine, selfVersion, serviceLaunch, type SelfFacts } from "../src/self.js";
 import { buildCaptureCommand, buildHookCommand, buildServerEntry, type SetupEnv } from "../src/setup.js";
@@ -37,10 +37,11 @@ describe("this process (npm layout: dist/src/cli.js run by node)", () => {
 
 describe("modeFor", () => {
   test("a node inside the package folder is the bundled runtime; any other node is an npm install; node:sea wins", () => {
-    assert.equal(modeFor(false, "C:\\Program Files\\nodejs\\node.exe", "C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\monomem"), "npm");
-    assert.equal(modeFor(false, "C:\\Monomem\\runtime\\node.exe", "C:\\Monomem"), "bundle");
-    assert.equal(modeFor(false, "/opt/monomem/bin/node", "/opt/monomem"), "bundle");
-    assert.equal(modeFor(false, "/opt/monomem-old/bin/node", "/opt/monomem"), "npm", "a sibling folder with a shared prefix is not inside");
+    // Native paths: path.relative parses only this OS's paths.
+    const pkg = resolve("monomem-pkg");
+    assert.equal(modeFor(false, resolve("nodejs", "node.exe"), pkg), "npm");
+    assert.equal(modeFor(false, join(pkg, "runtime", "node.exe"), pkg), "bundle");
+    assert.equal(modeFor(false, join(pkg + "-old", "node.exe"), pkg), "npm", "a sibling folder with a shared prefix is not inside");
     assert.equal(modeFor(true, "/opt/monomem/monomem", "/opt/monomem"), "sea");
   });
 });
