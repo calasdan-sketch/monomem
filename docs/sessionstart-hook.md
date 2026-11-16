@@ -48,6 +48,8 @@ Key files: src/store.ts (12), src/api.ts (7)
 Last session: Session: refactor the store
 Open tasks: 2 (on the board)
 
+Project facts: package_manager=pnpm (#12 by claude-code), deploy_target=fly.io (#15 by cursor)
+
 Recent memory (1 note):
 - [Release cadence] {recent 3d}: Ship weekly on Thursdays
 
@@ -61,6 +63,16 @@ Why shown, in {}: files = linked to files you changed, kw = matches your branch,
   tagged `convention`, the files memory mentions most, the last session and
   the open-task count. It is capped by `MONOMEM_PROFILE_TOKENS` (default
   300, never more than half the budget); `MONOMEM_PROFILE=off` drops it.
+- **Project facts** is one line with the current value of every recorded fact
+  (`facts` on a write; `monomem facts` lists them all), with the note and its
+  writer. It is always shown when there are facts. A disputed key is left to
+  the "writers disagree" line; a held note (unconfirmed outside content) never
+  reaches it. Notes that carry facts rank with decisions, not as just "recent".
+- **Busy writers:** when two or more writers are in the pool, one writer gets
+  at most 3 of the "Recent memory" lines and 20 of the index lines; the rest is
+  summed up as one line (`bot-b4: 50+ more not listed here (newest #3011; ...)`).
+  A store with a single writer is not capped. Tested with 2,000 notes from one
+  writer: the other writer's three notes and both fact values still appear.
 - The "Showing X of N memories" line counts the store's notes up to 2,000;
   above that it says "2,000+" (for example "Showing 12 of 2,000+
   memories"), so a very large store does not slow session start down.

@@ -24,7 +24,7 @@ import { buildSummary, restatedText, titleText } from "./recall.js";
 import { TASK_TAG, HANDOFF_TAG, listTasks } from "./tasks.js";
 import { CHAT_TAG } from "./chat-import.js";
 import { NEVER_SHOW_TAG, isModelWritten, originFlag, originTools, originLegend } from "./reserved-tags.js";
-import { disputedLines } from "./facts.js";
+import { disputedLines, factsTable, flaggedFactValue, MAX_FACT_VALUE, WITHHELD } from "./facts.js";
 import { enabledToolNames } from "./mcp/tool-names.js";
 import { expiredCountLine, heldFromSessionStart, isTainted, noteFlags, unconfirmedCountLine } from "./taint.js";
 
@@ -49,6 +49,14 @@ export const DEFAULT_RECALL_TOKENS = 1500;
 export const DEFAULT_PROFILE_TOKENS = 300;
 const CHARS_PER_TOKEN = 4;
 const POOL = 100;
+/** Busy-writer protection (r2-improvement #1): with two or more writers in the pool, one writer gets at most this many Recent lines... */
+export const RECENT_WRITER_CAP = 3;
+/** ... and at most this many index lines; the rest is summed up in one line per writer. */
+export const INDEX_WRITER_CAP = 20;
+/** Decisions and fact-carrying notes taken into the ranking as their own list ("settled"), newest first. */
+const SETTLED = 20;
+/** The "Project facts:" line: at most this many characters. */
+export const FACTS_LINE_CHARS = 400;
 const GIT_TIMEOUT_MS = 400;
 /** Hard cap on the pinned block (characters), charged to the recall budget. */
 export const PINNED_CHARS = 1600;
@@ -196,7 +204,7 @@ export function newNotesSince(store: Store, sessionId: string, opts: { namespace
 /** `{files,kw 3d}`: why a row is in the pack (signals from rankContext) and its age. */
 export function whyTag(n: NoteRecord, signals: Set<string> | undefined, now = Date.now()): string {
   const s = [...(signals ?? [])];
-  if (n.obs_type === "decision") s.push("decision");
+  if (n.obs_type === "decision" && !s.includes("decision")) s.push("decision");
   const days = Math.max(0, Math.floor((now - Date.parse(n.updated_at)) / 86_400_000)) || 0;
   return `{${s.length ? s.join(",") + " " : ""}${days}d}`;
 }
@@ -242,11 +250,49 @@ export function projectProfile(store: Store, opts: InjectOptions, latestSummary:
   return text.length > maxChars ? text.slice(0, maxChars - 1) + "…" : text;
 }
 
+/** The writer holding more than RECENT_WRITER_CAP of these notes and more than half of them, or null. */
+export function busiestWriter(notes: readonly NoteRecord[]): string | null {
+  const count = new Map<string, number>();
+  for (const n of notes) count.set(n.written_by, (count.get(n.written_by) ?? 0) + 1);
+  const [w, c] = [...count].sort((a, b) => b[1] - a[1])[0] ?? ["", 0];
+  return w && c > RECENT_WRITER_CAP && c * 2 > notes.length ? w : null;
+}
+
+/**
+ * "Project facts: package_manager=pnpm (#1 by claude-code), deploy_target=fly.io (#2 by cursor)": the current value of each
+ * recorded fact, from notes this session may see (held notes are already out). A disputed key is left to the disputes line; a
+ * value the fact check flags is withheld. Cut to `maxChars` with "+N more: monomem facts"; "" when there are none.
+ */
+export function projectFactsLine(factNotes: readonly NoteRecord[], maxChars = FACTS_LINE_CHARS): string {
+  const parts: string[] = [];
+  for (const rows of Object.values(factsTable(factNotes))) {
+    for (const r of rows) {
+      if (r.disputed) continue;
+      const v = r.values.find((x) => x.current) ?? r.values[0];
+      if (!v) continue;
+      const live = v.ids.filter((i) => !v.older.includes(i));
+      const id = Math.max(...(live.length ? live : v.ids));
+      const value = flaggedFactValue(v.value) ? WITHHELD : neutral(v.value).slice(0, MAX_FACT_VALUE);
+      parts.push(`${neutral(r.key).slice(0, 40)}=${value} (#${id} by ${neutral(v.writers[0] ?? "").slice(0, 24)})`);
+    }
+  }
+  if (!parts.length) return "";
+  const head = "Project facts: ";
+  const kept: string[] = [];
+  for (const p of parts) {
+    const tail = ` (+${parts.length - kept.length - 1} more: monomem facts)`;
+    if (kept.length && head.length + [...kept, p].join(", ").length + tail.length > maxChars) break;
+    kept.push(p);
+  }
+  const more = parts.length - kept.length;
+  return `${head}${kept.join(", ")}${more ? ` (+${more} more: monomem facts)` : ""}`;
+}
+
 /** The ranked candidate pool (exported for the tests). */
 export async function rankContext(
   store: Store,
   opts: InjectOptions = {}
-): Promise<{ ranked: NoteRecord[]; total: number; latestSummary: NoteRecord | null; why: Map<number, Set<string>>; pinned: NoteRecord[] }> {
+): Promise<{ ranked: NoteRecord[]; total: number; latestSummary: NoteRecord | null; why: Map<number, Set<string>>; pinned: NoteRecord[]; factNotes: NoteRecord[] }> {
   const ns = opts.namespace;
   const wf = {
     ...(opts.writtenBy ? { writtenBy: opts.writtenBy } : {}),
@@ -272,6 +318,14 @@ export async function rankContext(
     why.get(id)!.add(s);
   };
   const recent = { notes: store.list({ ...base, limit: POOL, count: false }).notes.filter((n) => !skip(n)) };
+  // Busy-writer protection: when one writer fills the recent pool, the other writers' newest notes join it too, so a bot that
+  // wrote 2,000 notes cannot push everyone else out before ranking even starts.
+  // ponytail: one extra query for the single busiest writer; a second busy writer still crowds, add a loop if that shows up.
+  const busiest = busiestWriter(recent.notes);
+  if (busiest && !opts.notWrittenBy && !opts.writtenBy) {
+    const seen = new Set(recent.notes.map((n) => n.id));
+    for (const n of store.list({ ...base, notWrittenBy: busiest, limit: POOL, count: false }).notes) if (!skip(n) && !seen.has(n.id)) recent.notes.push(n);
+  }
   // R1-06: only a summary the capture hooks wrote is framed as a summary block; anything else is an ordinary index line.
   const latestSummary = store.list({ ...base, kinds: ["summary"] as const, limit: 5, count: false }).notes.find((n) => !skip(n) && n.written_by === "capture") ?? null;
   const signals = opts.signals ?? (await gitSignals(opts.cwd ?? process.cwd()));
@@ -323,9 +377,25 @@ export async function rankContext(
       mark(r.note_id, "files");
     }
   }
+  // Settled knowledge (decisions, and notes that carry facts) is its own ranked list, newest first: a recorded decision is
+  // not just one more recent note, so a flood of fresh notes does not bury it.
+  let factNotes: NoteRecord[] = [];
+  try {
+    factNotes = store.liveFactNotesIn(ns, { ...(opts.writtenBy ? { writtenBy: opts.writtenBy } : {}), ...(opts.notWrittenBy ? { notWrittenBy: opts.notWrittenBy } : {}) }).filter((n) => fits(n) && (n.kind ?? "note") !== "summary");
+  } catch {
+    /* a lookup problem must not cost the session its memory */
+  }
+  const decisions = store.list({ ...base, obsTypes: ["decision"], limit: SETTLED, count: false }).notes.filter((n) => !skip(n));
+  const settled = [...new Map([...decisions, ...factNotes].map((n) => [n.id, n])).values()]
+    .sort((a, b) => (a.updated_at < b.updated_at ? 1 : a.updated_at > b.updated_at ? -1 : b.id - a.id))
+    .slice(0, SETTLED);
+  for (const n of settled) {
+    if (!pool.has(n.id)) pool.set(n.id, opts.includeDistrusted ? store.markDistrusted([n])[0] : n);
+    mark(n.id, "decision");
+  }
   const byRecency = [...pool.values()].sort((a, b) => (a.updated_at < b.updated_at ? 1 : a.updated_at > b.updated_at ? -1 : b.id - a.id)).map((n) => n.id);
   for (const id of byRecency.slice(0, 10)) mark(id, "recent");
-  const fused = rrfScores([bm25, overlap, byRecency]);
+  const fused = rrfScores([bm25, overlap, byRecency, settled.map((n) => n.id)]);
   // Operator-pinned notes (the notes.pinned COLUMN, never the agent-settable "pinned" tag): shown first by injectContext, so
   // they leave the ranked pass. pinnedNotes applies the sensitivity ceiling; readVisible + fits the distrust and session filters.
   const pinned = store
@@ -335,16 +405,18 @@ export async function rankContext(
   const pinnedIds = new Set(pinned.map((n) => n.id));
   const ranked = rankHits(store, [...fused.entries()].filter(([id]) => !pinnedIds.has(id)).map(([id, score]) => ({ note: pool.get(id)!, score })));
   const summary = latestSummary && pinnedIds.has(latestSummary.id) ? null : latestSummary;
-  return { ranked, total: store.list({ ...base, limit: 1, countCap: SESSION_COUNT_CAP }).total, latestSummary: summary, why, pinned };
+  return { ranked, total: store.list({ ...base, limit: 1, countCap: SESSION_COUNT_CAP }).total, latestSummary: summary, why, pinned, factNotes };
 }
 
 /** The packed context text ("" when there is nothing to say). */
 export async function injectContext(store: Store, opts: InjectOptions = {}): Promise<string> {
-  const { ranked, total, latestSummary, why, pinned } = await rankContext(store, opts);
+  const { ranked, total, latestSummary, why, pinned, factNotes } = await rankContext(store, opts);
   // 1.4.0: one count line for the notes held back as unconfirmed outside content; never their titles or text.
   const nsList = opts.namespace !== undefined ? [opts.namespace] : undefined;
   const heldLine = [unconfirmedCountLine(store.unconfirmedBreakdown(nsList)), ...(opts.cwd !== undefined ? store.openWindowLines(opts.cwd) : []), expiryEnforced(store) ? expiredCountLine(store.expiredCount(nsList), store.confirmSettings().days) : ""].filter(Boolean).join("\n");
-  if (!ranked.length && !latestSummary && !pinned.length) return heldLine;
+  // Always shown when there are facts: about 20-40 tokens, and the one thing a busy writer must never push out.
+  const factsLine = projectFactsLine(factNotes);
+  if (!ranked.length && !latestSummary && !pinned.length) return [factsLine, heldLine].filter(Boolean).join("\n\n");
   const budget = (opts.tokens ?? recallTokens()) * CHARS_PER_TOKEN;
   const parts: string[] = [];
   const shown: NoteRecord[] = [];
@@ -374,6 +446,10 @@ export async function injectContext(store: Store, opts: InjectOptions = {}): Pro
     parts.push(profile);
     used += profile.length;
   }
+  if (factsLine) {
+    parts.push(factsLine);
+    used += factsLine.length;
+  }
   // Fact-tier disputes (this namespace, or all when none is configured): 0 tokens when none, at most 2 short lines otherwise. Never lets the hook fail.
   // No configured namespace = a default install: every namespace is readable, so every one is checked. The session's own writer filters apply.
   try {
@@ -399,9 +475,14 @@ export async function injectContext(store: Store, opts: InjectOptions = {}): Pro
     shown.push(latestSummary);
   }
   const limit = Math.max(1, Math.min(100, Math.floor(opts.limit ?? 10)));
+  // Busy-writer protection: with two or more writers in the pool, each writer's share of the Recent and Index lines is capped.
+  const capped = new Set(ranked.map((n) => n.written_by)).size >= 2;
+  const perWriter = new Map<string, number>();
+  const over = new Map<string, NoteRecord[]>();
   const notes: NoteRecord[] = [];
   for (const n of ranked) {
     if (n.kind || isTainted(n.tags) || notes.length >= limit) continue; // stamped rows: index line only, never their text
+    if (capped && notes.filter((x) => x.written_by === n.written_by).length >= RECENT_WRITER_CAP) continue;
     const next = buildSummary([...notes, n], tagOf);
     if (used + next.length > budget) break;
     notes.push(n);
@@ -416,6 +497,10 @@ export async function injectContext(store: Store, opts: InjectOptions = {}): Pro
   const header = `Memory index (most relevant first; open with ${openToolName()}):`;
   for (const n of ranked) {
     if (shown.some((s) => s.id === n.id)) continue;
+    if (capped && (perWriter.get(n.written_by) ?? 0) >= INDEX_WRITER_CAP) {
+      (over.get(n.written_by) ?? over.set(n.written_by, []).get(n.written_by)!).push(n);
+      continue;
+    }
     const line = indexLine(n, tagOf(n));
     // The writer label is not charged to the budget, so the same store shows as many notes as it did before labels existed.
     const charged = indexLine(n, tagOf(n), false).length;
@@ -423,6 +508,13 @@ export async function injectContext(store: Store, opts: InjectOptions = {}): Pro
     lines.push(line);
     used += charged + 1;
     shown.push(n);
+    perWriter.set(n.written_by, (perWriter.get(n.written_by) ?? 0) + 1);
+  }
+  // One line per capped writer, so what was left out is said, not silently dropped. Counted in the ranked pool only: the
+  // store may hold more, hence "+" once the pool is half full of one writer.
+  for (const [w, rest] of over) {
+    const newest = Math.max(...rest.map((n) => n.id));
+    lines.push(`${neutral(w).slice(0, 24)}: ${rest.length}${rest.length >= POOL / 2 ? "+" : ""} more not listed here (newest #${newest}; search finds them).`);
   }
   if (lines.length) parts.push(`${header}\n${lines.join("\n")}`);
   if (!shown.length) return heldLine;

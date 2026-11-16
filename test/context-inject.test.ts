@@ -122,13 +122,12 @@ describe("session start: restated label (A2)", () => {
   test("an older note restated by the same writer carries the restated label in the Recent and Index sections", async () => {
     const s = new Store(":memory:");
     const old = as("alice", () => s.create({ title: "quarzo build server", body: "The quarzo build server is kalmuth. Quarzo quarzo.", tags: ["fact:build_server=kalmuth"] })).id;
-    const neu = as("alice", () => s.create({ title: "quarzo build server moved", body: "Update: the quarzo build server is now prendal.", tags: ["fact:build_server=prendal"] })).id;
+    const neu = as("alice", () => s.create({ title: "quarzo build server moved", body: "Update: quarzo builds moved off the old box; the build server is now prendal.", tags: ["fact:build_server=prendal"] })).id;
     for (const [id, d] of [[old, 2], [neu, 1]]) s.captureDb().prepare("UPDATE notes SET updated_at = ?, created_at = ?, content_at = ? WHERE id = ?").run(daysAgo(d), daysAgo(d), daysAgo(d), id);
-    // A near tie that puts the older note first before the twin rule: it is linked to two changed files, the newer to one.
+    // A near tie (within RESTATE_MAX_RATIO) that puts the older note first before the twin rule: it alone is linked to the changed files.
     const ins = s.captureDb().prepare("INSERT INTO note_files (note_id, path, action) VALUES (?, ?, 'changed')");
     ins.run(old, "src/a.ts");
     ins.run(old, "src/b.ts");
-    ins.run(neu, "src/a.ts");
     const signals = { branch: "quarzo", diffFiles: ["src/a.ts", "src/b.ts"] };
     const { ranked } = await rankContext(s, { signals });
     assert.deepEqual(ranked.map((n) => n.id), [neu, old]);
