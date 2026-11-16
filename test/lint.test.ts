@@ -2,7 +2,7 @@
 // MONOMEM_LINT policy (block / quarantine / warn), the quarantine queue
 // (store, MCP memory_quarantine, REST status codes) and -- just as important
 // -- benign look-alikes that must NOT trip it.
-import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
+import { slow } from "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
 import { test, describe, before, after, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
@@ -144,7 +144,7 @@ describe("linter hardening (r3)", () => {
     const N = 256 * 1024;
     const small = time(N / 4);
     const big = time(N);
-    assert.ok(big < 2000, `took ${big.toFixed(0)}ms`);
+    assert.ok(big < slow(2000), `took ${big.toFixed(0)}ms`);
     assert.ok(big / Math.max(small, 1) < 8, `N/4 ${small.toFixed(1)}ms, N ${big.toFixed(1)}ms: grows faster than linear`);
   });
 

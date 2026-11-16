@@ -1,6 +1,6 @@
 // 1.2.0 release-blocking setup/UX fixes: hook latency launcher, honest capture wording, health wording, drill with no store,
 // server-memory offer, quarantine next step, and the remote /mcp Authorization header the docs tell teammates to use.
-import "./setup-env.js";
+import { slow } from "./setup-env.js";
 import { test, describe, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
@@ -85,7 +85,7 @@ describe("sync hooks and npx", () => {
     const ms = Date.now() - t0;
     assert.equal(r.status, 0);
     console.log(`# node launcher hook user-prompt: ${ms} ms`);
-    assert.ok(ms < 3000);
+    assert.ok(ms < slow(3000));
   });
 });
 

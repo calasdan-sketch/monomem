@@ -6,7 +6,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-for (const k of Object.keys(process.env)) if (k.startsWith("MONOMEM_") || k.startsWith("ONEMEMORY_") || k.startsWith("CLAUDE_BRIDGE_")) delete process.env[k];
+// MONOMEM_TEST_TIME_SCALE is the one variable kept: it is read only by the tests (see slow() below), never by src, and
+// it must survive here so that the test runner passes it on to every test file's process.
+for (const k of Object.keys(process.env)) {
+  if (k === "MONOMEM_TEST_TIME_SCALE") continue;
+  if (k.startsWith("MONOMEM_") || k.startsWith("ONEMEMORY_") || k.startsWith("CLAUDE_BRIDGE_")) delete process.env[k];
+}
 const home = mkdtempSync(join(tmpdir(), "monomem-test-home-"));
 process.env.MONOMEM_HOME = home;
 // setup finds app configs through these (Claude Desktop under APPDATA, its Microsoft Store build under LOCALAPPDATA),
@@ -35,3 +40,15 @@ process.on("exit", () => {
     /* best effort */
   }
 });
+
+/**
+ * MONOMEM_TEST_TIME_SCALE (tests only; CI sets it to 3 on the Windows and macOS runners): how much slower than a
+ * developer machine this one may be. A wall-clock bound in a test is written for an idle machine and wrapped in slow(),
+ * so a loaded runner gets more room while the bound still catches what it is there for (a fixed 5 s pause, a 20 s lock
+ * wait, a 55 s timeout). Not a number, or below 1, counts as 1; at most 10.
+ */
+export function timeScale(raw: string | undefined = process.env.MONOMEM_TEST_TIME_SCALE): number {
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 1 ? Math.min(n, 10) : 1;
+}
+export const slow = (ms: number): number => ms * timeScale();

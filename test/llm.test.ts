@@ -1,6 +1,6 @@
 // llm.ts: the optional local-model summary. Off by default, loopback only, bounded, re-redacted, linted, and on any
 // failure the deterministic summary stays. A local http stub plays the model.
-import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
+import { slow } from "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
@@ -179,8 +179,10 @@ describe("LLM summarizer", () => {
       const db = join(dir, "state.db");
       new Store(db).close();
       const env = { MONOMEM_LLM_URL: base, MONOMEM_LLM_MODEL: "tiny" };
-      const slow = answer("Detached title\nThe body.");
-      reply = (req, body, res) => void setTimeout(() => slow(req, body, res), 1500);
+      const late = answer("Detached title\nThe body.");
+      // The model answers after MODEL_MS; session-end must return before that (both scale together on a slow runner).
+      const MODEL_MS = slow(1500);
+      reply = (req, body, res) => void setTimeout(() => late(req, body, res), MODEL_MS);
       const p = { session_id: "d1", cwd: "/w" };
       // Substantial enough to be summarised at all (see the floor in
       // extract.ts); this test is about session-end not blocking, not about
@@ -192,9 +194,9 @@ describe("LLM summarizer", () => {
       );
       const t0 = Date.now();
       await captureHook("session-end", p, { dbPath: db, dataDir: dir, env });
-      assert.ok(Date.now() - t0 < 1500, `session-end waited ${Date.now() - t0} ms for the model`);
+      assert.ok(Date.now() - t0 < MODEL_MS, `session-end waited ${Date.now() - t0} ms for the model`);
       let title = "";
-      for (let i = 0; i < 100 && title !== "Session: Detached title"; i++) {
+      for (let i = 0; i < 100 + MODEL_MS / 100 && title !== "Session: Detached title"; i++) {
         await new Promise((r) => setTimeout(r, 100));
         const s = new Store(db);
         title = s.list({ kinds: ["summary"] }).notes[0]?.title ?? "";

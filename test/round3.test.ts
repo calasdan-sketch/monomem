@@ -1,5 +1,6 @@
 // Round 3: reviewer findings. Hostile-input timing, host check, dry runs, token file hygiene, one-time sign-in,
 // secret-looking text, doctor, per-command help, safety-report privacy, scrub wording.
+import { slow } from "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
 import { test, describe, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { privateDir } from "../src/config.js";
@@ -54,14 +55,14 @@ describe("R3-1: hostile text cannot make the scans slow", () => {
   };
   for (const [name, text] of Object.entries(cases)) {
     test(`${name}: pii scan and the write-time linter each finish in under 500 ms`, () => {
-      assert.ok(timed(() => findPii(text)) < 500, "pii");
-      assert.ok(timed(() => lintContent({ body: text })) < 500, "lint");
+      assert.ok(timed(() => findPii(text)) < slow(500), "pii");
+      assert.ok(timed(() => lintContent({ body: text })) < slow(500), "lint");
     });
   }
   test("the contradiction check and the scan loop respect their budgets on big input", () => {
     const notes = Array.from({ length: 3000 }, (_, i) => ({ id: i + 1, namespace: "d", title: "t" + i, body: "x ".repeat(5000), tags: [], updated_at: new Date().toISOString(), created_at: "" })) as never[];
     assert.ok(timed(() => findContradictions(notes)) < 6000);
-    assert.ok(timed(() => scanPii(notes, 500, 1000)) < 1500, "scanPii gives up at its time budget");
+    assert.ok(timed(() => scanPii(notes, 500, 1000)) < 1000 + slow(500), "scanPii gives up at its time budget");
   });
   test("only the first 16 KB of a note is read, hits are capped, and email masks hide the tail", () => {
     assert.equal(findPii("x".repeat(20000) + " jo@example.com").length, 0);

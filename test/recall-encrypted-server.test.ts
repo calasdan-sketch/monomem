@@ -1,4 +1,4 @@
-import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
+import { slow } from "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
 // 1.5.0: on an encrypted store the session-start hook matches titles and tags itself (it never builds the in-memory body
 // index). A Monomem server for the SAME store running on loopback has that index: the hook asks it for body matches
 // within a short time budget, and falls back to title-and-tag matching when there is no server, a slow one, or one that
@@ -44,9 +44,14 @@ const signals = { branch: "zephyrcanyon", diffFiles: [] };
 async function noProbeMs(db: string, dir: string): Promise<number> {
   process.env.MONOMEM_NO_SERVER_PROBE = "1";
   try {
-    const t = Date.now();
-    await runRecall({ dbPath: db, cwd: dir, signals });
-    return Date.now() - t;
+    // The slower of two runs: one cold or GC-hit sample would make the comparison below flake (release-gate L-2).
+    let worst = 0;
+    for (let i = 0; i < 2; i++) {
+      const t = Date.now();
+      await runRecall({ dbPath: db, cwd: dir, signals });
+      worst = Math.max(worst, Date.now() - t);
+    }
+    return worst;
   } finally {
     delete process.env.MONOMEM_NO_SERVER_PROBE;
   }
@@ -88,7 +93,7 @@ describe("session start on an encrypted store asks a local server for body match
       const t0 = Date.now();
       const ctx = contextOf(await runRecall({ dbPath: db, cwd: dir, signals, serverPort: port }));
       const took = Date.now() - t0;
-      assert.ok(took < base + 500, `no server took ${took} ms; session start without asking took ${base} ms`);
+      assert.ok(took < base + slow(500), `no server took ${took} ms; session start without asking took ${base} ms`);
       assert.doesNotMatch(ctx, new RegExp(`#${target}\\b`), "the body-only note is not found without the server");
       assert.match(ctx, /filler/, "the rest of session start is unchanged");
     } finally {
@@ -110,7 +115,7 @@ describe("session start on an encrypted store asks a local server for body match
       const took = Date.now() - t0;
       // The ask adds at most its budget on top of session start itself (measured above on this machine; a fixed
       // SERVER_ASK_MS + 600 failed on a loaded Windows runner where session start alone took longer).
-      assert.ok(took < base + SERVER_ASK_MS + 500, `took ${took} ms; session start without asking took ${base} ms`);
+      assert.ok(took < base + SERVER_ASK_MS + slow(500), `took ${took} ms; session start without asking took ${base} ms`);
       assert.equal(asked, 1, "the hook did ask, then gave up");
       assert.doesNotMatch(ctx, new RegExp(`#${target}\\b`));
     } finally {

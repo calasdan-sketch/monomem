@@ -30,6 +30,14 @@ npm test
 node dist/src/cli.js doctor   # sanity-check Node/DB/token
 ```
 
+### Timing in tests
+
+A wall-clock bound in a test (`Date.now() - t0 < N`) is written for an idle machine and wrapped in `slow(N)` from
+`test/setup-env.ts`, or compared with a baseline measured in the same test. CI sets `MONOMEM_TEST_TIME_SCALE=3` on the
+Windows and macOS runners, so `slow()` gives them more room; leave it unset locally. Pure speed claims ("a write takes
+under 25 ms") belong in `bench/` (for example `bench/write-cost.mjs`), which CI runs on the Linux job, not in the suite.
+Pull requests run a smaller CI matrix; the full 12-cell matrix runs on main, nightly, by hand and before every publish.
+
 ## Before you open a PR
 
 1. `npm test` is green locally.

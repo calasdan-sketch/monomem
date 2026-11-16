@@ -1,7 +1,7 @@
 // Live wait on the change feed: GET /changes?wait=N and memory_since
 // wait_seconds. Covers wake-ups (in-process and cross-process), scope,
 // timeouts, client disconnects, caps, and that nothing leaks afterwards.
-import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
+import { slow } from "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -65,7 +65,7 @@ describe("waitForChanges", () => {
     store.create({ title: "already here" });
     const t0 = Date.now();
     const out = await waitForChanges(store, { since: "1h" }, { waitSeconds: 30, key: "k" });
-    assert.ok(Date.now() - t0 < 1000);
+    assert.ok(Date.now() - t0 < slow(1000));
     assert.equal(out.changes[0].title, "already here");
     assert.equal(activeWaiters(), 0);
     store.close();
@@ -80,7 +80,7 @@ describe("waitForChanges", () => {
     assert.equal(activeWaiters(), 1);
     store.create({ title: "idea from the phone", source: "phone" });
     const out = await p;
-    assert.ok(Date.now() - t0 < 2000, "should not have waited out the timeout");
+    assert.ok(Date.now() - t0 < slow(2000), "should not have waited out the timeout");
     assert.deepEqual(out.changes.map((c) => c.title), ["idea from the phone"]);
     assert.equal(out.timedOut, undefined);
     assert.equal(activeWaiters(), 0);
@@ -104,7 +104,7 @@ describe("waitForChanges", () => {
       const t0 = Date.now();
       act();
       const out = await p;
-      assert.ok(Date.now() - t0 < 1500, `${name} did not wake the waiter`);
+      assert.ok(Date.now() - t0 < slow(1500), `${name} did not wake the waiter`);
       assert.equal(out.changes.length, 1, name);
       assert.equal(out.timedOut, undefined, name);
     }
@@ -191,7 +191,7 @@ describe("waitForChanges", () => {
     const t0 = Date.now();
     ac.abort();
     await p;
-    assert.ok(Date.now() - t0 < 500);
+    assert.ok(Date.now() - t0 < slow(500));
     assert.equal(activeWaiters(), 0);
     assert.equal(listeners(store), 0);
     // Already-aborted signal: returns without parking.
