@@ -136,7 +136,7 @@ monomem import --from claude-code-chats --path <folder>      # another projects 
   slash commands and `<system-reminder>` blocks are left out. A reply Claude wrote in several pieces becomes one note.
 - **One note per message, with the message it replied to.** The question and its answer usually sit in two different
   messages ("which port does staging use?" ... "9443"), so each note also carries the first 400 characters of the message
-  before it. A search for the question's words then finds the answer. On the LoCoMo-10 benchmark by turn this raised
+  before it (left out when that message holds a secret or a linter hit). A search for the question's words then finds the answer. On the LoCoMo-10 benchmark by turn this raised
   recall@5 on the validation half (not used for tuning) from 58.8 % to 64.6 % ([BENCHMARK.md](./BENCHMARK.md#retrieval-longmemeval-s-and-locomo));
   the benchmark builds its notes with the same code as this import.
 - **Where it goes:** the `chats` namespace (`--namespace` to change it). Every note is tagged `imported:claude-code-chats` and
@@ -145,7 +145,9 @@ monomem import --from claude-code-chats --path <folder>      # another projects 
   `state_search`), not for every session's opening context.
 - **Same rules as the other imports:** read only, nothing leaves your computer, a message that looks like a secret is
   skipped (not stored, not shown), the memory linter may hold a message that reads like an instruction to an AI for your
-  review, and running it again adds only new messages.
+  review, and running it again adds only new messages. The secret check reads each message as written: a secret the chat
+  already split over lines (for example `password:` with the value on the next line, or a token wrapped in two) is not
+  recognised, so that message is stored. Import only chats you would be happy to keep in Monomem.
 - **With encryption on:** like captured notes, every chat note gets the fixed title `Chat message (sealed)`; its real title
   (speaker and first line) becomes the first line of the sealed body. Note titles stay plaintext on disk (SECURITY.md), so
   no message text is left in them. Search still finds the words in memory (the in-memory body index).

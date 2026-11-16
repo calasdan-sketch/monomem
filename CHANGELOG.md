@@ -87,7 +87,8 @@ upgrading from 1.3.x takes one step (docs/upgrading.md).
 - **Your past Claude Code conversations, searchable: `monomem import --from claude-code-chats`.** Reads
   `~/.claude/projects/*/*.jsonl` (read only, local) and stores one note per message: what you typed and Claude's written
   replies, without tool calls, tool output, thinking, subagent turns, slash commands or `<system-reminder>` blocks. Each note
-  also carries the first 400 characters of the message it replied to, so a search for a question finds its answer. Notes go
+  also carries the first 400 characters of the message it replied to, so a search for a question finds its answer (left
+  out when that message holds a secret or a linter hit). Notes go
   into the `chats` namespace (or `--namespace`), are tagged `imported:claude-code-chats` and `chat.session:<id>`, Claude's carry the model-written
   label, and **chat notes are never shown at session start or in the "new notes" line**. Same rules as the other imports:
   dry run first, secrets skipped and never shown, the linter may hold a message, re-runs add only new messages; the dry run
@@ -160,9 +161,10 @@ upgrading from 1.3.x takes one step (docs/upgrading.md).
   every note, so ranking is the plain store's: encrypted recall is now identical to plain on LongMemEval-S (97.2 / 85.7 R@5 /
   Rall@5) and LoCoMo-10 by session. LoCoMo-10 by turn differs slightly (67.6 / 58.2 / 76.9 vs 67.4 / 58.4 / 76.3 R@5 / Rall@5 /
   R@10) because chat notes get a fixed sealed title on an encrypted store. Kept current for this process's writes by connection-only triggers, and for other
-  processes' writes from the change log. The REST and MCP servers build it just after start-up (about 0.5 s and 22 MB
-  of memory at 10,000 notes, 4-5 s and about 155 MB at 100,000 notes; the build runs in batches of 1,000 notes; see
-  the body-index line in docs/BENCHMARK.md); the hooks never build it, so session start stays fast. On an encrypted store session start
+  processes' writes from the change log. The REST and MCP servers build it just after start-up (about 0.5 s at 10,000 notes
+  and 4-6 s at 100,000 notes; the build runs in batches of 1,000 notes. Memory: `bench --scale` measures about +22 MB at
+  10,000 and +155 MB at 100,000 inside an already-running process; a freshly started server grows by about +60 MB at 10,000
+  and about +235 MB at 100,000, to about 305 MB in total; see the body-index line in docs/BENCHMARK.md); the hooks never build it, so session start stays fast. On an encrypted store session start
   matches titles and tags itself and, when a Monomem server for the same store runs on this computer, asks that server
   (127.0.0.1 only, at most 0.3 s) which notes' bodies match; with no server, or a slow one, it stays on titles and tags.
   The hook sends its main key only after the server proves, over a fresh nonce, that it holds the same key and store
@@ -249,6 +251,22 @@ upgrading from 1.3.x takes one step (docs/upgrading.md).
   `CLAUDE_BRIDGE_*` (from claude-bridge). It used to call them all claude-bridge. Both old names still work.
 - Windows `service install`: the task no longer breaks when the data folder holds a `%` (so it is left out of the task)
   and the cli.js path holds a space. The task now always sets `MONOMEM_SERVICE=1` first, so cmd.exe keeps the quotes.
+- Windows `service install`: node.exe and cli.js are always quoted in the task (a folder like `R&D` broke it), and a `%` or
+  `"` in those paths is refused with a plain message (cmd.exe cannot carry them safely). The task belongs to the installing
+  user (`<UserId>`; no administrator needed), and a 5-minute repeat starts the server again after a crash or a closed
+  window (it does nothing while the server runs).
+- Running `service install` again restarts the server on every OS, so an upgrade takes effect: Windows ends the old task
+  before it creates and runs the new one, macOS takes the old agent out (`launchctl bootout`) before `bootstrap` (it used to
+  fail with "Bootstrap failed: 5") and retries `bootstrap` once after 1 s if it fails, and Linux runs `systemctl --user
+  restart`. `uninstall --purge` on Windows also finds the task by its name when `monomem-task.xml` was deleted.
+- Chat import: a note's "(replying to ...)" context is left out when the message it replied to holds a secret or a linter
+  hit, so a skipped secret cannot come back inside the next message's note.
+- `monomem doctor` lists the connected apps, and warns when an app is installed but none is connected to Monomem.
+- `monomem setup`'s first run creates the data folder locked to you (on Windows only you and SYSTEM; owner-only elsewhere):
+  opening a store now creates a new data folder owner-only. An existing folder is left as it is.
+- `MONOMEM_RECALL_TIMEOUT_MS` can raise the 5-second session-start cap (never lower it; at most 60 s). The test suite sets
+  it so a loaded CI runner does not trip the cap; a user does not need it.
+- `monomem rollback` without `--since` now names the flag and shows an example.
 - `monomem bench --help` and `help --all` name all five suites (including `poison`) and the retrieval `--split a|b`.
 
 ### Performance
@@ -261,11 +279,13 @@ upgrading from 1.3.x takes one step (docs/upgrading.md).
   for capture types, open tasks, conventions, the latest summary, pinned notes and fact notes (`idx_notes_obs`,
   `idx_notes_tag_task`, `idx_notes_tag_convention`, `idx_notes_kind_summary`, `idx_notes_pinned`, `idx_notes_facts`); they
   cost a little disk space and write time on every store, including one upgraded from 1.3.x.
-- Session start on a 100,000-note store: about 430 ms before, 7-11 ms p50 after (encrypted; release gate 50 ms, PASS), from
+- Session start on a 100,000-note store: about 430 ms before, 7-12 ms p50 after on a quiet PC, up to about 18 ms on a loaded one
+  (encrypted; release gate 50 ms, PASS), from
   the v22 indexes above. Recent file paths now come from the newest 2,000 notes, and the "Showing X of N memories" line
   counts up to 2,000 and then says "2,000+" (for example "Showing 12 of 2,000+ memories").
 - At 100,000 notes, keyword search time follows how many notes contain the query's words, not how many notes there are:
-  words in under 5 % of notes 0.6-8 ms p50, words in most notes about 110-190 ms p50 (`monomem bench --scale 100k`; its
+  words in under 5 % of notes 0.6-8 ms p50 (the bench's realistic-words line 1.5-4 ms), words in most notes about
+  110-190 ms p50 plain, up to about 260 ms encrypted or on a loaded PC (`monomem bench --scale 100k`; its
   made-up vocabulary makes the average query match about 82 % of notes, so its own search figure is the slow case).
   docs/BENCHMARK.md has the numbers.
 - Repeated searches with embeddings on reuse the query's embedding: each process keeps the last 256 query vectors (keyed by

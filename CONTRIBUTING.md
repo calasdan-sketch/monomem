@@ -10,6 +10,8 @@ Thanks for your interest — small, focused contributions are very welcome.
   certainly won't be merged.
 - **Tests pass.** `npm test` must be green (it builds, then runs the suite).
   New behaviour needs a test; bug fixes should come with a regression test.
+- **Big files are known.** `src/store.ts`, `src/cli.ts` and `src/mcp-server-core.ts` are large. Splitting them is
+  deliberately deferred: 1.5.0 wanted no behaviour change from a move. Please do not send a split as part of another change.
 - **No secrets, ever.** Don't commit tokens, `.env` files, or anything under
   `data/`.
 

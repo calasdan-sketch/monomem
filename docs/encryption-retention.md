@@ -72,12 +72,17 @@ Since 1.5.0, body search still works on an encrypted store, from a second index 
   most 0.3 s; the hook sends its key only after the server proves it holds the same key and store, and takes back only
   note ids). With no server running, body words do not reach session start: give notes titles and tags that say what
   they are about.
-- **Cost.** About 0.5 s to build and about 22 MB of memory at 10,000 notes, 4-5 s and about 155 MB at the 100,000 cap, in **each** process
+- **Cost.** About 0.5 s to build at 10,000 notes and 4-6 s at the 100,000 cap. Memory: `monomem bench --scale` measures
+  about +22 MB at 10,000 and +155 MB at 100,000 inside an already-running process; a freshly started server grows by about
+  +60 MB at 10,000 and about +235 MB at 100,000 (to about 305 MB in total). That is in **each** process
   that has it (five apps each running their own stdio server hold five copies). Above 100,000 notes it is not built:
   search there covers titles and tags only, and the CLI search says so. Any search that runs on titles and tags only
   while bodies are sealed (over the cap, a search inside a write before the index is built, or a failed build) says so in
   its reply: a `body_search` field on REST `/search` and `/relevant` and on MCP replies. Each is counted; `GET /status`
   (admin) and `monomem doctor` show the count and the last reason.
+- **After a purge.** A purged note leaves the index at once, so search cannot return it. Its words can still sit in the
+  server's in-memory index (search no longer finds them, but its stored data is not rewritten at once) until that server restarts; restart the servers after a purge you care
+  about. A store that was over the 100,000 cap and is purged back under it gets its index again after the server restarts.
 - **What it changes for security.** Nothing new is written to disk by Monomem: someone who copies the database file, its
   WAL or a database-only backup still gets no body text. But while a server runs, **every body's words are in its
   memory**, with their positions (enough to rebuild much of the text). The operating system can write that memory to disk:

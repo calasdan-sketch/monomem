@@ -325,12 +325,17 @@ the highest published figure. Other systems' own numbers (none re-run by us), re
 - **Vestige v6.2.1** (github.com/samvallad33/vestige, `benchmarks/README.md`; also no embeddings and no LLM) reports
   LongMemEval-S strict recall-all@5 **91.28** on the same 470 questions (5.6 above our 85.7), any-hit recall@5 98.6 and
   recall@10 99.4 on all 500 questions (we score 470), and in v6.2.2's release notes LoCoMo-10 by session R@5 **93.24** on
-  "ALL" questions (2.3 above our 90.9; the question count is not stated there). Caveats, from its own pages: its weights and
+  "ALL" questions (2.3 above our 90.9; ALL is 1,982 questions per its `benchmarks/README.md`, the same set as ours), and
+  LoCoMo-10 by turn ("turn exact") R@5 **68.16** (0.8 above our 67.4, which stores each turn with the turn it replied to;
+  about 7 above our 60.8 with one turn per note; Vestige pools neighbouring turns too, window size not stated). Caveats, from its own pages: its weights and
   word-cluster mappings were refined against the benchmark queries during development, and it reports no held-out half for
-  LongMemEval-S (for LoCoMo it reports conversations 1-5 to tune and 6-10 to test); how it stores sessions and turns is not
-  stated beyond turns being pooled with their neighbours. Ours were tuned on half **a** and checked on half **b** (above).
+  LongMemEval-S (for LoCoMo it reports conversations 1-5 to tune and 6-10 to test); it names "max-passage window pooling"
+  (LongMemEval) and "bidirectional micro-scene pooling" (LoCoMo by turn) with no window sizes. Ours were tuned on half **a** and checked on half **b** (above).
+- **MemPalace** self-reports LongMemEval-S any-hit R@5 **98.4** on a 450-question held-out set (tuned on the other 50;
+  reported in arXiv 2604.21284), 1.2 above our 97.2 on 470. A different question set, so not like-for-like; its earlier "100 %"
+  needed hand patches to failing questions (github.com/MemPalace/mempalace/discussions/747).
 - **agentmemory 0.9.31** reports 84.7 (BM25). Ours is 1.0 above it: we score 470 of the 500 questions, dropping the 30
-  abstention ones, by session, and did not check that agentmemory's setup matches; 1.0 point is about 5 questions, near the
+  abstention ones, by session, and its v0.9.31 release notes give 398 of 470, the same 470-question count; 1.0 point is about 5 questions, near the
   0.1-0.2 a re-run can move from ties. agentmemory 0.9.33 (2026-11-09) removed a three-results-per-query search cap, so its
   figure may change; it has published no new one.
 
@@ -339,7 +344,7 @@ LoCoMo-10 by turn is still our weakest number.
 **LoCoMo-10 by turn: each turn stored with the turn it replied to (2026-11-15).** The by-turn rows above use the notes
 `monomem import --from claude-code-chats` stores ([switching.md](./switching.md#your-past-claude-code-conversations)): one note
 per message, titled with the speaker and its first line, its body followed by `(replying to <speaker>: <first 400 characters of
-the previous turn>)`. The benchmark calls the same `chatNotes()` as the import, so it scores the same note layout a user's
+the previous turn>)` (the import leaves that part out when the previous message holds a secret or a linter hit). The benchmark calls the same `chatNotes()` as the import, so it scores the same note layout a user's
 imported chats get, not a layout made for the test (the content differs: LoCoMo is two people chatting, and the import also
 runs the linter and skips secrets). To compare with a "by turn" figure that stores each turn on its own,
 use our raw-turn figure below (60.8 R@5), not 67.4. Before, each turn was a note on its own (body `Speaker: text`, title the dialog id):
@@ -389,18 +394,18 @@ the design ceiling: above it the in-memory body index is not built.
 
 | Path at 100,000 notes | plain | encrypted |
 |---|---|---|
-| Session start (`injectContext`) p50 | 7.3-7.6 ms | **7-11 ms** (release gate 50 ms: **PASS**) |
+| Session start (`injectContext`) p50 | 7.3-8.8 ms | **7-12 ms** quiet, up to about 18 ms on a loaded PC (release gate 50 ms: **PASS**) |
 | Write (`create`, edges on) p50 | about 3-4 ms | about 3-4 ms |
-| Keyword search p50, words in under 5 % of notes | 0.6-8 ms | 0.6-8 ms |
-| Keyword search p50, words in most notes | about 110-190 ms | about 110-190 ms |
+| Keyword search p50, words in under 5 % of notes (the bench's realistic-words line: 1.5-4 ms) | 0.6-8 ms | 0.6-8 ms |
+| Keyword search p50, words in most notes (the bench's common-words line) | about 110-190 ms (up to about 250 on a loaded PC) | about 110-190 ms, up to about 260 ms |
 | Store build / database file | 170 s / 305 MB | 196 s / 313 MB |
 | In-memory body index (encrypted only) | - | see the C-06 body-index line below |
 
 Keyword search cost follows how many notes contain the query's words, not how many notes there are: ranking costs about
 1.2 microseconds per matching note. The bench's own query mix is the slow case: it draws 2 words from a made-up Zipf vocabulary
-of about 3,600 words, so the average query matches about 82 % of the notes (about 82,000 rows to rank), and the bench's search
-line read about 140-220 ms p50 in these runs. Words that appear in under 5 % of notes, as most content words in real text do, measured
-0.6-8 ms p50. A query whose every word is in most notes (close to a stop word) stays in the 110-190 ms range; dropping such
+of about 3,000 words, so the average query matches about 82 % of the notes (about 82,000 rows to rank), and the bench's
+common-words line read about 140-260 ms p50 in these runs (encrypted is the slower one: it ranks from the in-memory body index). Words that appear in under 5 % of notes, as most content words in real text do, measured
+0.6-8 ms p50. A query whose every word is in most notes (close to a stop word) stays in the 110-260 ms range; dropping such
 words from the match is a possible later change, not in 1.5.0. Not measured at this size: a whole hook process with Node
 start-up. Hybrid search (embeddings on; off by default) was timed once with a stand-in embedding server, about 320-365 ms p50,
 most of it a scan over every stored vector in the namespace.
@@ -436,7 +441,7 @@ indexes "" and never aborts the write); other processes' commits are noticed thr
 never do; above 100,000 notes it is not built. Measured with `monomem bench --scale 10k` (synthetic made-up words, a worse case
 for index size than real text): build 0.81 s and 0.58 s in two runs, process RSS +31.5 MB and +29.5 MB; session start (hook, no index) 15.3 and 12.4 ms p50 encrypted (10.2 and 10.7 plain),
 gate PASS; keyword search on the server store 10.7 and 7.7 ms p50 encrypted vs 9.0 and 8.1 plain; a write 7.8 and 5.9 ms p50 encrypted vs 7.2 and 7.6 plain (one extra decrypt
-and FTS insert). At 100,000 notes (`bench --scale 100k`, 15 Nov 2026, two runs, batched build): 4.90 s and 4.02 s, process RSS +151.7 MB and +154.2 MB (+509 MB before the build ran in id batches). Security:
+and FTS insert). At 100,000 notes (`bench --scale 100k`, 15 Nov 2026, two runs, batched build): 4.90 s, 4.02 s and 5.48 s, process RSS +151.7, +154.2 and +152.3 MB (+509 MB before the build ran in id batches); at 10,000 notes with the batched build: 0.56 s, RSS +21.3 MB (15 Nov 2026). These RSS figures are measured inside the bench process, which already holds the database pages. A freshly started server grows more: from about 69 MB at open to about 302-308 MB after the build at 100,000 notes (+233-240 MB, two runs), and to about 128 MB at 10,000 notes (+59 MB). Security:
 nothing new on disk, but the words are in RAM for the life of the process and can reach swap, hibernation and crash-dump files
 (docs/encryption-retention.md).
 
