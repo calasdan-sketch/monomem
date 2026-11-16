@@ -327,10 +327,10 @@ the highest published figure. Other systems' own numbers (none re-run by us), re
   recall@10 99.4 on all 500 questions (we score 470), and in v6.2.2's release notes LoCoMo-10 by session R@5 **93.24** on
   "ALL" questions (2.3 above our 90.9; ALL is 1,982 questions per its `benchmarks/README.md`, the same set as ours), and
   LoCoMo-10 by turn ("turn exact") R@5 **68.16** (0.8 above our 67.4, which stores each turn with the turn it replied to;
-  about 7 above our 60.8 with one turn per note; Vestige pools neighbouring turns too, window size not stated). Caveats, from its own pages: its weights and
+  about 7 above our 60.8 with one turn per note). Caveats, from its own pages: its weights and
   word-cluster mappings were refined against the benchmark queries during development, and it reports no held-out half for
   LongMemEval-S (for LoCoMo it reports conversations 1-5 to tune and 6-10 to test); it names "max-passage window pooling"
-  (LongMemEval) and "bidirectional micro-scene pooling" (LoCoMo by turn) with no window sizes. Ours were tuned on half **a** and checked on half **b** (above).
+  (LongMemEval) and "bidirectional micro-scene pooling" (LoCoMo by turn, credited to its soft-match figure, not the turn-exact one compared here) with no window sizes. Ours were tuned on half **a** and checked on half **b** (above).
 - **MemPalace** self-reports LongMemEval-S any-hit R@5 **98.4** on a 450-question held-out set (tuned on the other 50;
   reported in arXiv 2604.21284), 1.2 above our 97.2 on 470. A different question set, so not like-for-like; its earlier "100 %"
   needed hand patches to failing questions (github.com/MemPalace/mempalace/discussions/747).
@@ -394,8 +394,8 @@ the design ceiling: above it the in-memory body index is not built.
 
 | Path at 100,000 notes | plain | encrypted |
 |---|---|---|
-| Session start (`injectContext`) p50 | 7.3-8.8 ms | **7-12 ms** quiet, up to about 18 ms on a loaded PC (release gate 50 ms: **PASS**) |
-| Write (`create`, edges on) p50 | about 3-4 ms | about 3-4 ms |
+| Session start (`injectContext`) p50 | 7.2-8.8 ms | **7-12 ms** quiet, up to about 18 ms on a loaded PC (release gate 50 ms: **PASS**) |
+| Write (`create`, edges on) p50 | about 3-4 ms | about 3-5 ms |
 | Keyword search p50, words in under 5 % of notes (the bench's realistic-words line: 1.5-4 ms) | 0.6-8 ms | 0.6-8 ms |
 | Keyword search p50, words in most notes (the bench's common-words line) | about 110-190 ms (up to about 250 on a loaded PC) | about 110-190 ms, up to about 260 ms |
 | Store build / database file | 170 s / 305 MB | 196 s / 313 MB |
