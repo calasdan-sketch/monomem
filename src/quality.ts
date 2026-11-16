@@ -230,15 +230,17 @@ export function duplicateGroups(pairs: ReadonlyArray<{ idA: number; idB: number;
   const groups = new Map<number, number[]>();
   for (const id of parent.keys()) {
     const r = find(id);
-    groups.set(r, [...(groups.get(r) ?? []), id]);
+    const g = groups.get(r);
+    if (g) g.push(id);
+    else groups.set(r, [id]);
   }
   return [...groups.entries()]
     .map(([r, ids]) => ({ ids: ids.sort((x, y) => x - y), minScore: low.get(r) ?? 1 }))
     .sort((x, y) => x.ids[0] - y.ids[0]);
 }
 
+const writerKey = (n: NoteRecord): string => JSON.stringify([n.namespace, n.written_by, n.writer_id ?? ""]);
 const personConfirmed = (n: NoteRecord): boolean => (n.confirmed_kind === "human" || n.confirmed_kind === "admin") && n.confirmed_rev === n.rev;
-const sameWriter = (a: NoteRecord, b: NoteRecord): boolean => a.written_by === b.written_by && (a.writer_id ?? "") === (b.writer_id ?? "");
 
 /**
  * Search's restated-twin rule (search-service.ts demoteTwins) across the whole store, without its score parts: an older plain
@@ -249,16 +251,25 @@ const sameWriter = (a: NoteRecord, b: NoteRecord): boolean => a.written_by === b
 export function restatedPairs(store: Store, notes: NoteRecord[]): Array<[NoteRecord, NoteRecord]> {
   const enforce = expiryEnforced(store);
   const plain = notes.filter((n) => (n.kind ?? "note") === "note" && !n.superseded_by);
-  const byNs = new Map<string, NoteRecord[]>();
-  for (const n of plain) byNs.set(n.namespace, [...(byNs.get(n.namespace) ?? []), n]);
+  // One group per namespace + writer (only same-writer pairs count), so a store with many writers stays cheap.
+  // ponytail: still O(k^2) inside one writer's group of k notes; index by created_at if one writer reaches tens of thousands
+  const groups = new Map<string, NoteRecord[]>();
+  for (const n of plain) {
+    const k = writerKey(n);
+    const g = groups.get(k);
+    if (g) g.push(n);
+    else groups.set(k, [n]);
+  }
+  const created = new Map(plain.map((n) => [n.id, Date.parse(n.created_at)]));
   const out: Array<[NoteRecord, NoteRecord]> = [];
   for (const o of plain) {
     let best: NoteRecord | undefined;
     let sims: Map<number, number> | undefined; // read only when a cheap candidate exists
-    for (const n of byNs.get(o.namespace)!) {
-      if (n.id === o.id || !sameWriter(n, o) || !(Date.parse(n.created_at) > Date.parse(o.updated_at))) continue;
+    const oUpdated = Date.parse(o.updated_at);
+    for (const n of groups.get(writerKey(o))!) {
+      if (n.id === o.id || !(created.get(n.id)! > oUpdated)) continue;
+      if (best && created.get(n.id)! <= created.get(best.id)!) continue;
       if (n.distrusted || heldFromSessionStart(n, enforce) || (personConfirmed(o) && !personConfirmed(n))) continue;
-      if (best && Date.parse(n.created_at) <= Date.parse(best.created_at)) continue;
       const sameSubject = factClash(o.tags ?? [], n.tags ?? []) || ((sims ??= store.neighbourScores(o.id)).get(n.id) ?? 0) >= RESTATE_MIN_SIM;
       if (sameSubject && !(typeof store.isDistrusted === "function" && store.isDistrusted(n))) best = n;
     }
