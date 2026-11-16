@@ -15,6 +15,7 @@ import { runSearch, runRelevantSearch, roundRobin, type SearchOpts, type Relevan
 import { type ServerNamespaceOpts, canRead, readableNamespaces } from "../namespace.js";
 import { withWhenBase, WriterFilterArgs, splitIgnored, ignoredRefusal, withFields, withIgnored, errorResult, ConnectionCtx, OPERATOR_ONLY_TOOLS, READ_TOOLS, ID_PROBE_TOOLS, CREATING_TOOLS, noteIdsIn, STDIO_ADMIN_HINT, stdioAdminToolsAllowed } from "./shared.js";
 import { enabledToolNames } from "./tool-names.js";
+import { withComputer } from "../sync/marks.js";
 
 export function mcpContext(store: Store, scope: Scope, opts: ServerNamespaceOpts, conn: ConnectionCtx) {
   const server = new McpServer({
@@ -34,7 +35,8 @@ export function mcpContext(store: Store, scope: Scope, opts: ServerNamespaceOpts
   /** Whether a tool is offered on this server: descriptions name only tools the model was actually given. */
   const has = (name: string): boolean => !enabled || enabled.has(name);
   /** A note for a read reply: staleness, a readable date and (R2-01) the dispute marker, computed inside the caller's request. */
-  const withWhen = (n: NoteRecord) => withDisputes(store, withWhenBase(n) as NoteRecord);
+  // Device sync: a note that came from another computer says which one (from_computer), on every MCP read.
+  const withWhen = (n: NoteRecord) => withComputer(store, withDisputes(store, withWhenBase(n) as NoteRecord));
   const registerRaw = server.registerTool.bind(server) as (...a: unknown[]) => unknown;
   (server as unknown as { registerTool: (...a: unknown[]) => unknown }).registerTool = (name: unknown, cfg: unknown, handler: unknown) => {
     // Every registered tool's name and description is sent to the model on

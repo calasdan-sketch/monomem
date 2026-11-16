@@ -8173,6 +8173,12 @@ export class Store {
     return null;
   }
 
+  /** The store a note first came from by file sync (the origin store id), or null for a note written here. */
+  syncOriginOf(localId: number): string | null {
+    const row = this.db.prepare("SELECT origin FROM sync_map WHERE local_id = ? LIMIT 1").get(localId) as { origin: string } | undefined;
+    return row ? row.origin : null;
+  }
+
   /** Every (local id -> origin identity) link, for export. */
   syncOrigins(): Map<number, { origin: string; originId: number }> {
     const rows = this.db.prepare("SELECT origin, origin_id, local_id FROM sync_map").all() as Array<{

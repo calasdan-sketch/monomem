@@ -31,7 +31,9 @@ holds no readable note, title or computer name.
 - Run `monomem sync` when you switch computers, or let it run by itself: `monomem sync setup --auto on` (every 30 minutes while
   Monomem's server is running; `--every 10` for another interval; restart Monomem once after turning it on). `--auto off` turns
   it off. It is **off by default**.
-- `monomem show <id>` and `monomem why <id>` say which computer a note came from ("from computer: Work laptop").
+- `monomem show <id>` and `monomem why <id>` say which computer a note came from ("from computer: Work laptop"). Your AI
+  tools see it too: session start adds "(from computer: Work laptop)" to that note's line, and MCP reads carry
+  `from_computer`. A note written on this computer has neither.
 
 **What is never synced:** your sync key, your at-rest encryption key, app keys (`tokens.json`), the database itself, settings,
 backups and logs. Only note files (sealed) and each computer's chosen name (sealed) travel. Notes above

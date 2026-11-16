@@ -2,6 +2,7 @@
 // Moved out of createMcpServer (mcp-server-core.ts) unchanged; it calls these in a fixed order, which is the tools/list order.
 
 import { currentCeiling } from "../actor.js";
+import { listWithComputer } from "../sync/marks.js";
 import { z } from "zod";
 import { clampInt, type NoteRecord } from "../store.js";
 import { listWithDisputes } from "../facts.js";
@@ -402,18 +403,18 @@ export function registerNotesReadTools(c: McpCtx): void {
           const hint = trustedHint(namespace);
           if (hint) {
             return untrustedResultCut({
-              ...listWithDisputes(store, store.list({ namespace: hint, limit, offset, ...wf })),
+              ...listWithComputer(store, listWithDisputes(store, store.list({ namespace: hint, limit, offset, ...wf }))),
               searchedNamespaces: [hint],
             });
           }
           return untrustedResultCut({
-            ...listWithDisputes(store, listReadable(limit, offset, wf)),
+            ...listWithComputer(store, listWithDisputes(store, listReadable(limit, offset, wf))),
             searchedNamespaces: readable(),
           });
         }
         const result = store.list({ namespace, limit, offset, ...wf });
         return untrustedResultCut({
-          ...listWithDisputes(store, result),
+          ...listWithComputer(store, listWithDisputes(store, result)),
           searchedNamespaces: namespace ? [namespace] : [],
         });
       } catch (e) {

@@ -99,11 +99,21 @@ export function rememberMachine(store: Store, origin: string, label: string): vo
   if (l && store.getMeta(`sync_machine:${origin}`) !== l) store.setMeta(`sync_machine:${origin}`, l);
 }
 
+/** A note with `from_computer` added when it came in by file sync (MCP reads); unchanged otherwise. */
+export function withComputer<T extends { id: number }>(store: Store, n: T): T & { from_computer?: string } {
+  const pc = noteComputer(store, n.id);
+  return pc ? { ...n, from_computer: pc } : n;
+}
+
+export function listWithComputer<T extends { notes: Array<{ id: number }> }>(store: Store, r: T): T {
+  return { ...r, notes: r.notes.map((n) => withComputer(store, n)) };
+}
+
 /** For a note that came in by file sync: the computer it was first written on (its label, or a short store id). */
 export function noteComputer(store: Store, localId: number): string | null {
-  const o = store.syncOrigins().get(localId);
-  if (!o) return null;
-  return machineOf(store, o.origin) ?? `computer ${o.origin.slice(0, 8)}`;
+  const origin = store.syncOriginOf(localId);
+  if (!origin) return null;
+  return machineOf(store, origin) ?? `computer ${origin.slice(0, 8)}`;
 }
 
 // ---- import: act on a marker ----------------------------------------------------------------------------------------------
