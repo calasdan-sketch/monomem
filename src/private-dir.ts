@@ -23,8 +23,15 @@ export function lockdownArgs(dir: string, env: NodeJS.ProcessEnv = process.env):
   const user = env.USERNAME?.trim();
   if (!user) return null;
   const domain = env.USERDOMAIN?.trim();
-  return [dir, "/inheritance:r", "/grant:r", `${domain ? domain + "\\" : ""}${user}:(OI)(CI)F`, "SYSTEM:(OI)(CI)F"];
+  return [dir, "/inheritance:r", "/grant:r", `${domain ? domain + "\\" : ""}${user}:(OI)(CI)F`, "SYSTEM:(OI)(CI)F", "/remove:g", ...WIDE_SIDS];
 }
+
+/**
+ * Administrators, Users, Authenticated Users, Everyone, by SID (same on every Windows language). Removed explicitly: a
+ * folder created from an elevated (administrator) prompt gets its own non-inherited Administrators entry, which
+ * `/inheritance:r` alone leaves in place (seen on GitHub's Windows runners).
+ */
+const WIDE_SIDS = ["*S-1-5-32-544", "*S-1-5-32-545", "*S-1-5-11", "*S-1-1-0"];
 
 const WIDE_GROUPS = ["BUILTIN\\Administrators", "BUILTIN\\Users", "NT AUTHORITY\\Authenticated Users", "Everyone"];
 /** The groups that reach beyond the owner in the output of `icacls <dir>` (`monomem doctor` names them on Windows). */
@@ -54,7 +61,7 @@ export function privateDir(dir: string, o: PrivateDirOptions = {}): void {
     if (!args) throw new Error("the Windows user name is unknown");
     (o.run ?? runIcacls)(args);
   } catch (e) {
-    console.error(`[monomem] could not restrict ${dir} to your account with icacls (${(e as Error).message}); other accounts on this PC may be able to read it. Fix: icacls "${dir}" /inheritance:r /grant:r "%USERDOMAIN%\\%USERNAME%:(OI)(CI)F" "SYSTEM:(OI)(CI)F"`);
+    console.error(`[monomem] could not restrict ${dir} to your account with icacls (${(e as Error).message}); other accounts on this PC may be able to read it. Fix: icacls "${dir}" /inheritance:r /grant:r "%USERDOMAIN%\\%USERNAME%:(OI)(CI)F" "SYSTEM:(OI)(CI)F" /remove:g ${WIDE_SIDS.join(" ")}`);
   }
 }
 

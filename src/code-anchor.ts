@@ -67,8 +67,17 @@ export function anchorsFor(files: string[], cwd: string): CodeAnchor[] {
   } catch {
     return [];
   }
+  // git reports the real path; a cwd reached through a link or an 8.3 short name (macOS /var -> /private/var, Windows
+  // RUNNER~1) names the same folder differently, so a relative path is also tried from the real cwd.
+  let realCwd = cwd;
+  try {
+    realCwd = realpathSync.native(cwd);
+  } catch {
+    /* unreadable cwd: keep it as given */
+  }
   const rels = [...new Set(files.map((f) => {
-    const abs = resolve(cwd, f);
+    const given = resolve(cwd, f);
+    const abs = inside(root, given) || inside(realRoot, given) ? given : resolve(realCwd, f);
     if (!inside(root, abs) && !inside(realRoot, abs)) throw new ValidationError("files: a path must be inside this repository");
     if (existsSync(abs)) {
       let real: string;

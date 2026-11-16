@@ -668,7 +668,7 @@ async function doctor(): Promise<void> {
       if (!checked && outside) {
         warn(
           "the data folder is outside your user folder, so other accounts on this PC may be able to read the keys and notes.",
-          `To limit it to you: icacls "${DATA_DIR}" /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F" /grant:r "SYSTEM:(OI)(CI)F"`
+          `To limit it to you: icacls "${DATA_DIR}" /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F" "SYSTEM:(OI)(CI)F" /remove:g *S-1-5-32-544 *S-1-5-32-545 *S-1-5-11 *S-1-1-0`
         );
       }
     }

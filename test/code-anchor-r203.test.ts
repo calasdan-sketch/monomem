@@ -40,6 +40,15 @@ before(() => {
 after(() => rmSync(root, { recursive: true, force: true }));
 
 describe("R2-03 code anchors", () => {
+  test("a working folder reached through a link or short name (macOS /var -> /private/var, Windows RUNNER~1) still anchors", () => {
+    const link = join(root, "via-link");
+    symlinkSync(repo, link, "junction"); // a junction on Windows (no admin needed), a folder symlink elsewhere
+    const s = new Store(":memory:");
+    const n = at(link, () => s.create({ title: "linked cwd", body: "b" }, { files: ["src/auth.ts"] }));
+    assert.equal(s.read(n.id)!.code_changed, undefined);
+    assert.throws(() => at(link, () => s.create({ title: "x", body: "b" }, { files: [join(outside, "secret.txt")] })), /inside this repository/);
+  });
+
   test("a commit that changes an anchored file labels the note; one git ls-tree per HEAD", async () => {
     const s = new Store(":memory:");
     const n = at(repo, () => s.create({ title: "auth uses a token", body: "see auth" }, { files: ["src/auth.ts", "./src/db.ts"] }));

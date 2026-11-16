@@ -16,7 +16,7 @@ const ENV = { USERDOMAIN: "DESK", USERNAME: "dan" } as NodeJS.ProcessEnv;
 
 describe("R1-11 data folder ACL", () => {
   test("lockdownArgs: the owner and SYSTEM only, inheritance removed", () => {
-    assert.deepEqual(lockdownArgs("C:\\d", ENV), ["C:\\d", "/inheritance:r", "/grant:r", "DESK\\dan:(OI)(CI)F", "SYSTEM:(OI)(CI)F"]);
+    assert.deepEqual(lockdownArgs("C:\\d", ENV), ["C:\\d", "/inheritance:r", "/grant:r", "DESK\\dan:(OI)(CI)F", "SYSTEM:(OI)(CI)F", "/remove:g", "*S-1-5-32-544", "*S-1-5-32-545", "*S-1-5-11", "*S-1-1-0"]);
     assert.equal(lockdownArgs("C:\\d", {} as NodeJS.ProcessEnv), null, "no user name: no guessing");
   });
 
@@ -83,6 +83,20 @@ describe("R1-11 data folder ACL", () => {
       assert.ok(out.toLowerCase().includes((process.env.USERNAME ?? "?").toLowerCase()), out);
     } finally {
       rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test("win32 only: the lock also removes a direct (non-inherited) Administrators or Users entry, as an elevated prompt creates (GitHub's Windows runner)", { skip: process.platform !== "win32" }, () => {
+    const d = mkdtempSync(join(tmpdir(), "mm-acl-explicit-"));
+    try {
+      execFileSync("icacls", [d, "/grant", "*S-1-5-32-544:(OI)(CI)F", "*S-1-5-32-545:(OI)(CI)RX"], { stdio: "ignore" });
+      assert.deepEqual(wideAccessGroups(execFileSync("icacls", [d], { encoding: "utf8" })).slice(0, 2), ["BUILTIN\\Administrators", "BUILTIN\\Users"], "setup: the direct entries are there");
+      execFileSync("icacls", lockdownArgs(d)!, { stdio: "ignore" });
+      const out = execFileSync("icacls", [d], { encoding: "utf8" });
+      assert.deepEqual(wideAccessGroups(out), [], out);
+      assert.ok(out.toLowerCase().includes((process.env.USERNAME ?? "?").toLowerCase()), out);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
     }
   });
 
