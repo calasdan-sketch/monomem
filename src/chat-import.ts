@@ -118,7 +118,6 @@ export function readChatSession(path: string, stats?: ChatStats): ChatMessage[] 
   return out;
 }
 
-/** Every session under `root` (~/.claude/projects): one Item per message, grouped by project folder. */
 /** What a dry run reports beside the counts: files skipped for size, lines that could not be read. */
 export interface ChatStats {
   sessions: number;
@@ -126,6 +125,7 @@ export interface ChatStats {
   badLines: number;
 }
 
+/** Every session under `root` (~/.claude/projects): one Item per message, grouped by project folder. */
 export function readClaudeCodeChats(root: string, stats: ChatStats = { sessions: 0, tooBig: 0, badLines: 0 }, contextOk?: (text: string) => boolean): Item[] {
   const items: Item[] = [];
   for (const project of readdirSync(root, { withFileTypes: true })) {

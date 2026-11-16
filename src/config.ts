@@ -18,6 +18,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
+import { chmodQuiet, privateDir } from "./private-dir.js";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
@@ -25,6 +26,7 @@ import { resolveTimeZone } from "./time-parse.js";
 import { cleanWriter } from "./actor.js";
 import { didYouMean } from "./suggest.js";
 import { type Sensitivity, parseSensitivity, sensitivityRank, defaultCeilingFromEnv, SENSITIVITY_HELP } from "./sensitivity.js";
+export { chmodQuiet, lockdownArgs, wideAccessGroups, privateDir, type PrivateDirOptions } from "./private-dir.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const PROJECT_ROOT = join(__dirname, "..", "..");
@@ -132,9 +134,6 @@ export const TOKEN_FILE = join(DATA_DIR, ".token");
 export function insideNodeModules(p: string): boolean {
   return resolve(p).split(sep).includes("node_modules");
 }
-
-import { chmodQuiet, privateDir } from "./private-dir.js";
-export { chmodQuiet, lockdownArgs, wideAccessGroups, privateDir, type PrivateDirOptions } from "./private-dir.js";
 
 /** The data-dir files that hold notes or credentials: owner read/write only. */
 export const PRIVATE_FILES = ["state.db", "state.db-wal", "state.db-shm", "audit.log", "server.log", ".token", "tokens.json", "spaces.json", ".key", ".attest-key"];
