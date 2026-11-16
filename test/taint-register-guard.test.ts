@@ -90,6 +90,18 @@ const REST_EXEMPT: Record<string, string> = {
   "GET /export": "admin backup",
   "POST /import": "admin",
   "GET /trust": "no note content",
+  // routes-ui.ts: every /ui/ route needs the main (admin) key with no pin and no limit.
+  "GET /ui/state": "main key only; settings and version, no note content",
+  "GET /ui/needs-you": "main key only; counts and plain sentences, no note content",
+  "GET /ui/review": "main key only (like monomem review); ids and titles, no unconfirmed flag in the payload",
+  "POST /ui/review/:id/keep": "main key plus a person session; replies counts",
+  "PUT /ui/settings": "main key plus a local sign-in; replies settings",
+  "GET /ui/apps": "main key plus a local sign-in; app names, no note content",
+  "POST /ui/apps/connect": "main key plus a local sign-in; replies command output",
+  "POST /ui/update": "main key plus a local sign-in; replies command output",
+  "POST /ui/remove": "main key plus a local sign-in; replies command output",
+  "POST /ui/service": "main key plus a local sign-in; replies command output",
+  "POST /ui/backup": "main key plus a local sign-in; replies the backup folder",
 };
 
 function restRoutesInSource(): string[] {
@@ -112,6 +124,7 @@ function restRoutesInSource(): string[] {
     qCtxMatch: "/quarantine/:id/context",
     qMatch: "/quarantine/:id",
     del: "/tokens/:label",
+    keep: "/ui/review/:id/keep",
   };
   for (const m of api.matchAll(/req\.method === "([A-Z]+)" && (?:\(?path === "([^"]+)"|\(?(\w+)|\/\^)/g)) {
     const [, method, lit, v] = m;

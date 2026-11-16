@@ -231,9 +231,9 @@ describe("B: one gate for reading a note", () => {
     if (/req\.method === "GET" && SIGN_PAGES\[path\]/.test(api)) routes.add("(sign pages)");
     if (/req\.method === "GET" && sessMatch/.test(api)) routes.add("/sessions/:id");
     if (/req\.method === "GET" && qCtxMatch/.test(api)) routes.add("/quarantine/:id/context");
-    const NOTE_ROUTES = ["/notes", "/notes/:id", "/search", "/stats", "/changes", "/tasks", "/tasks/:id", "/handoffs", "/catch-up", "/export", "/index", "/timeline", "/sessions", "/sessions/:id", "/files/timeline", "/quality", "/quarantine", "/quarantine/:id/context"];
+    const NOTE_ROUTES = ["/notes", "/notes/:id", "/search", "/stats", "/changes", "/tasks", "/tasks/:id", "/handoffs", "/catch-up", "/export", "/index", "/timeline", "/sessions", "/sessions/:id", "/files/timeline", "/quality", "/quarantine", "/quarantine/:id/context", "/ui/review"];
     // /access: the read access log holds writer labels and redacted query previews, never note text.
-    const NO_NOTE_CONTENT = ["/health", "/proof", "/status", "/ready", "/", "/dashboard.js", "/favicon.ico", "(sign pages)", "/runner/status", "/trust", "/access", "/whoami", "/audit", "/insights", "/tokens"];
+    const NO_NOTE_CONTENT = ["/health", "/proof", "/status", "/ready", "/", "/dashboard.js", "/favicon.ico", "(sign pages)", "/runner/status", "/trust", "/access", "/whoami", "/audit", "/insights", "/tokens", "/ui/state", "/ui/needs-you", "/ui/apps"];
     assert.deepEqual([...routes].sort(), [...NOTE_ROUTES, ...NO_NOTE_CONTENT].sort(), "a GET route was added: add it to NOTE_ROUTES (and to the canary test below) or NO_NOTE_CONTENT");
 
     const mcp = readGroup("mcp-server-core.ts");
@@ -295,6 +295,7 @@ describe("B: the canary never reaches a non-admin reader through any classified 
         ["/quality", 403, ""], // admin only: it lists every writer's titles
         ["/quarantine", 403, ""], // admin only: held writes carry their full text
         ["/quarantine/1/context", 403, ""], // admin only: lists other writers' titles next to a held write
+        ["/ui/review", 403, ""], // the main key only: the review list names other writers' notes
       ];
       for (const [p, status, must] of routes) {
         const r = await fetch(base + p, { headers: { Authorization: `Bearer ${TOKEN}` } });
