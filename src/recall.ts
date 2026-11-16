@@ -30,6 +30,12 @@ import {
  * built -- the recall path has no business being that heavy.)
  */
 export const RECALL_HARD_TIMEOUT_MS = 5000; // never block session start
+/** The cap in use. MONOMEM_RECALL_TIMEOUT_MS can only RAISE it (to at most 60 s): the test suite does, so a loaded CI
+ * runner does not trip the 5 s cap; a user never needs it. */
+export function recallHardTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const n = Number(env.MONOMEM_RECALL_TIMEOUT_MS);
+  return Number.isFinite(n) && n > RECALL_HARD_TIMEOUT_MS ? Math.min(n, 60_000) : RECALL_HARD_TIMEOUT_MS;
+}
 /**
  * The opening banner and closing reminder around recalled notes. Both carry the same random per-output nonce, so a stored
  * note that copies the terminator text cannot fake the end of the block: it does not know this output's nonce.
@@ -345,7 +351,7 @@ export async function runRecall(opts: RecallOptions = {}): Promise<string> {
     const budgetMs = opts.budgetMs ?? 800;
 
     const timer = new Promise<null>((resolve) => {
-      const t = setTimeout(() => resolve(null), RECALL_HARD_TIMEOUT_MS);
+      const t = setTimeout(() => resolve(null), recallHardTimeoutMs());
       // Don't let the hard-timeout timer hold the process open after
       // we've already printed.
       (t as unknown as { unref?: () => void }).unref?.();
