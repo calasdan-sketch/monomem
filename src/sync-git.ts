@@ -393,6 +393,12 @@ export async function runGitSync(io: GitSyncIO, o: GitSyncOptions): Promise<numb
               io.out(`  ${c.conflict} note(s) were edited on two computers; the losing text is saved in ${keep}`);
             }
           }
+          const ar = imp.archive;
+          const n = (k: number, one: string): string => `${k} ${one}${k === 1 ? "" : "s"}`;
+          if (ar.archived) io.out(`  archived ${n(ar.archived, "note")} forgotten on another computer (kept, not deleted).`);
+          if (ar.restored) io.out(`  brought back ${n(ar.restored, "archived note")} (restored or edited on another computer).`);
+          if (ar.kept) io.out(`  kept ${n(ar.kept, "note")} live here that another computer archived:`);
+          for (const l of ar.lines) io.out(`    ${l}`);
           if (imp.foreignHeld > 0) io.out(`  ${imp.foreignHeld} note(s) from other machines held for review (monomem quarantine list).`);
           if (c.rejected > 0) io.err(`  ${c.rejected} file(s) were rejected (see \`monomem import --dir\` for details).`);
         } finally {
