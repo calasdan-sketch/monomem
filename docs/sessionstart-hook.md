@@ -61,6 +61,9 @@ Why shown, in {}: files = linked to files you changed, kw = matches your branch,
   tagged `convention`, the files memory mentions most, the last session and
   the open-task count. It is capped by `MONOMEM_PROFILE_TOKENS` (default
   300, never more than half the budget); `MONOMEM_PROFILE=off` drops it.
+- The "Showing X of N memories" line counts the store's notes up to 2,000;
+  above that it says "2,000+" (for example "Showing 12 of 2,000+
+  memories"), so a very large store does not slow session start down.
 - A note tagged `never-show` is never injected (nor in the profile or the
   file-context hint). `monomem never-show <id>` sets it, `--undo` clears it;
   the dashboard has a **never show** button on each note.

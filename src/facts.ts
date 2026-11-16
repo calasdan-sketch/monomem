@@ -5,9 +5,10 @@
 // What it cannot know: whether two notes mean the same subject when an agent reuses one key for two things. Use a common key
 // (COMMON_FACT_KEYS) when one fits, and prefix a subject ("api.deploy_target") only when the project has several.
 import type { Store, NoteRecord } from "./store.js";
-import { ValidationError } from "./store.js";
+import { ValidationError } from "./errors.js";
 import { printable } from "./security.js";
 import { actorStore } from "./actor.js";
+import { heldFromSessionStart } from "./taint.js";
 import { gatePinned } from "./operator-gate.js";
 import { factMismatchWarnings, scanForInjection, scanForDirective } from "./lint.js";
 
@@ -110,6 +111,12 @@ export const canonKey = (key: string): string => {
   return g ? prefixOf(key) + g[0] : key;
 };
 
+/** Two notes give one fact key (same common spelling) different values: they are about the same setting. */
+export function factClash(a: readonly string[], b: readonly string[]): boolean {
+  const mine = new Map(noteFacts(a).map(([k, v]) => [canonKey(k), normFact(v)]));
+  return noteFacts(b).some(([k, v]) => mine.has(canonKey(k)) && mine.get(canonKey(k)) !== normFact(v));
+}
+
 /** Plural / one-edit spellings of one word ("deploy_targets", "deploy_targt"). Short words are skipped: "db" vs "dr" is not drift. */
 function nearWord(a: string, b: string): boolean {
   if (a === b || a.length < 5 || b.length < 5 || Math.abs(a.length - b.length) > 1) return false;
@@ -132,21 +139,61 @@ function synonymKeys(key: string): string[] {
  * to the agent so it can ask the user. Distrusted writers are skipped.
  */
 export function writeConflicts(store: Store, note: NoteRecord): string[] {
-  const mine = noteFacts(note.tags);
-  if (!mine.length) return [];
-  const out: string[] = [];
-  for (const [key, value] of mine) {
+  return disputing(store, note).map(({ o, key, value, theirKey, theirs }) => {
+    const same = theirKey === key;
+    return `conflicts with #${o.id} by ${printable(o.written_by, 60)}: ${theirKey} ${quote(theirs, MAX_FACT_VALUE)} (theirs) vs ${same ? "" : key + " "}${quote(value, MAX_FACT_VALUE)} (yours)${same ? "" : ", the same setting under another key"}. Both are kept; ask the user which is right.`;
+  });
+}
+
+/**
+ * Live notes of another writer that give one of this note's fact keys (or a synonym) another value, at most MAX_REPORTED. Only
+ * notes the caller may read count: liveFactNotes applies the sensitivity ceiling, the distrust list and never-show, and the
+ * namespace is the note's own, so a hidden note never shows up here (and so never shows that it exists).
+ */
+function disputing(store: Store, note: NoteRecord): Array<{ o: NoteRecord; key: string; value: string; theirKey: string; theirs: string }> {
+  const out: Array<{ o: NoteRecord; key: string; value: string; theirKey: string; theirs: string }> = [];
+  for (const [key, value] of noteFacts(note.tags)) {
     for (const theirKey of [key, ...synonymKeys(key)]) {
       for (const o of store.liveFactNotes(note.namespace, theirKey, note.id)) {
         const theirs = noteFacts(o.tags).find(([k]) => k === theirKey)?.[1];
         if (theirs === undefined || writerOf(o) === writerOf(note) || normFact(theirs) === normFact(value)) continue;
-        const same = theirKey === key;
-        out.push(`conflicts with #${o.id} by ${printable(o.written_by, 60)}: ${theirKey} ${quote(theirs, MAX_FACT_VALUE)} (theirs) vs ${same ? "" : key + " "}${quote(value, MAX_FACT_VALUE)} (yours)${same ? "" : ", the same setting under another key"}. Both are kept; ask the user which is right.`);
+        out.push({ o, key, value, theirKey, theirs });
         if (out.length >= MAX_REPORTED) return out;
       }
     }
   }
   return out;
+}
+
+/** One note that gives a fact key of the note being read another value (R2-01). `confirmed`: a person confirmed its current version. */
+export interface DisputeMark { id: number; key: string; value: string; written_by: string; confirmed: boolean }
+export const DISPUTED_BY_CONFIRMED = "disputed by a confirmed note";
+const humanConfirmed = (n: NoteRecord): boolean => n.confirmed_kind === "human" && n.confirmed_rev === n.rev;
+
+/**
+ * R2-01: the dispute marker for a note handed to a reader: `disputed` lists the live notes of other writers that give one of
+ * its fact keys another value (confirmed ones first), and `disputed_label` says when the other side is confirmed by a person
+ * and this one is not. Both sides keep their notes; nothing is hidden. {} for a note without facts or without a dispute, so
+ * other notes keep their exact shape. Must run inside the caller's request (the ceiling is the caller's).
+ */
+export function disputeFields(store: Store, note: NoteRecord): { disputed?: DisputeMark[]; disputed_label?: string } {
+  if (note.archived_at || !Array.isArray(note.tags) || !note.tags.some((t) => t.startsWith(FACT_PREFIX))) return {};
+  const marks = disputing(store, note)
+    .map(({ o, theirKey, theirs }) => ({ id: o.id, key: theirKey, value: flaggedFactValue(theirs) ? WITHHELD : printable(theirs, MAX_FACT_VALUE), written_by: o.written_by, confirmed: humanConfirmed(o) }))
+    .sort((a, b) => Number(b.confirmed) - Number(a.confirmed) || a.id - b.id);
+  if (!marks.length) return {};
+  return { disputed: marks, ...(marks.some((m) => m.confirmed) && !humanConfirmed(note) ? { disputed_label: DISPUTED_BY_CONFIRMED } : {}) };
+}
+
+/** A note (or note-shaped record) with its dispute marker added (R2-01). */
+export function withDisputes<T extends NoteRecord>(store: Store, note: T): T & { disputed?: DisputeMark[]; disputed_label?: string } {
+  const d = disputeFields(store, note);
+  return d.disputed ? { ...note, ...d } : note;
+}
+
+/** A list result ({ notes, ... }) with each note's dispute marker added. */
+export function listWithDisputes<T extends { notes: NoteRecord[] }>(store: Store, r: T): T {
+  return { ...r, notes: r.notes.map((n) => withDisputes(store, n)) };
 }
 
 export interface SimilarKey { key: string; value: string; id: number; writer: string }
@@ -243,7 +290,10 @@ function disputes(notes: readonly NoteRecord[]): Dispute[] {
  */
 export function disputedLines(store: Store, opts: DisputeOpts | string = {}): string {
   const o: DisputeOpts = typeof opts === "string" ? { namespace: opts } : opts;
-  const found = disputes(store.liveFactNotesIn(o.namespace, { writtenBy: o.writtenBy, notWrittenBy: o.notWrittenBy }));
+  // 1.4.0: a note held out of session start (unconfirmed outside content ...) must not reach it through its fact value either.
+  const enforce = store.confirmSettings().mode === "enforce";
+  const live = store.liveFactNotesIn(o.namespace, { writtenBy: o.writtenBy, notWrittenBy: o.notWrittenBy }).filter((n) => !heldFromSessionStart(n, enforce));
+  const found = disputes(live);
   const lines = found.slice(0, MAX_DISPUTE_LINES).map(({ namespace, key, sides }) => {
     const text = sides.slice(0, MAX_SIDES).map((s) => {
       const ws = [...s.writers.values()].sort((a, b) => a.id - b.id);

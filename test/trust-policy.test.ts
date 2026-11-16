@@ -16,7 +16,7 @@ import { createApiServer } from "../src/api.js";
 import { createMcpServer } from "../src/mcp-server-core.js";
 import { runSearch, runSearchExplained, runRelevantSearch } from "../src/search-service.js";
 import { runChanges } from "../src/changes.js";
-import { putTask, approveTask, claimTask, getTask, listTasks, listHandoffs, writeHandoff, catchUp, queuedCommandTasks, classifyQueuedCommand } from "../src/tasks.js";
+import { putTask, approveTask, claimTask, getTask, listTasks, writeHandoff, catchUp, queuedCommandTasks, classifyQueuedCommand } from "../src/tasks.js";
 import { buildSummary } from "../src/recall.js";
 import { provenanceBanner } from "../src/security.js";
 import { consolidateNotes } from "../src/consolidate.js";

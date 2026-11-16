@@ -22,6 +22,19 @@ const as = <T>(label: string, fn: () => T): T => actorStore.run({ label, authed:
 const read = (f: string): string => readFileSync(join(SRC, f), "utf8");
 
 /**
+ * The gate itself: store.ts and the modules split out of it (src/store/**) may read notes and query the gated tables
+ * directly. Every other file under src/ (recursively, so a new subfolder is not silently unscanned) is checked below.
+ */
+const isGateFile = (f: string): boolean => f === "store.ts" || f.startsWith("store/");
+function srcFiles(dir = SRC, prefix = ""): string[] {
+  return readdirSync(join(dir), { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? srcFiles(join(dir, e.name), `${prefix}${e.name}/`) : e.name.endsWith(".ts") ? [`${prefix}${e.name}`] : [],
+  );
+}
+/** The files outside the gate, paths relative to src/ with forward slashes. */
+const scanned = (): string[] => srcFiles().filter((f) => !isGateFile(f));
+
+/**
  * Every raw read of notes outside store.ts: `.read(` / `.exportAll(` / `.exportBatch(` on ANY receiver (an alias,
  * `this.s.read(`, `deps.store.read(` all match), each carrying a `// gate-ok: <reason>` comment on the same line.
  * The reasons are listed here per file, so the check is keyed on the call site and not on a count: adding a read, or
@@ -32,12 +45,16 @@ const GATE_OK = "// gate-ok: ";
 const EXPECTED_SITES: Record<string, string[]> = {
   "api.ts": [
     "access probe: denyUnreadable/readVisible decide before anything is returned",
-    "PUT: namespace check, then a hidden note reads as 404",
-    "tag-guard lookup only (no content returned)",
     "archive/restore: denyUnwritable probe, hidden note is 404",
     "GET /export is admin-only (a full backup)",
+    "namespace check; confirm() re-reads through readVisible",
+    "namespace probe; flagNote re-reads through readVisible",
   ],
+  "operator-gate.ts": ["the CLI is the operator"],
+  "audit-cli.ts": ["verify-receipt --note: the operator compares a note with their own receipt; only a hash and the rev are printed"],
+  "bench/engine.ts": ["bench adapter over HTTP GET /export (admin-only), not a Store read"],
   "cli.ts": [
+    "the CLI is the operator",
     "local shell command (reindex): the operator owns the database file",
     "local shell command (permanent delete): the operator owns the database file",
     "local shell command (show): the operator owns the database file",
@@ -48,19 +65,22 @@ const EXPECTED_SITES: Record<string, string[]> = {
   "quality.ts": ["admin-only report"],
   "conflicts.ts": ["admin-only report"],
   "why.ts": ["local shell command (why): the operator owns the database file"],
+  "review-step.ts": ["local CLI, the operator owns the database file"],
   "consolidate.ts": [
     "admin consolidation by ids: mixed trusted/distrusted sources are refused below",
     "candidate scan is filtered with store.filterVisible before use",
     "re-read of an id the pool already admitted",
   ],
   "mcp-server-core.ts": [
-    "tag-guard lookup only (no content returned)",
+    "read-taint probe, a flag check, nothing returned",
     "access probe: readVisible decides before anything is returned",
     "admin delete: namespace check only",
     "admin forget: existence + archived check only, nothing returned",
     "consolidation candidates (admin): filtered with filterVisible",
     "consolidation candidates (admin): filtered with filterVisible",
     "admin consolidate: namespace check only",
+    "namespace check only; confirm() re-reads through readVisible",
+    "namespace check only; flagNote re-reads through readVisible",
   ],
   "setup.ts": ["setup reads back the test note it wrote a moment ago"],
   "sync.ts": [
@@ -77,6 +97,7 @@ const EXPECTED_SITES: Record<string, string[]> = {
   "rollback.ts": [
     "operator rollback (admin), confined to the caller's namespaces by rollbackCandidates",
     "re-embed what the operator just restored; nothing is returned",
+    "operator rollback, only the writer name is used",
   ],
   "tasks.ts": [
     "requireTaskRef: a distrusted task reads as absent",
@@ -99,7 +120,43 @@ export function rawSites(text: string): Array<[number, string]> {
 }
 
 /** Unconditional `includeDistrusted: true` (not behind a `? { includeDistrusted: true } : {}` pass-through of an admin-gated flag), per file. */
-const INTERNAL_OPT_IN: Record<string, number> = { "api.ts": 1, "cli.ts": 1, "everyday-cli.ts": 2, /* show/edit: the local shell is the owner, as in label */ "liveness.ts": 2, "mcp-server-core.ts": 1, "runner.ts": 2, "tasks.ts": 2 };
+const INTERNAL_OPT_IN: Record<string, number> = {
+  "api.ts": 1,
+  // 1 + 2 (1.5.0 U-02): search counts how many matches the distrust list hid (the type and the call); only the count is printed.
+  "cli.ts": 3,
+  // 1.5.0 U-15: tidiness counts notes in any state, so an empty store loses no points for a missing backup; a count only.
+  "digest.ts": 1,
+  // show/edit: the local shell is the owner, as in label; + 1 (1.5.0 U-02): ls counts the notes the distrust list hid.
+  "everyday-cli.ts": 3,
+  // heldEditDiff: admin-only callers (REST quarantine context, CLI quarantine show) diff a held edit against its target.
+  "line-diff.ts": 1,
+  "liveness.ts": 2,
+  "mcp-server-core.ts": 1,
+  "runner.ts": 2,
+  // 1.5.0 U-15: setup checks whether the store has any note at all before choosing where to write its test note; a count only.
+  "setup.ts": 1,
+  "tasks.ts": 2,
+};
+
+/** SQL on a table the trust rules read or write: notes, their history, held writes, distrust/attester state, _meta (trust settings), confirmations, links. */
+const GATED_SQL_RE = /\b(?:FROM|JOIN|UPDATE|INTO)\s+(notes|note_history|quarantine|trust_distrust|trust_attesters|trust_log|_meta|confirmations|note_links|note_flags|note_client_keys|code_anchors)\b/gi;
+/** Files outside the gate that touch a gated table directly, with the tables, each reviewed. */
+const SQL_ALLOWED: Record<string, string[]> = {
+  // backup.ts counts the notes of the COPY it just made and strips local-only _meta keys from that copy.
+  "backup.ts": ["_meta", "notes"],
+  // bench/monomem-adapter.ts clears the copied key-id marker (_meta) of the throwaway drill copy of a database it just made.
+  "bench/monomem-adapter.ts": ["_meta"],
+  // bench/scale.ts counts sealed bodies (body_enc IS NOT NULL, a COUNT only) in the synthetic temp-folder store it just built.
+  "bench/scale.ts": ["notes"],
+  // drill.ts forgets the copied key-id marker (_meta attest_key_id) in its own temp-folder COPY of the database, as the bench adapter does.
+  "drill.ts": ["_meta"],
+  // health.ts keeps its own "audit lines seen" marker in _meta (health_audit_seen); it reads no trust setting.
+  "health.ts": ["_meta"],
+  // restore.ts counts (and checks for encryption) the BACKUP FILE it is about to put in place, before any store opens it.
+  "restore.ts": ["_meta", "notes"],
+  // why.ts is a local shell command (the operator owns the database file): held-write and confirmation history for one id.
+  "why.ts": ["confirmations", "quarantine"],
+};
 
 describe("B: one gate for reading a note", () => {
   test("the scanner itself: it matches aliased receivers and ignores comments (positive control)", () => {
@@ -117,7 +174,8 @@ describe("B: one gate for reading a note", () => {
   });
 
   test("no module reads notes raw without a reviewed, reasoned call site", () => {
-    const files = readdirSync(SRC).filter((f) => f.endsWith(".ts") && f !== "store.ts");
+    const files = scanned();
+    assert.ok(files.length > 50 && files.some((f) => f.includes("/")), "the scan is recursive and found the source files");
     const seen: Record<string, string[]> = {};
     const unmarked: string[] = [];
     for (const f of files) {
@@ -133,20 +191,27 @@ describe("B: one gate for reading a note", () => {
     assert.deepEqual(seen, expected, "the set of reviewed raw reads changed: update EXPECTED_SITES in test/trust-gate-guard.test.ts with the reason it is safe");
   });
 
-  test("no SQL on the notes table outside store.ts, and no new unconditional includeDistrusted opt-in", () => {
-    const files = readdirSync(SRC).filter((f) => f.endsWith(".ts") && f !== "store.ts");
-    const sql: string[] = [];
+  test("no SQL on the gated tables outside the gate, and no new unconditional includeDistrusted opt-in", () => {
+    const files = scanned();
+    const sql: Record<string, string[]> = {};
     const optIn: Record<string, number> = {};
     for (const f of files) {
       const t = read(f);
-      if (/\b(?:FROM|JOIN|UPDATE|INTO)\s+notes\b/i.test(t)) sql.push(f);
+      const code = t.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+      const tables = new Set([...code.matchAll(GATED_SQL_RE)].map((m) => m[1]));
+      if (tables.size) sql[f] = [...tables].sort();
       const n = t.split("\n").filter((l) => /includeDistrusted: ?true/.test(l) && !/\? \{ includeDistrusted: true \} : \{\}/.test(l) && !/^\s*\/\//.test(l)).length;
       if (n) optIn[f] = n;
     }
-    // backup.ts only counts the notes of the COPY it just made; restore.ts only counts (and checks for encryption) the BACKUP FILE it is about to put
-    // in place, before any store opens it: neither reads a note into a response.
-    assert.deepEqual(sql.sort(), ["backup.ts", "restore.ts"], "SQL on the notes table belongs in store.ts, behind the gate");
+    assert.deepEqual(sql, SQL_ALLOWED, "SQL on a gated table belongs in store.ts / src/store/, behind the gate: route it through the Store, or review it and list it in SQL_ALLOWED");
     assert.deepEqual(optIn, INTERNAL_OPT_IN, "an unconditional includeDistrusted: true was added or removed: review it, then update INTERNAL_OPT_IN");
+  });
+
+  test("the SQL scanner matches every gated table and ignores other tables (positive control)", () => {
+    const hits = (s: string) => [...s.matchAll(GATED_SQL_RE)].map((m) => m[1]);
+    assert.deepEqual(hits("SELECT * FROM notes; UPDATE note_history SET x; INSERT INTO quarantine; DELETE FROM trust_distrust"), ["notes", "note_history", "quarantine", "trust_distrust"]);
+    assert.deepEqual(hits("select 1 from _meta join confirmations on 1 join note_links on 1 from trust_attesters from trust_log"), ["_meta", "confirmations", "note_links", "trust_attesters", "trust_log"]);
+    assert.deepEqual(hits("SELECT * FROM notes_fts; FROM note_vectors; FROM access_log; FROM notesx"), []);
   });
 
   test("every HTTP GET route and every MCP tool is classified", () => {
@@ -157,15 +222,16 @@ describe("B: one gate for reading a note", () => {
     if (/req\.method === "GET" && getId/.test(api)) routes.add("/tasks/:id");
     if (/req\.method === "GET" && SIGN_PAGES\[path\]/.test(api)) routes.add("(sign pages)");
     if (/req\.method === "GET" && sessMatch/.test(api)) routes.add("/sessions/:id");
-    const NOTE_ROUTES = ["/notes", "/notes/:id", "/search", "/stats", "/changes", "/tasks", "/tasks/:id", "/handoffs", "/catch-up", "/export", "/index", "/timeline", "/sessions", "/sessions/:id", "/files/timeline", "/quality", "/quarantine"];
+    if (/req\.method === "GET" && qCtxMatch/.test(api)) routes.add("/quarantine/:id/context");
+    const NOTE_ROUTES = ["/notes", "/notes/:id", "/search", "/stats", "/changes", "/tasks", "/tasks/:id", "/handoffs", "/catch-up", "/export", "/index", "/timeline", "/sessions", "/sessions/:id", "/files/timeline", "/quality", "/quarantine", "/quarantine/:id/context"];
     // /access: the read access log holds writer labels and redacted query previews, never note text.
-    const NO_NOTE_CONTENT = ["/health", "/ready", "/", "/dashboard.js", "/favicon.ico", "(sign pages)", "/runner/status", "/trust", "/access", "/whoami", "/audit", "/insights", "/tokens"];
+    const NO_NOTE_CONTENT = ["/health", "/proof", "/status", "/ready", "/", "/dashboard.js", "/favicon.ico", "(sign pages)", "/runner/status", "/trust", "/access", "/whoami", "/audit", "/insights", "/tokens"];
     assert.deepEqual([...routes].sort(), [...NOTE_ROUTES, ...NO_NOTE_CONTENT].sort(), "a GET route was added: add it to NOTE_ROUTES (and to the canary test below) or NO_NOTE_CONTENT");
 
     const mcp = read("mcp-server-core.ts");
     const tools = new Set<string>([...mcp.matchAll(/server\.registerTool\(\s*"([a-z_]+)"/g)].map((m) => m[1]));
     const NOTE_TOOLS = ["state_read", "state_search", "state_relevant", "state_list", "memory_stats", "memory_receipt", "memory_why", "memory_consolidation_candidates", "memory_since", "task_get", "task_list", "catch_up", "memory_ack", "memory_history", "memory_index", "memory_timeline", "memory_get", "session_list"];
-    const OTHER_TOOLS = ["state_write", "state_delete", "memory_consolidate", "memory_rebuild_edges", "task_put", "task_claim", "task_approve", "session_handoff", "memory_quarantine", "runner_status", "trust_policy", "memory_supersede_preview", "memory_supersede_confirm", "memory_supersede_undo", "memory_restore_version", "memory_history_purge", "memory_rollback"];
+    const OTHER_TOOLS = ["state_write", "state_delete", "memory_consolidate", "memory_rebuild_edges", "task_put", "task_claim", "task_approve", "session_handoff", "memory_quarantine", "runner_status", "trust_policy", "memory_supersede_preview", "memory_supersede_confirm", "memory_supersede_undo", "memory_restore_version", "memory_history_purge", "memory_rollback", "memory_confirm", "memory_flag"];
     assert.deepEqual([...tools].sort(), [...NOTE_TOOLS, ...OTHER_TOOLS].sort(), "an MCP tool was added: classify it here (and canary-test it below if it returns note content)");
   });
 });
@@ -220,6 +286,7 @@ describe("B: the canary never reaches a non-admin reader through any classified 
         ["/files/timeline?path=src/x.ts", 200, "rows"],
         ["/quality", 403, ""], // admin only: it lists every writer's titles
         ["/quarantine", 403, ""], // admin only: held writes carry their full text
+        ["/quarantine/1/context", 403, ""], // admin only: lists other writers' titles next to a held write
       ];
       for (const [p, status, must] of routes) {
         const r = await fetch(base + p, { headers: { Authorization: `Bearer ${TOKEN}` } });

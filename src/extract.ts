@@ -10,6 +10,8 @@
 //   - a prompt-injection-shaped tool output -> security_alert (the label and the source only, never the text)
 //   - a decision phrase in a prompt ("let's go with", "from now on", ...) -> decision
 //   - concepts: keywords.ts over the observation's own text, as obs.concept:<word> tags
+// With a key present (1.5.0 S-02a) titles and tags are never sealed, so a capture note gets fixed words for a title
+// ("Decision (sealed)", "Session 2026-11-14"), its built title moves to the first line of the sealed body, and no concept tags.
 // Observations and summaries go through Store.create / Store.update like any note (lint, quarantine, history apply);
 // their kind/session/type are set through write options no request can reach, and their tags are reserved
 // (reserved-tags.ts), so an ordinary write cannot forge one. Observations run from `distilled_seq` onward (each event is
@@ -20,6 +22,7 @@ import { scanForInjection } from "./lint.js";
 import { extractKeywords } from "./keywords.js";
 import { captureAad, eventInput } from "./capture.js";
 import { MODEL_WRITTEN_TAG, ORIGIN_TOOL_PREFIX } from "./reserved-tags.js";
+import { isOutsideTool, OTHER_TOOL, toolTag } from "./taint.js";
 
 export const OBS_TYPES = ["bugfix", "feature", "refactor", "change", "discovery", "decision", "security_alert", "security_note"] as const;
 export type ObsType = (typeof OBS_TYPES)[number];
@@ -45,6 +48,7 @@ interface SessionRow {
   id: string;
   namespace: string;
   cwd: string;
+  started_at: string;
   distilled_seq: number;
   summary_note_id: number | null;
 }
@@ -59,20 +63,8 @@ export interface Observation {
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 const READ_TOOLS = new Set(["Read", "Grep", "Glob"]);
 
-/**
- * Tools whose output is outside content: the web, and MCP servers other than Monomem itself. The name is the hook
- * payload's tool_name, recorded by capture.ts, never text the model wrote.
- * ponytail: local reads (Read/Grep/Glob) and Bash (curl, git pull) are not counted: they run in nearly every session, so
- * the label would mean nothing. A downloaded README read with Read is therefore NOT stamped (said in docs/trust.md).
- */
-export function isOutsideTool(tool: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  if (tool === "WebFetch" || tool === "WebSearch") return true;
-  if (!tool.startsWith("mcp__") || /^mcp__(plugin_monomem_)?monomem__/.test(tool)) return false;
-  // MONOMEM_LOCAL_MCP_SERVERS: MCP servers the owner says return only local content (a code index, say), by server name.
-  const server = tool.slice(5).split("__")[0].toLowerCase();
-  const local = (env.MONOMEM_LOCAL_MCP_SERVERS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
-  return !local.includes(server);
-}
+// isOutsideTool lives in taint.ts (the store needs it too, without importing this file).
+export { isOutsideTool, OTHER_TOOL };
 /** At most this many tool names are stamped on one summary (sorted); a session that used more still gets the first ones. */
 export const MAX_ORIGIN_TOOLS = 3;
 
@@ -80,13 +72,9 @@ export const MAX_ORIGIN_TOOLS = 3;
 export function originTags(events: readonly { event: string; tool: string; output: string }[]): string[] {
   const seen = new Set<string>();
   // A tool name lands in a tag and in agent context: anything but plain name characters is stamped as "other" (still stamped).
-  for (const e of events)
-    if ((e.event === "post-tool" || e.event === "post-tool-failure") && e.output && isOutsideTool(e.tool)) seen.add(SAFE_TOOL_NAME.test(e.tool) ? e.tool : OTHER_TOOL);
-  return [...seen].sort().slice(0, MAX_ORIGIN_TOOLS).map((t) => ORIGIN_TOOL_PREFIX + t);
+  for (const e of events) if ((e.event === "post-tool" || e.event === "post-tool-failure") && e.output && isOutsideTool(e.tool)) seen.add(toolTag(e.tool));
+  return [...seen].sort().slice(0, MAX_ORIGIN_TOOLS);
 }
-const SAFE_TOOL_NAME = /^[A-Za-z0-9_.-]{1,80}$/;
-/** The stamp used when a tool's name is unsafe to print, or when the linter refuses the named stamp. */
-export const OTHER_TOOL = "other";
 const TEST_CMD = /\b(?:node\s+--test|(?:npm|pnpm|yarn)\s+(?:run\s+)?test|npx\s+(?:jest|vitest)|jest|vitest|pytest|cargo\s+test|go\s+test)\b/;
 const BUILD_CMD = /\b(?:(?:npm|pnpm|yarn)\s+run\s+build|tsc\b|cargo\s+build|go\s+build|make\b)/;
 const TEST_FAILED =
@@ -302,7 +290,7 @@ function eventsAfter(store: Store, sessionId: string, seq: number, limit = BATCH
 }
 
 function session(store: Store, id: string): SessionRow | null {
-  return (store.captureDb().prepare("SELECT id, namespace, cwd, distilled_seq, summary_note_id FROM sessions WHERE id = ?").get(id) as SessionRow | undefined) ?? null;
+  return (store.captureDb().prepare("SELECT id, namespace, cwd, started_at, distilled_seq, summary_note_id FROM sessions WHERE id = ?").get(id) as SessionRow | undefined) ?? null;
 }
 
 /** Words the observation templates themselves add: not concepts. */
@@ -313,11 +301,25 @@ function tagsFor(kind: "observation" | "summary", type: string, text: string): s
   return [kind, `obs.type:${type}`, ...concepts.slice(0, 5).map((k) => `obs.concept:${k}`)];
 }
 
+/** The fixed title a sealed observation gets ("Decision (sealed)", "Security alert (sealed)"). */
+const SEALED_SUFFIX = " (sealed)";
+const sealedObsTitle = (type: string): string => `${type.charAt(0).toUpperCase()}${type.slice(1).replace(/_/g, " ")}${SEALED_SUFFIX}`;
+/** The fixed title a sealed session summary gets: the day it started. */
+export const sealedSessionTitle = (startedAt: string): string => `Session ${startedAt.slice(0, 10)}`;
+/** An observation's own title: a sealed one keeps it as the first line of its body. */
+const obsTitle = (n: { title: string; body: string }): string => (n.title.endsWith(SEALED_SUFFIX) ? n.body.split("\n")[0] : n.title);
+
 /** Write one capture note; a write the linter holds or refuses is skipped (the linter doing its job), never thrown. */
 function write(store: Store, s: SessionRow, kind: "observation" | "summary", type: string, title: string, body: string, files: Observation["files"], extraTags: string[] = []): NoteRecord | null {
+  const sealed = store.sealsWrites();
+  if (sealed) {
+    // The summary's request is already in its body ("Request: ..."); an observation's title becomes its first body line.
+    if (kind === "observation") body = `${title}\n${body}`;
+    title = kind === "observation" ? sealedObsTitle(type) : sealedSessionTitle(s.started_at);
+  }
   const attempt = (extra: string[]): NoteRecord => {
     const note = store.create(
-      { namespace: s.namespace || DEFAULT_NAMESPACE, title, body, tags: [...tagsFor(kind, type, `${title} ${body}`), ...extra], source: CAPTURE_SOURCE },
+      { namespace: s.namespace || DEFAULT_NAMESPACE, title, body, tags: [...tagsFor(kind, type, sealed ? "" : `${title} ${body}`), ...extra], source: CAPTURE_SOURCE },
       { kind, sessionId: s.id, obsType: kind === "observation" ? type : "", skipEdges: true }
     );
     linkFiles(store, note.id, files);
@@ -359,11 +361,16 @@ export function summarize(events: readonly EventRow[], cwd: string, observationT
   let editsSinceCommit = new Set<string>();
   for (const e of tools) {
     const p = field(e.input, "file_path") || field(e.input, "notebook_path") || (READ_TOOLS.has(e.tool) ? field(e.input, "path") : "");
+    // R1-07: a path is one printable line, capped; tool OUTPUT never enters the summary (it can be attacker text).
+    const clean = (x: string): string => one(normPath(x, cwd), 120);
     if (p && EDIT_TOOLS.has(e.tool) && e.ok) {
-      changed.add(normPath(p, cwd));
-      editsSinceCommit.add(normPath(p, cwd));
-    } else if (p && READ_TOOLS.has(e.tool)) read.add(normPath(p, cwd));
-    if (!e.ok) errors.push(`${e.tool}: ${one(e.output.split("\n").find((l) => l.trim()) ?? "", 160)}`);
+      changed.add(clean(p));
+      editsSinceCommit.add(clean(p));
+    } else if (p && READ_TOOLS.has(e.tool)) read.add(clean(p));
+    if (!e.ok) {
+      const code = /\bexit(?:ed with)?(?: code)?[: ]+(\d{1,3})\b/i.exec(e.output)?.[1];
+      errors.push(`${one(e.tool, 40)} failed${code ? ` (exit ${code})` : ""}`);
+    }
     if (e.tool !== "Bash") continue;
     const cmd = field(e.input, "command");
     if (!cmd) continue;
@@ -421,9 +428,10 @@ export function distillSession(store: Store, sessionId: string): { observations:
     if (batch.length < BATCH) break;
   }
   const all = eventsAfter(store, sessionId, 0, 20_000);
-  const titles = store.list({ kinds: ["observation"], sessionId, limit: 50, order: "created_asc" }).notes.map((n) => n.title);
+  const titles = store.list({ kinds: ["observation"], sessionId, limit: 50, order: "created_asc" }).notes.map(obsTitle);
   const sum = summarize(all, s.cwd, titles);
   if (!sum) return { observations: written, summaryId: s.summary_note_id };
+  if (store.sealsWrites()) sum.title = sealedSessionTitle(s.started_at);
   // The summary quotes the session's errors and closing words, which can carry what an outside tool returned: stamp it.
   // Observations are not stamped: their text comes from the user's prompts and local commands, never from tool output.
   const origin = originTags(all);

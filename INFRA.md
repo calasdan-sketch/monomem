@@ -20,6 +20,7 @@ how to build/run it locally.
 | MCP-over-HTTP path | `/mcp` |
 | Bearer token env var | `MONOMEM_TOKEN` (auto-generated and persisted to `~/.monomem/.token` if unset; a from-source git checkout that already has `./data/state.db` keeps using `./data/`) |
 | DB path env var | `MONOMEM_DB_PATH` (defaults to `~/.monomem/state.db`, or `$MONOMEM_HOME/state.db`) |
+| Lock wait | The HTTP server waits up to 2 s for another program's database lock (backup, `encrypt`, an import), then answers "busy, try again": REST `503` + `Retry-After`, MCP a tool error. The CLI and the stdio server wait up to 20 s. |
 
 Placeholders used below that are specific to *your* setup:
 
@@ -124,7 +125,7 @@ cloudflared tunnel run monomem
 ```
 
 Leave it running, then from another machine (or your phone off wifi) hit
-`https://<TUNNEL_HOSTNAME>/health` and confirm you get `{"status":"ok"}`,
+`https://<TUNNEL_HOSTNAME>/health` and confirm you get `{"status":"ok",...}` (it also names the version and schema the server runs),
 not a Cloudflare error page. Ctrl+C to stop once confirmed.
 
 ### Step 7 — Restart-on-boot
@@ -466,10 +467,38 @@ definitions themselves could not be run in the environment they were written in
 (no systemd, no Windows), so check them once on your machine: **verify with
 `systemd-analyze verify` / `Get-ScheduledTask`, then reboot once.**
 
-### Linux: systemd
+### For your own user, on any OS: `monomem service install`
+
+```bash
+monomem service install --print   # shows the file it would write and the commands it would run; changes nothing
+monomem service install           # Windows: a Task Scheduler task at sign-in; macOS: a LaunchAgent; Linux: a systemd --user unit
+monomem service status
+monomem service uninstall
+```
+
+Each one runs the absolute `node` binary with the absolute `cli.js` of the install you ran it from, as `start --log`
+(output goes to `<data>/server.log`, rotated like `audit.log`), and is restarted if it stops. Nothing depends on `PATH`,
+nvm's shell setup or npm's `monomem.ps1` / `monomem.cmd` shims. `monomem setup` never installs one. After you update
+Monomem, run `monomem service install` again so the task points at the new files (`monomem doctor` warns when the running
+server is older than the CLI). The service files were generated and checked by tests; they were not installed on a test
+machine, so run `monomem service status` once and reboot once.
+
+- Windows: the task starts when you sign in, in a console window; minimise it (closing it stops Monomem until Task
+  Scheduler starts it again, within 5 minutes). The task runs `cmd.exe`, which sets the carried settings and then starts
+  `node.exe`. A value containing `%` or a quote cannot be carried; install says so, and you save that one with `setx`.
+- Every OS: the service carries the data folder in use when you installed it, plus any `MONOMEM_PORT`,
+  `MONOMEM_MCP_PORT`, `MONOMEM_BIND`, `MONOMEM_ALLOWED_HOSTS`, `MONOMEM_DB_PATH` set then (never a key). On Linux,
+  `loginctl enable-linger` keeps it running while you are logged out.
+- When `MONOMEM_BIND` is not loopback or `MONOMEM_ALLOWED_HOSTS` is set, install must be run by a person in a terminal
+  (it asks you to type yes); an agent's shell or a script is refused. `--print` is never gated.
+
+### Linux: a system-wide systemd service
 
 `/etc/systemd/system/monomem.service` (adjust `User`, the `monomem` path
-from `which monomem`, and the data dir):
+from `which monomem`, and the data dir). `ExecStart` must be a path the
+service user can read: with `ProtectHome=true`, an nvm install under a home
+folder is hidden from it, so install Node and Monomem system-wide (or use
+`monomem service install` for your own user instead):
 
 ```ini
 [Unit]
@@ -510,19 +539,12 @@ journalctl -u monomem -f
 
 ### Windows: Task Scheduler for Monomem itself
 
-The tunnel recipe in section 1 only keeps *cloudflared* alive. This keeps
-Monomem alive: it starts at logon and Task Scheduler restarts it if it exits.
-PowerShell (run once, normal user; adjust the path from `where.exe monomem`):
-
-```powershell
-$exe = (Get-Command monomem).Source
-$action   = New-ScheduledTaskAction -Execute $exe -Argument "start"
-$trigger  = New-ScheduledTaskTrigger -AtLogOn
-$settings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
-            -ExecutionTimeLimit ([TimeSpan]::Zero) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-Register-ScheduledTask -TaskName "Monomem" -Action $action -Trigger $trigger -Settings $settings
-Start-ScheduledTask -TaskName "Monomem"
-```
+The tunnel recipe in section 1 only keeps *cloudflared* alive. To keep
+Monomem alive, run `monomem service install` (above). It registers a task
+that starts at logon and is restarted if it exits; its action is `node.exe`
+with the full path of `cli.js`. (An older version of this guide used
+`(Get-Command monomem).Source`, which on an npm install is `monomem.ps1`: Task
+Scheduler opens that file instead of running it, so the server never started.)
 
 Caveats: it starts when you log in, not at raw boot (use NSSM or a service
 wrapper for that), and if your PC sleeps the store sleeps, which also pauses
@@ -593,7 +615,7 @@ or a service manager and were not run.
 node -v                                  # (verified) must print v22.16 or newer
 npm install -g monomem                 # (not verified here: needs the npm registry)
 monomem start                          # (verified) creates ~/.monomem/.token and state.db, API :8790, MCP :8791
-curl localhost:8790/health               # (verified) {"status":"ok"}
+curl localhost:8790/health               # {"status":"ok","version":"1.5.0","schema":22}
 T=$(cat ~/.monomem/.token)             # (verified)
 curl -s -H "Authorization: Bearer $T" "localhost:8790/changes?since=last&consumer=pc&wait=25"   # (verified) parks, then returns timedOut:true
 curl -s -H "Authorization: Bearer $T" -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \

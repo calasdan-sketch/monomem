@@ -1,5 +1,5 @@
 // setup: the automatic memory hooks (planHooks) are appended next to the user's own hooks, are idempotent, need consent
-// (--capture or a typed y; --yes alone never adds them), and come out again with --undo. Everything runs in temp dirs.
+// (--capture or a typed y; --yes alone never adds them, only the start-of-session hook), and come out again with --undo. Everything runs in temp dirs.
 import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
 import { test, describe, afterEach } from "node:test";
 import assert from "node:assert/strict";
@@ -105,7 +105,8 @@ describe("setup: automatic memory hooks", () => {
   test("runSetup: --yes alone adds no capture hooks; --yes --capture does; --undo takes only ours out", async () => {
     const s = sandbox();
     writeFileSync(s.settings, USER_HOOKS);
-    assert.equal(await runSetup(s.e, io(), opts({ yes: true, db: s.db })), 0);
+    // --yes alone adds only the start-of-session hook (owner decision, 1.5.0); with --no-hook it adds nothing at all.
+    assert.equal(await runSetup(s.e, io(), opts({ yes: true, hook: "no", db: s.db })), 0);
     assert.deepEqual(read(s.settings), JSON.parse(USER_HOOKS), "no consent, no hooks");
     const out = io();
     assert.equal(await runSetup(s.e, out, opts({ yes: true, db: s.db, hook: "yes", capture: "yes" })), 0, out.all());
@@ -138,5 +139,18 @@ describe("setup: automatic memory hooks", () => {
     assert.ok(after.hooks.SessionStart, "the start-of-session hook was accepted");
     assert.equal(after.hooks.UserPromptSubmit, undefined, "capture was declined");
     assert.match(after.hooks.SessionStart[0].hooks[0].command, /recall --budget-ms/);
+  });
+});
+
+describe("setup --yes preview (final panel, ease B2)", () => {
+  test("the preview shows only what --yes adds: the start-of-session hook, not the capture hooks it leaves out", async () => {
+    const s = sandbox();
+    const out = io();
+    assert.equal(await runSetup(s.e, out, opts({ yes: true, db: s.db })), 0, out.all());
+    const after = read(s.settings);
+    assert.ok(after.hooks.SessionStart, "--yes adds the start-of-session hook");
+    assert.equal(after.hooks.PostToolUse, undefined, "--yes leaves capture out");
+    assert.doesNotMatch(out.all(), /PostToolUse/, "the preview must not show a capture hook that is never written");
+    assert.doesNotMatch(out.all(), /record what/i);
   });
 });

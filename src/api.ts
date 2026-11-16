@@ -31,10 +31,13 @@ import {
   validateForgetAfter,
   coerceNumeric,
   DEFAULT_NAMESPACE,
+  quarantineCasNote,
 } from "./store.js";
-import { truthyParam } from "./trust.js";
+import { RECEIPT_CHECK, type WriteReceipt } from "./store/write-receipt.js";
+import { truthyParam, distrustedOptInRefusal } from "./trust.js";
 import { originAllowed, hostAllowed, hostRefusal, RateLimiter, AuthTarpit, clientKey, tokenKey, authenticateEntry, scopeAllows, LIMITS, audit, auditFailureCount, printable } from "./security.js";
-import { type Scope, type TokenEntry, TIME_ZONE, PROJECT_ROOT, DATA_DIR, resolveToken } from "./config.js";
+import { checkFilesInput } from "./code-anchor.js";
+import { type Scope, type TokenEntry, TIME_ZONE, PROJECT_ROOT, DATA_DIR, resolveToken, tokenId, sha256Hex } from "./config.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -61,7 +64,7 @@ function signAsset(file: string): string | null {
   return signCache.get(file) ?? null;
 }
 import { runnerStatus } from "./liveness.js";
-import { PayloadTooLargeError, readBody, normalizeTokens, IMPORT_BODY_BYTES, applyServerLimits } from "./http-common.js";
+import { PayloadTooLargeError, readBody, normalizeTokens, IMPORT_BODY_BYTES, applyServerLimits, healthBody, serverProof } from "./http-common.js";
 
 /**
  * Import size above which the similarity-graph rebuild is DEFERRED rather
@@ -102,7 +105,8 @@ import {
 import { ackChanges, resolveSince } from "./changes.js";
 import { qualityReport } from "./quality.js";
 import { rollbackPreview, rollbackConfirm, embedRestored } from "./rollback.js";
-import { redeemLoginCode } from "./login-code.js";
+import { redeemLogin } from "./login-code.js";
+import { randomBytes } from "node:crypto";
 
 // The quality and health scans read every note. The dashboard asks on every load, so answers are reused for a minute
 // (and a second request that arrives while one is running shares it).
@@ -121,8 +125,12 @@ function cachedFor<T>(store: Store, key: string, fn: () => Promise<T>): Promise<
 }
 let scanIds = 0;
 import { SupersedeError, supersedePreview, supersedeConfirm, supersedeUndo, noteHistory, restoreVersion, purgeNoteHistory, type Caller } from "./supersede.js";
-import { withFacts, factFeedback } from "./facts.js";
+import { withFacts, factFeedback, withDisputes, listWithDisputes } from "./facts.js";
+import { isBusyError } from "./restore.js";
+import { heldEditDiff } from "./line-diff.js";
 import { assertPlainWriteTags, assertReviewedTag } from "./reserved-tags.js";
+import { prepareNoteUpdate } from "./note-update.js";
+import { ORIGIN_DECLARED, ReadTaint, taintRegistryFor, unconfirmedIdsIn } from "./taint.js";
 import { waitForChanges, parseWait, WaitBusyError } from "./change-wait.js";
 import type { LintFinding } from "./lint.js";
 import { memoryIndex, memoryTimeline, memoryGet, sessionList, sessionGet, fileTimeline, type ReadScope } from "./progressive.js";
@@ -132,6 +140,9 @@ import { meterStats } from "./meter.js";
 import { TokenAdminError, addApp, removeApp, listApps, describeAccess, connectionSnippet } from "./tokens-admin.js";
 
 /** When each app (by label) last made a request, since the server started. Shown in the dashboard's Apps panel. */
+/** How long a dashboard session (monomem open, at a terminal) keeps its read-rule exemption for confirms. */
+export const DASHBOARD_SESSION_TTL_MS = 8 * 3_600_000;
+
 const lastUsed = new Map<string, string>();
 
 // Minimum scope a request needs: deletes, imports and full /export are admin,
@@ -144,6 +155,7 @@ function requiredScope(method: string | undefined, path: string): Scope {
   if (path === "/trust" || path.startsWith("/trust/")) return "admin";
   // A full-store dump is admin-only; a read token can still page /notes.
   if (method === "GET" && path === "/export") return "admin";
+  if (path === "/status") return "admin";
   // /relevant is a read despite the POST method (the message is a JSON body,
   // not a query string, because it can be long) -- same class as /search.
   if (method === "POST" && path === "/relevant") return "read";
@@ -164,7 +176,7 @@ function requiredScope(method: string | undefined, path: string): Scope {
   if (method === "POST" && path === "/sweep-expired") return "admin";
   // The quality view lists titles from every writer, and approving a held write is the linter's human gate.
   if (path === "/audit" || path === "/insights") return "admin";
-  if (path === "/quality" || path === "/quarantine" || /^\/quarantine\/\d+\/(approve|reject)$/.test(path)) return "admin";
+  if (path === "/quality" || path === "/quarantine" || /^\/quarantine\/\d+\/(approve|reject|keep-history|context)$/.test(path)) return "admin";
   // Approve-first is the switch in front of an agent's own writes: reading or flipping it is admin, like the queue itself.
   if (path === "/approve-first") return "admin";
   // Pins and rollback are operator switches, like approve-first.
@@ -173,6 +185,8 @@ function requiredScope(method: string | undefined, path: string): Scope {
   if (path === "/access" || path === "/flood" || path === "/flood/resume") return "admin";
   // A note's earlier versions can hold text that was taken out on purpose: administrators only, reads included.
   if (/^\/notes\/\d+\/history(\/restore)?$/.test(path)) return "admin";
+  // 1.4.0: any writer may confirm; who counts (and as what kind) is decided by Store.confirm, an admin token as `admin`.
+  if (method === "POST" && /^\/notes\/\d+\/confirm$/.test(path)) return "write";
   if (method === "POST" || method === "PUT") return "write";
   return "read";
 }
@@ -182,8 +196,8 @@ function requiredScope(method: string | undefined, path: string): Scope {
 // a generic 500 so SQL/internal details never leak to the client.
 // REST note bodies: a field Monomem does not know (a client sent `content` for `body`) used to be dropped, leaving an empty note.
 // written_by / created_by are accepted and ignored: the server stamps the writer from the token.
-const POST_NOTE_FIELDS = ["namespace", "title", "body", "tags", "source", "created_at", "forget_after", "confidence", "facts", "written_by", "created_by", "sensitivity"];
-const PUT_NOTE_FIELDS = ["namespace", "title", "body", "tags", "source", "forget_after", "confidence", "if_rev", "facts", "written_by", "created_by", "sensitivity"];
+const POST_NOTE_FIELDS = ["namespace", "title", "body", "tags", "source", "created_at", "forget_after", "confidence", "facts", "written_by", "created_by", "sensitivity", "outside", "derived_from", "client_key", "files"];
+const PUT_NOTE_FIELDS = ["namespace", "title", "body", "tags", "source", "forget_after", "confidence", "if_rev", "facts", "written_by", "created_by", "sensitivity", "outside", "derived_from"];
 // Fields of a note the server returns. A client that GETs a note and PUTs it back whole sends these; they are ignored (never applied).
 // `rev` is ignored too: use `if_rev` for compare-and-swap.
 const PUT_READ_ONLY_FIELDS = [
@@ -191,6 +205,7 @@ const PUT_READ_ONLY_FIELDS = [
   "imported_unverified", "attested_writer", "attested_by", "attested_writer_id", "merged_from_writers", "distrusted", "confidence_claimed_by",
   "status", "superseded_by", "superseded_at", "superseded_by_writer", "access_count", "last_accessed", "expires_at", "archived_at",
   "pinned", "session_id", "obs_type", "stale", "ageDays", "staleWarning", "unreadable", "encrypted", "neighbors", "history", "files", "score", "breakdown",
+  "grandfathered_at", "approved_at", "approved_by", "confirmed_at", "confirmed_by", "confirmed_kind", "confirmed_rev", "unconfirmed", "unconfirmed_label", "expired", "expired_label", "built_on_distrusted", "built_on_distrusted_label", "disputed", "disputed_label", "flagged", "flagged_label", "code_changed", "code_changed_label", "restated_by", "restated_label",
 ];
 /** A 400 message naming the unknown top-level fields of a note body, or null when there are none. */
 export function unknownNoteFields(body: unknown, allowed: readonly string[], ignored: readonly string[] = []): string | null {
@@ -199,7 +214,9 @@ export function unknownNoteFields(body: unknown, allowed: readonly string[], ign
   return bad.length ? `unknown field${bad.length === 1 ? "" : "s"}: ${bad.map((k) => printable(k, 40)).join(", ")} (allowed: ${allowed.join(", ")})` : null;
 }
 
-function sendError(res: ServerResponse, e: unknown): void {
+/** `receipt` (R2-06): the audit line of a note write's held / refused decision, from Store.refusedWriteReceipt. */
+function sendError(res: ServerResponse, e: unknown, receipt?: WriteReceipt): void {
+  const r = receipt ? { receipt, receipt_check: RECEIPT_CHECK } : {};
   // A linter-held write was accepted for admin review, not rejected: 202.
   if (e instanceof QuarantinedError) {
     sendJson(res, 202, {
@@ -208,20 +225,26 @@ function sendError(res: ServerResponse, e: unknown): void {
         reasons: e.findings,
         next: "The write was held, not lost. An administrator can approve or reject it in the dashboard, or with: monomem quarantine list",
       },
+      ...r,
     });
     return;
   }
   if (e instanceof SupersedeError) {
     sendJson(res, e.status, { error: e.message, ...(e.warning ? { warning: e.warning } : {}) });
   } else if (e instanceof StaleWriteError) {
-    sendJson(res, 409, { error: e.message });
+    sendJson(res, 409, { error: e.message, ...r });
   } else if (e instanceof WriterPausedError) {
-    sendJson(res, 429, { error: e.message });
+    sendJson(res, 429, { error: e.message, ...r });
   } else if (e instanceof ValidationError) {
-    sendJson(res, 400, { error: e.message });
+    sendJson(res, 400, { error: e.message, ...r });
   } else if (e instanceof NoteUnreadableError) {
     console.error("[monomem] " + e.message);
     sendJson(res, 500, { error: e.message, id: e.noteId });
+  } else if (isBusyError(e)) {
+    // 1.5.0 (infra HIGH-1): another program held the database lock past the wait. Retryable, not a server fault.
+    console.error("[monomem] write gave up waiting for the database lock:", (e as Error).message);
+    res.setHeader("Retry-After", "2");
+    sendJson(res, 503, { error: "The database is busy (another program is writing to it); nothing was saved. Try again in a few seconds." });
   } else {
     console.error("[monomem] write error:", (e as Error).message);
     sendJson(res, 500, { error: "internal error" });
@@ -368,6 +391,8 @@ export function createApiServer(
   opts: ServerNamespaceOpts = {}
 ): Server {
   const tokens = normalizeTokens(token);
+  /** A note for a read reply: staleness and (R2-01) the dispute marker, computed inside the caller's request. */
+  const annotRead = (n: NoteRecord) => withDisputes(store, annotateStaleness(n) as NoteRecord);
   // Two buckets, neither of which lets garbage traffic lock out a valid
   // client sharing its IP (everyone behind one tunnel has the same socket IP):
   //  - authFailures: per client IP, counts FAILED authentications only
@@ -377,6 +402,14 @@ export function createApiServer(
   const authFailures = new RateLimiter();
   const tarpit = new AuthTarpit();
   const perToken = new RateLimiter();
+  // 1.4.0: unconfirmed notes each token has read, kept across its requests and shared with MCP over HTTP (taint.ts).
+  const taintedReadsFor = taintRegistryFor(store);
+  // 1.4.0: dashboard sessions opened with `monomem open` AT A TERMINAL (POST /login with its one-time code; login-code.ts
+  // records where it was minted). The dashboard sends one back in X-Monomem-Dashboard; only then is an admin confirm treated
+  // as the person looking at the note (Store.confirm `dashboard`). Each is bound to the key it signed in as and lasts
+  // DASHBOARD_SESSION_TTL_MS. Any other admin key, the primary one included, is an agent as far as the read rule goes.
+  // ponytail: in memory, newest 100; a restart signs the dashboard's confirm out of that exemption until monomem open again.
+  const dashboardSessions = new Map<string, { label: string; exp: number }>();
   const anon = new RateLimiter();
 
   // Server-side namespace resolution, active only when the entry point
@@ -466,7 +499,7 @@ export function createApiServer(
       // Health check is intentionally unauthenticated so infra (tunnel,
       // uptime monitor) can probe liveness without a credential.
       if (req.method === "GET" && path === "/health") {
-        sendJson(res, 200, { status: "ok" });
+        sendJson(res, 200, healthBody());
         return;
       }
 
@@ -498,6 +531,24 @@ export function createApiServer(
         } catch {
           sendJson(res, 503, { status: "unavailable" });
         }
+        return;
+      }
+
+      // GET /proof?nonce=<32 hex> -> { proof }: lets the session-start hook check that this server holds the same main key and
+      // store before it sends that key here (recall.ts askServerForBodyHits). An HMAC only: no key, no note data.
+      if (req.method === "GET" && path === "/proof") {
+        if (anonLimited()) return;
+        const nonce = url.searchParams.get("nonce") ?? "";
+        const primary = tokens.find((t) => t.label === "primary");
+        if (!primary) {
+          sendJson(res, 404, { error: "this server has no main key" });
+          return;
+        }
+        if (!/^[0-9a-f]{32}$/.test(nonce)) {
+          sendJson(res, 400, { error: "nonce must be 32 lowercase hex characters" });
+          return;
+        }
+        sendJson(res, 200, { proof: serverProof(tokenId(primary), nonce, store.storeId()) });
         return;
       }
 
@@ -550,11 +601,21 @@ export function createApiServer(
           sendJson(res, 400, { error: "invalid JSON body" });
           return;
         }
-        if (!redeemLoginCode(code)) {
+        const redeemed = redeemLogin(code);
+        if (!redeemed) {
           sendJson(res, 401, { error: "that sign-in link has expired or was already used. Run monomem open again." });
           return;
         }
-        sendJson(res, 200, { token: resolveToken() });
+        const key = resolveToken();
+        if (!redeemed.terminal) {
+          sendJson(res, 200, { token: key, notice: "Signed in. Confirms here count as the key's, because this link wasn't opened from a terminal." });
+          return;
+        }
+        const session = randomBytes(24).toString("hex");
+        const label = tokens.find((t) => tokenId(t) === sha256Hex(key))?.label ?? "";
+        dashboardSessions.set(session, { label, exp: Date.now() + DASHBOARD_SESSION_TTL_MS });
+        if (dashboardSessions.size > 100) dashboardSessions.delete(dashboardSessions.keys().next().value as string);
+        sendJson(res, 200, { token: key, dashboard_session: session });
         return;
       }
       // Phone command signer. No data in it; the secret never leaves the phone,
@@ -587,7 +648,7 @@ export function createApiServer(
         else sendJson(res, 401, { error: "unauthorized", hint: "Send your key as the header  Authorization: Bearer <key>.  Your keys: monomem token list.  To open the dashboard already signed in: monomem open" });
         return;
       }
-      if (!perToken.check(tokenKey(principal.token))) {
+      if (!perToken.check(tokenKey(tokenId(principal)))) {
         sendJson(res, 429, { error: "rate limit exceeded" });
         return;
       }
@@ -599,6 +660,10 @@ export function createApiServer(
         // The token's sensitivity ceiling rides on the same per-request context, and the store applies it inside its queries.
         if (principal.max_sensitivity !== undefined) actorRef.maxSensitivity = principal.max_sensitivity;
         actorRef.canDeclassify = scopeAllows(principal.scope, "admin");
+        // 1.4.0 taint: what this token read while unconfirmed (kept per token for the process), and its declared flag.
+        const reads = taintedReadsFor(currentWriter());
+        actorRef.taintedReads = reads;
+        actorRef.taint = principal.reads_outside ? [ORIGIN_DECLARED] : []; // via:memory is decided by the Store from taintedReads
       } else if (principal.max_sensitivity !== undefined) {
         // Cannot happen (every request runs inside actorStore.run), but a ceiling that cannot be applied must never be skipped.
         sendJson(res, 500, { error: "internal error" });
@@ -608,6 +673,8 @@ export function createApiServer(
       // cwd-resolved namespace. This is the isolation boundary for this
       // request -- resolved here, once, so every gate below reads `ns`.
       nsCtx = resolveRequestNamespace(principal.namespace, serverNs);
+      // 1.4.0: a write's derived_from may only name notes this request could read (Store.derivedIds).
+      if (actorRef && nsCtx.active) actorRef.readable = readable(nsCtx);
       // Enforce the token's scope: a read-only token can't write/delete, etc.
       const need = requiredScope(req.method, path);
       if (!scopeAllows(scope, need)) {
@@ -625,7 +692,19 @@ export function createApiServer(
       if (isReadRoute(req.method, path)) {
         const nsHint = url.searchParams.get("namespace");
         const tool = `${req.method} ${path.replace(/\/\d+(?=\/|$)/g, "/:id").replace(/^\/sessions\/[^/]+$/, "/sessions/:id")}`;
-        pendingReads.set(res, (payload) => store.logAccess({ tool, namespaces: nsHint ? [nsHint] : [], query: readQuery, payload }));
+        pendingReads.set(res, (payload) => {
+          // 1.4.0: an unconfirmed note handed to this token: what it writes next is marked via:memory.
+          const reads = actorRef?.taintedReads;
+          if (reads instanceof ReadTaint) for (const id of unconfirmedIdsIn(payload)) reads.add(id);
+          store.logAccess({ tool, namespaces: nsHint ? [nsHint] : [], query: readQuery, payload });
+        });
+      } else if (actorRef && !(req.method === "POST" && /^\/(notes|tasks|handoffs)$/.test(path))) {
+        // R1-05: any other reply that carries an unconfirmed note (PUT /notes/:id, POST /tasks/:id/claim ...) marks the token too.
+        // Creating routes are left out: the note in their reply is the caller's own. No access-log row for these.
+        pendingReads.set(res, (payload) => {
+          const reads = actorRef.taintedReads;
+          if (reads instanceof ReadTaint) for (const id of unconfirmedIdsIn(payload)) reads.add(id);
+        });
       }
 
       // include_distrusted switches the trust policy OFF for the call, so it is an
@@ -636,26 +715,22 @@ export function createApiServer(
       // belong to their own admins, so the opt-in is honoured for the token's own namespace and nowhere else (it must say
       // so with namespace=<own>, or name a note of its own namespace by id).
       const pinnedWithGrants = (): boolean => nsCtx.active && readable(nsCtx).some((n) => n !== nsCtx.ownNamespace);
-      const refuseDistrustedOptIn = (nsHint?: string | null): boolean => {
-        if (!isAdmin) {
-          sendJson(res, 403, {
-            error: "include_distrusted needs an admin token: it shows notes from writers the admin put on the distrust list",
-          });
-          return true;
-        }
-        if (pinnedWithGrants() && (nsHint ?? "") !== nsCtx.ownNamespace) {
-          sendJson(res, 403, {
-            error:
-              `include_distrusted is honoured only for this token's own namespace ("${nsCtx.ownNamespace}"): pass namespace=${nsCtx.ownNamespace}. ` +
-              "The namespaces this token can only read are governed by their own admins.",
-          });
-          return true;
-        }
-        return false;
+      // The rule itself is distrustedOptInRefusal (trust.ts), shared with MCP; this maps its answer to a 403.
+      const refuseDistrustedOptIn = (nsHint?: string | null, byId = false): boolean => {
+        const why = distrustedOptInRefusal({ admin: isAdmin, byId, pinnedWithGrants, ownNs: nsCtx.ownNamespace, nsHint: nsHint ?? "" });
+        if (why === null) return false;
+        sendJson(res, 403, {
+          error:
+            why === "other-namespace"
+              ? `include_distrusted is honoured only for this token's own namespace ("${nsCtx.ownNamespace}"): pass namespace=${nsCtx.ownNamespace}. ` +
+                "The namespaces this token can only read are governed by their own admins."
+              : "include_distrusted needs an admin token: it shows notes from writers the admin put on the distrust list",
+        });
+        return true;
       };
       // (By-id reads carry no namespace parameter: they are checked against the note's own namespace where they read it.)
       const byIdRead = req.method === "GET" && (/^\/notes\/\d+$/.test(path) || /^\/tasks\/\d+$/.test(path));
-      if (flagParam(url, "include_distrusted") && (byIdRead ? !isAdmin && refuseDistrustedOptIn() : refuseDistrustedOptIn(url.searchParams.get("namespace")))) return;
+      if (flagParam(url, "include_distrusted") && refuseDistrustedOptIn(byIdRead ? null : url.searchParams.get("namespace"), byIdRead)) return;
 
       // GET /whoami -> who this token is and what it can see (the dashboard's signed-in banner; a quick connection test).
       if (req.method === "GET" && path === "/whoami") {
@@ -665,6 +740,13 @@ export function createApiServer(
         return;
       }
       lastUsed.set(principal.label, new Date().toISOString());
+
+      // GET /status (admin) -> this server's build and the state of its in-memory body index (C-06): what /health leaves out
+      // for unauthenticated callers. `monomem doctor` reads it from a server it has verified (local-server.ts).
+      if (req.method === "GET" && path === "/status") {
+        sendJson(res, 200, { ...healthBody(), body_index: store.bodyIndexInfo() });
+        return;
+      }
 
       // Apps that may connect (admin only, and only an administrator with no ceiling and no namespace pin: it would otherwise
       // be a way to hand out wider access than it has itself). Secrets are never returned except the new one, once.
@@ -712,7 +794,7 @@ export function createApiServer(
               by: principal.label || "(unnamed)",
             });
             // Take effect now, not at the next 2-second check (only this change is applied, nothing else is re-read).
-            tokens.push({ token: made.token, scope: made.app.scope, label: made.app.label, ...(made.app.namespace ? { namespace: made.app.namespace } : {}), ...(made.app.max_sensitivity ? { max_sensitivity: made.app.max_sensitivity } : {}) });
+            tokens.push({ token_sha256: sha256Hex(made.token), scope: made.app.scope, label: made.app.label, ...(made.app.namespace ? { namespace: made.app.namespace } : {}), ...(made.app.max_sensitivity ? { max_sensitivity: made.app.max_sensitivity } : {}) });
             sendJson(res, 201, { token: made.token, app: made.app, access: describeAccess(made.app), ceiling_was_default: made.ceilingWasDefault, snippet: connectionSnippet(made.token) });
             return;
           }
@@ -772,6 +854,10 @@ export function createApiServer(
           sendJson(res, 400, { error: "created_at needs the 'admin' scope; leave it out and the note is dated now" });
           return;
         }
+        if (parsed.outside !== undefined && typeof parsed.outside !== "boolean") {
+          sendJson(res, 400, { error: "outside must be true or false" });
+          return;
+        }
         if (parsed.forget_after !== undefined) parsed.forget_after = coerceNumeric(parsed.forget_after) as number;
         if (parsed.confidence !== undefined) parsed.confidence = coerceNumeric(parsed.confidence) as number;
         try {
@@ -783,13 +869,35 @@ export function createApiServer(
           const { facts } = parsed as { facts?: unknown };
           delete (parsed as { facts?: unknown }).facts;
           parsed.tags = withFacts(parsed.tags, facts);
+          const { client_key: clientKey } = parsed as { client_key?: unknown };
+          delete (parsed as { client_key?: unknown }).client_key;
+          if (clientKey !== undefined && typeof clientKey !== "string") {
+            sendJson(res, 400, { error: "client_key must be a string" });
+            return;
+          }
+          // R2-03: the files the note is about, anchored in git (same rules as state_write).
+          const anchorFiles = checkFilesInput((parsed as { files?: unknown }).files);
+          delete (parsed as { files?: unknown }).files;
           const warnings: LintFinding[] = [];
-          const note = store.create(parsed, { lintWarnings: warnings });
+          store.takeWriteReceipt(); // drop a decision left by an earlier call
+          const once = store.createOnce(parsed, clientKey, { lintWarnings: warnings, ...(anchorFiles ? { files: anchorFiles } : {}) });
+          const receipt = store.takeWriteReceipt(); // R2-06, read before any await
+          // R2-04: a retry with a known key wrote nothing; 200 with the note the first write made.
+          if (once.deduplicated) {
+            // final-security SF6: another writer may have changed the note since. Like MCP: no body; and an unconfirmed note
+            // marks this token as a read would (creating routes are otherwise exempt from read-taint).
+            const reads = actorRef?.taintedReads;
+            if (reads instanceof ReadTaint) for (const id of unconfirmedIdsIn(once.note)) reads.add(id);
+            const { body: _body, ...note } = once.note;
+            sendJson(res, 200, { note, deduplicated: true });
+            return;
+          }
+          const note = once.note;
           await maybeEmbed(store, note);
           const sim = store.similarNote(note.id);
-          sendJson(res, 201, { note, ...(sim ? { similar_note: { id: sim.id, title: sim.title, hint: `looks similar to #${sim.id} - consider updating it (PUT /notes/${sim.id}) if this is the same thing` } } : {}), ...(warnings.length ? { warnings } : {}), ...(facts === undefined ? {} : factFeedback(store, note)) });
+          sendJson(res, 201, { note, ...(receipt ? { receipt, receipt_check: RECEIPT_CHECK } : {}), ...(sim ? { similar_note: { id: sim.id, title: sim.title, hint: `looks similar to #${sim.id} - consider updating it (PUT /notes/${sim.id}) if this is the same thing` } } : {}), ...(warnings.length ? { warnings } : {}), ...(facts === undefined ? {} : factFeedback(store, note)) });
         } catch (e) {
-          sendError(res, e);
+          sendError(res, e, store.refusedWriteReceipt(e));
         }
         return;
       }
@@ -828,7 +936,7 @@ export function createApiServer(
         // Round edge scores to 3 decimals for readability (stored raw in
         // SQLite), mirroring the MCP state_read tool. Neighbor entries
         // already carry their staleness fields (annotated in Store.read).
-        const base = annotateStaleness(note);
+        const base = annotRead(note);
         const outNote = note.neighbors
           ? {
               ...base,
@@ -859,6 +967,10 @@ export function createApiServer(
           sendJson(res, 400, { error: badPut });
           return;
         }
+        if (parsed && parsed.outside !== undefined && typeof parsed.outside !== "boolean") {
+          sendJson(res, 400, { error: "outside must be true or false" });
+          return;
+        }
         if (parsed && parsed.forget_after !== undefined) parsed.forget_after = coerceNumeric(parsed.forget_after) as number;
         if (parsed && parsed.confidence !== undefined && parsed.confidence !== null) parsed.confidence = coerceNumeric(parsed.confidence) as number;
         // Compare-and-swap, as in the MCP tool state_write: `if_rev` is the revision the caller last read; the edit is
@@ -876,37 +988,97 @@ export function createApiServer(
           }
         }
         try {
-          if (nsCtx.active) {
-            // The client-supplied namespace is dropped (the note keeps its
-            // existing namespace), and the note must live in the server's
-            // own namespace -- otherwise a PUT by id could rewrite a granted
-            // namespace's notes (grants are read-only).
-            const existing = store.read(id); // gate-ok: PUT: namespace check, then a hidden note reads as 404
-            if (!denyUnwritable(nsCtx, res, existing)) return;
-            delete parsed.namespace;
-          }
-          // A note the distrust list hides reads as missing to everyone but an admin (who may rewrite it under a trusted writer).
-          if (!store.readVisible(id, { hideArchived: true, includeDistrusted: isAdmin })) { // a forgotten note is restored first, never edited (the reply echoes the body)
-            sendJson(res, 404, { error: "not found" });
-            return;
-          }
           // `facts` as in the MCP update: they replace the note's fact tags and keep its other tags.
           const putFacts = (parsed as { facts?: unknown }).facts;
           if (putFacts !== undefined) delete (parsed as { facts?: unknown }).facts;
-          const currentTags = putFacts !== undefined || (parsed && parsed.tags !== undefined) ? store.read(id)?.tags : undefined; // gate-ok: tag-guard lookup only (no content returned)
-          if (putFacts !== undefined) parsed.tags = withFacts(parsed.tags, putFacts, currentTags);
-          if (parsed && parsed.tags !== undefined) {
-            assertPlainWriteTags(parsed.tags, currentTags);
-            assertReviewedTag(parsed.tags, currentTags, isAdmin);
-          }
-          const warnings: LintFinding[] = [];
-          const note = store.update(id, parsed, { lintWarnings: warnings, ...(ifRev !== undefined ? { ifRev } : {}) });
-          if (!note) {
+          // The same checks as MCP state_write (note-update.ts): a hidden, forgotten, missing or (for a pinned token) other
+          // namespace's note is 404 -- grants are read-only -- before any tag rule can answer.
+          const check = prepareNoteUpdate(store, { admin: isAdmin, mayReview: isAdmin, ...(nsCtx.active ? { ownNs: nsCtx.ownNamespace } : {}) }, id, parsed.tags, putFacts);
+          if (!check.ok) {
             sendJson(res, 404, { error: "not found" });
             return;
           }
-          await maybeEmbed(store, note);
-          sendJson(res, 200, { note, ...(warnings.length ? { warnings } : {}), ...(putFacts === undefined ? {} : factFeedback(store, note)) });
+          // The client-supplied namespace is dropped for a pinned token (the note keeps its existing namespace).
+          if (nsCtx.active) delete parsed.namespace;
+          if (check.tags !== undefined) parsed.tags = check.tags;
+          const warnings: LintFinding[] = [];
+          store.takeWriteReceipt(); // drop a decision left by an earlier call
+          const { unchanged, ...note } = store.update(id, parsed, { lintWarnings: warnings, ...(ifRev !== undefined ? { ifRev } : {}) }) ?? ({} as NoteRecord);
+          const receipt = store.takeWriteReceipt(); // R2-06, read before any await
+          if (!note.id) {
+            sendJson(res, 404, { error: "not found" });
+            return;
+          }
+          if (!unchanged) await maybeEmbed(store, note);
+          sendJson(res, 200, { note, ...(unchanged ? { unchanged: true } : {}), ...(receipt ? { receipt, receipt_check: RECEIPT_CHECK } : {}), ...(warnings.length ? { warnings } : {}), ...(putFacts === undefined ? {} : factFeedback(store, note)) });
+        } catch (e) {
+          sendError(res, e, store.refusedWriteReceipt(e, id));
+        }
+        return;
+      }
+
+      // POST /notes/:id/confirm { source? } -> 1.4.0 confirm. An admin token (the dashboard) confirms as kind `admin`; any
+      // other token as a corroboration that counts only by Store.confirm's rules. 200 either way: `counted` says which.
+      const confirmMatch = /^\/notes\/(\d+)\/confirm$/.exec(path);
+      if (req.method === "POST" && confirmMatch) {
+        const id = Number(confirmMatch[1]);
+        let body: { source?: unknown };
+        try {
+          body = JSON.parse((await readBody(req)) || "{}") as { source?: unknown };
+        } catch {
+          sendJson(res, 400, { error: "invalid JSON body" });
+          return;
+        }
+        if (body.source !== undefined && typeof body.source !== "string") {
+          sendJson(res, 400, { error: "source must be text" });
+          return;
+        }
+        try {
+          const probe = store.read(id); // gate-ok: namespace check; confirm() re-reads through readVisible
+          if (nsCtx.active && !denyUnreadable(nsCtx, res, probe)) return;
+          const ds = req.headers["x-monomem-dashboard"];
+          const sess = typeof ds === "string" ? dashboardSessions.get(ds) : undefined;
+          if (sess && sess.exp <= Date.now()) dashboardSessions.delete(ds as string);
+          const dashboard = isAdmin && sess !== undefined && sess.exp > Date.now() && sess.label === principal.label;
+          const r = store.confirm(id, { source: body.source, admin: isAdmin, dashboard });
+          if (!r) {
+            sendJson(res, 404, { error: "not found" });
+            return;
+          }
+          // No title in the reply: to the caller (an agent's key, or the dashboard that already shows it) it is outside text.
+          const { title: _title, ...reply } = r;
+          sendJson(res, 200, reply);
+        } catch (e) {
+          sendError(res, e);
+        }
+        return;
+      }
+
+      // POST /notes/:id/flag { reason } -> 1.5.0 (R2-02) "this looks wrong". The note does not change. Same rules as the
+      // memory_flag tool: own namespace only, a hidden note is 404 like a missing one.
+      const flagMatch = /^\/notes\/(\d+)\/flag$/.exec(path);
+      if (req.method === "POST" && flagMatch) {
+        const id = Number(flagMatch[1]);
+        let body: { reason?: unknown };
+        try {
+          body = JSON.parse((await readBody(req)) || "{}") as { reason?: unknown };
+        } catch {
+          sendJson(res, 400, { error: "invalid JSON body" });
+          return;
+        }
+        const bad = unknownNoteFields(body, ["reason"]);
+        if (bad) {
+          sendJson(res, 400, { error: bad });
+          return;
+        }
+        try {
+          if (nsCtx.active && !denyUnwritable(nsCtx, res, store.read(id))) return; // gate-ok: namespace probe; flagNote re-reads through readVisible
+          const r = store.flagNote(id, body.reason);
+          if (!r) {
+            sendJson(res, 404, { error: "not found" });
+            return;
+          }
+          sendJson(res, 200, { flagged: true, id: r.note_id, rev: r.rev });
         } catch (e) {
           sendError(res, e);
         }
@@ -1243,8 +1415,14 @@ export function createApiServer(
           sendJson(res, 400, { error: "expected { id: number, pinned: boolean }" });
           return;
         }
-        if (!store.setPinned(id, body.pinned, own)) {
-          sendJson(res, 404, { error: "no note with that number" });
+        try {
+          // 1.4.0: a note from outside content that no person confirmed is refused (400, the message says what to do).
+          if (!store.setPinned(id, body.pinned, own)) {
+            sendJson(res, 404, { error: "no note with that number" });
+            return;
+          }
+        } catch (e) {
+          sendError(res, e);
           return;
         }
         sendJson(res, 200, { id, pinned: body.pinned });
@@ -1284,8 +1462,24 @@ export function createApiServer(
         return;
       }
 
-      // POST /quarantine/:id/approve | reject -> the memory_quarantine tool's approve / reject, for the dashboard.
-      const qMatch = /^\/quarantine\/(\d+)\/(approve|reject)$/.exec(path);
+      // GET /quarantine/:id/context -> other notes in the namespace saved since the write was held, same topic (admin).
+      const qCtxMatch = /^\/quarantine\/(\d+)\/context$/.exec(path);
+      if (req.method === "GET" && qCtxMatch) {
+        const id = Number(qCtxMatch[1]);
+        const entry = store.getQuarantine(id);
+        // Uniform "not found" for another namespace's entry: no existence oracle.
+        const ctx = entry && !(nsCtx.active && entry.namespace !== nsCtx.ownNamespace) ? store.quarantineContext(id) : null;
+        if (!ctx) {
+          sendJson(res, 404, { error: `no quarantined write with id ${id}` });
+          return;
+        }
+        const diff = heldEditDiff(store, entry!);
+        sendJson(res, 200, { ...ctx, ...(diff.length ? { diff } : {}), note: quarantineCasNote(ctx.op) });
+        return;
+      }
+
+      // POST /quarantine/:id/approve | keep-history | reject -> the memory_quarantine tool's actions, for the dashboard.
+      const qMatch = /^\/quarantine\/(\d+)\/(approve|keep-history|reject)$/.exec(path);
       if (req.method === "POST" && qMatch) {
         const id = Number(qMatch[1]);
         const entry = store.getQuarantine(id);
@@ -1298,10 +1492,27 @@ export function createApiServer(
           if (qMatch[2] === "reject") {
             store.rejectQuarantine(id);
             sendJson(res, 200, { rejected: id });
+          } else if (qMatch[2] === "keep-history") {
+            let b: { by?: unknown } = {};
+            try {
+              b = JSON.parse((await readBody(req)) || "{}") as { by?: unknown };
+            } catch {
+              sendJson(res, 400, { error: "invalid JSON body" });
+              return;
+            }
+            const by = b.by === undefined ? undefined : typeof b.by === "number" && Number.isSafeInteger(b.by) && b.by > 0 ? b.by : typeof b.by === "string" && /^[1-9][0-9]{0,14}$/.test(b.by) ? Number(b.by) : null;
+            if (by === null) {
+              sendJson(res, 400, { error: "by must be a note id (a positive whole number)" });
+              return;
+            }
+            const kept = store.keepQuarantineAsHistory(id, by);
+            await maybeEmbed(store, kept.note);
+            // 1.5.0 (S-01): ids only, as over MCP: approving must not echo the flagged text back.
+            sendJson(res, 200, { kept_as_history: id, note_id: kept.note.id, superseded_by: kept.superseded_by });
           } else {
             const note = store.approveQuarantine(id);
             await maybeEmbed(store, note);
-            sendJson(res, 200, { approved: id, note });
+            sendJson(res, 200, { approved: id, note_id: note.id });
           }
         } catch (e) {
           sendError(res, e);
@@ -1345,18 +1556,18 @@ export function createApiServer(
               archivedOnly,
               ...wf,
             });
-            sendJson(res, 200, { ...result, searchedNamespaces: [hint] });
+            sendJson(res, 200, { ...listWithDisputes(store, result), searchedNamespaces: [hint] });
             return;
           }
           sendJson(res, 200, {
-            ...listReadable(
+            ...listWithDisputes(store, listReadable(
               nsCtx,
               limit,
               offset,
               includeArchived,
               archivedOnly,
               wf
-            ),
+            )),
             searchedNamespaces: readable(nsCtx),
           });
           return;
@@ -1370,7 +1581,7 @@ export function createApiServer(
           ...wf,
         });
         sendJson(res, 200, {
-          ...result,
+          ...listWithDisputes(store, result),
           searchedNamespaces: namespace ? [namespace] : [],
         });
         return;
@@ -1393,7 +1604,12 @@ export function createApiServer(
           return;
         }
         const semNotice = semanticNotice(modeRaw);
-        const sendJsonN = (r: ServerResponse, code: number, body: Record<string, unknown>): void => sendJson(r, code, semNotice ? { ...body, notice: semNotice } : body);
+        // C-06: a search that could not read sealed bodies says so (body_search), never an empty-looking answer alone.
+        const fb0 = store.bodyIndexFallbacks();
+        const sendJsonN = (r: ServerResponse, code: number, body: Record<string, unknown>): void => {
+          const bodyNote = store.bodySearchNotice(fb0);
+          sendJson(r, code, { ...body, ...(semNotice ? { notice: semNotice } : {}), ...(bodyNote ? { body_search: bodyNote } : {}) });
+        };
         const whenRaw = url.searchParams.get("when") ?? undefined;
         // Retrieval visibility: ?explain=1 swaps the plain search for the
         // explained twin and attaches a `breakdown` to each result, so the
@@ -1418,7 +1634,7 @@ export function createApiServer(
         // Shape a hit for the wire: staleness annotation always, breakdown
         // only when explain=1. Shared by all three namespace branches.
         const shapeHit = (n: NoteRecord, breakdown?: unknown): Record<string, unknown> => ({
-          ...annotateStaleness(n),
+          ...annotRead(n),
           ...(breakdown !== undefined ? { breakdown } : {}),
         });
         const toResults = (hits: ExplainedHit[]): Record<string, unknown>[] =>
@@ -1449,7 +1665,7 @@ export function createApiServer(
             }
             const results = await runSearch(store, q, { ...searchOpts, namespace: hint });
             sendJsonN(res, 200, {
-              results: results.map((n) => annotateStaleness(n)),
+              results: results.map((n) => annotRead(n)),
               timeRange: timePhrase ? timePhrase.label : null,
               searchedNamespaces: [hint],
             });
@@ -1478,7 +1694,7 @@ export function createApiServer(
             lists.push(await runSearch(store, q, { ...searchOpts, namespace: ns }));
           }
           sendJsonN(res, 200, {
-            results: roundRobin(lists, lim).map((n) => annotateStaleness(n)),
+            results: roundRobin(lists, lim).map((n) => annotRead(n)),
             timeRange: timePhrase ? timePhrase.label : null,
             searchedNamespaces: readable(nsCtx),
           });
@@ -1503,7 +1719,7 @@ export function createApiServer(
         }
         const results = await runSearch(store, q, singleOpts);
         sendJsonN(res, 200, {
-          results: results.map((n) => annotateStaleness(n)),
+          results: results.map((n) => annotRead(n)),
           timeRange: timePhrase ? timePhrase.label : null,
           searchedNamespaces: namespace ? [namespace] : [],
         });
@@ -1516,6 +1732,11 @@ export function createApiServer(
       // search. Namespace gating matches GET /search exactly.
       if (req.method === "POST" && path === "/relevant") {
         const raw = await readBody(req);
+        const fb0 = store.bodyIndexFallbacks(); // C-06: see /search
+        const withBodyNote = (body: Record<string, unknown>): Record<string, unknown> => {
+          const bodyNote = store.bodySearchNotice(fb0);
+          return bodyNote ? { ...body, body_search: bodyNote } : body;
+        };
         let parsed: { message?: unknown; limit?: unknown; namespace?: unknown; written_by?: unknown; not_written_by?: unknown; include_distrusted?: unknown };
         try {
           parsed = JSON.parse(raw || "{}");
@@ -1559,7 +1780,7 @@ export function createApiServer(
         // vague-message path is the most likely to act on outdated facts).
         const withStaleness = (r: { keywords: string[]; results: NoteRecord[] }) => ({
           keywords: r.keywords,
-          results: r.results.map((n) => annotateStaleness(n)),
+          results: r.results.map((n) => annotRead(n)),
         });
         if (nsCtx.active) {
           // Untrusted hint intersected with the readable set, like GET
@@ -1574,10 +1795,10 @@ export function createApiServer(
               limit: relLimit,
               ...rwf,
             });
-            sendJson(res, 200, {
+            sendJson(res, 200, withBodyNote({
               ...withStaleness(out),
               searchedNamespaces: [hint],
-            });
+            }));
             return;
           }
           const lists: NoteRecord[][] = [];
@@ -1592,11 +1813,11 @@ export function createApiServer(
             lists.push(r.results);
           }
           const lim = clampInt(relLimit, 10, 1, 200);
-          sendJson(res, 200, {
+          sendJson(res, 200, withBodyNote({
             keywords,
-            results: roundRobin(lists, lim).map((n) => annotateStaleness(n)),
+            results: roundRobin(lists, lim).map((n) => annotRead(n)),
             searchedNamespaces: readable(nsCtx),
-          });
+          }));
           return;
         }
         const out = await runRelevantSearch(store, parsed.message, {
@@ -1604,10 +1825,10 @@ export function createApiServer(
           limit: relLimit,
           ...rwf,
         });
-        sendJson(res, 200, {
+        sendJson(res, 200, withBodyNote({
           ...withStaleness(out),
           searchedNamespaces: relNs ? [relNs] : [],
-        });
+        }));
         return;
       }
 
@@ -1841,7 +2062,7 @@ export function createApiServer(
               // `wait` and `wait_seconds` are the same thing (MCP spells it wait_seconds).
               waitSeconds: parseWait(url.searchParams.get("wait") ?? url.searchParams.get("wait_seconds")),
               signal: abort.signal,
-              key: tokenKey(principal.token),
+              key: tokenKey(tokenId(principal)),
               scopeKey: waitScopeKey(namespaces),
             }
           );

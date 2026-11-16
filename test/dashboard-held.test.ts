@@ -59,6 +59,20 @@ describe("dashboard: Held view", () => {
     assert.equal(p.el("tab_held").ariaCurrent, "page");
     assert.equal(p.el("tab_list").ariaCurrent, null);
   });
+  // U-14: a person reads plain words, not the store's obs.origin:* tags; still escaped, still flagged (taint stays visible).
+  test("origin tags read as plain words on the held card", async () => {
+    const tagged = { ...held, tags: ["obs.origin:declared", "obs.origin:via:memory", "obs.origin:tool:" + XSS, "plain"] };
+    const p = page((path) => (path.startsWith("/quarantine") ? { quarantine: [tagged] } : {}));
+    p.ctx.loadHeld();
+    await settle();
+    const html = p.el("list").innerHTML as string;
+    assert.ok(!html.includes(">obs.origin"), "no raw origin tag as visible text");
+    assert.match(html, /<span class='tag why'[^>]*>from outside content \(the agent said so\)<\/span>/);
+    assert.match(html, /<span class='tag why'[^>]*>written after reading unconfirmed memory<\/span>/);
+    assert.match(html, /<span class='tag why'[^>]*>its session read outside content through &lt;img/);
+    assert.match(html, /<span class='tag'>plain<\/span>/);
+    assert.ok(!html.includes("<img"));
+  });
   test("empty state tells you what the view is for", async () => {
     const p = page(() => ({ quarantine: [] }));
     p.ctx.loadHeld();
@@ -137,6 +151,23 @@ describe("dashboard: inline confirm", () => {
     assert.equal(ran, 0);
     p.ctx.arm(b, () => ran++);
     assert.equal(ran, 1);
+  });
+  // U-06: the stub has no layout, so "the button does not move" is checked as its cause: the first click writes nothing into the
+  // visible status line above the cards (an empty .msg is display:none, so a hint there pushed every card down a line).
+  test("first click leaves the status line alone, tells a screen reader, and stays armed 10 seconds (WCAG 2.2.1)", () => {
+    const p = page(() => ({}));
+    const delays: number[] = [];
+    let fire: () => void = () => {};
+    p.ctx.setTimeout = (fn: () => void, ms: number) => { delays.push(ms); fire = fn; return 1; };
+    const b: any = { textContent: "Reject", _t: 0, attrs: {} as any, getAttribute(k: string) { return this.attrs[k] ?? null; }, setAttribute(k: string, v: string) { this.attrs[k] = v; }, removeAttribute(k: string) { delete this.attrs[k]; } };
+    p.ctx.arm(b, () => {});
+    assert.equal(p.el("msg").textContent, "", "nothing new above the cards");
+    assert.deepEqual(delays, [10000]);
+    assert.match(p.el("armhint").textContent, /Press Reject again within 10 seconds to confirm/);
+    assert.match(DASHBOARD_HTML, /<span id="armhint" class="sr" role="status" aria-live="polite"><\/span>/);
+    fire();
+    assert.equal(b.textContent, "Reject");
+    assert.equal(p.el("armhint").textContent, "");
   });
 });
 

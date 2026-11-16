@@ -1,7 +1,10 @@
 // `monomem bench --longmemeval | --locomo`: a retrieval benchmark on public long-conversation datasets.
 // No LLM, no judge: each conversation is loaded into a fresh throwaway Store, the question is searched, and the
-// retrieved sessions/turns are scored against the dataset's gold evidence (recall@k, nDCG@10, MRR).
+// retrieved sessions/turns are scored against the dataset's gold evidence (recall@k, strict recall-all@k, nDCG@10, MRR).
 import { BENCH_HOME } from "./retrieval-env.js"; // first: isolate MONOMEM_HOME before config.js loads
+import { createHash } from "node:crypto";
+import { chatNotes, sealedChatNote } from "../chat-import.js";
+import { replyContextIsClean } from "../claude-import.js";
 import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
@@ -9,6 +12,7 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { DATA_DIR, DB_PATH } from "../config.js";
 import { Store } from "../store.js";
+import { ensureKey } from "../crypto.js";
 import { LIMITS } from "../security.js";
 import { embed, embeddingsEnabled } from "../embeddings.js";
 import { maybeEmbed, runRelevantSearch, runSearch } from "../search-service.js";
@@ -105,10 +109,14 @@ export function locomoHaystacks(data: unknown, g: Granularity): Haystack[] {
       const lines = arr(conv[key]).map((t) => {
         const r = rec(t);
         const cap = str(r.blip_caption);
-        return { dia: str(r.dia_id), text: `${str(r.speaker)}: ${str(r.text)}${cap ? ` [shares image: ${cap}]` : ""}` };
+        return { dia: str(r.dia_id), speaker: str(r.speaker), said: `${str(r.text)}${cap ? ` [shares image: ${cap}]` : ""}` };
       });
-      if (g === "session") docs.push({ unit: sess, title: sess, body: lines.map((l) => l.text).join("\n"), date });
-      else for (const l of lines) if (l.dia) docs.push({ unit: l.dia, title: l.dia, body: l.text, date });
+      if (g === "session") docs.push({ unit: sess, title: sess, body: lines.map((l) => `${l.speaker}: ${l.said}`).join("\n"), date });
+      // By turn: the notes `import --from claude-code-chats` stores for a conversation (each with what it replied to).
+      else {
+        const turns = lines.map((l, j) => ({ id: l.dia || `#${j}`, speaker: l.speaker, text: l.said }));
+        for (const n of chatNotes(turns, replyContextIsClean)) if (!n.id.startsWith("#")) docs.push({ unit: n.id, title: n.title, body: n.body, date });
+      }
     }
     const sid = str(sample.sample_id) || `conv${out.length}`;
     // Questions are asked after the conversation: "now" is its last session date.
@@ -125,6 +133,20 @@ export function locomoHaystacks(data: unknown, g: Granularity): Haystack[] {
     if (questions.length) out.push({ docs, questions });
   }
   return out;
+}
+
+export type Split = "a" | "b";
+
+/**
+ * Tuning / held-out halves, so a ranking change is tuned on one half and judged on the other. LongMemEval-S: one question per
+ * haystack, split on the parity of sha256(question id). LoCoMo: whole conversations, the first five (a) and the rest (b), so a
+ * held-out question never shares a haystack with a tuning one. No split: everything.
+ */
+export function splitHaystacks<T extends { questions: Array<{ id: string }> }>(stacks: T[], dataset: Dataset, split: Split | undefined): T[] {
+  if (!split) return stacks;
+  if (dataset === "locomo") return split === "a" ? stacks.slice(0, 5) : stacks.slice(5);
+  const half = (id: string): Split => ((createHash("sha256").update(id).digest()[31] & 1) === 0 ? "a" : "b");
+  return stacks.filter((h) => half(h.questions[0]?.id ?? "") === split);
 }
 
 /** Download `url` to `dest` once (streamed, progress on stderr). Returns dest. */
@@ -159,6 +181,10 @@ export interface RetrievalOptions {
   limit?: number;
   mode: "keyword" | "hybrid";
   granularity: Granularity;
+  /** C-06: write every haystack into an encrypted store (a key file beside the database) to measure what encryption costs. */
+  encrypted?: boolean;
+  /** Only the tuning (a) or held-out (b) half: see splitHaystacks. */
+  split?: Split;
 }
 
 interface ModeResult {
@@ -169,6 +195,8 @@ interface ModeResult {
 export interface RetrievalReport {
   dataset: string;
   granularity: Granularity;
+  encrypted: boolean;
+  split?: Split;
   questions: number;
   haystacks: number;
   notes: number;
@@ -194,6 +222,7 @@ export async function runRetrieval(o: RetrievalOptions): Promise<RetrievalReport
   const file = o.data ?? (await fetchOnce(SOURCES[o.dataset].url, join(CACHE_DIR, SOURCES[o.dataset].file)));
   const parsed: unknown = JSON.parse(readFileSync(file, "utf8")); // untrusted: parsed as data only
   let stacks = o.dataset === "longmemeval" ? longMemEvalHaystacks(parsed, o.granularity) : locomoHaystacks(parsed, o.granularity);
+  stacks = splitHaystacks(stacks, o.dataset, o.split);
   if (o.limit) stacks = stacks.slice(0, o.limit);
 
   let hybridSkip = "";
@@ -215,12 +244,18 @@ export async function runRetrieval(o: RetrievalOptions): Promise<RetrievalReport
   let nq = 0;
   for (const [i, h] of stacks.entries()) {
     const dir = join(BENCH_HOME, `h${i}`);
+    if (o.encrypted) ensureKey(dir);
+    // One audit log (and signing key) per throwaway store: a shared one makes every store after the first print
+    // "not replacing the signing key ... it belongs to another store".
+    process.env.MONOMEM_AUDIT_LOG = join(dir, "audit.log");
     const store = new Store(join(dir, "state.db"));
     try {
       const unitOf = new Map<number, string>();
       const t0 = performance.now();
       const created = store.transaction(() =>
-        h.docs.map((d) => {
+        h.docs.map((raw) => {
+          // An encrypted store stores chat turns the way the import does there: fixed title, real title in the sealed body.
+          const d = o.encrypted && o.dataset === "locomo" && o.granularity === "turn" ? sealedChatNote(raw) : raw;
           if (d.body.length > LIMITS.body) truncated++;
           const n = store.create(
             { title: d.title, body: d.body.slice(0, LIMITS.body), created_at: d.date },
@@ -262,6 +297,8 @@ export async function runRetrieval(o: RetrievalOptions): Promise<RetrievalReport
   return {
     dataset: o.dataset === "longmemeval" ? "LongMemEval-S (cleaned)" : "LoCoMo-10",
     granularity: o.granularity,
+    encrypted: o.encrypted === true,
+    ...(o.split ? { split: o.split } : {}),
     questions: nq,
     haystacks: stacks.length,
     notes,
@@ -279,17 +316,17 @@ const pct = (x: number): string => (x * 100).toFixed(1).padStart(6);
 
 export function renderRetrieval(r: RetrievalReport): string {
   const lines = [
-    `${r.dataset}, ${r.granularity} granularity: ${r.questions} questions over ${r.haystacks} haystacks, ${r.notes} notes` +
+    `${r.dataset}, ${r.granularity} granularity${r.encrypted ? ", ENCRYPTED store (key file on)" : ""}${r.split ? `, split ${r.split} only` : ""}: ${r.questions} questions over ${r.haystacks} haystacks, ${r.notes} notes` +
       (r.truncatedBodies ? ` (${r.truncatedBodies} bodies cut to ${LIMITS.body} chars)` : ""),
     `indexing: ${(r.indexMs.total / 1000).toFixed(1)} s total, p50 ${r.indexMs.p50PerHaystack.toFixed(1)} ms per haystack`,
   ];
   const table = (name: string, m: ModeResult): void => {
     lines.push("", `${name} (search p50 ${m.latencyMs.p50.toFixed(2)} ms, p95 ${m.latencyMs.p95.toFixed(2)} ms)`);
-    lines.push(`${"type".padEnd(28)}${"n".padStart(5)}    R@5   R@10 Rall@10 nDCG@10    MRR`);
+    lines.push(`${"type".padEnd(28)}${"n".padStart(5)}    R@5 Rall@5   R@10 Rall@10 nDCG@10    MRR`);
     const keys = ["all", ...Object.keys(m.metrics).filter((k) => k !== "all").sort()];
     for (const k of keys) {
       const x = m.metrics[k];
-      lines.push(`${k.padEnd(28)}${String(x.n).padStart(5)} ${pct(x.r5)} ${pct(x.r10)}  ${pct(x.rAll10)}  ${pct(x.ndcg10)} ${pct(x.mrr)}`);
+      lines.push(`${k.padEnd(28)}${String(x.n).padStart(5)} ${pct(x.r5)} ${pct(x.rAll5)} ${pct(x.r10)}  ${pct(x.rAll10)}  ${pct(x.ndcg10)} ${pct(x.mrr)}`);
     }
   };
   table("keyword (runSearch mode=keyword / state_search: BM25, all-terms first, then any-keyword BM25 x keyword coverage)", r.keyword);
@@ -314,7 +351,12 @@ export async function retrievalMain(argv: string[], out: (s: string) => void = c
       const a = argv[i];
       if (a === "--longmemeval" || a === "--locomo" || a === "--") continue;
       else if (a === "--json") json = true;
-      else if (a === "--data") o.data = resolve(take(i++, a));
+      else if (a === "--encrypted") o.encrypted = true;
+      else if (a === "--split") {
+        const v = take(i++, a);
+        if (v !== "a" && v !== "b") throw new Error("--split must be a or b");
+        o.split = v;
+      } else if (a === "--data") o.data = resolve(take(i++, a));
       else if (a === "--limit") {
         const n = Number(take(i++, a));
         if (!Number.isInteger(n) || n < 1) throw new Error("--limit must be a whole number above 0");

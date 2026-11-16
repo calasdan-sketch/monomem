@@ -9,6 +9,7 @@
 // state store, not a mock or a second copy.
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { isBusyError } from "./restore.js";
 import { actorStore, currentCeiling, currentWriter } from "./actor.js";
 import { type Sensitivity, SENSITIVITY_LEVELS } from "./sensitivity.js";
 import { z } from "zod";
@@ -20,6 +21,7 @@ import {
   clampInt,
   REBUILD_CONFIRM_NOTE_COUNT,
   CHANGES_MAX_LIMIT,
+  quarantineCasNote,
   type NoteRecord,
 } from "./store.js";
 import type { LintFinding } from "./lint.js";
@@ -40,12 +42,16 @@ import { rollbackPreview, rollbackConfirm, embedRestored } from "./rollback.js";
 import { supersedePreview, supersedeConfirm, supersedeUndo, noteHistory, restoreVersion, purgeNoteHistory, SupersedeError, type Caller } from "./supersede.js";
 import { runnerStatus } from "./liveness.js";
 import { assertPlainWriteTags, assertReviewedTag } from "./reserved-tags.js";
-import { withFacts, factFeedback, COMMON_FACT_KEYS, type FactFeedback } from "./facts.js";
+import { prepareNoteUpdate } from "./note-update.js";
+import { distrustedOptInRefusal } from "./trust.js";
+import { ORIGIN_DECLARED, ReadTaint, unconfirmedIdsIn } from "./taint.js";
+import { withFacts, factFeedback, COMMON_FACT_KEYS, withDisputes, listWithDisputes, type FactFeedback } from "./facts.js";
 import { waitForChanges, parseWait, WAIT_MAX_SECONDS, WAIT_RECOMMENDED_SECONDS } from "./change-wait.js";
 import { type Scope, PACKAGE_VERSION } from "./config.js";
 export { PACKAGE_VERSION };
 import { ADMIN_SCOPE_NEEDED, scopeAllows, UNTRUSTED_BANNER, provenanceBanner, audit, printableWords } from "./security.js";
-import { runSearch, runSearchExplained, semanticNotice, parseMode, maybeEmbed, runRelevantSearch, roundRobin, describeWhen, SEARCH_MODES, type SearchOpts, type RelevantOpts, type ExplainedHit } from "./search-service.js";
+import { checkFilesInput } from "./code-anchor.js";
+import { runSearch, runSearchExplained, semanticNotice, parseMode, maybeEmbed, runRelevantSearch, roundRobin, describeWhen, bestPassage, SEARCH_MODES, type SearchOpts, type RelevantOpts, type ExplainedHit } from "./search-service.js";
 import {
   type ServerNamespaceOpts,
   canRead,
@@ -56,9 +62,10 @@ import { TIME_ZONE } from "./config.js";
 import { annotateStaleness } from "./staleness.js";
 
 /** Staleness fields plus a compact `when` ("2023-05-08, 5 months ago") so the reader sees the note's date and age. */
-const withWhen = (n: NoteRecord) => ({ ...annotateStaleness(n), when: describeWhen(n.created_at) });
+const withWhenBase = (n: NoteRecord) => ({ ...annotateStaleness(n), when: describeWhen(n.created_at) });
 import { meterStats } from "./meter.js";
 import { receiptList, receiptGet } from "./receipts.js";
+import { RECEIPT_CHECK } from "./store/write-receipt.js";
 import { noteWhy } from "./why.js";
 import {
   findCandidatesGuarded,
@@ -106,14 +113,18 @@ const zFacts = () =>
 const READ_MAX_CHARS = 40_000;
 /** state_read ids: at most this many notes per call. */
 const MULTI_READ_MAX = 10;
-const CUT_NOTE = `Long bodies are cut to ${LIST_BODY_CHARS} characters (body_truncated, body_chars); state_read id=N for the full text.`;
+const CUT_NOTE = `Long bodies are cut to ${LIST_BODY_CHARS} characters (body_truncated, body_chars); a search shows the part with the most query words, and body_offset says where it starts. state_read id=N for the full text.`;
 /** The same payload with each note body in `results` / `notes` cut to LIST_BODY_CHARS (a host caps how much tool output it shows). */
-function cutBodies(payload: Record<string, unknown>): Record<string, unknown> {
+function cutBodies(payload: Record<string, unknown>, query?: string): Record<string, unknown> {
+  // A search (query given) shows the window with the most query hits (C-01); body_offset says where it starts, so
+  // state_read offset=N continues from there. The window is a slice of that note's own body: nothing else is read.
   const cut = (v: unknown): unknown =>
     Array.isArray(v)
       ? v.map((n) => {
           const b = (n as { body?: unknown } | null)?.body;
-          return typeof b === "string" && b.length > LIST_BODY_CHARS ? { ...(n as object), body: b.slice(0, LIST_BODY_CHARS), body_truncated: true, body_chars: b.length } : n;
+          if (typeof b !== "string" || b.length <= LIST_BODY_CHARS) return n;
+          const p = query ? bestPassage(b, query, LIST_BODY_CHARS) : { start: 0, text: b.slice(0, LIST_BODY_CHARS) };
+          return { ...(n as object), body: p.text, body_truncated: true, body_chars: b.length, ...(p.start > 0 ? { body_offset: p.start } : {}) };
         })
       : v;
   return { ...payload, ...("results" in payload ? { results: cut(payload.results) } : {}), ...("notes" in payload ? { notes: cut(payload.notes) } : {}) };
@@ -123,8 +134,8 @@ function noBody<T extends { body?: unknown }>(n: T): Omit<T, "body"> {
   const { body: _body, ...rest } = n;
   return rest;
 }
-function untrustedResultCut(payload: Record<string, unknown>) {
-  return untrustedResult(cutBodies(payload));
+function untrustedResultCut(payload: Record<string, unknown>, query?: string) {
+  return untrustedResult(cutBodies(payload, query));
 }
 
 /** False only for a payload with a results / notes / recent list and no record anywhere (every list empty or plain strings): no stored text is in it. */
@@ -219,7 +230,16 @@ function noteWriterArgs(note_written_by?: string, not_note_written_by?: string):
 }
 
 // A linter-held write is not an error: the write was accepted for review.
-function quarantinedResult(e: QuarantinedError) {
+function quarantinedResult(e: QuarantinedError, extra?: Record<string, unknown>) {
+  // Lead with what the linter saw: under approve-first an injected instruction used to be reported only as "waiting for
+  // approval", and the agent then told the person it was routine. The labels are the linter's own words, never note text.
+  const approval = e.findings.some((f) => f.category === "approval");
+  const injected = [...new Set(e.findings.filter((f) => f.category === "injection" || f.category === "directive").map((f) => f.label))];
+  const why = injected.length
+    ? `This write was held because it looks like an injected instruction (${injected.join(", ")})${approval ? ", and its namespace also requires approval (approve-first)" : ""}. Nothing is stored or changed yet. `
+    : approval && e.findings.length === 1
+      ? "This write was held for admin review because its namespace requires approval (approve-first); nothing is stored or changed yet. "
+      : `This write was held for admin review by the memory linter${approval ? " (its namespace also requires approval, approve-first)" : ""}; nothing is stored or changed yet. `;
   return textResult({
     quarantined: {
       id: e.quarantineId,
@@ -230,12 +250,11 @@ function quarantinedResult(e: QuarantinedError) {
       // the surfaces that always exist instead.
       next: "The write was held, not lost. An administrator can approve or reject it in the dashboard, or with: monomem quarantine list",
       message:
-        (e.findings.some((f) => f.category === "approval")
-          ? "This write was held for admin review because its namespace requires approval (approve-first), and is not stored as a note yet. "
-          : "This write was held for admin review by the memory linter and is not stored as a note yet. ") +
+        why +
         "An admin can approve or reject it in the Monomem dashboard, or with `monomem quarantine` " +
         "(and through the memory_quarantine tool where MONOMEM_TOOLS makes it available).",
     },
+    ...extra,
   });
 }
 
@@ -275,7 +294,8 @@ function ignoredRefusal(tool: string, raw: Record<string, unknown>, args: Record
 }
 
 /** Adds ignored_arguments (and what each probably meant) to a tool's JSON result. */
-function withIgnored(r: unknown, tool: string, ignored: string[], shape: z.ZodRawShape): unknown {
+/** Extra top-level fields on a tool's JSON reply (after the untrusted banner, when there is one); other replies unchanged. */
+function withFields(r: unknown, extra: Record<string, unknown>): unknown {
   const res = r as { content?: Array<{ type: string; text?: string }> } | undefined;
   const text = res?.content?.[0]?.text;
   if (typeof text !== "string") return r;
@@ -287,21 +307,26 @@ function withIgnored(r: unknown, tool: string, ignored: string[], shape: z.ZodRa
     return r;
   }
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return r;
-  const hint = ignored.map((k) => `\`${k}\` is not an argument of ${tool} and was ignored${didYouMean(k, shape)}`).join("; ");
-  const unscoped = tool === "state_search" && ignored.some((k) => ARG_ALIASES[k.toLowerCase()] === "namespace");
-  const extra = {
-    ignored_arguments: ignored,
-    ignored_hint: hint + (unscoped ? ". The search was NOT limited to a namespace: pass `namespace` (one name) to scope it." : ""),
-  };
   return { ...res, content: [{ ...res!.content![0], text: banner + JSON.stringify({ ...payload, ...extra }) }, ...res!.content!.slice(1)] };
 }
 
-function errorResult(message: string) {
+function withIgnored(r: unknown, tool: string, ignored: string[], shape: z.ZodRawShape): unknown {
+  const hint = ignored.map((k) => `\`${k}\` is not an argument of ${tool} and was ignored${didYouMean(k, shape)}`).join("; ");
+  const unscoped = tool === "state_search" && ignored.some((k) => ARG_ALIASES[k.toLowerCase()] === "namespace");
+  return withFields(r, {
+    ignored_arguments: ignored,
+    ignored_hint: hint + (unscoped ? ". The search was NOT limited to a namespace: pass `namespace` (one name) to scope it." : ""),
+  });
+}
+
+const BUSY_TOOL_MESSAGE = "The database is busy (another program is writing to it); nothing was saved. Try again in a few seconds.";
+
+function errorResult(message: string, extra?: Record<string, unknown>) {
   return {
     content: [
       {
         type: "text" as const,
-        text: JSON.stringify({ error: message }),
+        text: JSON.stringify({ error: message, ...extra }),
       },
     ],
     isError: true,
@@ -312,8 +337,10 @@ function errorResult(message: string) {
 // caller-input problem (ValidationError) is echoed back, but any unexpected
 // fault (e.g. a raw node:sqlite error) is logged server-side and returned as a
 // generic message so SQLite/internal details never leak to the MCP caller.
-function errorFor(e: unknown) {
-  if (e instanceof ValidationError) return errorResult(e.message);
+function errorFor(e: unknown, extra?: Record<string, unknown>) {
+  if (e instanceof ValidationError) return errorResult(e.message, extra);
+  // 1.5.0 (U-09): another program held the database lock past the wait. Retryable, not a fault; same words as REST's 503.
+  if (isBusyError(e)) return errorResult(BUSY_TOOL_MESSAGE);
   // eslint-disable-next-line no-console
   console.error("[monomem] mcp tool error:", (e as Error).message);
   return errorResult("internal error");
@@ -339,6 +366,12 @@ export interface ConnectionCtx {
   local?: boolean;
   /** The token's sensitivity ceiling (config `max_sensitivity`); the store hides every note above it from this connection. */
   maxSensitivity?: Sensitivity;
+  /** 1.4.0: the token is marked reads_outside: every note this connection writes is marked `obs.origin:declared`. */
+  readsOutside?: boolean;
+  /** 1.4.0: the set of unconfirmed note ids this writer has read (kept by the HTTP front door across requests). */
+  taintedReads?: ReadTaint;
+  /** 1.5.0: the folder a local (stdio) server was launched in; hook-session taint is matched by it (ActorRef.cwd). */
+  cwd?: string;
 }
 
 /**
@@ -371,7 +404,29 @@ const READ_TOOLS = new Set([
   "session_list",
   "task_get",
   "task_list",
+  // 1.4.0: these name notes (titles, ids) without the note objects' flags; logRead looks the ids up (ID_PROBE_TOOLS).
+  "memory_why",
+  "memory_receipt",
+  "memory_supersede_preview",
+  "memory_quarantine",
 ]);
+
+/**
+ * Read tools whose replies name notes without carrying their `unconfirmed` flag: every note id in the call's arguments and
+ * reply is looked up, and an unconfirmed one marks the connection like a read of it (taint.ts). memory_quarantine counts
+ * only for action=context (list shows no notes; approve/reject are decisions, not reads).
+ */
+const ID_PROBE_TOOLS = new Set(["memory_why", "memory_receipt", "memory_supersede_preview", "memory_quarantine", "memory_history", "memory_since"]);
+/** Tools that CREATE a note when called without an id: the note in their reply is the caller's own, not something it read. */
+const CREATING_TOOLS = new Set(["state_write", "task_put", "session_handoff"]);
+const ID_KEYS = new Set(["id", "ids", "new_id", "old_ids", "note_id", "target_id", "by"]);
+function noteIdsIn(v: unknown, depth = 0, key = ""): number[] {
+  if (depth > 6 || v === null || v === undefined) return [];
+  if (typeof v === "number") return ID_KEYS.has(key) && Number.isSafeInteger(v) && v > 0 ? [v] : [];
+  if (Array.isArray(v)) return v.flatMap((x) => noteIdsIn(x, depth + 1, key));
+  if (typeof v !== "object") return [];
+  return Object.entries(v as Record<string, unknown>).flatMap(([k, x]) => noteIdsIn(x, depth + 1, k));
+}
 
 const STDIO_ADMIN_HINT =
   "This is an operator action and is off over the local stdio connection. Do it yourself in the dashboard " +
@@ -468,8 +523,14 @@ export function createMcpServer(
   const enabled =
     opts.tools === "all" ? null : opts.tools ? new Set(opts.tools) : enabledToolNames();
   const localGuard = conn.local === true && !stdioAdminToolsAllowed();
+  // 1.4.0: unconfirmed notes this connection has read. The stdio server is one process = one agent: its own set. An
+  // HTTP connection gets a new server per request, so mcp-http.ts passes the token writer's set from its registry.
+  const taintedReads: ReadTaint = conn.taintedReads ?? new ReadTaint();
+  const connTaint = (): string[] => (conn.readsOutside ? [ORIGIN_DECLARED] : []); // read-taint (via:memory) is decided by the Store from taintedReads
   /** Whether a tool is offered on this server: descriptions name only tools the model was actually given. */
   const has = (name: string): boolean => !enabled || enabled.has(name);
+  /** A note for a read reply: staleness, a readable date and (R2-01) the dispute marker, computed inside the caller's request. */
+  const withWhen = (n: NoteRecord) => withDisputes(store, withWhenBase(n) as NoteRecord);
   const registerRaw = server.registerTool.bind(server) as (...a: unknown[]) => unknown;
   (server as unknown as { registerTool: (...a: unknown[]) => unknown }).registerTool = (name: unknown, cfg: unknown, handler: unknown) => {
     // Every registered tool's name and description is sent to the model on
@@ -501,24 +562,24 @@ export function createMcpServer(
     {
       // include_distrusted turns the trust policy OFF for the call: admin only, for every tool.
       // A read/write connection (or an agent a hostile note talked into asking) gets a refusal.
-      const first = args[0] as { include_distrusted?: unknown; namespace?: unknown } | undefined;
-      if (localGuard && first && first.include_distrusted === true) {
-        return errorResult(`include_distrusted shows notes from writers the operator distrusted. ${STDIO_ADMIN_HINT}`);
-      }
-      if (first && first.include_distrusted === true && !scopeAllows(scope, "admin")) {
-        return errorResult("include_distrusted needs an admin connection: it shows notes from writers the admin put on the distrust list");
-      }
+      // The rule itself is distrustedOptInRefusal (trust.ts), shared with REST; this maps its answer to an error result.
       // A namespace-pinned admin: honoured for its OWN namespace only (the ones it merely reads belong to their own admins).
       // By-id tools (state_read, task_get) are checked against the note's namespace where they read it.
-      if (
-        first &&
-        first.include_distrusted === true &&
-        nsActive &&
-        name !== "state_read" &&
-        name !== "task_get" &&
-        readable().some((n) => n !== ownNs) &&
-        first.namespace !== ownNs
-      ) {
+      const first = args[0] as { include_distrusted?: unknown; namespace?: unknown } | undefined;
+      const why =
+        first && first.include_distrusted === true
+          ? distrustedOptInRefusal({
+              admin: scopeAllows(scope, "admin"),
+              local: localGuard,
+              byId: name === "state_read" || name === "task_get",
+              pinnedWithGrants: () => nsActive && readable().some((n) => n !== ownNs),
+              ownNs,
+              nsHint: first.namespace,
+            })
+          : null;
+      if (why === "local") return errorResult(`include_distrusted shows notes from writers the operator distrusted. ${STDIO_ADMIN_HINT}`);
+      if (why === "not-admin") return errorResult("include_distrusted needs an admin connection: it shows notes from writers the admin put on the distrust list");
+      if (why === "other-namespace") {
         return errorResult(
           `include_distrusted is honoured only for this connection's own namespace ("${ownNs}"): pass namespace "${ownNs}". The namespaces it can only read are governed by their own admins.`
         );
@@ -529,12 +590,45 @@ export function createMcpServer(
           authed: conn.authed === true,
           ...(conn.maxSensitivity !== undefined ? { maxSensitivity: conn.maxSensitivity } : {}),
           canDeclassify: scopeAllows(scope, "admin"),
+          taint: connTaint(),
+          taintedReads,
+          ...(conn.cwd !== undefined ? { cwd: conn.cwd } : {}),
+          // 1.4.0: a write's derived_from may only name notes this connection could read.
+          ...(nsActive ? { readable: readable() } : {}),
         },
         () => {
+          const fb0 = store.bodyIndexFallbacks();
           const out = (handler as (...x: unknown[]) => unknown)(...args);
-          return READ_TOOLS.has(name as string) ? logRead(name as string, args[0] as Record<string, unknown> | undefined, out) : out;
+          // R1-05: EVERY reply that hands this connection an unconfirmed note marks it, not only the read tools (a metadata edit,
+          // a task claim and a history call echo the text too). The access log stays for read tools only.
+          const marked = READ_TOOLS.has(name as string) ? logRead(name as string, args[0] as Record<string, unknown> | undefined, out) : markReads(name as string, args[0] as Record<string, unknown> | undefined, out);
+          // C-06: a search that could not read sealed bodies says so in the reply (body_search), never silently.
+          // ponytail: the fallback counter is per process; a concurrent call's fallback can add the notice here too (never drop it).
+          const note = (r: unknown): unknown => {
+            const n = store.bodySearchNotice(fb0);
+            return n ? withFields(r, { body_search: n }) : r;
+          };
+          return marked instanceof Promise ? marked.then(note) : note(marked);
       });
     }
+  };
+
+  const markReads = (tool: string, a: Record<string, unknown> | undefined, out: unknown): unknown => {
+    const mark = (r: unknown): unknown => {
+      if (CREATING_TOOLS.has(tool) && a?.id === undefined) return r;
+      const res = r as { isError?: boolean; content?: Array<{ text?: unknown }> } | undefined;
+      const text = res?.content?.[0]?.text;
+      if (res?.isError || typeof text !== "string") return r;
+      let payload: unknown;
+      try {
+        payload = JSON.parse(text.startsWith(UNTRUSTED_BANNER) ? text.slice(UNTRUSTED_BANNER.length) : text);
+      } catch {
+        return r;
+      }
+      for (const id of unconfirmedIdsIn(payload)) taintedReads.add(id);
+      return r;
+    };
+    return out instanceof Promise ? out.then(mark) : mark(out);
   };
 
   // Read access log (Store.logAccess): one row per successful read tool call, written inside the caller's actor context
@@ -551,6 +645,12 @@ export function createMcpServer(
         payload = undefined;
       }
       if (payload && typeof payload === "object" && "error" in payload) return r;
+      if (tool === "memory_quarantine" && a?.action !== "context") return r;
+      // 1.4.0: this connection has now read outside content nobody confirmed; what it writes next is marked via:memory.
+      for (const id of unconfirmedIdsIn(payload)) taintedReads.add(id);
+      if (ID_PROBE_TOOLS.has(tool)) {
+        for (const id of new Set([...noteIdsIn(a), ...noteIdsIn(payload)])) if (store.read(id)?.unconfirmed) taintedReads.add(id); // gate-ok: read-taint probe, a flag check, nothing returned
+      }
       const query = typeof a?.query === "string" ? a.query : typeof a?.message === "string" ? a.message : a;
       store.logAccess({ tool, namespaces: typeof a?.namespace === "string" ? [a.namespace] : [], query, payload });
       return r;
@@ -658,7 +758,7 @@ export function createMcpServer(
     const annotated = withWhen(note);
     const payload: Record<string, unknown> = note.neighbors
       ? { ...annotated, neighbors: note.neighbors.map((n) => ({ ...n, score: Math.round(n.score * 1000) / 1000 })) }
-      : annotated;
+      : { ...annotated };
     const full = typeof note.body === "string" ? note.body : "";
     if (start > 0 || full.length > max) {
       const end = Math.min(full.length, start + max);
@@ -738,21 +838,50 @@ export function createMcpServer(
           .describe(
             "Who may read this note: public, internal (default) or private. A connection with a ceiling cannot read, write or relabel above it; lowering a label needs an admin."
           ),
+        outside: z
+          .boolean()
+          .optional()
+          .describe(
+            "Set true when this note's content came from outside (a web page, a document, another server). The note is then marked unconfirmed until a person confirms it. It can only add the mark, never remove it."
+          ),
+        derived_from: z
+          .array(z.union([z.number().int().positive(), z.string().regex(/^\d{1,15}$/)]))
+          .max(20)
+          .optional()
+          .describe(
+            "Ids of the notes this one was built from (at most 20). Links are only ever added, never removed. A note built from an unconfirmed note is marked unconfirmed too."
+          ),
+        client_key: z
+          .string()
+          .optional()
+          .describe("Idempotency key for creating (any unique string you invent, e.g. a UUID): a retry with the same key returns the note the first write made (deduplicated:true) instead of a duplicate."),
+        files: z
+          .array(z.string())
+          .max(20)
+          .optional()
+          .describe("When creating: the files in this git repository the note is about (at most 20, e.g. [\"src/auth.ts\"], tracked by git). When one of them changes in a later commit, reads label the note `[code changed since this was written: ...]` until a person checks it."),
       },
     },
-    async ({ id, namespace, title: givenTitle, body, tags: plainTags, facts, source, if_rev, forget_after, confidence, sensitivity }) => {
+    async ({ id, namespace, title: givenTitle, body, tags: plainTags, facts, source, if_rev, forget_after, confidence, sensitivity, outside, derived_from, client_key, files }) => {
       const warnings: LintFinding[] = [];
       let title = givenTitle;
       let tags = plainTags;
+      // R2-06: the audit line of this write's decision (accepted, held, refused) comes back as `receipt`.
+      const withReceipt = (r = store.takeWriteReceipt()) => (r ? { receipt: r, receipt_check: RECEIPT_CHECK } : {});
       try {
         const denied = denyIfUnder("write");
         if (denied) return errorResult(denied);
+        store.takeWriteReceipt(); // drop a decision left by an earlier call
         // task / handoff / task.* tags belong to task_put and session_handoff.
-        if (tags !== undefined) {
-          const currentTags = id !== undefined ? store.read(id)?.tags : undefined; // gate-ok: tag-guard lookup only (no content returned)
-          assertPlainWriteTags(tags, currentTags);
-          assertReviewedTag(tags, currentTags, false);
+        // 1.5.0 (A2): for an update the guard runs below, on the note this caller may see (the same order as REST), so a
+        // reserved-tag refusal can't reveal a hidden note.
+        if (tags !== undefined && id === undefined) {
+          assertPlainWriteTags(tags, undefined);
+          assertReviewedTag(tags, undefined, false);
         }
+        if (id !== undefined && client_key !== undefined) return errorResult("client_key applies to creating a note; use if_rev to guard an update");
+        if (id !== undefined && files !== undefined) return errorResult("files applies to creating a note; a person refreshes an existing note's files with monomem review keep <id>");
+        const anchorFiles = checkFilesInput(files);
         if (id !== undefined) {
           // When namespace resolution is active the model-supplied namespace
           // is dropped entirely (the note keeps its existing namespace), and
@@ -761,23 +890,22 @@ export function createMcpServer(
           // update-by-id could rewrite notes from a granted namespace. A
           // missing or foreign note reports the same "no note" so the caller
           // can't probe which ids exist in namespaces it may not write.
-          // A note the distrust list hides reads as missing here too (only an admin may rewrite it).
-          // hideArchived: updating a forgotten note would echo its text back; it must be restored first.
-          const target = store.readVisible(id, { hideArchived: true, includeDistrusted: scopeAllows(scope, "admin") });
-          if (!target) return errorResult(noNote(id, scopeAllows(scope, "admin")));
-          if (nsActive && target.namespace !== ownNs) {
-            return errorResult(`no note with id ${id}`);
-          }
-          if (facts !== undefined) tags = withFacts(plainTags, facts, target.tags);
+          // A note the distrust list hides reads as missing here too (only an admin may rewrite it). The checks are shared with
+          // REST PUT /notes/:id (note-update.ts). `reviewed` is never an MCP caller's: an admin connection is an agent.
+          const check = prepareNoteUpdate(store, { admin: scopeAllows(scope, "admin"), mayReview: false, ...(nsActive ? { ownNs } : {}) }, id, tags, facts);
+          if (!check.ok) return errorResult(check.why === "missing" ? noNote(id, scopeAllows(scope, "admin")) : `no note with id ${id}`);
+          tags = check.tags;
           const patch = nsActive
-            ? { title, body, tags, source, forget_after, confidence, sensitivity }
-            : { namespace, title, body, tags, source, forget_after, confidence, sensitivity };
-          const updated = store.update(id, patch, { ifRev: if_rev, lintWarnings: warnings });
-          if (!updated) return errorResult(`no note with id ${id}`);
-          await maybeEmbed(store, updated);
+            ? { title, body, tags, source, forget_after, confidence, sensitivity, outside, derived_from }
+            : { namespace, title, body, tags, source, forget_after, confidence, sensitivity, outside, derived_from };
+          const result = store.update(id, patch, { ifRev: if_rev, lintWarnings: warnings });
+          if (!result) return errorResult(`no note with id ${id}`);
+          const { unchanged, ...updated } = result;
+          const receipt = withReceipt(); // before any await: the write is synchronous, the next one is not ours
+          if (!unchanged) await maybeEmbed(store, updated);
           // A partial update echoes back the merged note, which can include a
           // pre-existing body planted by someone else -- wrap it as untrusted.
-          return untrustedResult(withConflicts(withWarnings({ note: noBody(updated) }, warnings), store, updated, facts));
+          return untrustedResult(withConflicts(withWarnings({ note: noBody(updated), ...(unchanged ? { unchanged: true } : {}), ...receipt }, warnings), store, updated, facts));
         }
         let titleGenerated = false;
         if (!title || !title.trim()) {
@@ -789,17 +917,79 @@ export function createMcpServer(
         // Writes always go to the server-resolved namespace when active; the
         // model-supplied `namespace` is ignored (prompt-injection guard).
         tags = withFacts(plainTags, facts);
-        const created = store.create(
+        const once = store.createOnce(
           nsActive
-            ? { namespace: ownNs, title, body, tags, source, forget_after, sensitivity, ...(typeof confidence === "number" ? { confidence } : {}) }
-            : { namespace, title, body, tags, source, forget_after, sensitivity, ...(typeof confidence === "number" ? { confidence } : {}) },
-          { lintWarnings: warnings }
+            ? { namespace: ownNs, title, body, tags, source, forget_after, sensitivity, outside, derived_from, ...(typeof confidence === "number" ? { confidence } : {}) }
+            : { namespace, title, body, tags, source, forget_after, sensitivity, outside, derived_from, ...(typeof confidence === "number" ? { confidence } : {}) },
+          client_key,
+          { lintWarnings: warnings, ...(anchorFiles ? { files: anchorFiles } : {}) }
         );
+        const receipt = withReceipt();
+        // R2-04: a retry with a known key wrote nothing; the reply is the note the first write made.
+        if (once.deduplicated) return untrustedResult({ note: noBody(once.note), deduplicated: true });
+        const created = once.note;
         await maybeEmbed(store, created);
         const sim = store.similarNote(created.id);
-        return untrustedResult(withConflicts(withWarnings({ note: noBody(created), ...(titleGenerated ? { title_generated: `No title was given, so it was made from the body's first line. To change it: state_write id=${created.id} title="..."` } : {}), ...(sim ? { similar_note: { id: sim.id, title: sim.title, hint: `looks similar to #${sim.id} - consider updating it (state_write with id=${sim.id}) if this is the same thing` } } : {}) }, warnings), store, created, facts));
+        return untrustedResult(withConflicts(withWarnings({ note: noBody(created), ...receipt, ...(titleGenerated ? { title_generated: `No title was given, so it was made from the body's first line. To change it: state_write id=${created.id} title="..."` } : {}), ...(sim ? { similar_note: { id: sim.id, title: sim.title, hint: `looks similar to #${sim.id} - consider updating it (state_write with id=${sim.id}) if this is the same thing` } } : {}) }, warnings), store, created, facts));
       } catch (e) {
-        if (e instanceof QuarantinedError) return quarantinedResult(e);
+        const receipt = withReceipt(store.refusedWriteReceipt(e, id));
+        if (e instanceof QuarantinedError) return quarantinedResult(e, receipt);
+        return errorFor(e, receipt);
+      }
+    }
+  );
+
+  // 1.4.0: not in DEFAULT_TOOLS (it costs context every turn, and over stdio a confirm never counts). A token agent that
+  // checks notes for others turns it on with MONOMEM_TOOLS. It never lifts the block on pinning: only a person can.
+  server.registerTool(
+    "memory_confirm",
+    {
+      title: "Confirm a note from outside content",
+      description:
+        "Record that you checked a note marked unconfirmed (from outside content) against a source. It counts only when you did not write the note, connect with your own key (not a local connection), name a source different from the note's own and from earlier confirms, and have not read the note's text yet. A counted confirm is corroboration, not verification: it lets the note back into session start, never lets it be pinned. The reply says whether it counted and why.",
+      inputSchema: {
+        id: zInt().describe("Id of the note to confirm."),
+        source: z.string().max(200).optional().describe("What you checked it against (a URL or a short description). Required for it to count."),
+      },
+    },
+    async ({ id, source }) => {
+      try {
+        const denied = denyIfUnder("write");
+        if (denied) return errorResult(denied);
+        const probe = store.read(id); // gate-ok: namespace check only; confirm() re-reads through readVisible
+        if (!probe || (nsActive && !canRead(grants, ownNs, probe.namespace))) return errorResult(`no note with id ${id}`);
+        const r = store.confirm(id, { source });
+        if (!r) return errorResult(noNote(id));
+        return untrustedResult({ counted: r.counted, kind: r.kind, ...(r.reason ? { reason: r.reason } : {}), message: r.message, id: r.id, rev: r.rev });
+      } catch (e) {
+        return errorFor(e);
+      }
+    }
+  );
+
+  // 1.5.0 (R2-02): not in DEFAULT_TOOLS; turn it on with MONOMEM_TOOLS=memory_flag. Same rules as POST /notes/:id/flag.
+  server.registerTool(
+    "memory_flag",
+    {
+      title: "Flag a note that looks wrong",
+      description:
+        "Say that a note looks wrong or out of date, with a one-line reason, instead of overwriting it. The note does not change. Until a person looks at it, a note nobody confirmed is left out of session start; a note a person confirmed stays, labelled. You cannot flag your own note (change it instead); at most 20 flags a day.",
+      inputSchema: {
+        id: zInt().describe("Id of the note that looks wrong."),
+        reason: z.string().describe("One line: what looks wrong and why (at most 200 characters), e.g. \"package.json says pnpm\"."),
+      },
+    },
+    async ({ id, reason }) => {
+      try {
+        const denied = denyIfUnder("write");
+        if (denied) return errorResult(denied);
+        // A flag changes what session start shows in the note's namespace: like an edit, only in this server's own namespace.
+        const probe = store.read(id); // gate-ok: namespace check only; flagNote re-reads through readVisible
+        if (!probe || (nsActive && probe.namespace !== ownNs)) return errorResult(`no note with id ${id}`);
+        const r = store.flagNote(id, reason);
+        if (!r) return errorResult(`no note with id ${id}`);
+        return untrustedResult({ flagged: true, id: r.note_id, rev: r.rev, message: "Flag recorded. The note is unchanged; a person decides in monomem review." });
+      } catch (e) {
         return errorFor(e);
       }
     }
@@ -951,9 +1141,9 @@ export function createMcpServer(
             note: "Reconstructed from note history; hard-deleted notes cannot be shown.",
             not_kept: view.notKept,
             archived_then: view.archivedThen,
-            results: hits.map((h) => asOfFields(h, withWhen)),
+            results: hits.map((h) => asOfFields(h, withWhenBase)),
             searchedNamespaces: spaces ?? [],
-          });
+          }, query);
         }
         if (mode === "relevant") {
           if (when !== undefined || explain !== undefined || include_superseded !== undefined) {
@@ -981,7 +1171,7 @@ export function createMcpServer(
         const untrustedResultN = (p: Record<string, unknown>) => {
           const n = Array.isArray(p.results) ? p.results.length : 0;
           const q = { ...p, ...(limit !== undefined && limit > 200 ? { limit_capped: 200 } : {}), ...(n >= effLimit ? { more: true } : {}) };
-          return untrustedResultCut(semNotice ? { ...q, notice: semNotice } : q);
+          return untrustedResultCut(semNotice ? { ...q, notice: semNotice } : q, query);
         };
         const wf = { ...writerFilterArgs(written_by, not_written_by, include_distrusted), ...supersededArg(include_superseded) };
         if (explain === true && currentCeiling() === undefined) {
@@ -1110,7 +1300,7 @@ export function createMcpServer(
     /** Cut long bodies (state_search mode "relevant"); state_relevant keeps them whole as before. */
     cut?: boolean;
   }) {
-    const out$ = cut ? untrustedResultCut : untrustedResult;
+    const out$ = cut ? (p: Record<string, unknown>) => untrustedResultCut(p, message) : untrustedResult;
     try {
       const denied = denyIfUnder("read");
       if (denied) return errorResult(denied);
@@ -1193,18 +1383,18 @@ export function createMcpServer(
           const hint = trustedHint(namespace);
           if (hint) {
             return untrustedResultCut({
-              ...store.list({ namespace: hint, limit, offset, ...wf }),
+              ...listWithDisputes(store, store.list({ namespace: hint, limit, offset, ...wf })),
               searchedNamespaces: [hint],
             });
           }
           return untrustedResultCut({
-            ...listReadable(limit, offset, wf),
+            ...listWithDisputes(store, listReadable(limit, offset, wf)),
             searchedNamespaces: readable(),
           });
         }
         const result = store.list({ namespace, limit, offset, ...wf });
         return untrustedResultCut({
-          ...result,
+          ...listWithDisputes(store, result),
           searchedNamespaces: namespace ? [namespace] : [],
         });
       } catch (e) {
@@ -2097,17 +2287,22 @@ export function createMcpServer(
         "when MONOMEM_LINT says quarantine). Quarantined writes are not notes: they are invisible to " +
         "search, list, and recall until approved. action=list shows id, reasons, namespace and time only -- " +
         "never the held text, which a human reviews in the dashboard or with `monomem quarantine list`; " +
-        "approve applies the write as originally requested; reject discards it. " +
+        "context lists the other notes in the same namespace saved since the write was held that share its topic " +
+        "(ids, titles, times, writers; never the held text); " +
+        "approve applies the write as originally requested, keeping the time it was written (a held edit fails if the note changed since); " +
+        "keep_history stores it with its written time and marks it replaced by the newest related note from context (or `by`), " +
+        "and is refused when there is none; reject discards it. " +
         "Requires the admin scope." +
         (nsActive ? " Only this server's own namespace is visible." : ""),
       annotations: { destructiveHint: true },
       inputSchema: {
-        action: z.enum(["list", "approve", "reject"]).describe("list, approve, or reject."),
-        id: z.number().int().optional().describe("Quarantine id (required for approve/reject)."),
+        action: z.enum(["list", "context", "approve", "keep_history", "reject"]).describe("list, context, approve, keep_history, or reject."),
+        id: z.number().int().optional().describe("Quarantine id (required for every action but list)."),
+        by: z.number().int().optional().describe("keep_history only: the newer note that replaces it (default: the newest one context lists)."),
         limit: z.number().int().optional().describe("Max entries for list (default 50, max 500)."),
       },
     },
-    async ({ action, id, limit }) => {
+    async ({ action, id, by, limit }) => {
       try {
         const denied = denyIfUnder("admin");
         if (denied) return errorResult(denied);
@@ -2130,6 +2325,26 @@ export function createMcpServer(
           store.rejectQuarantine(id);
           return textResult({ rejected: id });
         }
+        if (action === "context") {
+          // Other notes only (ids, titles, times, writers), exactly what a list of the namespace shows; never the held text.
+          const ctx = store.quarantineContext(id)!;
+          return textResult({
+            id,
+            op: ctx.op,
+            target_id: ctx.target_id,
+            namespace: ctx.namespace,
+            held_at: ctx.held_at,
+            ...(ctx.target_changed !== undefined ? { target_changed: ctx.target_changed } : {}),
+            ...(ctx.clears ? { clears: ctx.clears } : {}),
+            since_held: ctx.notes,
+            note: quarantineCasNote(ctx.op),
+          });
+        }
+        if (action === "keep_history") {
+          const kept = store.keepQuarantineAsHistory(id, by);
+          await maybeEmbed(store, kept.note); // S-01: the kept note is searchable by meaning on every surface, as from the CLI
+          return textResult({ kept_as_history: id, note_id: kept.note.id, superseded_by: kept.superseded_by });
+        }
         const note = store.approveQuarantine(id);
         await maybeEmbed(store, note);
         // Id only, for the same reason as list: approving must not echo the flagged text back.
@@ -2151,7 +2366,7 @@ export function createMcpServer(
         "(a distrusted command task is NEVER run) unless a read passes include_distrusted:true. `undistrust` removes the entry. " +
         "`add_attester` / `remove_attester` manage the public keys whose signed export attestations an import will believe " +
         "(a verified note keeps its original writer in `attested_writer`); `revoke_attester` / `unrevoke_attester` stop trusting a key at once. " +
-        "Signed attestations and cross-server writer ids are EXPERIMENTAL in 1.4.x and may change. `list` shows the policy, the recent trust log and this " +
+        "Signed attestations and cross-server writer ids are EXPERIMENTAL and may change in a minor release. `list` shows the policy, the recent trust log and this " +
         "server's identity (server_id and public key to give another server's admin). Changes are audit-logged. " +
         "The list lives in the database and cannot be set by a write token or by note content. See docs/trust.md." +
         (nsActive ? " This server is pinned to its own namespace: it can manage only that namespace's rules and cannot change the attester list." : ""),

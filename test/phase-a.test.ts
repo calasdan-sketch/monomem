@@ -239,23 +239,19 @@ describe("A3: connect / open / setup", () => {
     }
   });
 
-  test("connect --restricted writes a key-based web entry (Claude Code) and a limited key; without the app the key is not left behind", () => {
+  // 1.5.0 (R1-08): minting a key needs a person at a terminal, which a test cannot be; the key-writing wiring itself is covered
+  // by the setup tests. Here: a script is refused, nothing is written, and --dry-run still shows the plan.
+  test("connect --restricted without a terminal is refused: no key, no settings file; --dry-run shows the plan", () => {
     const f = fresh();
     try {
       const r = f.run("connect", "claude-code", "--restricted", "--max", "public", "--yes");
-      assert.equal(r.status, 0, String(r.stderr) + String(r.stdout));
-      const cfg = JSON.parse(readFileSync(join(f.home, ".claude.json"), "utf8"));
-      const entry = cfg.mcpServers.monomem;
-      assert.equal(entry.type, "http");
-      assert.match(entry.url, /:8791\/mcp$/);
-      assert.match(entry.headers.Authorization, /^Bearer [0-9a-f]{64}$/);
-      const toks = JSON.parse(readFileSync(join(f.home, "data", "tokens.json"), "utf8"));
-      assert.equal(toks[0].max_sensitivity, "public");
-      assert.equal(toks[0].token, entry.headers.Authorization.slice(7));
-      // Connecting it again the old (unlimited) way is refused until the entry is removed, and no second key is left behind.
-      const again = f.run("connect", "claude-code", "--restricted", "--yes");
-      assert.equal(again.status, 1);
-      assert.equal(JSON.parse(readFileSync(join(f.home, "data", "tokens.json"), "utf8")).length, 1);
+      assert.equal(r.status, 1, String(r.stderr) + String(r.stdout));
+      assert.match(String(r.stderr), /Refused: connect claude-code/);
+      assert.equal(existsSync(join(f.home, ".claude.json")), false);
+      assert.equal(existsSync(join(f.home, "data", "tokens.json")), false);
+      const dry = f.run("connect", "claude-code", "--restricted", "--max", "public", "--dry-run");
+      assert.equal(dry.status, 0, String(dry.stderr) + String(dry.stdout));
+      assert.equal(existsSync(join(f.home, "data", "tokens.json")), false);
     } finally {
       rmSync(f.home, { recursive: true, force: true });
     }
@@ -264,9 +260,13 @@ describe("A3: connect / open / setup", () => {
   test("restricted wiring is refused for an app whose format is not verified (key removed again), and --print only shows a snippet", () => {
     const f = fresh();
     try {
+      // 1.5.0 (R1-08): minting the key (even only to print it) needs a person at a terminal; a script is refused. The dry run still shows the snippet text.
       const p = f.run("connect", "zed", "--restricted");
-      assert.equal(p.status, 0);
-      assert.match(String(p.stdout), /Paste this/);
+      assert.equal(p.status, 1);
+      assert.match(String(p.stderr), /Refused: connect zed/);
+      const d = f.run("connect", "zed", "--restricted", "--dry-run");
+      assert.equal(d.status, 0, String(d.stderr));
+      assert.match(String(d.stdout), /Paste this/);
       assert.ok(!existsSync(join(f.home, ".config", "zed")), "no settings file was written");
       const w = f.run("connect", "windsurf");
       assert.match(String(w.stdout), /Windsurf: I cannot check where its settings file lives/);
@@ -338,7 +338,6 @@ describe("A3: connect / open / setup", () => {
 });
 
 // ---- A4: plain-language errors and CLI polish --------------------------------------------------------------------------
-import { DatabaseSync } from "node:sqlite";
 import { describeDbFailure } from "../src/db-problem.js";
 import { createMcpServer } from "../src/mcp-server-core.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";

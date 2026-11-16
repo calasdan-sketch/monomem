@@ -10,9 +10,9 @@
 
 import "./quiet-sqlite.js"; // first: hide the node:sqlite ExperimentalWarning
 import "./legacy-env.js"; // second: read the old CLAUDE_BRIDGE_* variables as MONOMEM_*
-import { Store } from "./store.js";
 import { createApiServer } from "./api.js";
 import { createMcpHttpServer } from "./mcp-http.js";
+import { hardenTokensFile } from "./tokens-admin.js";
 import { exitOnListenError } from "./http-common.js";
 import {
   DB_PATH,
@@ -29,15 +29,41 @@ import {
 import { autoConsolidateCooperative, AUTO_MERGE_SCORE } from "./consolidate.js";
 import { resolveStartupNamespace } from "./namespace.js";
 import { warnUnlabelledExposure } from "./sensitivity.js";
-import { openStoreOrExit } from "./db-problem.js";
+import { openStoreOrExit, SERVER_BUSY_TIMEOUT_MS } from "./db-problem.js";
 import { abortAllWaiters } from "./change-wait.js";
 import { pruneStaleHeartbeats } from "./liveness.js";
+import { rotateLogIfNeeded } from "./security.js";
+import { appendFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+
+/**
+ * `start --log` (1.5.0, U-12): a server with no terminal (`monomem open`, `monomem service install`) keeps what it prints in
+ * <data>/server.log, one timestamped line each, rotated like audit.log (MONOMEM_AUDIT_MAX_BYTES / MONOMEM_AUDIT_KEEP).
+ * The server prints no note text and no key, only paths, ports and errors.
+ */
+function logToFile(path: string): void {
+  const write = process.stderr.write.bind(process.stderr);
+  let writes = 0;
+  process.stderr.write = ((chunk: string | Uint8Array, ...rest: unknown[]): boolean => {
+    try {
+      rotateLogIfNeeded(path, writes++);
+      const lines = String(chunk).replace(/\n$/, "").split("\n");
+      appendFileSync(path, lines.map((l) => `${new Date().toISOString()} ${l}\n`).join(""), { mode: 0o600 });
+    } catch {
+      /* a full disk must not stop the server */
+    }
+    return (write as (...a: unknown[]) => boolean)(chunk, ...rest);
+  }) as typeof process.stderr.write;
+}
 
 prepareDataDir();
+if (process.argv.includes("--log")) logToFile(join(dirname(resolve(DB_PATH)), "server.log"));
 assertSafeExposure();
+hardenTokensFile(); // 1.5.0: plain-text keys in tokens.json become hashes on the first start
 const tokens = resolveTokens();
-const store = openStoreOrExit(DB_PATH);
+const store = openStoreOrExit(DB_PATH, { busyTimeoutMs: SERVER_BUSY_TIMEOUT_MS });
 warnUnlabelledExposure(store, tokens);
+setImmediate(() => store.warmBodyIndex()); // C-06: build the encrypted-body search index now, not on the first agent search
 startTokenReload(tokens);
 
 // Namespace resolution happens ONCE here, at startup, from the process cwd --

@@ -9,12 +9,15 @@
 // Nothing here throws to the hook: errors are the caller's to swallow (hook.ts never fails the agent).
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, chmodSync } from "node:fs";
 import { join } from "node:path";
+import { randomBytes } from "node:crypto";
 import type { Store } from "./store.js";
 import { redact } from "./redact.js";
-import { captureAad } from "./crypto.js";
+import { captureAad, encrypt, spoolAad } from "./crypto.js";
 import { currentWriter } from "./actor.js";
+import { isOutsideTool } from "./taint.js";
+import { audit } from "./security.js";
 
-export const HOOK_EVENTS = ["session-start", "user-prompt", "post-tool", "post-tool-failure", "stop", "subagent-stop", "session-end"] as const;
+export const HOOK_EVENTS = ["session-start", "user-prompt", "post-tool", "post-tool-failure", "stop", "subagent-stop", "session-end", "pre-compact"] as const;
 export type HookEvent = (typeof HOOK_EVENTS)[number];
 
 /** Longest stored field (input / output), after redaction. */
@@ -139,22 +142,30 @@ export function normalizeHookInput(event: HookEvent, raw: unknown, now: Date = n
   return { session_id: sid, cwd, event, tool, input: cleanField(input), output: cleanField(output), ok, bytes, at: now.toISOString(), ...(model ? { model } : {}) };
 }
 
+/** A tool result from outside content (the web, another MCP server): what marks a session as having read outside content. */
+const isOutsideEvent = (ev: CaptureEvent): boolean => (ev.event === "post-tool" || ev.event === "post-tool-failure") && Boolean(ev.output) && isOutsideTool(ev.tool);
+
 /**
  * Store one event (caller holds no transaction). Creates the session row on first sight. Returns whether the session is
  * new, so the caller can run its once-per-session housekeeping (drain the spool, distill crashed sessions).
  */
-export function recordEvent(store: Store, ev: CaptureEvent, namespace: string): { newSession: boolean; seq: number } {
+export function recordEvent(store: Store, ev: CaptureEvent & { spool_id?: string }, namespace: string): { newSession: boolean; seq: number } {
   const db = store.captureDb();
   db.exec("BEGIN IMMEDIATE");
   try {
+    // 1.5.0 (R1-13): a spooled line carries an id; one already stored (the drain was cut off after the insert) is not stored again.
+    if (ev.spool_id && db.prepare("SELECT 1 FROM capture_events WHERE spool_id = ?").get(ev.spool_id)) {
+      db.exec("ROLLBACK");
+      return { newSession: false, seq: 0 };
+    }
     const created = Number(
       db
         .prepare("INSERT OR IGNORE INTO sessions (id, namespace, cwd, started_at, writer) VALUES (?, ?, ?, ?, ?)")
         .run(ev.session_id, namespace, ev.cwd, ev.at, currentWriter() || null).changes ?? 0
     );
     const res = db
-      .prepare("INSERT INTO capture_events (session_id, at, event, tool, input, input_enc, output, output_enc, ok, bytes) VALUES (?, ?, ?, ?, '', NULL, '', NULL, ?, ?)")
-      .run(ev.session_id, ev.at, ev.event, ev.tool, ev.ok ? 1 : 0, ev.bytes);
+      .prepare("INSERT INTO capture_events (session_id, at, event, tool, input, input_enc, output, output_enc, ok, bytes, spool_id) VALUES (?, ?, ?, ?, '', NULL, '', NULL, ?, ?, ?)")
+      .run(ev.session_id, ev.at, ev.event, ev.tool, ev.ok ? 1 : 0, ev.bytes, ev.spool_id ?? null);
     const seq = Number(res.lastInsertRowid);
     if (ev.input) {
       const sealed = store.sealCapture(ev.input, captureAad(seq, ev.session_id, "input"));
@@ -171,6 +182,8 @@ export function recordEvent(store: Store, ev: CaptureEvent, namespace: string): 
     ).run(...(ev.event === "session-end" ? [ev.at] : []), ev.session_id);
     // Only when reported: a later session-start without it (after /clear) keeps the stored value.
     if (ev.model) db.prepare("UPDATE sessions SET model = ? WHERE id = ?").run(ev.model, ev.session_id);
+    // 1.4.0: this session read outside content; notes written in its namespace while it lasts are marked (Store.taintFor).
+    if (isOutsideEvent(ev)) db.prepare("UPDATE sessions SET outside_at = MAX(COALESCE(outside_at, ''), ?) WHERE id = ?").run(ev.at, ev.session_id);
     db.exec("COMMIT");
     return { newSession: created === 1, seq };
   } catch (e) {
@@ -201,18 +214,41 @@ export interface SpooledEvent extends CaptureEvent {
   namespace: string;
   /** Failed drains so far; past SPOOL_MAX_TRIES the event is dropped, so one bad line cannot cycle through the spool forever. */
   tries?: number;
+  /** 1.5.0: random id given when spooled; the store ignores a second insert of the same id (exactly-once drain). */
+  spool_id?: string;
+  /** 1.5.0: the event itself is already stored; only the late outside-read mark (retroTaint) is still owed. */
+  retro_only?: boolean;
 }
 
 export const SPOOL_MAX_TRIES = 5;
 /** A `.draining` file this old was left by a hook that died mid-drain: the next drain adopts it. */
 const STALE_DRAIN_MS = 10 * 60_000;
 
-export function spoolEvent(dataDir: string, ev: SpooledEvent): boolean {
+/**
+ * One spool line. With a key (1.5.0 S-02b) it is `{spool_id, tries, sealed}`: the whole event sealed and bound to its spool
+ * id. Without one it is the event itself, as before. `seal` returns null when there is no key.
+ */
+function spoolLine(ev: SpooledEvent, seal: (plain: string, aad: string) => string | null): object {
+  const full = { ...ev, spool_id: ev.spool_id ?? randomBytes(16).toString("hex") };
+  const sealed = seal(JSON.stringify(full), spoolAad(full.spool_id));
+  return sealed ? { spool_id: full.spool_id, ...(full.tries ? { tries: full.tries } : {}), sealed } : full;
+}
+
+/** Spool one event, sealed when `key` is given (the key beside the database; null = encryption off). */
+export function spoolEvent(dataDir: string, ev: SpooledEvent, key: Buffer | null): boolean {
+  try {
+    return appendSpool(dataDir, spoolLine(ev, (plain, aad) => (key ? encrypt(plain, key, aad) : null)));
+  } catch {
+    return false;
+  }
+}
+
+function appendSpool(dataDir: string, line: object): boolean {
   try {
     mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     const p = join(dataDir, SPOOL_FILE);
     if (existsSync(p) && statSync(p).size > SPOOL_MAX_BYTES) return false;
-    appendFileSync(p, JSON.stringify(ev) + "\n", { mode: 0o600 });
+    appendFileSync(p, JSON.stringify(line) + "\n", { mode: 0o600 });
     try {
       chmodSync(p, 0o600);
     } catch {
@@ -251,23 +287,67 @@ export function drainSpool(store: Store, dataDir: string, now = Date.now()): num
     /* no data dir */
   }
   let stored = 0;
+  let dropped = 0;
   for (const taken of files) {
     try {
       for (const line of readFileSync(taken, "utf8").split("\n")) {
         if (!line.trim()) continue;
-        let ev: SpooledEvent;
+        let raw: Record<string, unknown> | null;
         try {
-          ev = JSON.parse(line) as SpooledEvent;
+          raw = JSON.parse(line) as Record<string, unknown> | null;
         } catch {
           continue; // a torn line (a hook killed mid-write) is dropped
         }
+        let ev: SpooledEvent;
+        if (raw && typeof raw.sealed === "string") {
+          // A sealed line opens only with the key and under the spool id it was sealed with; the id it carries is the one used.
+          const id = String(raw.spool_id ?? "");
+          try {
+            ev = { ...(JSON.parse(store.openCapture("", raw.sealed, spoolAad(id))) as SpooledEvent), spool_id: id, tries: Number(raw.tries) || 0 };
+          } catch {
+            // Key gone, or the line was moved under another id: kept as it is until the try limit, never opened.
+            const tries = (Number(raw.tries) || 0) + 1;
+            if (tries < SPOOL_MAX_TRIES) appendSpool(dataDir, { ...raw, tries });
+            else dropped++;
+            continue;
+          }
+        } else ev = raw as unknown as SpooledEvent;
         if (!ev || typeof ev.session_id !== "string" || !(HOOK_EVENTS as readonly string[]).includes(ev.event)) continue;
-        try {
-          recordEvent(store, ev, typeof ev.namespace === "string" ? ev.namespace : "");
-          stored++;
-        } catch {
+        const respool = (extra: Partial<SpooledEvent>): void => {
           const tries = (Number(ev.tries) || 0) + 1;
-          if (tries < SPOOL_MAX_TRIES) spoolEvent(dataDir, { ...ev, tries });
+          if (tries >= SPOOL_MAX_TRIES) {
+            dropped++;
+            return;
+          }
+          // Put back sealed when the store seals (an old plain line comes back sealed too).
+          try {
+            appendSpool(dataDir, spoolLine({ ...ev, ...extra, tries }, (plain, aad) => store.sealCapture(plain, aad).enc));
+          } catch {
+            dropped++; // the store refuses to write plaintext (its key went missing): never spooled in the clear
+          }
+        };
+        if (!ev.retro_only) {
+          try {
+            recordEvent(store, ev, typeof ev.namespace === "string" ? ev.namespace : "");
+          } catch {
+            respool({});
+            continue;
+          }
+          stored++;
+        }
+        // Stored late: notes written since that outside read got no mark at the time, so they get it now. Its own try: a failure
+        // here must not store the event twice. Three tries in place, then a retro-only line for the next drain.
+        if (ev.retro_only || isOutsideEvent(ev)) {
+          let marked = false;
+          for (let i = 0; i < 3 && !marked; i++) {
+            try {
+              store.retroTaint(ev.cwd, ev.at, ev.tool);
+              marked = true;
+            } catch {
+              /* retry */
+            }
+          }
+          if (!marked) respool({ retro_only: true });
         }
       }
     } finally {
@@ -278,6 +358,7 @@ export function drainSpool(store: Store, dataDir: string, now = Date.now()): num
       }
     }
   }
+  if (dropped > 0) audit({ op: "spool-drop", kind: "capture", detail: `${dropped} event(s) dropped after ${SPOOL_MAX_TRIES} tries` });
   return stored;
 }
 

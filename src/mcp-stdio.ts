@@ -35,6 +35,7 @@ try {
 const sweep = (): void => stdioSweep(store);
 sweep();
 setInterval(sweep, 3_600_000).unref();
+setImmediate(() => store.warmBodyIndex()); // C-06: build the encrypted-body search index now, not on the first agent search
 // Server-side namespace resolution: resolved ONCE at startup from the
 // process working directory. Null when unconfigured (legacy behavior).
 const nsOpts = resolveStartupNamespace(process.cwd());
@@ -48,7 +49,7 @@ if (stdioCeiling && !stdioMax) {
   console.error(`[monomem] MONOMEM_STDIO_MAX_SENSITIVITY must be ${SENSITIVITY_HELP} (got ${JSON.stringify(stdioCeiling)}); not starting.`);
   process.exit(1);
 }
-const server = createMcpServer(store, "admin", nsOpts ?? undefined, stdioMax ? { maxSensitivity: stdioMax, local: true } : { local: true });
+const server = createMcpServer(store, "admin", nsOpts ?? undefined, stdioMax ? { maxSensitivity: stdioMax, local: true, cwd: process.cwd() } : { local: true, cwd: process.cwd() });
 const transport = new StdioServerTransport();
 // The client's own name from the initialize handshake goes to the audit log, labelled as a claim: any program can
 // send any clientInfo. It is never used for written_by or for any access decision.

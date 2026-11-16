@@ -66,13 +66,17 @@ describe("the real programs honour CLAUDE_BRIDGE_DB_PATH", () => {
   const run = (args: string[], env: Record<string, string>) =>
     spawnSync(process.execPath, [CLI, ...args], { encoding: "utf8", env: { PATH: process.env.PATH ?? "", HOME: env.HOME, USERPROFILE: env.HOME, ...env } });
 
-  test("doctor opens the OLD database, upgrades it and saves the verified pre-upgrade copy beside it", () => {
+  test("doctor finds the OLD database and only reports it; the next command upgrades it and saves the verified pre-upgrade copy beside it", () => {
     const { dir, db } = oldDb();
     const r = run(["doctor"], { HOME: join(dir, "home"), CLAUDE_BRIDGE_DB_PATH: db });
     const out = r.stdout + r.stderr;
-    assert.match(out, /database OK at .*state\.db \(2 notes\)/);
     assert.ok(out.includes(db), "it is the old path, not ~/.monomem");
     assert.match(out, /CLAUDE_BRIDGE_DB_PATH/, "and it says the old name was read");
+    // 1.5.0: doctor only looks (apps that still have the file open would keep writing in the old shape).
+    assert.match(out, /schema v13.*doctor did not upgrade it/);
+    assert.equal(Store.peekSchemaVersion(db), 13);
+    assert.equal(run(["ls"], { HOME: join(dir, "home"), CLAUDE_BRIDGE_DB_PATH: db }).status, 0);
+    assert.match(run(["doctor"], { HOME: join(dir, "home"), CLAUDE_BRIDGE_DB_PATH: db }).stdout, /database OK at .*state\.db \(2 notes\)/);
     const copy = db + `.pre-v${SCHEMA_VERSION}-backup`;
     assert.ok(existsSync(copy), "pre-upgrade copy exists");
     assert.equal(Store.peekSchemaVersion(copy), 13, "the copy is still in the old format");
@@ -102,6 +106,16 @@ describe("the real programs honour CLAUDE_BRIDGE_DB_PATH", () => {
     const r = run(["doctor"], { HOME: join(dir, "home"), CLAUDE_BRIDGE_DB_PATH: db, MONOMEM_DB_PATH: other });
     assert.ok((r.stdout + r.stderr).includes(other));
     assert.equal(existsSync(db + `.pre-v${SCHEMA_VERSION}-backup`), false, "the old database was not opened");
+  });
+
+  test("doctor names the old program each mapped setting came from", () => {
+    const { dir } = oldDb();
+    mkdirSync(join(dir, "om"), { recursive: true }); // a set-up data folder: doctor on a missing one only says "not set up"
+    const r = run(["doctor"], { HOME: join(dir, "home"), ONEMEMORY_HOME: join(dir, "om"), CLAUDE_BRIDGE_PORT: "18999" });
+    const out = r.stdout + r.stderr;
+    assert.match(out, /ONEMEMORY_HOME \(from OneMemory\)/);
+    assert.match(out, /CLAUDE_BRIDGE_PORT \(from claude-bridge\)/);
+    assert.doesNotMatch(out, /ONEMEMORY_HOME \(from claude-bridge\)/);
   });
 
   test("the recall hook with --db reads that database and does not upgrade an older one", () => {

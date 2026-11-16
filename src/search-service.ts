@@ -11,10 +11,12 @@
 
 import { mayEmbed } from "./sensitivity.js";
 import { Store, NoteRecord, clampInt, queryTooLong, ValidationError } from "./store.js";
-import { embed, embeddingsEnabled, embeddingsConfig, noteEmbeddingText } from "./embeddings.js";
+import { embed, embedQuery, embeddingsEnabled, embeddingsConfig, noteEmbeddingText } from "./embeddings.js";
 import { filterByTimeRange, parseTimePhrase, type TimeRange } from "./time-parse.js";
 import { TIME_ZONE } from "./config.js";
-import { extractKeywords } from "./keywords.js";
+import { extractKeywords, searchStem } from "./keywords.js";
+import { UNCONFIRMED_FACTOR, heldFromSessionStart } from "./taint.js";
+import { factClash } from "./facts.js";
 import {
   stalenessConfig,
   stalePenaltyFactor,
@@ -263,12 +265,23 @@ function newerFirst(a: NoteRecord, b: NoteRecord): number {
  * only a *recently* re-read stale note can still outrank fresh -- which is
  * the intended recency signal, not a bug.
  */
+/** Re-confirmation expiry in enforce mode (a partial test double without the settings counts as off). */
+export function expiryEnforced(store: Store): boolean {
+  return typeof store.confirmSettings === "function" && store.confirmSettings().mode === "enforce";
+}
+
 function applyStalePenalty(
   hits: Array<{ note: NoteRecord; score: number }>,
-  cfg: StalenessConfig
+  cfg: StalenessConfig,
+  enforceExpiry = false
 ): Array<{ note: NoteRecord; score: number }> {
   return hits
-    .map((h) => ({ ...h, score: h.score * stalePenaltyFactor(h.note, cfg) }))
+    // 1.4.0: unconfirmed outside content is mildly demoted too (still returned, labelled), and so is a note past its
+    // re-confirmation date in enforce mode (enforceExpiry): x0.9 each, at most x0.81 together.
+    .map((h) => ({
+      ...h,
+      score: h.score * stalePenaltyFactor(h.note, cfg) * (h.note.unconfirmed ? UNCONFIRMED_FACTOR : 1) * (enforceExpiry && h.note.expired ? UNCONFIRMED_FACTOR : 1),
+    }))
     .sort((a, b) => b.score - a.score); // stable: ties keep fetch order
 }
 
@@ -324,6 +337,80 @@ function demoteStaleTwins(
   return { ranked: out, behind };
 }
 
+/** Restated-twin rule: the similarity edge that counts as "the same subject" (the edge floor is 0.25). */
+export const RESTATE_MIN_SIM = 0.6;
+/** ... and only a near tie moves: the older note's score is at most this many times the newer one's. */
+export const RESTATE_MAX_RATIO = 1.5;
+/** A note a person confirmed (at the CLI or as an admin) for its current version. */
+const personConfirmed = (n: NoteRecord): boolean => (n.confirmed_kind === "human" || n.confirmed_kind === "admin") && n.confirmed_rev === n.rev;
+const sameWriter = (a: NoteRecord, b: NoteRecord): boolean => a.written_by === b.written_by && (a.writer_id ?? "") === (b.writer_id ?? "");
+
+/**
+ * The stale-twin pass, plus the restated-twin rule (1.5.0, GAP-OBSOLETE-UNREPLACED). An older hit O moves to just behind a newer
+ * hit N when ALL of these hold: same namespace, both plain notes; N was written after O last changed; the SAME server-stamped
+ * writer (that writer could already edit O in place, so the reorder gives it nothing new; a different writer gets the dispute
+ * label only, never a reorder, so one agent cannot bury another's note); the same subject (a fact key with another value, or a
+ * similarity edge >= RESTATE_MIN_SIM); a near tie (O <= RESTATE_MAX_RATIO x N, after boosts and penalties); N inside the first
+ * `limit` results; O not confirmed by a person unless N is too; N not held (unconfirmed outside content, flagged, built on a
+ * distrusted writer, expired in enforce mode), not replaced and not distrusted; O not read clearly more than N. Nothing is
+ * dropped: O stays in the results, labelled `restated_by`.
+ */
+function demoteTwins(
+  store: Store,
+  ranked: Array<{ note: NoteRecord; score: number }>,
+  cfg: StalenessConfig,
+  limit = ranked.length
+): { ranked: Array<{ note: NoteRecord; score: number }>; behind: Map<number, number>; restated: Map<number, number> } {
+  const stale = demoteStaleTwins(store, ranked, cfg);
+  const restated = new Map<number, number>();
+  if (stale.ranked.length < 2) return { ...stale, restated };
+  const out = [...stale.ranked];
+  const enforce = expiryEnforced(store);
+  const isNote = (n: NoteRecord): boolean => (n.kind ?? "note") === "note";
+  for (const oid of out.map((h) => h.note.id)) {
+    if (stale.behind.has(oid)) continue; // already placed behind a newer twin
+    const oi = out.findIndex((h) => h.note.id === oid);
+    const o = out[oi];
+    if (!isNote(o.note)) continue;
+    const oBoost = accessBoostFactor(o.note.access_count, o.note.last_accessed);
+    let sims: Map<number, number> | undefined; // read only when a cheap candidate exists
+    let anchor = -1;
+    for (let i = oi + 1; i < Math.min(out.length, limit); i++) {
+      const n = out[i];
+      if (!isNote(n.note) || n.note.namespace !== o.note.namespace || !sameWriter(n.note, o.note)) continue;
+      if (!(Date.parse(n.note.created_at) > Date.parse(o.note.updated_at))) continue;
+      if (!(n.score > 0) || o.score > RESTATE_MAX_RATIO * n.score) continue;
+      if (personConfirmed(o.note) && !personConfirmed(n.note)) continue;
+      // O keeps its place when it is read clearly MORE than N. Not an absolute read count as in the stale pass: both notes come
+      // back together, so both gain reads, and an absolute bar would undo the order after about nine searches.
+      if (oBoost >= STALE_TWIN_ACTIVE_BOOST * accessBoostFactor(n.note.access_count, n.note.last_accessed)) continue;
+      if (n.note.superseded_by || n.note.distrusted || heldFromSessionStart(n.note, enforce)) continue;
+      const sameSubject = factClash(o.note.tags ?? [], n.note.tags ?? []) || ((sims ??= store.neighbourScores(oid)).get(n.note.id) ?? 0) >= RESTATE_MIN_SIM;
+      if (!sameSubject) continue;
+      if (typeof store.isDistrusted === "function" && store.isDistrusted(n.note)) continue; // an admin's include_distrusted read
+      anchor = i;
+    }
+    if (anchor > oi) {
+      out.splice(oi, 1);
+      out.splice(anchor, 0, o);
+      restated.set(oid, out[anchor - 1].note.id);
+    }
+  }
+  return { ranked: out, behind: stale.behind, restated };
+}
+
+/** What a restated note carries: the newer note's id and a fixed label (no note text). */
+export type RestatedNote = NoteRecord & { restated_by?: number; restated_label?: string };
+export const restatedLabel = (id: number): string =>
+  `[restated by newer note #${id} from the same writer; not replaced: memory_supersede_preview retires this one]`;
+const withRestated = (n: NoteRecord, by: number | undefined): RestatedNote =>
+  by === undefined ? n : { ...n, restated_by: by, restated_label: restatedLabel(by) };
+/** The label for a CLI result line (" [restated by ...]"), or "". */
+export const restatedFlag = (n: NoteRecord): string => {
+  const by = (n as RestatedNote).restated_by;
+  return by === undefined ? "" : ` ${restatedLabel(by)}`;
+};
+
 /**
  * Bump access counters for notes *returned* to the caller (the top N), never
  * for every note the scorer scanned. Importance weighting should reflect
@@ -361,7 +448,7 @@ function finalizeResults(
   staleCfg: StalenessConfig,
   spread = false
 ): NoteRecord[] {
-  const ranked = rankHits(store, hits, staleCfg);
+  const ranked = rankHits(store, hits, staleCfg, limit);
   const notes = (spread ? capPerSession(ranked) : ranked).slice(0, limit);
   bumpAccess(store, notes);
   return notes;
@@ -404,14 +491,13 @@ export function describeWhen(created: string, now: Date = new Date(), relativeTo
 }
 
 /**
- * The ranking half of finalizeResults (access boost, staleness penalty, stale-twin demotion) without the truncation and
+ * The ranking half of finalizeResults (access boost, staleness penalty, stale- and restated-twin demotion) without the truncation and
  * the access bump: the session-start context ranks its own pool and decides itself what it shows (context-inject.ts).
  */
-export function rankHits(store: Store, hits: Array<{ note: NoteRecord; score: number }>, staleCfg: StalenessConfig = stalenessConfig()): NoteRecord[] {
-  const ranked = accessRerankEnabled()
-    ? demoteStaleTwins(store, applyStalePenalty(boostAndRank(hits), staleCfg), staleCfg).ranked
-    : [...hits].sort((a, b) => b.score - a.score); // native relevance only (stable)
-  return ranked.map((h) => h.note);
+export function rankHits(store: Store, hits: Array<{ note: NoteRecord; score: number }>, staleCfg: StalenessConfig = stalenessConfig(), limit?: number): RestatedNote[] {
+  if (!accessRerankEnabled()) return [...hits].sort((a, b) => b.score - a.score).map((h) => h.note); // native relevance only (stable)
+  const d = demoteTwins(store, applyStalePenalty(boostAndRank(hits), staleCfg, expiryEnforced(store)), staleCfg, limit);
+  return d.ranked.map((h) => withRestated(h.note, d.restated.get(h.note.id)));
 }
 
 // ---- Retrieval visibility --------------------------------------------------
@@ -499,8 +585,8 @@ function finalizeExplained(
   // report the true base rather than the post-boost score.
   const baseById = new Map<number, number>(hits.map((h) => [h.note.id, h.score]));
   const demoted = accessRerankEnabled()
-    ? demoteStaleTwins(store, applyStalePenalty(boostAndRank(hits), staleCfg), staleCfg)
-    : { ranked: [...hits].sort((a, b) => b.score - a.score), behind: new Map<number, number>() };
+    ? demoteTwins(store, applyStalePenalty(boostAndRank(hits), staleCfg, expiryEnforced(store)), staleCfg, limit)
+    : { ranked: [...hits].sort((a, b) => b.score - a.score), behind: new Map<number, number>(), restated: new Map<number, number>() };
   const ranked = demoted.ranked;
   const top = (spread ? capPerSessionBy(ranked, (h) => h.note) : ranked).slice(0, limit);
   bumpAccess(store, top.map((h) => h.note));
@@ -523,8 +609,12 @@ function finalizeExplained(
       stale: staleInfo.stale,
     };
     const behindId = demoted.behind.get(h.note.id);
-    const explanation = describeBreakdown(partial) + (behindId !== undefined ? ` Kept behind the newer note #${behindId} on the same topic.` : "");
-    return { note: h.note, breakdown: { ...partial, explanation } };
+    const restatedBy = demoted.restated.get(h.note.id);
+    const explanation =
+      describeBreakdown(partial) +
+      (behindId !== undefined ? ` Kept behind the newer note #${behindId} on the same topic.` : "") +
+      (restatedBy !== undefined ? ` Kept behind #${restatedBy}, a newer note by the same writer on the same subject. Not replaced: to retire this one, use memory_supersede_preview.` : "");
+    return { note: withRestated(h.note, restatedBy), breakdown: { ...partial, explanation } };
   });
 }
 
@@ -643,7 +733,7 @@ async function runSearchInner(
 
   if (mode === "keyword" || !embeddingsEnabled()) return finalize(keyword(win ? clampInt(limit * 3, 60, 1, 200) : fetchK));
 
-  const qv = await embed(query);
+  const qv = await embedQuery(query);
   if (!qv) return finalize(keyword(win ? clampInt(limit * 3, 60, 1, 200) : fetchK)); // endpoint down / not embeddable -> graceful fallback
 
   // Oversample (limit*5, capped at the 200 max) so the hybrid blend has a rich
@@ -733,7 +823,7 @@ async function runSearchExplainedInner(
 
   if (mode === "keyword" || !embeddingsEnabled()) return finalize(keyword(win ? clampInt(limit * 3, 60, 1, 200) : fetchK));
 
-  const qv = await embed(query);
+  const qv = await embedQuery(query);
   if (!qv) return finalize(keyword(win ? clampInt(limit * 3, 60, 1, 200) : fetchK));
 
   const poolLimit = clampInt(limit * 5, 100, 1, 200);
@@ -851,11 +941,30 @@ export function anyKeywordHits(
   opts: Parameters<Store["searchRanked"]>[1]
 ): Array<{ note: NoteRecord; score: number }> {
   if (keywords.length === 0) return [];
-  return store
-    .searchRanked(keywords.join(" "), { ...opts, limit, anyTerm: true })
+  // The FTS query uses suffix-trimmed stems ("camping" -> camp*), so other forms of a word match too.
+  const stems = [...new Set(keywords.map(searchStem))];
+  const hits = store.searchRanked(stems.join(" "), { ...opts, limit, anyTerm: true });
+  if (hits.length === 0) return []; // nothing to weigh: skip the vocabulary reads
+  // Coverage counts the keywords as typed, so a note with the exact form outranks one with only another form of it.
+  const cover = rarityCoverage(store, keywords);
+  return hits
     // Floor the coverage: an FTS match the text scan misses (an odd tokenisation) still counts as one keyword.
-    .map((h) => ({ note: h.note, score: h.score * Math.max(keywordCoverage(h.note, keywords), 1 / keywords.length) }))
+    .map((h) => ({ note: h.note, score: h.score * Math.max(cover(h.note), 1 / keywords.length) }))
     .sort((a, b) => b.score - a.score);
+}
+
+/**
+ * Coverage weighted by rarity: the share of the query's keyword weight a note contains, where a keyword found in few
+ * notes weighs more (idf, log(1 + (N+1)/(df+0.5))). A note holding the one rare word of a question beats a note holding
+ * two common ones. With no vocabulary to read, every keyword weighs the same (plain keywordCoverage).
+ */
+function rarityCoverage(store: Store, keywords: string[]): (note: NoteRecord) => number {
+  const terms = [...new Set(keywords.map((k) => fold(k.replace(/^#/, ""))).filter(Boolean))];
+  const { n, df } = store.prefixDocFreqs(terms);
+  if (terms.length === 0 || df.size === 0) return (note) => keywordCoverage(note, keywords);
+  const weight = new Map(terms.map((t) => [t, Math.log(1 + (n + 1) / ((df.get(t) ?? 0) + 0.5))]));
+  const total = [...weight.values()].reduce((a, b) => a + b, 0) || 1;
+  return (note) => [...coveredTerms(note, terms)].reduce((a, t) => a + (weight.get(t) ?? 0), 0) / total;
 }
 
 /**
@@ -902,17 +1011,79 @@ const fold = (s: string): string => s.normalize("NFD").replace(/\p{M}+/gu, "").t
 export function keywordCoverage(note: NoteRecord, keywords: string[]): number {
   const bare = [...new Set(keywords.map((k) => fold(k.replace(/^#/, ""))).filter(Boolean))];
   if (bare.length === 0) return 0;
+  return coveredTerms(note, bare).size / bare.length;
+}
+
+/** The already-folded `terms` a note contains, each as a prefix at a word start (keywordCoverage's match). */
+function coveredTerms(note: NoteRecord, terms: string[]): Set<string> {
   const text = fold(`${note.title} ${note.body} ${note.tags.join(" ")}`);
-  let hit = 0;
-  for (const k of bare) {
+  const hit = new Set<string>();
+  for (const k of terms) {
     for (let i = text.indexOf(k); i !== -1; i = text.indexOf(k, i + 1)) {
       if (i === 0 || !WORD_CHAR.test(text[i - 1])) {
-        hit++;
+        hit.add(k);
         break;
       }
     }
   }
-  return hit / bare.length;
+  return hit;
+}
+
+/** `fold` per character, so offsets in the result line up with the original text (a character whose fold changes length is kept as is). */
+function foldSameLength(s: string): string {
+  if (/^[\x00-\x7f]*$/.test(s)) return s.toLowerCase();
+  let out = "";
+  for (const ch of s) {
+    const f = fold(ch);
+    out += f.length === ch.length ? f : ch;
+  }
+  return out;
+}
+
+/**
+ * C-01: the `size`-character window of `body` with the most query-word hits (word-start prefix match, accents folded,
+ * the query's keywords as extractKeywords picks them), so a long search hit shows the part that matched rather than its
+ * opening. Ties go to the earliest window; a window no better than the opening one keeps the opening (start 0). Reads only
+ * the one body it is given: what it returns is always a slice of that body.
+ */
+export function bestPassage(body: string, query: string, size: number): { start: number; text: string } {
+  if (body.length <= size) return { start: 0, text: body };
+  const terms = [...new Set(extractKeywords(query).map((k) => fold(k.replace(/^#/, ""))).filter(Boolean))];
+  const text = foldSameLength(body);
+  const hits: Array<{ at: number; end: number; term: number }> = [];
+  terms.forEach((k, term) => {
+    for (let i = text.indexOf(k); i !== -1; i = text.indexOf(k, i + 1)) {
+      if (i === 0 || !WORD_CHAR.test(text[i - 1])) hits.push({ at: i, end: i + k.length, term });
+    }
+  });
+  if (hits.length === 0) return { start: 0, text: body.slice(0, size) };
+  hits.sort((a, b) => a.at - b.at);
+  // Score = distinct query words first, then total hits, over the hits that fit in a window opening at hit i
+  // (two pointers with per-word counts: linear in the number of hits).
+  const count = new Array<number>(terms.length).fill(0);
+  let distinct = 0;
+  const add = (h: { term: number }, d: 1 | -1): void => {
+    if (d === 1 && count[h.term]++ === 0) distinct++;
+    if (d === -1 && --count[h.term] === 0) distinct--;
+  };
+  let best = { score: -1, from: 0, to: 0 };
+  for (let i = 0, j = 0; i < hits.length; i++) {
+    if (j < i) j = i;
+    while (j < hits.length && hits[j].end <= hits[i].at + size) add(hits[j++], 1);
+    const sc = distinct * 1e6 + (j - i);
+    if (sc > best.score) best = { score: sc, from: i, to: j };
+    if (j > i) add(hits[i], -1);
+  }
+  const opening = hits.filter((h) => h.end <= size);
+  if (new Set(opening.map((h) => h.term)).size * 1e6 + opening.length >= best.score) return { start: 0, text: body.slice(0, size) };
+  // Centre the matched span in the window, then back up to a word start (within 40 characters) so the passage opens cleanly.
+  const first = hits[best.from].at;
+  const span = hits[best.to - 1].end - first;
+  let start = Math.max(0, Math.min(body.length - size, first - Math.floor((size - span) / 2)));
+  const ws = body.lastIndexOf(" ", start);
+  if (start > 0 && ws >= 0 && start - ws <= 40 && ws + 1 <= first) start = ws + 1;
+  if (start > 0 && /[\udc00-\udfff]/.test(body[start])) start++; // never open on half a surrogate pair
+  return { start, text: body.slice(start, start + size) };
 }
 
 // The public entry points. A caller that opted in with includeDistrusted gets

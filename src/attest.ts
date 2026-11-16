@@ -127,6 +127,28 @@ export function keyIdOf(publicKey: string): string {
   return createHash("sha256").update(Buffer.from(publicKey, "base64url")).digest("hex").slice(0, 16);
 }
 
+/**
+ * Domain strings of the 1.5.0 signed audit log and signed receipts (one place, so a signature made for one can never be
+ * replayed as the other). docs/verify-receipt.mjs repeats RECEIPT_DOMAIN; test/signed-audit.test.ts checks they agree.
+ */
+export const AUDIT_DOMAIN = "monomem-audit-v1\n";
+export const RECEIPT_DOMAIN = "monomem-receipt-v2";
+
+/** Ed25519 signature over `data`, base64url. */
+export function signBytes(key: SigningKey, data: string): string {
+  return sign(null, Buffer.from(data), key.privateKey).toString("base64url");
+}
+
+/** Check an Ed25519 `sig` (base64url) over `data` with a raw public key (base64url). Never throws. */
+export function verifyBytes(publicKey: string, data: string, sig: string): boolean {
+  try {
+    const key = createPublicKey({ key: { kty: "OKP", crv: "Ed25519", x: publicKey }, format: "jwk" });
+    return verify(null, Buffer.from(data), key, Buffer.from(sig, "base64url"));
+  } catch {
+    return false;
+  }
+}
+
 function publicFromPrivate(privateKey: KeyObject): string {
   const jwk = createPublicKey(privateKey).export({ format: "jwk" }) as { x?: string };
   if (!jwk.x) throw new Error("could not derive the public key");
@@ -183,9 +205,10 @@ export function keyFileStamp(dataDir: string): string {
  * 0600) and atomically rename it over the current key, so there is never a moment
  * without a key file. With `keepOldAs`, the old private key is first copied to that
  * path (mode 0600); otherwise it is gone (the caller has already recorded the old
- * PUBLIC key, which is all that verifying earlier exports needs).
+ * PUBLIC key, which is all that verifying earlier exports needs). `beforeSwap` runs with the new key once it is on disk
+ * and before it replaces the old one (the signed audit log writes its key-rotate line there, still under the old key).
  */
-export function replaceSigningKey(dataDir: string, keepOldAs?: string): SigningKey {
+export function replaceSigningKey(dataDir: string, keepOldAs?: string, beforeSwap?: (next: SigningKey) => void): SigningKey {
   const p = attestKeyPath(dataDir);
   mkdirSync(dirname(p), { recursive: true, mode: 0o700 });
   const { privateKey } = generateKeyPairSync("ed25519");
@@ -197,6 +220,7 @@ export function replaceSigningKey(dataDir: string, keepOldAs?: string): SigningK
       copyFileSync(p, keepOldAs, fsConstants.COPYFILE_EXCL);
       chmodSync(keepOldAs, 0o600);
     }
+    beforeSwap?.(fromPrivate(privateKey));
     renameSync(tmp, p);
   } catch (e) {
     try {

@@ -1,5 +1,54 @@
 # Upgrading
 
+## Monomem 1.4.0 and 1.5.0 (database schema v19 to v22)
+
+Applies to Monomem 1.3.x (and to a development build that already made the store v20 or v21). A fresh install needs none of this.
+
+- **Close every app that uses Monomem first** (Claude Code, Claude Desktop, Cursor, Codex, the server), then upgrade and start
+  them again. An app still running the old version keeps writing in the old shape after the file is upgraded; 1.3.x and 1.4.x
+  cannot notice that. From 1.5.0 on, a running Monomem notices a newer upgrade and refuses to save ("restart this app") until
+  you restart it. `monomem doctor` only reports an older database; it never upgrades it.
+
+- **What changes.** The first start migrates the database from schema v19 to **v22** (1.4.0 and 1.5.0 ship as one step): new columns on notes (when the upgrade ran,
+  who approved a held write and when, the latest confirm), two on held writes (their forget date and confidence), one on capture
+  sessions, and two new tables (confirms, and "derived from" links between notes), and, from 1.5.0, when a note's title or body last changed (the re-confirmation clock starts there, not at any edit) and the folder of the local process that wrote it, plus three small tables (agents' "this looks wrong" flags, the retry keys that stop a repeated write from saving a note twice, and the per-writer counts `monomem trust` shows) and two index changes. No note text is rewritten. Every note that exists
+  at the upgrade is marked with the upgrade time, so nothing that showed before the upgrade is hidden after it.
+- **A verified backup is made first**, at `<database>.pre-v22-backup`. The upgrade does not run if that copy cannot be made.
+  Remove it when you are happy: `monomem backup --prune-premigration`. `monomem doctor` warns once a copy is more than 14 days old.
+- **Your app keys are hashed on the first start of 1.5.0 (automatic).** Each plain-text key in `tokens.json` is replaced by its
+  one-way hash; the rewrite is atomic, `tokens.json.bak` (which held the plain text) is deleted, and starting again changes nothing.
+  Your apps keep working: they still send the key in their own config. The main key in `.token` stays in plain text (the CLI
+  and the dashboard sign-in need it). **Going back is the catch:** Monomem 1.4.x and older cannot read a hashed entry, so after
+  a downgrade those apps are refused until you run `monomem connect <app>` again to make each a new key. (Restoring the
+  `.pre-v22-backup` database does not bring back the old `tokens.json`.) `monomem token harden` hashes by hand; `monomem doctor`
+  warns if a key is still in plain text.
+- **One way only.** Monomem 1.3.x and older refuse a v22 database instead of opening it. If several machines share one database,
+  upgrade all of them.
+- **To go back to 1.3.x:** close every app that uses Monomem and stop the server, then `monomem restore <database>.pre-v22-backup --yes`
+  and install the older version (`npm i -g monomem@1.3.5`). Anything written after the upgrade is not in the backup; the copy-aside keeps it.
+- Afterwards run `monomem doctor`, then `monomem health`. What is new: [CHANGELOG.md](../CHANGELOG.md).
+
+**Day 1.** Session start, search and lists show the same notes as before. Notes that existed at the upgrade are exempt from the
+outside-content hold (unless a later edit marks them). One change: an old note that carries a 1.3.5 outside-content stamp (a
+session summary that read the web) can no longer be pinned or used as a replacement by an admin key or an agent; `monomem
+pin` in a terminal still can, after you type yes. Also new: `monomem add` run from an agent's shell or a
+script (not a terminal) is marked like any other writer's notes. What is new: notes written from now on after an agent read a web page or another MCP server's output
+(when Monomem can see it) land **unconfirmed**. They are labelled, kept out of session start, and one line says how many:
+`Monomem: N notes from outside content wait for confirmation (not shown). Review: monomem review`. See
+[trust.md](./trust.md#outside-content-and-taint-140).
+
+**About day 31.** Re-confirmation expiry is on in **label** mode by default. Notes nobody edited or confirmed in the 30
+days since the upgrade start showing `[expired - not re-confirmed in 30 days]` in search and in session-start index lines.
+Nothing is hidden or deleted, and their ranking does not change. You can:
+
+- leave it, and confirm notes as you check them: `monomem review`, then `monomem confirm <id> --source "..."` (or
+  `monomem review --confirm-all` after reading the list);
+- turn the label off: `monomem config set confirm-mode off` (asks you to type yes);
+- make expired notes stay out of session start: `monomem config set confirm-mode enforce`. Changing the mode restarts
+  every note's clock, so nothing expires for another 30 days.
+
+Details: [search.md](./search.md#re-confirmation-expiry).
+
 ## Monomem 1.3.0 (database schema v18 to v19)
 
 Applies to Monomem 1.2.x. A fresh install needs none of this.
@@ -84,9 +133,12 @@ distrust list and writer labels are the stable part. See [trust.md](./trust.md).
 Run `monomem doctor` afterwards: it lists the pre-migration copies with size and age, and warns about
 leftover `.partial` files.
 
-## Rolling back
+## Rolling back (older versions: OneMemory 1.4.x and the v19 upgrade)
 
-To roll back:
+> **On Monomem 1.4.0 or 1.5.0?** This section is not for you. Follow "To go back to 1.3.x" in
+> [Monomem 1.4.0 and 1.5.0](#monomem-140-and-150-database-schema-v19-to-v22) (it restores `<database>.pre-v22-backup`).
+
+To roll back an older upgrade:
 
 Stop every Monomem process (server, MCP clients, runners, the CLI). **Move** `<database>.pre-v19-backup`
 over the database (a copy would leave the original; remove the `-wal` and `-shm` files next to it),

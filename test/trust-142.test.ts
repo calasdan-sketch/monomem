@@ -14,7 +14,7 @@ import { Store, type ImportNote, type ImportReport } from "../src/store.js";
 import { actorStore } from "../src/actor.js";
 import { createApiServer } from "../src/api.js";
 import { createMcpServer } from "../src/mcp-server-core.js";
-import { putTask, writeHandoff } from "../src/tasks.js";
+import { putTask } from "../src/tasks.js";
 import { exportMarkdown } from "../src/sync.js";
 import { distrustSql, mergedHasSql, matchesDistrust, MAX_TAINT_NAMES, type DistrustRule } from "../src/trust.js";
 import { backupStore } from "../src/backup.js";
@@ -58,7 +58,7 @@ describe("the harness is hermetic", () => {
     // (a throwaway data directory, and the full tool surface so the suite can
     // exercise the operator tools a plain install no longer registers; the flood guard off for bulk tests). Any
     // other MONOMEM_* variable means the developer's shell leaked in.
-    const deliberate = new Set(["MONOMEM_HOME", "MONOMEM_TOOLS", "MONOMEM_FLOOD_WRITES_PER_HOUR", "MONOMEM_SCAN_CACHE_SECONDS"]);
+    const deliberate = new Set(["MONOMEM_HOME", "MONOMEM_TOOLS", "MONOMEM_FLOOD_WRITES_PER_HOUR", "MONOMEM_SCAN_CACHE_SECONDS", "MONOMEM_NO_SERVER_PROBE", "MONOMEM_RECALL_TIMEOUT_MS"]); // NO_SERVER_PROBE: doctor never probes a real server from a test; RECALL_TIMEOUT: a loaded CI runner must not trip the 5 s session-start cap
     const left = Object.keys(process.env).filter((k) => k.startsWith("MONOMEM_") && !deliberate.has(k));
     assert.deepEqual(left, []);
     assert.equal(process.env.MONOMEM_TOOLS, "all", "the suite runs against the full tool surface");
@@ -716,7 +716,7 @@ describe("8: backups and upgrades", () => {
       s.close();
       downgradeTo(p, 13);
       // an older copy with fewer notes (an earlier upgrade of this database, before it was rolled back and used)
-      const old = p + ".pre-v19-backup";
+      const old = p + ".pre-v22-backup";
       copyFileSync(p, old);
       const db = new DatabaseSync(old);
       db.exec("DELETE FROM notes WHERE id > 1");
@@ -725,7 +725,7 @@ describe("8: backups and upgrades", () => {
       s2.close();
       const copies = Store.preMigrationBackups(p).map((c) => c.path.slice(dir.length + 1)).sort();
       assert.equal(copies.length, 2, copies.join(", "));
-      assert.ok(copies.some((c) => /^state\.db\.pre-v19-backup-\d{8}-\d{6}$/.test(c)), copies.join(", "));
+      assert.ok(copies.some((c) => /^state\.db\.pre-v22-backup-\d{8}-\d{6}$/.test(c)), copies.join(", "));
       assert.equal(Store.verifyBackupFile(old).ok && (Store.verifyBackupFile(old) as any).notes, 3, "the fresh copy holds the live state");
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -739,8 +739,8 @@ describe("8: backups and upgrades", () => {
       const s = new Store(p);
       as("alice", () => s.create({ title: "n", body: "b" }));
       s.close();
-      const stale = [p + ".pre-v19-backup.123abc.partial", p + ".pre-v19-backup.123abc.partial-journal"];
-      const fresh = p + ".pre-v19-backup.999fff.partial";
+      const stale = [p + ".pre-v22-backup.123abc.partial", p + ".pre-v22-backup.123abc.partial-journal"];
+      const fresh = p + ".pre-v22-backup.999fff.partial";
       for (const f of [...stale, fresh]) writeFileSync(f, "x");
       const old = new Date(Date.now() - 3600_000);
       for (const f of stale) utimesSync(f, old, old);
@@ -889,7 +889,7 @@ describe("docs and CI stay in step with the code", () => {
 
   test("docs/upgrading.md exists and is linked from the README and the CHANGELOG", () => {
     const up = read("docs", "upgrading.md");
-    for (const must of ["Older upgrade notes (OneMemory)", "Monomem 1.2.0", "pre-v18-backup", "pre-v19-backup", "1.3.4", "roll back", "imported_unverified", "MONOMEM_ATTEST_MIN_VERSION", "EXPERIMENTAL"]) assert.ok(up.includes(must) || up.toLowerCase().includes(must.toLowerCase()), `upgrading.md lacks ${must}`);
+    for (const must of ["Older upgrade notes (OneMemory)", "Monomem 1.2.0", "pre-v18-backup", "pre-v22-backup", "1.3.4", "roll back", "imported_unverified", "MONOMEM_ATTEST_MIN_VERSION", "EXPERIMENTAL"]) assert.ok(up.includes(must) || up.toLowerCase().includes(must.toLowerCase()), `upgrading.md lacks ${must}`);
     assert.match(read("README.md"), /docs\/upgrading\.md/);
     assert.match(read("CHANGELOG.md"), /docs\/upgrading\.md/);
   });

@@ -289,7 +289,7 @@ describe("4: approving a held update", () => {
     }
     assert.ok(qid > 0);
     s.update(n.id, { body: "v2 by someone else" });
-    assert.throws(() => s.approveQuarantine(qid), /stale write/);
+    assert.throws(() => s.approveQuarantine(qid), /changed since this edit was held/);
     assert.equal(s.read(n.id)!.body, "v2 by someone else");
     s.close();
   });
@@ -312,7 +312,7 @@ describe("4: approving a held update", () => {
     } catch (e) {
       qid2 = (e as QuarantinedError).quarantineId;
     }
-    assert.throws(() => s.approveQuarantine(qid), /stale write/);
+    assert.throws(() => s.approveQuarantine(qid), /changed since this edit was held/);
     assert.equal(s.approveQuarantine(qid2).namespace, "archive");
     s.close();
   });

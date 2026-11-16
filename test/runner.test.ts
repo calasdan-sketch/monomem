@@ -27,7 +27,6 @@ import {
   resetHeartbeat,
   resolveAction,
   runCommand,
-  runnerId,
   signCommand,
   startRunner,
   truncate,

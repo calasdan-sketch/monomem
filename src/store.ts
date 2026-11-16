@@ -12,17 +12,15 @@
 // app-level "remember to reindex" step to forget.
 
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, statSync, statfsSync, readdirSync, renameSync, linkSync, existsSync, copyFileSync, unlinkSync } from "node:fs";
+import { mkdirSync, statSync, statfsSync, readdirSync, renameSync, linkSync, existsSync, unlinkSync, copyFileSync, readFileSync } from "node:fs";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { dirname, basename, join } from "node:path";
-import { checkSizes, checkNames, audit, ADMIN_SCOPE_NEEDED } from "./security.js";
+import { dirname, basename, join, resolve } from "node:path";
+import { privateDir } from "./private-dir.js";
+import { checkSizes, checkNames, audit, auditHead, auditPath, beginKeyRotation, withAuditPath, ADMIN_SCOPE_NEEDED } from "./security.js";
 import { chmodQuiet } from "./config.js";
 import { SECRET_ASSIGN_LABEL } from "./security.js";
 import { lintContent, lintPolicy, describeFindings, type LintFinding, type LintAction, type LintCategory } from "./lint.js";
-// Reuses consolidate.ts's zero-dependency text similarity for the note
-// similarity graph. This is a module cycle (consolidate.ts imports Store
-// from here), but a safe one: both modules only touch the other's bindings
-// inside function bodies at runtime, never during module evaluation.
+// The zero-dependency text similarity for the note similarity graph (shared with consolidate.ts).
 import {
   precomputeTfMaps,
   computeDocFreqs,
@@ -32,33 +30,33 @@ import {
   termFreq,
   tokenize,
   MIN_SHARED_TOKENS_FOR_EDGE,
-} from "./consolidate.js";
+} from "./text-sim.js";
 // No module cycle: staleness.ts imports config.ts at runtime and store.ts
 // only as a type (erased at compile), so store -> staleness -> config is
 // acyclic.
 import { isStale, stalenessConfig, annotateStaleness } from "./staleness.js";
 // At-rest encryption for note bodies. No module cycle: crypto.ts imports
 // only node: builtins, never store.ts.
+import { BodyIndex, type BodyIndexInfo } from "./store/body-index.js";
 import { encrypt, decryptIfEncrypted, isEncrypted, loadKey, keyPath, noteAad, captureAad } from "./crypto.js";
 import { currentActor, currentWriter, cleanWriter, currentCeiling, actorStore } from "./actor.js";
 import { redact } from "./redact.js";
-import { contentHash as syncContentHash } from "./sync-hash.js";
+import {
+  ORIGIN_PREFIX,
+  sessionTaintExempt,
+  isTainted,
+  UNCONFIRMED_LABEL,
+  DISTRUSTED_BASE_LABEL,
+  expiredLabel,
+  type ConfirmMode,
+} from "./taint.js";
 import {
   type Sensitivity,
   DEFAULT_SENSITIVITY,
-  SENSITIVITY_HELP,
-  isSensitivity,
   levelsAtOrBelow,
-  parseSensitivity,
-  sensitivityRank,
   sensitivityVisible,
 } from "./sensitivity.js";
 import {
-  ALL_NAMESPACES,
-  MAX_DISTRUST_RULES,
-  MAX_DISTRUST_RULES_PER_NAMESPACE,
-  MAX_TRUST_LOG_ROWS,
-  MAX_TRUST_LOG_ROWS_GLOBAL,
   MAX_TAINT_NAMES,
   capTaint,
   canonicalRuleWriter,
@@ -77,7 +75,6 @@ import {
   type WriterFacts,
 } from "./trust.js";
 import {
-  contentHash,
   ephemeralKey,
   isPublicKey,
   keyIdOf,
@@ -90,7 +87,6 @@ import {
   loadOrCreateSigningKey,
   parseTrustedAttestersEnvDetailed,
   peekSigningKey,
-  tightenKeyFile,
   attestKeyPath,
   signRecord,
   verifyRecord,
@@ -98,35 +94,51 @@ import {
   type SigningKey,
   type TrustedAttester,
   type VerifyContext,
-  type VerifyReason,
 } from "./attest.js";
+import {
+  ValidationError,
+  NoteUnreadableError,
+  MissingKeyError,
+  StaleWriteError,
+  RebuildBusyError,
+  CandidateScanError,
+  QuarantinedError,
+  WriterPausedError,
+} from "./errors.js";
+import * as gateOps from "./store/gates.js";
+import * as trustOps from "./store/trust.js";
+import * as quarantineOps from "./store/quarantine.js";
+import * as confirmOps from "./store/confirm.js";
+import * as taintOps from "./store/taint.js";
+import * as receiptOps from "./store/write-receipt.js";
+import * as surfaceOps from "./store/surfaces.js";
+import * as clientKeyOps from "./store/client-keys.js";
+import * as flagOps from "./store/flags.js";
+import * as codeAnchorOps from "./store/code-anchors.js";
+import type { CodeChange, CodeChangedItem } from "./store/code-anchors.js";
+export type { CodeChange, CodeChangedItem };
+import type { FlaggedItem, NoteFlag } from "./store/flags.js";
+import * as reputationOps from "./store/reputation.js";
+import type { WriterCounts, WriterEvent } from "./store/reputation.js";
+export type { FlaggedItem, NoteFlag, WriterCounts, WriterEvent };
+import { tagsToStorage, parseTags, dueBase, needsHumanConfirm, sealQuarantineCol, openQuarantineCol, isoOrNull, clampInt, envCount, floodWritesPerHour, isOperatorWrite, isPlainObject } from "./store/rows.js";
+export { dueBase, needsHumanConfirm, clampInt, floodWritesPerHour };
+export { ValidationError, NoteUnreadableError, StaleWriteError, RebuildBusyError, CandidateScanError, QuarantinedError, WriterPausedError };
 
 /**
- * A caller-input error (bad/oversized/secret-bearing data, empty title, stale
- * write). The HTTP layer maps these to 400 with the message shown; anything
- * else is an unexpected fault mapped to a generic 500, so internals never leak.
+ * 1.5.0 (round 2, S-04): this process opened the database before a newer Monomem upgraded it. Writing now would store rows in
+ * the old shape (the re-confirmation clock, new columns), so every write is refused until the app restarts.
  */
-export class ValidationError extends Error {}
+export class SchemaNewerError extends ValidationError {
+  constructor(readonly found: number) {
+    super(`Monomem was upgraded (the database is now at schema v${found}, this app runs v${SCHEMA_VERSION}); nothing was saved. Restart this app to use the new version.`);
+  }
+}
 
 /** v16: a no-migrate open (the capture hooks) found a database at another schema version than this build's. */
 export class SchemaMismatchError extends Error {
   constructor(readonly found: number) {
     super(`monomem: the database is at schema v${found}, this build uses v${SCHEMA_VERSION}; not opening it without a migration`);
-  }
-}
-
-/**
- * A stored note body could not be decrypted (wrong key file, or the row was
- * tampered with / moved). NOT a ValidationError: it is the operator's problem,
- * so the REST layer answers 500 -- but with this clear, id-bearing message
- * instead of a bare "internal error", and never hangs a stream.
- */
-export class NoteUnreadableError extends Error {
-  constructor(
-    public readonly noteId: number,
-    detail: string
-  ) {
-    super(`note ${noteId} cannot be decrypted (wrong key file, or the stored data was altered): ${detail}`);
   }
 }
 
@@ -211,60 +223,8 @@ function historyAad(hid: number): string {
   return `history|${hid}`;
 }
 
-/**
- * A compare-and-swap update was refused because the note moved on since the caller read it
- * (`ifRev` no longer matches). A ValidationError subclass so every surface keeps its message;
- * the REST layer answers 409 so a client can tell "re-read and retry" from "bad request".
- */
-export class StaleWriteError extends ValidationError {}
-
-/**
- * A rebuild was requested while another one is already running in this
- * process (single-flight). A ValidationError subclass so every surface maps
- * it to a clean caller-facing error; the REST layer answers 409.
- */
-export class RebuildBusyError extends ValidationError {
-  constructor() {
-    super("a similarity-edge rebuild is already running; retry when it finishes");
-  }
-}
-
-/**
- * A guarded duplicate-candidate scan (consolidate.ts findCandidatesGuarded)
- * was refused (one already running), cancelled, or ran out of time.
- */
-export class CandidateScanError extends ValidationError {}
-
-/**
- * A write held for admin review by the write-time linter (MONOMEM_LINT
- * quarantine policy). A ValidationError subclass so an unaware caller still
- * maps it to a clean caller-facing error; the REST and MCP write paths catch
- * it and report `{ quarantined: { id, reasons } }` instead.
- */
-export class QuarantinedError extends ValidationError {
-  constructor(
-    readonly quarantineId: number,
-    readonly findings: LintFinding[]
-  ) {
-    super(
-      `held in quarantine #${quarantineId} pending admin review (${describeFindings(findings)})`
-    );
-  }
-}
-
-/** A write from a writer the flood guard paused (Store.floodGate). Cleared by an operator: `monomem resume <label>`. */
-export class WriterPausedError extends ValidationError {}
-
-/** Env knob: a non-negative number, or `dflt` when unset, empty or unusable. */
-function envCount(name: string, dflt: number): number {
-  const raw = process.env[name]?.trim();
-  const n = raw ? Number(raw) : NaN;
-  return Number.isFinite(n) && n >= 0 ? n : dflt;
-}
 /** Days of read-access log kept (MONOMEM_ACCESS_LOG_DAYS, default 30; 0 = the log is off). */
 export const accessLogDays = (): number => envCount("MONOMEM_ACCESS_LOG_DAYS", 30);
-/** Writes one writer may make in a rolling hour before it is paused (MONOMEM_FLOOD_WRITES_PER_HOUR, default 500; 0 = off). */
-export const floodWritesPerHour = (): number => Math.floor(envCount("MONOMEM_FLOOD_WRITES_PER_HOUR", 500));
 /** Longest query preview kept in the access log. */
 export const ACCESS_PREVIEW_MAX = 120;
 const ACCESS_AAD = "access_log";
@@ -354,18 +314,9 @@ function lintFor(
 /** The quarantine reason of a write held only because its namespace is approve-first. */
 /** bm25 column weights for notes_fts(title, body, tags). */
 const FTS_WEIGHTS = "5, 1, 2";
+/** change_log.actor on the rows `encrypt enable` / `disable` rewrite (a body re-stored, its content unchanged). */
+export const ENCRYPT_ACTOR = { enable: "monomem encrypt enable", disable: "monomem encrypt disable" } as const;
 const APPROVAL_FINDING: LintFinding = { category: "approval", label: "namespace requires approval", field: "namespace" };
-
-/**
- * Approve-first namespaces hold every write that is not the operator's. The operator is the local
- * `monomem` CLI (writer marker `cli`, no token behind the call) plus the internal lint modes: "none"
- * is an approved quarantine replay, "trusted" is consolidation re-writing stored notes. Everything
- * else counts as an agent: MCP over stdio or HTTP, every REST call (an admin token included -- REST
- * has no separate operator login), the server's own jobs, the runner, capture hooks, library callers.
- */
-function isOperatorWrite(mode: LintMode): boolean {
-  return mode !== "full" || currentWriter() === "cli";
-}
 
 /**
  * Archive, restore and supersede change what agents see but cannot wait in the quarantine queue (it
@@ -409,6 +360,16 @@ export interface NoteInput {
    * Anything else is rejected. See docs/sensitivity-labels.md.
    */
   sensitivity?: string;
+  /**
+   * 1.4.0: the writer says this note's content came from outside (a web page, another server). Adds `obs.origin:declared`;
+   * false or absent never removes taint.
+   */
+  outside?: boolean;
+  /**
+   * 1.4.0: ids of the notes this one was built from (at most 20, each must exist). Stored as add-only links; a note built
+   * from an unconfirmed note is marked `obs.origin:via:memory`. Numeric strings are accepted (MCP/REST clients send them).
+   */
+  derived_from?: Array<number | string>;
 }
 
 /**
@@ -554,8 +515,10 @@ export interface ChangesPage {
   changes: ChangeEntry[];
   /** Totals over the whole window, not just this page. */
   counts: ChangeCounts & { total: number };
-  /** Totals grouped by provenance source ("" = unattributed). */
+  /** Totals grouped by provenance source ("" = unattributed). The source is what the writer CLAIMS. */
   bySource: Record<string, ChangeCounts>;
+  /** Totals grouped by the stamped writer of each change (written_by; "" = unknown). */
+  byWriter: Record<string, ChangeCounts>;
   /** Linter-held writes queued in the window (not notes; see quarantine). */
   quarantined: number;
   /** Opaque cursor for the next page; null when this was the last page. */
@@ -583,6 +546,47 @@ export interface QuarantineEntry {
   created_at: string;
 }
 
+/** The quarantine columns approval needs beyond QuarantineEntry (Store.applyHeld). */
+export interface HeldRow {
+  if_rev: number | null;
+  set_namespace: number;
+  created_at: string;
+  created_at_override: string | null;
+  written_by: string | null;
+  sensitivity: string;
+  imported_unverified: number;
+  sync_origin: string | null;
+  sync_origin_id: number | null;
+  forget_after: number | null;
+  confidence: number | null;
+  /** JSON list of fields a held edit cleared ("forget_after", "confidence"). */
+  clears: string | null;
+}
+
+/** Shown with every approval view (CLI, MCP, REST, dashboard). The second sentence only applies to a held edit. */
+export function quarantineCasNote(op: "create" | "update"): string {
+  return (
+    "Approving keeps the time the write was made." +
+    (op === "update" ? " A held edit applies only to the version of the note it was written against: if the note changed since it was held, approval fails and the edit stays held so you can reject it." : "")
+  );
+}
+
+/** What was saved while a held write waited (Store.quarantineContext). Never the held text. */
+export interface QuarantineContext {
+  id: number;
+  op: "create" | "update";
+  target_id: number | null;
+  namespace: string;
+  /** When the write was held (= when it was written). */
+  held_at: string;
+  /** op=update only: the target note changed since the hold, so approving the edit will fail (compare-and-swap). */
+  target_changed?: boolean;
+  /** op=update only: fields the held edit CLEARS on approval ("confidence", "forget_after"); absent when none. */
+  clears?: string[];
+  /** Other notes in the namespace, same topic, saved since held_at; newest first. */
+  notes: Array<{ id: number; title: string; updated_at: string; written_by: string }>;
+}
+
 /** How long change-log rows (incl. deletes) are kept for the change feed. */
 export const CHANGE_LOG_RETENTION_DAYS = 90;
 
@@ -590,7 +594,7 @@ export const CHANGE_LOG_RETENTION_DAYS = 90;
 const FTS_PREFIX_OPT = "prefix='1'";
 
 /** Current schema version (PRAGMA user_version). See Store.migrate. */
-export const SCHEMA_VERSION = 19;
+export const SCHEMA_VERSION = 22;
 
 /**
  * Notes fetched per page by exportBatch(), which both streaming export
@@ -639,6 +643,10 @@ export interface NotePatch {
   confidence?: number | null;
   /** Relabel the note ("public" | "internal" | "private"). Never above the caller's ceiling; lowering a label needs an admin. */
   sensitivity?: string;
+  /** 1.4.0: see NoteInput.outside (add-only). */
+  outside?: boolean;
+  /** 1.4.0: see NoteInput.derived_from. Adds links; never removes one. */
+  derived_from?: Array<number | string>;
 }
 
 export interface NoteRecord {
@@ -727,6 +735,8 @@ export interface NoteRecord {
    * replacing note. A superseded note is kept whole (nothing is deleted) and is left out of search and lists unless asked for.
    */
   status?: "superseded";
+  /** R1-02: set only on the reply to a write that changed nothing (no rev bump, nothing stored). */
+  unchanged?: true;
   superseded_by?: number;
   superseded_at?: string;
   /** The writer who confirmed the replacement. */
@@ -767,9 +777,61 @@ export interface NoteRecord {
    * Not the `pinned` tag (which only keeps captured rows from decay).
    */
   pinned?: true;
+  /** v20: present only on notes that existed when the store was upgraded to 1.4.0 (the upgrade time). */
+  grandfathered_at?: string;
+  /** v20: present only on a held write that was approved: when, and by whom. created_at/updated_at keep the written time. */
+  approved_at?: string;
+  approved_by?: string;
+  /** v20: the latest qualifying confirm (kind human | admin | corroborated); it counts only while confirmed_rev equals rev. */
+  confirmed_at?: string;
+  confirmed_by?: string;
+  confirmed_kind?: string;
+  confirmed_rev?: number;
+  /** 1.4.0: present (true) on a note from outside content that nobody confirmed for its current rev (taint.ts). */
+  unconfirmed?: true;
+  /** ... and the label shown with it. */
+  unconfirmed_label?: string;
+  /** 1.4.0 (1a): present (true) when re-confirmation expiry is on and the note is past its due date; with its label. */
+  expired?: true;
+  expired_label?: string;
+  /** 1.4.0 (1d): the notes this one says it was built from (add-only links); present only when there are any. */
+  derived_from?: number[];
+  /** 1.4.0 (1d): one of those notes was written or touched by a distrusted writer (one hop); with its label. */
+  built_on_distrusted?: true;
+  built_on_distrusted_label?: string;
+  /** 1.5.0 (R2-02): "this looks wrong" flags by other writers on this version (store/flags.ts); with its label. */
+  flagged?: NoteFlag[];
+  flagged_label?: string;
+  /** 1.5.0 (R2-03): files this note is about that changed in git since it was written (store/code-anchors.ts); with its label. */
+  code_changed?: CodeChange[];
+  code_changed_label?: string;
 }
 
-interface NoteRow {
+/** The re-confirmation expiry settings (_meta; Store.confirmSettings). `set_at`: when the mode was last changed. */
+export interface ConfirmSettings {
+  mode: ConfirmMode;
+  days: number;
+  set_at?: string;
+}
+
+/** One row of `monomem review` (Store.reviewList). */
+export interface ReviewItem {
+  id: number;
+  namespace: string;
+  title: string;
+  writer: string;
+  why: string;
+}
+export interface ReviewRow {
+  id: number;
+  namespace: string;
+  title: string;
+  written_by: string | null;
+  tags: string;
+  updated_at: string;
+}
+
+export interface NoteRow {
   id: number;
   namespace: string;
   title: string;
@@ -804,20 +866,24 @@ interface NoteRow {
   pinned?: number | null;
   /** v19. NOT NULL in the table; optional here only because a few narrow projections do not select it. */
   sensitivity?: string | null;
+  /** v20 (absent from narrow projections). */
+  grandfathered_at?: string | null;
+  approved_at?: string | null;
+  approved_by?: string | null;
+  confirmed_at?: string | null;
+  confirmed_by?: string | null;
+  confirmed_kind?: string | null;
+  confirmed_rev?: number | null;
+  /** v21: when the title or body last changed (the expiry clock); writer_cwd: see migrate. */
+  content_at?: string | null;
+  writer_cwd?: string | null;
 }
 
 export const DEFAULT_NAMESPACE = "default";
-/** The capture's outside-content stamp (reserved-tags.ts re-exports it; defined here so update() can keep it without an import cycle). */
-export const ORIGIN_TOOL_PREFIX = "obs.origin:tool:";
 
 /** A pre-upgrade copy (`-backup`, a dated `-backup-YYYYMMDD-HHMMSS` kept copy) or an unfinished/killed one (`.<id>.partial` and its sidecars). */
 const PREMIGRATION_FILE_RE = /-backup(-\d{8}-\d{6}(-\d+)?)?(\.[0-9a-f]+\.partial(-journal|-wal|-shm)?)?$/;
 const PREMIGRATION_PARTIAL_RE = /\.[0-9a-f]+\.partial(-journal|-wal|-shm)?$/;
-
-/** AAD binding a sealed quarantine column to its column name and namespace. */
-function quarantineAad(col: string, namespace: string): string {
-  return `quarantine|${col}|${namespace}`;
-}
 
 /** Who is making this write: an internal override, else the connection's server-stamped writer. */
 function writerNow(opts: { writtenBy?: string }): string {
@@ -881,27 +947,72 @@ function annotateRetention(row: NoteRow, rec: NoteRecord): NoteRecord {
     if (row.session_id) out.session_id = row.session_id;
     if (row.obs_type) out.obs_type = row.obs_type;
   }
+  // v20: only when set, so a note written after the upgrade keeps its exact old shape.
+  if (row.grandfathered_at) out.grandfathered_at = row.grandfathered_at;
+  if (row.approved_at) {
+    out.approved_at = row.approved_at;
+    out.approved_by = row.approved_by ?? "";
+  }
+  if (row.confirmed_at) {
+    out.confirmed_at = row.confirmed_at;
+    out.confirmed_by = row.confirmed_by ?? "";
+    out.confirmed_kind = row.confirmed_kind ?? "";
+    out.confirmed_rev = Number(row.confirmed_rev ?? 0);
+  }
+  // 1.4.0: tainted, not grandfathered (=== null: a narrow projection without the column is never flagged), no confirm for this rev.
+  if (row.grandfathered_at === null && isTainted(out.tags) && !(row.confirmed_kind && Number(row.confirmed_rev) === Number(row.rev))) {
+    out.unconfirmed = true;
+    out.unconfirmed_label = UNCONFIRMED_LABEL;
+  }
   return out;
 }
 
-function tagsToStorage(tags: string[] | undefined): string {
-  if (!tags || tags.length === 0) return "";
-  // Store as a JSON array so tags can contain commas/spaces; dedupe + trim.
-  const cleaned = Array.from(new Set(tags.map((t) => t.trim()).filter(Boolean)));
-  return cleaned.length ? JSON.stringify(cleaned) : "";
+/**
+ * R1-02: true when `patch` changes nothing about `existing` (title, body, tag set, source, namespace, sensitivity,
+ * confidence, forget date all equal after normalisation) and carries no side effect (outside/derived/internal flags,
+ * a stale if_rev). Such a write is a no-op: no rev bump, no updated_at, no history, no flood count.
+ */
+function isNoopPatch(
+  existing: NoteRecord,
+  patch: NotePatch,
+  opts: { ifRev?: number; writtenAt?: string; keepWriter?: boolean; alsoTouchedBy?: string[]; replaceTaint?: string[]; importedUnverified?: boolean; holdForApproval?: boolean; historyReason?: string }
+): boolean {
+  if (opts.writtenAt || opts.keepWriter || opts.alsoTouchedBy?.length || opts.replaceTaint || opts.importedUnverified || opts.holdForApproval) return false;
+  if (opts.historyReason && opts.historyReason !== "update") return false;
+  if (opts.ifRev !== undefined && opts.ifRev !== existing.rev) return false;
+  if (patch.outside === true || patch.derived_from?.length) return false;
+  if (patch.title !== undefined && patch.title !== existing.title) return false;
+  if (patch.body !== undefined && patch.body !== existing.body) return false;
+  const ns = patch.namespace?.trim();
+  if (ns && ns !== existing.namespace) return false;
+  if (patch.sensitivity !== undefined && patch.sensitivity !== existing.sensitivity) return false;
+  if (patch.source !== undefined && patch.source.replace(/[\u{E0000}-\u{E007F}]/gu, "").slice(0, 200) !== existing.source) return false;
+  const conf = patch.confidence as number | null | undefined;
+  if (conf !== undefined && conf !== (existing.confidence ?? null)) return false;
+  const forget = patch.forget_after as number | null | undefined;
+  if (forget !== undefined && !((forget === 0 || forget === null) && !existing.expires_at)) return false;
+  if (patch.tags !== undefined) {
+    // The store re-adds outside-content stamps a patch drops, so they count as present.
+    const want = new Set([...patch.tags.map((t) => t.trim()), ...existing.tags.filter((t) => t.startsWith(ORIGIN_PREFIX))]);
+    const have = new Set(existing.tags);
+    if (want.size !== have.size || [...want].some((t) => !have.has(t))) return false;
+  }
+  return true;
 }
 
-function parseTags(raw: string): string[] {
-  if (!raw) return [];
-  if (raw[0] === "[") {
-    try {
-      const a = JSON.parse(raw);
-      if (Array.isArray(a)) return a.filter((x) => typeof x === "string");
-    } catch {
-      /* fall through to legacy comma parse */
-    }
-  }
-  return raw.split(",").map((t) => t.trim()).filter(Boolean); // legacy rows
+/** What a confirm did (Store.confirm). `counted` false = recorded (when `recorded`) but releases nothing; `message` says why. */
+export interface ConfirmResult {
+  counted: boolean;
+  recorded: boolean;
+  kind: "human" | "admin" | "corroborated" | "not_counted";
+  reason?: string;
+  message: string;
+  id: number;
+  title: string;
+  rev: number;
+  by: string;
+  at: string;
+  source: string;
 }
 
 /**
@@ -934,23 +1045,6 @@ function buildMatchQuery(q: string, any = false): string {
     // match every word starting with go). A typed search keeps prefix matching for every word.
     .map((t) => `"${t.replace(/"/g, '""')}"${any && /^[\p{L}]{1,2}$/u.test(t) ? "" : "*"}`);
   return tokens.join(any ? " OR " : " AND "); // "" when nothing usable; caller returns []
-}
-
-/**
- * Normalize a caller-supplied timestamp to canonical ISO-8601 (UTC, ms), or
- * null when it is missing, not a string, or doesn't parse. Canonical form
- * matters: created_at/updated_at are compared and sorted as strings.
- */
-function isoOrNull(v: unknown): string | null {
-  if (typeof v !== "string" || !v.trim()) return null;
-  const t = Date.parse(v);
-  return Number.isNaN(t) ? null : new Date(t).toISOString();
-}
-
-/** Coerce a possibly-NaN/undefined value to a bounded integer with a default. */
-export function clampInt(v: number | undefined, def: number, min: number, max: number): number {
-  const n = typeof v === "number" && Number.isFinite(v) ? Math.floor(v) : def;
-  return Math.min(Math.max(n, min), max);
 }
 
 // --- Similarity edge graph (v4) -------------------------------------------
@@ -1095,6 +1189,9 @@ export function accessFlushMs(): number {
  * `autoMax` (MONOMEM_EDGE_AUTO_MAX_NOTES, default 100,000) is not indexed automatically at all: new notes there get no
  * automatic similarity links until `monomem rebuild-edges` is run.
  */
+/** _meta key prefix for a failed background edge build (F-06). */
+const EDGE_FAIL_PREFIX = "edge_build_failed:";
+
 export function edgeBuildLimits(): { syncMax: number; autoMax: number; sliceMs: number } {
   const num = (v: string | undefined, def: number): number => {
     const n = Number(v);
@@ -1319,6 +1416,25 @@ export interface DecayCandidate {
   idleDays: number;
 }
 
+/** A row the similarity-edge rebuild reads (P6). */
+interface EdgeRow {
+  rev: number;
+  namespace: string;
+  title: string;
+  body: string;
+  body_enc: string | null;
+}
+
+/** _meta key: this database was checked for pre-1.2.1 (v1) ciphertext with a key present (P2). */
+const V1_CHECKED = "v1_envelopes_checked";
+
+/** A3: the revocation set used when the stored list is damaged: every key reads as revoked. */
+class AllRevoked extends Set<string> {
+  override has(_k: string): boolean {
+    return true;
+  }
+}
+
 /**
  * SQL fragment filtering by archive state.
  *
@@ -1330,7 +1446,7 @@ function archivedClause(includeArchived?: boolean, archivedOnly?: boolean, inclu
   if (includeArchived) return "";
   if (supersededOnly) return " AND superseded_by IS NOT NULL";
   // A replaced note is archived too, but it has its own view (supersededOnly) and its own way back (supersede undo).
-  if (archivedOnly) return " AND archived_at IS NOT NULL AND superseded_by IS NULL";
+  if (archivedOnly) return includeSuperseded ? " AND archived_at IS NOT NULL" : " AND archived_at IS NOT NULL AND superseded_by IS NULL";
   if (includeSuperseded) return " AND (archived_at IS NULL OR superseded_by IS NOT NULL)";
   return " AND archived_at IS NULL";
 }
@@ -1365,6 +1481,17 @@ function tagClause(withTags?: string[], withoutTags?: string[], tagPrefix?: stri
   }
   return { sql, params };
 }
+
+/** Round 4: rare rows with a partial index (v22), by tag or by kind. `term` is the index's WHERE clause, verbatim. */
+type ListIndex = { name: string; term: string };
+const TAG_INDEXES: Record<string, ListIndex | undefined> = {
+  task: { name: "idx_notes_tag_task", term: `instr(tags, '"task"') > 0` },
+  convention: { name: "idx_notes_tag_convention", term: `instr(tags, '"convention"') > 0` },
+};
+const SUMMARY_INDEX: ListIndex = { name: "idx_notes_kind_summary", term: "kind = 'summary'" };
+
+/** Round 4: recentFilePaths looks at this many newest notes (session start keywords; a path older than that is not "recent"). */
+const RECENT_FILE_NOTES = 2000;
 
 function tagsMatch(rawTags: string, withTags?: string[], withoutTags?: string[], tagPrefix?: string): boolean {
   if (!withTags?.length && !withoutTags?.length && !tagPrefix) return true;
@@ -1441,11 +1568,14 @@ function dropFromIndex(idx: NsEdgeIndex, id: number): void {
 
 let warnedEnvAttesters = "";
 
+/** trust_attesters label for this server's own rotated-out keys (reserved: only key rotation writes it). */
+export const RETIRED_OWN_KEY_LABEL = "retired key of this server";
+
 export class Store {
-  private db: DatabaseSync;
+  /** @internal */ db: DatabaseSync;
   private readonly dbPath: string;
   /** Per-namespace edge-scoring index (see NsEdgeIndex). */
-  private edgeIndexes = new Map<string, NsEdgeIndex>();
+  /** @internal */ edgeIndexes = new Map<string, NsEdgeIndex>();
   /** Namespaces whose index is being built in the background, with the notes written meanwhile (linked when it is ready). */
   private edgeBuilds = new Map<string, Set<number>>();
   /** Recent live-note counts per namespace, so a write does not recount a big namespace every time. */
@@ -1466,7 +1596,7 @@ export class Store {
   /** Directory the key file resolves against (single resolver: beside the DB). */
   private readonly keyDir: string;
   /** This database's server_id (the `store_uuid` in _meta); filled in by the constructor. */
-  private serverIdValue = "";
+  /** @internal */ serverIdValue = "";
   /** The attestation signing key, loaded (or created) on first use. */
   private signingKey: SigningKey | null = null;
 
@@ -1493,20 +1623,32 @@ export class Store {
    * `opts.busyTimeoutMs` (see the constructor and bestEffortWrite).
    */
   private static readonly BUSY_TIMEOUT_MS = 20_000;
+  /** This connection's lock wait (opts.busyTimeoutMs or BUSY_TIMEOUT_MS): what bestEffortWrite puts back after its zero wait. */
+  private readonly busyTimeoutMs: number;
+  /** SQLite page-cache cap: a negative value is KiB, so -65536 = 64 MB. */
+  static readonly CACHE_SIZE_KIB = -65536;
   /** See the constructor: refuse instead of migrating. */
   private readonly noMigrate: boolean;
+  private readonly auditLog: string | undefined;
+  /** C-06: the in-memory index of decrypted bodies (store/body-index.ts). */
+  private readonly bodyIndex: BodyIndex;
 
   /**
    * `opts.noMigrate` (the capture hooks): never upgrade the file. A database at any other schema version than this build's
    * is refused with a SchemaMismatchError instead (the hook then spools the event). `opts.busyTimeoutMs` shortens the lock
    * wait for callers that would rather give up fast than block an agent.
    */
-  constructor(dbPath: string, opts: { noMigrate?: boolean; busyTimeoutMs?: number } = {}) {
+  constructor(dbPath: string, opts: { noMigrate?: boolean; busyTimeoutMs?: number; bodyIndex?: "lazy" | "off"; /** Test hook: the body index's note cap. */ bodyIndexMaxNotes?: number; /** This store's own audit log, whatever MONOMEM_AUDIT_LOG says (the benchmark's several servers in one process). */ auditLog?: string } = {}) {
     this.dbPath = dbPath;
+    this.auditLog = opts.auditLog;
+    // C-06: hooks pass "off" (one prompt's life is too short to build it); MONOMEM_BODY_INDEX=off turns it off everywhere.
+    this.bodyIndex = new BodyIndex(this, opts.bodyIndex !== "off" && (process.env.MONOMEM_BODY_INDEX ?? "").trim().toLowerCase() !== "off", opts.bodyIndexMaxNotes);
     this.noMigrate = opts.noMigrate === true;
+    this.busyTimeoutMs = Math.floor(opts.busyTimeoutMs ?? Store.BUSY_TIMEOUT_MS);
     if (dbPath !== ":memory:") {
       try {
-        mkdirSync(dirname(dbPath), { recursive: true, mode: 0o700 });
+        // final4 EASE-B1: a NEW data folder gets the owner-only lock (icacls on Windows); an existing one is left alone.
+        if (!existsSync(dirname(dbPath))) privateDir(dirname(dbPath));
       } catch (e) {
         throw new Error(Store.explainOpenError(e, dbPath));
       }
@@ -1521,13 +1663,16 @@ export class Store {
       // busy_timeout FIRST: switching to WAL and migrating both need a lock
       // another process may be holding at the same moment. The pragmas are INSIDE the try: on a read-only mount the first
       // failure of an existing database is exactly here (the WAL switch), and it must get the readable message too.
-      this.db.exec(`PRAGMA busy_timeout = ${Math.floor(opts.busyTimeoutMs ?? Store.BUSY_TIMEOUT_MS)};`);
+      this.db.exec(`PRAGMA busy_timeout = ${this.busyTimeoutMs};`);
       this.db.exec("PRAGMA journal_mode = WAL;");
       // A checkpoint leaves the -wal file at its high-water size (old page images, deleted text included); cap what it keeps.
       this.db.exec("PRAGMA journal_size_limit = 4194304;");
       this.db.exec("PRAGMA foreign_keys = ON;");
       // Zero freed pages: without this a deleted note's text stays readable in the file until reused.
       this.db.exec("PRAGMA secure_delete = ON;");
+      // 1.5.0 (round 2, P1): a 64 MB page-cache CAP (memory is used only as pages are read, so a short CLI run costs nothing
+      // extra). The 2 MB default made session start at 50k notes 413 ms; with this, 66 ms (round2-performance.md).
+      this.db.exec(`PRAGMA cache_size = ${Store.CACHE_SIZE_KIB};`);
       // Load the at-rest key before migrations so a v10 upgrade on an encrypted
       // store can read existing rows. loadKey throws on a corrupt key file
       // rather than silently degrading -- see crypto.ts.
@@ -1553,6 +1698,8 @@ export class Store {
     }
     // Notes are private: owner-only db + WAL/SHM (POSIX; no-op on Windows).
     if (dbPath !== ":memory:") for (const ext of ["", "-wal", "-shm"]) chmodQuiet(dbPath + ext, 0o600);
+    // 1.5.0: the store key exists from the moment the store is opened, not from its first write.
+    this.ensureAuditKey();
   }
 
   private static isReadOnlyError(e: unknown): boolean {
@@ -1599,9 +1746,11 @@ export class Store {
         /* nothing to close */
       }
       throw new Error(
-        `monomem: this database is at schema version ${found}, newer than this build supports ` +
+        `this database is at schema version ${found}, newer than this build supports ` +
           `(${SCHEMA_VERSION}). Upgrade monomem (npm i -g monomem@latest) instead of opening it with an older version. ` +
-          `To go back to the older version on purpose, restore the copy the upgrade left beside the database (${this.dbPath}.pre-v${found}-backup) with a build that supports it: monomem restore <that file> (docs/upgrading.md).`
+          `To go back to the older version on purpose: close every app that uses Monomem and stop the server, run ` +
+          `monomem restore ${this.dbPath}.pre-v${found}-backup --yes, then install the older version (docs/upgrading.md, "To go back"). ` +
+          `Anything written after the upgrade is not in that copy; restore keeps your current database aside first.`
       );
     }
     if (found >= SCHEMA_VERSION) {
@@ -2137,6 +2286,14 @@ export class Store {
     );
   }
 
+  /** Index names in this file, read once (a store made before an index was added still works, just without it). */
+  private tagIndexCache: Set<string> | undefined;
+  /** @internal */
+  hasIndex(name: string): boolean {
+    this.tagIndexCache ??= new Set((this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as Array<{ name: string }>).map((r) => r.name));
+    return this.tagIndexCache.has(name);
+  }
+
   private addColumn(table: string, column: string, decl: string): void {
     if (!this.hasColumn(table, column)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);
   }
@@ -2669,6 +2826,167 @@ export class Store {
       this.db.exec("CREATE INDEX IF NOT EXISTS idx_notes_live_updated ON notes(archived_at, updated_at DESC, id DESC)");
       this.createDeleteTrigger();
     }
+    if (v < 20) {
+      // v20 (1.4.0): trust. Everything the release needs lands in this one step (one backup, one transaction).
+      //  - notes.grandfathered_at: when the upgrade ran, for every note that existed then (new notes leave it NULL). Notes
+      //    from before the upgrade are exempt from the new holds, and any re-confirmation clock starts here, so upgrading
+      //    hides nothing.
+      //  - notes.approved_at / approved_by: a held write that was approved (its created_at/updated_at keep the WRITTEN time).
+      //  - notes.confirmed_*: the latest qualifying confirm (kind human|admin|corroborated), valid only while confirmed_rev = rev.
+      //  - quarantine.forget_after / confidence: a held write keeps them, so approving it applies them.
+      //  - sessions.outside_at: when a captured session last read outside content (web, other MCP servers).
+      //  - confirmations: every confirm, counted or not (who, whether authenticated, what source they named; kind
+      //    'not_counted' with the rule in `reason`).
+      //  - note_links: add-only "derived from" links between notes.
+      for (const c of ["grandfathered_at", "approved_at", "approved_by", "confirmed_at", "confirmed_by", "confirmed_kind"]) this.addColumn("notes", c, "TEXT");
+      this.addColumn("notes", "confirmed_rev", "INTEGER");
+      // 1 = the last content write by the local CLI ran at a terminal (stdin and stdout); see retroTaint.
+      this.addColumn("notes", "cli_tty", "INTEGER");
+      this.addColumn("quarantine", "forget_after", "INTEGER");
+      this.addColumn("quarantine", "confidence", "REAL");
+      // A held edit that CLEARS its confidence or forget date (null): a JSON list of those field names, applied on approval.
+      this.addColumn("quarantine", "clears", "TEXT");
+      this.addColumn("sessions", "outside_at", "TEXT");
+      // The taint window asks "open sessions of this namespace" on every agent write.
+      this.db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_ns_open ON sessions(namespace, ended_at)");
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS confirmations (
+          id INTEGER PRIMARY KEY,
+          note_id INTEGER NOT NULL,
+          note_rev INTEGER NOT NULL,
+          at TEXT NOT NULL,
+          by TEXT NOT NULL,
+          by_authed INTEGER NOT NULL,
+          kind TEXT NOT NULL,
+          source TEXT NOT NULL,
+          source_key TEXT NOT NULL,
+          reason TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_confirm_note ON confirmations(note_id, at);
+        CREATE TABLE IF NOT EXISTS note_links (
+          note_id INTEGER NOT NULL,
+          derived_from INTEGER NOT NULL,
+          added_at TEXT NOT NULL,
+          added_by TEXT NOT NULL,
+          PRIMARY KEY (note_id, derived_from)
+        );
+        CREATE INDEX IF NOT EXISTS idx_links_parent ON note_links(derived_from);
+      `);
+      this.db.prepare("UPDATE notes SET grandfathered_at = ? WHERE grandfathered_at IS NULL").run(new Date().toISOString());
+    }
+    if (v < 21) {
+      // v21 (1.5.0): everything round 1 of 1.5.0 needs, in this one step (one backup, one transaction). Later 1.5.0 items add
+      // their columns here too: the release ships as one schema bump. Every step is idempotent.
+      //  - notes.content_at: when the TITLE or BODY last changed (or the held write was written). The re-confirmation clock
+      //    starts from this, not from updated_at, so a tag/confidence/TTL edit or a corroboration can no longer restart it.
+      //    Existing notes get their updated_at, except a note whose current version carries a corroborated confirm: that
+      //    confirm used to restart the clock, so its time is kept and upgrading changes no due date (hides nothing).
+      //  - notes.writer_cwd: the folder of the local, unauthenticated process that last wrote the content (stdio server launch
+      //    folder, or the CLI at a non-terminal). Taint windows are matched by folder, not by the namespace the writer names.
+      //    Never exported or synced. NULL = unknown origin.
+      if (!this.hasColumn("notes", "content_at")) {
+        this.addColumn("notes", "content_at", "TEXT");
+        this.db.exec(
+          `UPDATE notes SET content_at = CASE WHEN confirmed_kind = 'corroborated' AND confirmed_rev = rev AND confirmed_at > updated_at THEN confirmed_at ELSE updated_at END WHERE content_at IS NULL`
+        );
+      }
+      this.addColumn("notes", "writer_cwd", "TEXT");
+      //  - capture_events.spool_id: the id a spooled hook event carries; a second insert of the same id is ignored, so a drain cut
+      //    off after the insert cannot store (and count) an event twice (R1-13). Live hook events have NULL.
+      //  - notes_links_ad: deleting a note removes its note_links rows (either column) and its confirmations, so no row names an id
+      //    that no longer exists (and a later note that reuses the id cannot inherit them). Orphans already there are removed.
+      //  - idx_notes_origin: a partial index over the notes the unconfirmed scan looks at (stamped, live, not grandfathered), so
+      //    session start does not read the whole table (R1-16). Its WHERE terms are repeated verbatim in Store.unconfirmedSql.
+      this.db.exec("CREATE INDEX IF NOT EXISTS idx_notes_origin ON notes(namespace) WHERE tags LIKE '%obs.origin:%' AND archived_at IS NULL AND grandfathered_at IS NULL");
+      this.addColumn("capture_events", "spool_id", "TEXT");
+      this.db.exec(`
+        DELETE FROM note_links WHERE note_id NOT IN (SELECT id FROM notes) OR derived_from NOT IN (SELECT id FROM notes);
+        DELETE FROM confirmations WHERE note_id NOT IN (SELECT id FROM notes);
+        DROP TRIGGER IF EXISTS notes_links_ad;
+        CREATE TRIGGER notes_links_ad AFTER DELETE ON notes BEGIN
+          DELETE FROM note_links WHERE note_id = old.id OR derived_from = old.id;
+          DELETE FROM confirmations WHERE note_id = old.id;
+        END;
+      `);
+      this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_capture_spool ON capture_events(spool_id) WHERE spool_id IS NOT NULL");
+    }
+    if (v < 22) {
+      // v22 (1.5.0, round 2): one more step for the round-2 items (one backup, one transaction). Unreleased: later round-2
+      // items add their tables HERE. To add a table: CREATE it in this exec, add its "DELETE FROM <table> WHERE note_id =
+      // old.id;" line to the notes_links_ad trigger at the end, and drop it in test/legacy-db.ts (the v22 block). Idempotent.
+      //  - F-05: idx_note_edges_note_id is a prefix of note_edges' primary key (pure write cost): dropped. (archived_at, kind)
+      //    makes the unfiltered live COUNT covering.
+      //  - note_flags (R2-02): "this looks wrong" flags. Nothing in the note changes; a flag names the rev it was about.
+      //  - note_client_keys (R2-04): idempotency keys on note writes, per writer, stored hashed (never the raw key).
+      //  - writer_events (R2-08): what happened to a writer's writes (held by the linter, rejected, rolled back, flag upheld,
+      //    replaced), for the counts `monomem trust` shows. Counts only: no row outlives its usefulness by naming content, and
+      //    the rows stay when a note is deleted (the count is about the writer, not the note).
+      //  - code_anchors (R2-03): the files a note is about, each with its git blob, the commit and the repository root at
+      //    write time. Plain paths (like note_files), never note text.
+      //  - idx_notes_obs, idx_notes_tag_task, idx_notes_tag_convention, idx_notes_kind_summary, idx_notes_pinned,
+      //    idx_notes_facts (round 4, 100k gate): session start's decisions, conventions, open-task count, latest summary, pinned
+      //    notes and fact notes read only those rows, not the whole namespace. The partial ones are named in the query (INDEXED
+      //    BY, see TAG_INDEXES, pinnedNotes, liveFactNotesIn) because the planner cannot tell a rare row from a common one.
+      this.db.exec(`
+        DROP INDEX IF EXISTS idx_note_edges_note_id;
+        CREATE INDEX IF NOT EXISTS idx_notes_live_kind ON notes(archived_at, kind);
+        CREATE INDEX IF NOT EXISTS idx_notes_obs ON notes(obs_type, updated_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_notes_tag_task ON notes(updated_at DESC, id DESC) WHERE instr(tags, '"task"') > 0;
+        CREATE INDEX IF NOT EXISTS idx_notes_tag_convention ON notes(updated_at DESC, id DESC) WHERE instr(tags, '"convention"') > 0;
+        CREATE INDEX IF NOT EXISTS idx_notes_kind_summary ON notes(updated_at DESC, id DESC) WHERE kind = 'summary';
+        CREATE INDEX IF NOT EXISTS idx_notes_pinned ON notes(id) WHERE pinned = 1;
+        CREATE INDEX IF NOT EXISTS idx_notes_facts ON notes(id) WHERE tags LIKE '%"fact:%' AND archived_at IS NULL AND superseded_at IS NULL;
+        CREATE TABLE IF NOT EXISTS note_flags (
+          id INTEGER PRIMARY KEY,
+          note_id INTEGER NOT NULL,
+          note_rev INTEGER NOT NULL,
+          flagged_by TEXT NOT NULL,
+          reason TEXT NOT NULL DEFAULT '',
+          at TEXT NOT NULL,
+          tainted INTEGER NOT NULL DEFAULT 0,
+          cleared_at TEXT,
+          cleared_by TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_note_flags_note ON note_flags(note_id, note_rev);
+        CREATE INDEX IF NOT EXISTS idx_note_flags_by ON note_flags(flagged_by, at);
+        CREATE TABLE IF NOT EXISTS note_client_keys (
+          writer TEXT NOT NULL,
+          key_hash TEXT NOT NULL,
+          note_id INTEGER NOT NULL,
+          at TEXT NOT NULL,
+          PRIMARY KEY (writer, key_hash)
+        );
+        CREATE INDEX IF NOT EXISTS idx_note_client_keys_note ON note_client_keys(note_id);
+        CREATE TABLE IF NOT EXISTS writer_events (
+          id INTEGER PRIMARY KEY,
+          writer TEXT NOT NULL,
+          event TEXT NOT NULL,
+          note_id INTEGER,
+          at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_writer_events ON writer_events(at, writer);
+        CREATE TABLE IF NOT EXISTS code_anchors (
+          note_id INTEGER NOT NULL,
+          path TEXT NOT NULL,
+          blob TEXT NOT NULL,
+          commit_sha TEXT NOT NULL,
+          repo_root TEXT NOT NULL,
+          at TEXT NOT NULL,
+          PRIMARY KEY (note_id, path)
+        );
+        DELETE FROM code_anchors WHERE note_id NOT IN (SELECT id FROM notes);
+        DELETE FROM note_flags WHERE note_id NOT IN (SELECT id FROM notes);
+        DELETE FROM note_client_keys WHERE note_id NOT IN (SELECT id FROM notes);
+        DROP TRIGGER IF EXISTS notes_links_ad;
+        CREATE TRIGGER notes_links_ad AFTER DELETE ON notes BEGIN
+          DELETE FROM note_links WHERE note_id = old.id OR derived_from = old.id;
+          DELETE FROM confirmations WHERE note_id = old.id;
+          DELETE FROM note_flags WHERE note_id = old.id;
+          DELETE FROM note_client_keys WHERE note_id = old.id;
+          DELETE FROM code_anchors WHERE note_id = old.id;
+        END;
+      `);
+    }
   }
 
   /** The delete log row also remembers the deleted note's writers (v14). Caller holds the write lock. */
@@ -2727,7 +3045,7 @@ export class Store {
       return rows.length < 2 || rows.some((r) => !r.sql.includes("written_by")) || Boolean(oldIdx);
     };
     if (!stale()) return;
-    this.db.exec("BEGIN IMMEDIATE");
+    this.beginWrite();
     try {
       if (stale()) {
         this.createLogTriggers();
@@ -2824,6 +3142,10 @@ export class Store {
       holdForApproval?: boolean;
       /** Sync of another machine's file: its (origin, id), linked to the note when a held create is approved. */
       syncIdentity?: { origin: string; id: number };
+      /** R2-04: the checked client_key (createOnce passes it); recorded for this writer in the same transaction. */
+      clientKey?: string;
+      /** R2-03: files the note is about, as the request named them (checkFilesInput); anchored in the writer's git repository. */
+      files?: string[];
     } & LintOpts = {}
   ): NoteRecord {
     if (!opts.bulkImport) this.floodGate(opts.lint ?? "full");
@@ -2836,6 +3158,20 @@ export class Store {
     validateNames(input);
     validateForgetAfter(input.forget_after);
     validateConfidence(input.confidence);
+    // 1.4.0 taint, before the hold so a held write keeps it. Internal writes for someone else (writtenBy: an approval, a
+    // sync) and restores carry only what their own tags or `outside` say.
+    // ponytail: a held create (quarantine) keeps the inherited taint but not the links themselves; carry them in the hold if asked.
+    const derived = this.derivedIds(input.derived_from);
+    // R2-03: the git calls run here, before the write lock; a path outside the repository is refused before anything is stored.
+    // ponytail: a held create (quarantine) does not keep its anchors; carry them in the hold if asked.
+    const anchors = codeAnchorOps.prepareAnchors(opts.files);
+    const taint = [
+      ...new Set([
+        ...this.taintFor(input.outside, opts.bulkImport || opts.writtenBy !== undefined ? null : currentWriter()),
+        ...this.inheritedTaint(derived),
+      ]),
+    ];
+    if (taint.some((t) => !(input.tags ?? []).includes(t))) input = { ...input, tags: [...(input.tags ?? []), ...taint.filter((t) => !(input.tags ?? []).includes(t))] };
     const backdate = isoOrNull(input.created_at);
     if (backdate && Date.parse(backdate) > Date.now() + 5 * 60_000) {
       throw new ValidationError(`created_at ${input.created_at} is more than 5 minutes in the future`);
@@ -2854,6 +3190,8 @@ export class Store {
         tags: input.tags,
         source: input.source,
         createdAt: input.created_at,
+        forgetAfter: input.forget_after,
+        confidence: input.confidence,
         findings,
         writtenBy: opts.writtenBy,
         importedUnverified: opts.importedUnverified,
@@ -2906,7 +3244,8 @@ export class Store {
     // nested inside a caller's transaction (consolidateNotes) a SAVEPOINT
     // keeps the note + edges all-or-nothing without touching the outer txn.
     const nested = this.db.isTransaction;
-    this.db.exec(nested ? "SAVEPOINT monomem_create" : "BEGIN IMMEDIATE");
+    if (nested) this.db.exec("SAVEPOINT monomem_create");
+    else this.beginWrite();
     let id: number;
     try {
       // Key state is read INSIDE the write transaction (see writeKey): the
@@ -2917,8 +3256,8 @@ export class Store {
           `INSERT INTO notes (namespace, title, body, tags, source, written_by, created_by, imported_written_by,
                               imported_created_by, attested_writer, attested_by, merged_from_writers,
                               created_at, updated_at, rev, body_enc, expires_at, archived_at, imported_unverified,
-                              confidence, confidence_by, kind, session_id, obs_type, sensitivity)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                              confidence, confidence_by, kind, session_id, obs_type, sensitivity, content_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           namespace,
@@ -2944,13 +3283,18 @@ export class Store {
           opts.kind ?? "note",
           opts.sessionId ?? "",
           opts.obsType ?? "",
-          sensitivity
+          sensitivity,
+          updatedAt
         );
       id = Number(result.lastInsertRowid);
       if (encrypting) {
         const sealed = this.sealBody(body, noteAad(id, namespace));
         this.db.prepare("UPDATE notes SET body = ?, body_enc = ? WHERE id = ?").run(sealed.body, sealed.bodyEnc, id);
       }
+      if (opts.clientKey !== undefined) clientKeyOps.recordClientKey(this, id, writer, opts.clientKey, now);
+      this.addLinks(id, derived, writer, now);
+      codeAnchorOps.setAnchors(this, id, anchors, now);
+      this.stampCliTerminal(id, writer);
       // An archived (restored-as-forgotten) note stays out of the edge graph.
       if (!archivedAt) this.noteWritten(namespace, id, { rev: startRev, title: input.title, body });
       // Link the new note into the similarity graph (same namespace only).
@@ -2970,8 +3314,9 @@ export class Store {
       throw e;
     }
     if (!nested) this.announceChange();
-    this.audit({ op: "create", id, namespace, bytes: body.length });
-    return this.read(id)!;
+    const created = this.read(id)!;
+    this.audit({ op: "create", id, namespace, bytes: body.length }, receiptOps.receiptContent(created));
+    return created;
   }
 
   read(id: number, opts: ReadOpts = {}): (NoteRecord & { neighbors?: NeighborEntry[] }) | null {
@@ -3041,7 +3386,8 @@ export class Store {
       where.push(f.sql);
       params.push(...f.params);
     }
-    const rows = this.db.prepare(`SELECT * FROM notes WHERE ${where.join(" AND ")}${this.ceilingSql()} ORDER BY id DESC LIMIT ${namespace === undefined ? 5000 : 500}`).all(...params) as unknown as NoteRow[];
+    const from = this.hasIndex("idx_notes_facts") ? "notes INDEXED BY idx_notes_facts" : "notes"; // round 4: named, see v22
+    const rows = this.db.prepare(`SELECT * FROM ${from} WHERE ${where.join(" AND ")}${this.ceilingSql()} ORDER BY id DESC LIMIT ${namespace === undefined ? 5000 : 500}`).all(...params) as unknown as NoteRow[];
     // newest kept when over the cap, handed back oldest first
     return this.filterVisible(rows.reverse().map((r) => this.rec(r)));
   }
@@ -3094,7 +3440,7 @@ export class Store {
       try {
         fn();
       } finally {
-        this.db.exec(`PRAGMA busy_timeout = ${Store.BUSY_TIMEOUT_MS};`);
+        this.db.exec(`PRAGMA busy_timeout = ${this.busyTimeoutMs};`);
       }
     } catch {
       /* best-effort: skip silently */
@@ -3166,14 +3512,14 @@ export class Store {
     this.pendingAccess = new Map();
     let ok = false;
     this.bestEffortWrite(() => {
-      this.db.exec("BEGIN IMMEDIATE");
+      this.beginWrite();
       try {
         const up = this.db.prepare(
           `UPDATE notes SET access_count = access_count + ?,
                   last_accessed = CASE WHEN last_accessed IS NULL OR last_accessed < ? THEN ? ELSE last_accessed END
             WHERE id = ?`
         );
-        for (const [id, p] of batch) up.run(p.n, p.at, p.at, id);
+        for (const [id, p] of batch) this.bookkeepingChanges += Number(up.run(p.n, p.at, p.at, id).changes);
         this.commitTx();
         ok = true;
       } catch (e) {
@@ -3212,7 +3558,7 @@ export class Store {
       try {
         r.body = decryptIfEncrypted(row.body_enc, this.readKey(), noteAad(row.id, row.namespace));
       } catch (e) {
-        throw new NoteUnreadableError(row.id, (e as Error).message);
+        throw new NoteUnreadableError(row.id, (e as Error).message, e);
       }
     }
     // A visible note that was replaced by a note the caller may not see must not name that note (id, time, writer).
@@ -3226,7 +3572,64 @@ export class Store {
       r.access_count += p.n;
       if (!r.last_accessed || p.at > r.last_accessed) r.last_accessed = p.at;
     }
-    return annotateRetention(row, r);
+    return codeAnchorOps.annotateCodeChanged(this, row, flagOps.annotateFlags(this, row, this.annotateConfirmRules(row, annotateRetention(row, r))));
+  }
+
+  /**
+   * 1.4.0: re-confirmation expiry (1a) and derived_from (1d) on a record. Fields appear only when set, so other notes keep
+   * their exact shape. A narrow projection without the v20 columns gets neither.
+   */
+  private linksStmt: ReturnType<DatabaseSync["prepare"]> | null = null;
+  /** note_links is add-only: once it has a row it always will. An empty answer is re-asked at most once a second. */
+  /** @internal */ linksSeen: { any: boolean; at: number } | null = null;
+  private anyLinks(): boolean {
+    if (this.linksSeen?.any || (this.linksSeen && Date.now() - this.linksSeen.at < 1000)) return this.linksSeen.any;
+    this.linksSeen = { any: this.db.prepare("SELECT 1 FROM note_links LIMIT 1").get() !== undefined, at: Date.now() };
+    return this.linksSeen.any;
+  }
+
+  private annotateConfirmRules(row: NoteRow, out: NoteRecord): NoteRecord {
+    if (row.grandfathered_at === undefined) return out;
+    // Tasks and handoffs are the board's own records (claimed, finished, handed on): re-confirmation expiry is for notes.
+    const live = !row.archived_at && row.superseded_by == null && !out.pinned && !out.kind && !out.tags.includes("task") && !out.tags.includes("handoff");
+    const c = live ? this.confirmSettings() : null;
+    const base = c ? dueBase(row, c) : 0;
+    if (c && c.mode !== "off" && base > 0 && base + c.days * 86_400_000 <= Date.now()) {
+      out.expired = true;
+      out.expired_label = expiredLabel(c.days);
+    }
+    if (!this.anyLinks()) return out;
+    this.linksStmt ??= this.db.prepare("SELECT derived_from FROM note_links WHERE note_id = ? ORDER BY rowid");
+    const links = (this.linksStmt.all(row.id) as Array<{ derived_from: number }>).map((l) => Number(l.derived_from));
+    if (!links.length) return out;
+    out.derived_from = links;
+    const rules = this.distrustRules();
+    // 1.5.0 (R1-12): a reader is told only the parent ids it could read itself (its namespaces, its sensitivity ceiling, and for a
+    // key that cannot declassify the distrust list), so a link is no way to learn the id of a hidden note.
+    const actor = actorStore.getStore();
+    const readable = actor?.readable;
+    const restricted = readable !== undefined || currentCeiling() !== undefined || (actor?.authed === true && actor.canDeclassify !== true && rules.length > 0);
+    if (rules.length || restricted) {
+      // ponytail: one hop only (the parents' own writers); a recursive walk up the chain is 1.4.1.
+      const sid = this.serverId();
+      const parents = this.db.prepare(`SELECT * FROM notes WHERE id IN (${links.map(() => "?").join(",")})`).all(...links) as unknown as NoteRow[];
+      if (rules.length && parents.some((p) => matchesDistrust(rules, rowToRecord(p, sid), sid))) {
+        out.built_on_distrusted = true;
+        out.built_on_distrusted_label = DISTRUSTED_BASE_LABEL;
+      }
+      if (restricted) {
+        const byId = new Map(parents.map((p) => [Number(p.id), p]));
+        out.derived_from = links.filter((id) => {
+          const p = byId.get(id);
+          if (!p) return false;
+          if (readable && !readable.includes(p.namespace)) return false;
+          if (currentCeiling() !== undefined && this.hiddenByCeiling(p as unknown as { sensitivity?: string | null })) return false;
+          return !(actor?.authed === true && actor.canDeclassify !== true && rules.length > 0 && matchesDistrust(rules, rowToRecord(p, sid), sid));
+        });
+        if (!out.derived_from.length) delete out.derived_from;
+      }
+    }
+    return out;
   }
 
   /**
@@ -3238,18 +3641,29 @@ export class Store {
   private upgradeV1Envelopes(): void {
     const key = this.lastKey;
     if (!key) return;
+    // 1.5.0 (round 2, P2): the probe is a full scan (no index on body_enc), so it runs once per database. Nothing writes v1
+    // any more; an old backup restored over the file brings its own _meta without the mark, so it is checked again.
+    if (this.getMeta(V1_CHECKED) === "1") return;
     try {
       const probe = this.db.prepare("SELECT 1 FROM notes WHERE body_enc LIKE 'v1:%' LIMIT 1").get();
-      if (!probe) return;
-      this.transaction(() => {
-        const rows = this.db
-          .prepare("SELECT id, namespace, body_enc FROM notes WHERE body_enc LIKE 'v1:%'")
-          .all() as unknown as Array<{ id: number; namespace: string; body_enc: string }>;
-        const upd = this.db.prepare("UPDATE notes SET body_enc = ? WHERE id = ?");
-        for (const r of rows) {
-          upd.run(encrypt(decryptIfEncrypted(r.body_enc, key), key, noteAad(r.id, r.namespace)), r.id);
-        }
-      });
+      if (probe) {
+        this.transaction(() => {
+          const rows = this.db
+            .prepare("SELECT id, namespace, body_enc FROM notes WHERE body_enc LIKE 'v1:%'")
+            .all() as unknown as Array<{ id: number; namespace: string; body_enc: string }>;
+          const upd = this.db.prepare("UPDATE notes SET body_enc = ? WHERE id = ?");
+          for (const r of rows) {
+            upd.run(encrypt(decryptIfEncrypted(r.body_enc, key), key, noteAad(r.id, r.namespace)), r.id);
+          }
+          this.setMeta(V1_CHECKED, "1");
+        });
+        return;
+      }
+      try {
+        this.setMeta(V1_CHECKED, "1");
+      } catch {
+        /* a busy or read-only open: the next open checks again */
+      }
     } catch (e) {
       process.stderr.write(`monomem: could not upgrade v1 ciphertext to v2 (${(e as Error).message}); run \`monomem encrypt enable\` to retry.\n`);
     }
@@ -3334,7 +3748,7 @@ export class Store {
    * deleted key (unrecoverable) or keep writing plaintext after enable.
    * Null = encryption is off (no key file).
    */
-  private writeKey(): Buffer | null {
+  /** @internal */ writeKey(): Buffer | null {
     const stamp = this.stampOf();
     if (stamp === "") {
       // No key. Fine for a plaintext store; but if encrypted rows exist the key
@@ -3351,11 +3765,9 @@ export class Store {
           }
           if (r !== "live") {
             const aside = this.asideKeys().map((a) => a.path).join(", ");
-            throw new Error(
-              `monomem: this database holds encrypted notes but the key file ${keyPath(this.keyDir)} is missing; ` +
-                `refusing to write plaintext next to ciphertext.` +
-                (aside ? ` A key copy exists at ${aside} -- rename it back to ${keyPath(this.keyDir)}.` : ` Restore the key from a backup.`)
-            );
+            const kp = keyPath(this.keyDir);
+            const fix = aside ? `A key copy exists at ${aside} -- rename it back to ${kp}.` : `Restore the key file ${kp} from your backup.`;
+            throw new MissingKeyError(kp, fix, `this database holds encrypted notes but the key file ${kp} is missing; refusing to write plaintext next to ciphertext. ${fix}`);
           }
         }
       }
@@ -3369,13 +3781,18 @@ export class Store {
     return this.lastKey;
   }
 
+  /** Whether a write made now is sealed (a key file is present). The capture writer uses it to keep user text out of titles. */
+  sealsWrites(): boolean {
+    return this.writeKey() !== null;
+  }
+
   /**
    * Key for DECRYPTING. Prefers the last key seen so a reader racing a
    * concurrent `encrypt disable` (key file already gone, its snapshot still
    * encrypted) keeps working; falls back to a fresh load when this process
    * started before `encrypt enable`.
    */
-  private readKey(): Buffer | null {
+  /** @internal */ readKey(): Buffer | null {
     return this.lastKey ?? this.writeKey();
   }
 
@@ -3511,20 +3928,46 @@ export class Store {
       importedUnverified?: boolean;
       /** Sync of another machine's file: its (origin, id), so approving the held update records the sync merge base. */
       syncIdentity?: { origin: string; id: number };
+      /** internal (approving a held edit): the time the edit was written; never earlier than the note's own updated_at. */
+      writtenAt?: string;
     } & LintOpts = {}
   ): NoteRecord | null {
-    this.floodGate(opts.lint ?? "full", opts.noFloodCount !== true);
+    this.floodGate(opts.lint ?? "full", false); // a paused writer is refused even for a no-op; the write is counted below
     validateNames(patch);
     validateForgetAfter(patch.forget_after);
     validateConfidence(patch.confidence);
     const existing = this.read(id);
     if (!existing) return null;
+    if (isNoopPatch(existing, patch, opts)) return { ...existing, unchanged: true };
+    this.floodGate(opts.lint ?? "full", opts.noFloodCount !== true);
     this.refuseAgentOnPinned(id, "changing it");
-    // The outside-content stamp only grows, on every path (REST, MCP, file sync, import): no write can strip it.
-    const stamps = existing.tags.filter((t) => t.startsWith(ORIGIN_TOOL_PREFIX));
-    if (patch.tags !== undefined && stamps.some((t) => !patch.tags!.includes(t))) {
-      const given = patch.tags;
-      patch = { ...patch, tags: [...given, ...stamps.filter((t) => !given.includes(t))] };
+    // R1-06: a captured row (session summary, observation) is written by capture; an agent editing its text could forge what
+    // session start prints. The writers that are not agents (capture, the server's jobs, a person at a terminal) may.
+    if (existing.kind && existing.kind !== "note" && ((patch.title !== undefined && patch.title !== existing.title) || (patch.body !== undefined && patch.body !== existing.body))) {
+      const w = currentWriter();
+      if (actorStore.getStore()?.authed === true || w === "stdio" || w.startsWith("stdio:") || (w === "cli" && !sessionTaintExempt("cli"))) {
+        throw new ValidationError("Session summaries are written by capture; add a note instead.");
+      }
+    }
+    // The outside-content stamps (obs.origin:*) only grow, on every path (REST, MCP, file sync, import): no write can strip
+    // one, and a content edit by a connection that reads outside content adds its own (taintFor).
+    const stamps = existing.tags.filter((t) => t.startsWith(ORIGIN_PREFIX));
+    const contentEdit = (patch.title !== undefined && patch.title !== existing.title) || (patch.body !== undefined && patch.body !== existing.body);
+    // 1.4.0 (1d): links only grow; a new link to an unconfirmed note marks this one via:memory.
+    const derived = this.derivedIds(patch.derived_from, id);
+    const added = [
+      ...new Set([
+        ...(contentEdit || patch.outside === true
+          ? this.taintFor(patch.outside, opts.writtenBy !== undefined || opts.keepWriter ? null : currentWriter())
+          : []),
+        ...this.inheritedTaint(derived),
+      ]),
+    ];
+    const newTaint = added.some((t) => !stamps.includes(t));
+    const keep = [...stamps, ...added.filter((t) => !stamps.includes(t))];
+    const given = patch.tags ?? existing.tags;
+    if ((patch.tags !== undefined || newTaint) && keep.some((t) => !given.includes(t))) {
+      patch = { ...patch, tags: [...given, ...keep.filter((t) => !given.includes(t))] };
     }
     const newLabel = patch.sensitivity !== undefined ? this.labelForRelabel(patch.sensitivity, existing.sensitivity) : undefined;
     if (existing.status === "superseded") {
@@ -3552,7 +3995,8 @@ export class Store {
     // Approve-first: an agent's content change (what the linter looks at) or a move, into or out of such a namespace, is held.
     // Metadata-only patches (confidence, re-sent unchanged fields) are not. Setting forget_after is a delayed forget, and
     // forgetting there is the operator's alone, so an agent is refused (0 = keep forever, harmless, stays allowed).
-    if (patch.forget_after !== undefined && patch.forget_after !== 0) {
+    // null clears the date like 0 (keep forever), so it is not a delayed forget either.
+    if (patch.forget_after !== undefined && patch.forget_after !== null && patch.forget_after !== 0) {
       refuseAgentInApproveFirst(this, existing.namespace, "setting a forget date on a note");
       // A delayed forget of someone else's note is removal: admin only (a non-admin key may set one on notes it created;
       // created_by, not written_by, so editing someone's body does not make the note yours).
@@ -3586,6 +4030,8 @@ export class Store {
         body: patch.body,
         tags: patch.tags,
         source: patch.source,
+        forgetAfter: patch.forget_after,
+        confidence: patch.confidence,
         sensitivity: newLabel ?? existing.sensitivity ?? DEFAULT_SENSITIVITY,
         findings,
         writtenBy: opts.writtenBy,
@@ -3641,6 +4087,10 @@ export class Store {
         : existing.written_by;
     validateSizes({ title, body, tags: patch.tags ?? existing.tags });
     const now = new Date().toISOString();
+    // When the edit was written: now, or (approving a held edit) the hold time. Never before the note's own updated_at, so
+    // a note's time cannot move backwards (the approval's compare-and-swap means nothing changed in between anyway).
+    const held = isoOrNull(opts.writtenAt);
+    const writtenAt = held ? (held > existing.updated_at ? held : existing.updated_at) : now;
     // Re-seal: existing.body is already decrypted plaintext, so an update
     // that leaves the body alone still produces fresh ciphertext (new IV).
     // Retention: an explicit forget_after resets the deadline relative to
@@ -3648,7 +4098,7 @@ export class Store {
     // note's existing deadline instead of silently dropping it.
     const expiresAt =
       patch.forget_after !== undefined
-        ? retentionDeadline(patch.forget_after, now)
+        ? retentionDeadline(patch.forget_after, writtenAt)
         : existing.expires_at ?? null;
 
     const touched = [...new Set([existing.namespace, namespace])];
@@ -3663,7 +4113,8 @@ export class Store {
     // Inside a caller's transaction (a rollback restores many notes in one) a SAVEPOINT keeps this write all-or-nothing.
     const nested = this.db.isTransaction;
     const undo = (): void => this.rollbackTx(nested ? "ROLLBACK TO monomem_update; RELEASE monomem_update" : "ROLLBACK");
-    this.db.exec(nested ? "SAVEPOINT monomem_update" : "BEGIN IMMEDIATE");
+    if (nested) this.db.exec("SAVEPOINT monomem_update");
+    else this.beginWrite();
     try {
       // Sealed under the write lock so the key state cannot change between
       // the check and the write (see writeKey), bound to this id+namespace.
@@ -3722,15 +4173,19 @@ export class Store {
                             merged_from_writers = ?,
                             confidence = CASE WHEN ? = 1 THEN ? ELSE confidence END,
                             confidence_by = CASE WHEN ? = 1 THEN ? ELSE confidence_by END,
-                            sensitivity = CASE WHEN ? = 1 THEN ? ELSE sensitivity END
+                            sensitivity = CASE WHEN ? = 1 THEN ? ELSE sensitivity END,
+                            content_at = CASE WHEN ? = 1 THEN ? ELSE content_at END,
+                            confirmed_rev = CASE WHEN ? = 0 AND confirmed_rev = ? THEN ? ELSE confirmed_rev END
            WHERE id = ? AND (? IS NULL OR rev = ?) AND sensitivity = ?${this.ceilingSql()}`
         )
         .run(
-          namespace, title, sealed.body, tags, source, rev, now, sealed.bodyEnc, expiresAt, writer,
+          namespace, title, sealed.body, tags, source, rev, writtenAt, sealed.bodyEnc, expiresAt, writer,
           restamp ? 1 : 0, restamp ? 1 : 0, mergedAfter,
           confidenceSet ? 1 : 0, confidenceSet && typeof patch.confidence === "number" ? patch.confidence : null,
           confidenceSet ? 1 : 0, confidenceSet && typeof patch.confidence === "number" ? writerNow(opts) : "",
           newLabel ? 1 : 0, newLabel ?? "",
+          contentChanged ? 1 : 0, writtenAt,
+          contentChanged || newTaint ? 1 : 0, existing.rev, rev,
           id, want, want, existing.sensitivity ?? DEFAULT_SENSITIVITY
         );
 
@@ -3744,6 +4199,11 @@ export class Store {
         );
       }
       if (opts.importedUnverified) this.db.prepare("UPDATE notes SET imported_unverified = 1 WHERE id = ?").run(id);
+      // Outside content in this edit (a new stamp or one the note already had): the 1.4.0 exemption of a pre-upgrade note covered
+      // what it said then, not this.
+      if (added.length) this.db.prepare("UPDATE notes SET grandfathered_at = NULL WHERE id = ?").run(id);
+      this.addLinks(id, derived, writerNow(opts), now);
+      if (restamp) this.stampCliTerminal(id, writer);
 
       // Invalidate the embedding: the note's text just changed, so the stored
       // vector is now stale. Drop it rather than keep a vector that no longer
@@ -3776,8 +4236,9 @@ export class Store {
     }
 
     if (!nested) this.announceChange();
-    this.audit({ op: "update", id, namespace, bytes: body.length });
-    return this.read(id);
+    const updated = this.read(id);
+    this.audit({ op: "update", id, namespace, bytes: body.length }, updated ? receiptOps.receiptContent(updated) : { note_id: id });
+    return updated;
   }
 
   delete(id: number): boolean {
@@ -3824,7 +4285,7 @@ export class Store {
     const rows = this.db.prepare(`SELECT id, namespace FROM notes WHERE superseded_by = ?${this.ceilingSql()}`).all(deletedId) as Array<{ id: number; namespace: string }>;
     if (rows.length === 0) return;
     const now = new Date().toISOString();
-    this.db.exec("BEGIN IMMEDIATE");
+    this.beginWrite();
     try {
       const upd = this.db.prepare("UPDATE notes SET archived_at = NULL, superseded_by = NULL, superseded_at = NULL, superseded_by_writer = '', rev = rev + 1 WHERE id = ? AND superseded_by = ?");
       const log = this.db.prepare("INSERT INTO supersede_log (at, actor, action, namespace, old_id, new_id, flags) VALUES (?, ?, 'undo', ?, ?, ?, 'replacement-deleted')");
@@ -3999,8 +4460,11 @@ export class Store {
   recentFilePaths(namespace: string | undefined, limit: number): string[] {
     const rows = this.db
       .prepare(
-        `SELECT nf.path, MAX(n.created_at) AS at FROM note_files nf JOIN notes n ON n.id = nf.note_id
-         WHERE n.archived_at IS NULL${namespace !== undefined ? " AND n.namespace = ?" : ""}${this.ceilingSql("n.sensitivity")} GROUP BY nf.path ORDER BY at DESC LIMIT ?`
+        // Round 4: only the RECENT_FILE_NOTES newest rows (was every row in the namespace: ~40 ms at 100k notes).
+        `SELECT nf.path, MAX(n.created_at) AS at FROM (SELECT id, created_at FROM notes
+           WHERE archived_at IS NULL${namespace !== undefined ? " AND namespace = ?" : ""}${this.ceilingSql("sensitivity")}
+           ORDER BY id DESC LIMIT ${RECENT_FILE_NOTES}) n
+         JOIN note_files nf ON nf.note_id = n.id GROUP BY nf.path ORDER BY at DESC LIMIT ?`
       )
       .all(...(namespace !== undefined ? [namespace] : []), limit) as Array<{ path: string }>;
     return rows.map((r) => r.path);
@@ -4125,7 +4589,7 @@ export class Store {
       try {
         body = decryptIfEncrypted(r.body_enc, this.readKey(), historyAad(Number(r.hid)));
       } catch (e) {
-        throw new NoteUnreadableError(Number(r.note_id), `its saved version ${r.version}: ${(e as Error).message}`);
+        throw new NoteUnreadableError(Number(r.note_id), `its saved version ${r.version}: ${(e as Error).message}`, e);
       }
     }
     return {
@@ -4330,7 +4794,8 @@ export class Store {
     const now = new Date().toISOString();
     // Inside a caller's transaction (confirm creates the replacing note in the same one) a SAVEPOINT keeps this all-or-nothing.
     const nested = this.db.isTransaction;
-    this.db.exec(nested ? "SAVEPOINT monomem_supersede" : "BEGIN IMMEDIATE");
+    if (nested) this.db.exec("SAVEPOINT monomem_supersede");
+    else this.beginWrite();
     try {
       // Single use: a nonce that was already spent makes the whole call fail. Spent nonces are kept past their expiry.
       this.spendNonce(input.nonce, input.expiresMs);
@@ -4341,6 +4806,8 @@ export class Store {
         | undefined;
       if (!target || target.archived_at !== null || target.superseded_by !== null || this.idHidden(input.newId)) throw new ValidationError("the replacing note is no longer a live note; nothing was changed");
       if (input.newRev !== undefined && target.rev !== input.newRev) throw new StaleWriteError("the replacing note was edited after the preview; nothing was changed");
+      // 1.4.0: the replacement takes the old notes' place, so outside content no person confirmed cannot be it.
+      this.requireHumanConfirm(input.newId, "use it as a replacement");
       const upd = this.db.prepare(
         `UPDATE notes SET archived_at = ?, superseded_by = ?, superseded_at = ?, superseded_by_writer = ?, rev = rev + 1
          WHERE id = ? AND rev = ? AND archived_at IS NULL AND superseded_by IS NULL AND namespace = ?`
@@ -4349,9 +4816,16 @@ export class Store {
       input.oldIds.forEach((oid, i) => {
         if (oid === input.newId) throw new ValidationError("a note cannot replace itself");
         this.refuseAgentOnPinned(oid, "replacing it");
+        const before = this.read(oid);
         const res = upd.run(now, input.newId, now, input.actor, oid, input.oldRevs[i], target.namespace);
         if (Number(res.changes) === 0) {
           throw new StaleWriteError(`note ${oid} changed (or was retired, moved or removed) after the preview; nothing was changed`);
+        }
+        // R2-08: replaced by someone else through the two-step supersede (admin keys and the terminal only); a flag on the
+        // version it replaced is upheld.
+        if (before && before.written_by !== currentWriter()) {
+          this.recordWriterEvent(before.written_by, "superseded", oid);
+          if (before.flagged) this.recordWriterEvent(before.written_by, "flags_upheld", oid);
         }
         log.run(now, input.actor, target.namespace, oid, input.newId, input.flags ?? "");
       });
@@ -4379,7 +4853,7 @@ export class Store {
     const nsRow = this.db.prepare("SELECT namespace FROM notes WHERE id = ?").get(id) as { namespace: string } | undefined;
     if (nsRow) refuseAgentInApproveFirst(this, nsRow.namespace, "bringing back a replaced note");
     const now = new Date().toISOString();
-    this.db.exec("BEGIN IMMEDIATE");
+    this.beginWrite();
     try {
       const row = this.db.prepare("SELECT namespace, superseded_by FROM notes WHERE id = ? AND superseded_by IS NOT NULL").get(id) as
         | { namespace: string; superseded_by: number }
@@ -4445,6 +4919,15 @@ export class Store {
     return new Set(rows.map((r) => r.neighbor_id));
   }
 
+  /** neighbourIds with each edge's similarity score (search-service.ts restated-twin rule). */
+  neighbourScores(id: number): Map<number, number> {
+    const ceil = this.ceilingSql("n.sensitivity");
+    const rows = this.db
+      .prepare(`SELECT e.neighbor_id AS neighbor_id, e.score AS score FROM note_edges e JOIN notes n ON n.id = e.neighbor_id WHERE e.note_id = ?${ceil}`)
+      .all(id) as Array<{ neighbor_id: number; score: number }>;
+    return new Map(rows.map((r) => [Number(r.neighbor_id), Number(r.score)]));
+  }
+
   /**
    * For captured rows (observations, summaries) among `ids`: the live rows written just before and just after each one in
    * the same capture session (by created_at, then id). Ordinary notes have no session and are left out.
@@ -4501,12 +4984,14 @@ export class Store {
     if (ns !== undefined) refuseAgentInApproveFirst(this, ns, "forgetting a note");
     this.refuseAgentOnPinned(id, "forgetting it");
     const iso = new Date().toISOString();
-    this.db
-      .prepare("UPDATE notes SET archived_at = ? WHERE id = ? AND archived_at IS NULL")
-      .run(iso, id);
-    // The embedding is a lossy copy of the text (and never encrypted): a forgotten note keeps none.
-    // A restore recomputes it on the REST path, or `monomem reindex` does; until then keyword search finds it.
-    this.db.prepare("DELETE FROM note_vectors WHERE note_id = ?").run(id);
+    this.writeTx(() => {
+      this.db
+        .prepare("UPDATE notes SET archived_at = ? WHERE id = ? AND archived_at IS NULL")
+        .run(iso, id);
+      // The embedding is a lossy copy of the text (and never encrypted): a forgotten note keeps none.
+      // A restore recomputes it on the REST path, or `monomem reindex` does; until then keyword search finds it.
+      this.db.prepare("DELETE FROM note_vectors WHERE note_id = ?").run(id);
+    });
     this.edgeIndexes.clear();
     this.announceChange();
     this.audit({ op: "archive", id, namespace: ns });
@@ -4530,13 +5015,15 @@ export class Store {
       throw new ValidationError(`note ${id} was replaced by ${this.idHidden(cur.superseded_by) ? "another note" : `note ${cur.superseded_by}`}; use "supersede undo" to bring it back (a plain restore would hide that it was replaced)`);
     }
     // A restored captured row counts as just read, or the next decay sweep would archive it again at once.
-    this.db
-      .prepare(
-        `UPDATE notes SET archived_at = NULL, expires_at = ?,
-                last_accessed = CASE WHEN kind IN ('observation', 'summary') THEN ? ELSE last_accessed END
-          WHERE id = ? AND archived_at IS NOT NULL`
-      )
-      .run(opts.forget_after === undefined ? null : retentionDeadline(opts.forget_after), new Date().toISOString(), id);
+    this.writeTx(() =>
+      this.db
+        .prepare(
+          `UPDATE notes SET archived_at = NULL, expires_at = ?,
+                  last_accessed = CASE WHEN kind IN ('observation', 'summary') THEN ? ELSE last_accessed END
+            WHERE id = ? AND archived_at IS NOT NULL`
+        )
+        .run(opts.forget_after === undefined ? null : retentionDeadline(opts.forget_after), new Date().toISOString(), id)
+    );
     this.edgeIndexes.clear(); // restored note rejoins the similarity index lazily
     this.announceChange();
     this.audit({ op: "restore", id, namespace: restoreNs });
@@ -4567,7 +5054,8 @@ export class Store {
     const updPlain = this.db.prepare("UPDATE notes SET body_enc = ?, body = '' WHERE id = ?");
     const updEnc = this.db.prepare("UPDATE notes SET body_enc = ? WHERE id = ?");
     let count = 0;
-    this.db.exec("BEGIN IMMEDIATE");
+    this.beginWrite();
+    const logFrom = this.lastChangeSeq();
     try {
       let after = 0;
       for (;;) {
@@ -4590,6 +5078,7 @@ export class Store {
         }
         after = rows[rows.length - 1].id;
       }
+      this.stampRewrite(ENCRYPT_ACTOR.enable, logFrom);
       this.sealQuarantine(key);
       this.sealHistory(key);
       this.sealCaptureEvents(key);
@@ -4607,6 +5096,20 @@ export class Store {
     return count;
   }
 
+  /**
+   * Name the change-log rows `encrypt enable` / `disable` just caused (the body column moved, the content did not), so
+   * `why` can say "encrypted" instead of "metadata changed by unknown". Caller holds the write lock; the rows are this
+   * transaction's own, the only 'updated' rows with no actor and an unchanged rev written after it began.
+   */
+  private stampRewrite(label: string, from: number): void {
+    this.db.prepare("UPDATE change_log SET actor = ? WHERE kind = 'updated' AND actor = '' AND seq > ?").run(label, from);
+  }
+
+  /** The newest change-log seq (0 when empty). */
+  private lastChangeSeq(): number {
+    return Number((this.db.prepare("SELECT COALESCE(MAX(seq), 0) AS m FROM change_log").get() as { m: number }).m);
+  }
+
   /** Seal every still-plaintext quarantine row (caller holds the write lock). */
   private sealQuarantine(key: Buffer): void {
     const rows = this.db.prepare("SELECT id, namespace, title, body, tags FROM quarantine WHERE sealed = 0").all() as Array<{
@@ -4619,7 +5122,7 @@ export class Store {
     const upd = this.db.prepare("UPDATE quarantine SET title = ?, body = ?, tags = ?, sealed = 1 WHERE id = ?");
     for (const r of rows) {
       const seal = (col: string, v: string | null): string | null =>
-        v === null ? null : encrypt(v, key, quarantineAad(col, r.namespace));
+        v === null ? null : sealQuarantineCol(v, key, col, r.namespace, r.id);
       upd.run(seal("title", r.title), seal("body", r.body), seal("tags", r.tags), r.id);
     }
   }
@@ -4636,7 +5139,7 @@ export class Store {
     const upd = this.db.prepare("UPDATE quarantine SET title = ?, body = ?, tags = ?, sealed = 0 WHERE id = ?");
     for (const r of rows) {
       const open = (col: string, v: string | null): string | null =>
-        v === null ? null : decryptIfEncrypted(v, key, quarantineAad(col, r.namespace));
+        v === null ? null : openQuarantineCol(v, key, col, r.namespace, r.id);
       upd.run(open("title", r.title), open("body", r.body), open("tags", r.tags), r.id);
     }
   }
@@ -4654,7 +5157,7 @@ export class Store {
     };
     if (hasPrefix()) return;
     try {
-      this.db.exec("BEGIN IMMEDIATE");
+      this.beginWrite();
       try {
         if (!hasPrefix()) {
           this.db.exec(`DROP TABLE notes_fts;
@@ -4744,7 +5247,8 @@ export class Store {
     );
     const upd = this.db.prepare("UPDATE notes SET body = ?, body_enc = NULL WHERE id = ?");
     let count = 0;
-    this.db.exec("BEGIN IMMEDIATE");
+    this.beginWrite();
+    const logFrom = this.lastChangeSeq();
     try {
       let after = 0;
       for (;;) {
@@ -4756,6 +5260,7 @@ export class Store {
         }
         after = rows[rows.length - 1].id;
       }
+      this.stampRewrite(ENCRYPT_ACTOR.disable, logFrom);
       this.unsealQuarantine(key);
       this.unsealHistory(key);
       this.unsealCaptureEvents(key);
@@ -4774,6 +5279,17 @@ export class Store {
   }
 
   /** Count of notes whose body is stored encrypted at rest. */
+  /** 1.5.0 (S-03): notes whose body is stored readable (meaningful when a key exists: `encrypt enable` seals them). */
+  plaintextBodyCount(): number {
+    const r = this.db.prepare("SELECT COUNT(*) AS c FROM notes WHERE body_enc IS NULL AND body <> ''").get() as { c: number };
+    return Number(r.c);
+  }
+
+  /** C-04: every place note content can exist and whether it is encrypted here now (counts only; store/surfaces.ts). */
+  encryptionSurfaces(o: { dataDir: string; dbPath: string }): surfaceOps.EncryptionSurface[] {
+    return surfaceOps.encryptionSurfaces(this, o);
+  }
+
   encryptedCount(): number {
     const r = this.db.prepare("SELECT COUNT(*) AS c FROM notes WHERE body_enc IS NOT NULL").get() as {
       c: number;
@@ -4788,9 +5304,7 @@ export class Store {
       .get(id) as { namespace: string; sensitivity: string } | undefined;
     if (!row || this.hiddenByCeiling(row)) return false; // a note above the caller's ceiling is "not found", never deleted
     this.refuseAgentOnPinned(id, "deleting it");
-    const result = this.db
-      .prepare("DELETE FROM notes WHERE id = ? AND (? IS NULL OR rev = ?)")
-      .run(id, rev, rev);
+    const result = this.writeTx(() => this.db.prepare("DELETE FROM notes WHERE id = ? AND (? IS NULL OR rev = ?)").run(id, rev, rev));
     const ok = Number(result.changes) > 0;
     if (ok) {
       this.noteWritten(row.namespace, id, null);
@@ -4824,8 +5338,35 @@ export class Store {
    * BEGIN/COMMIT inline because it needs to distinguish a stale rev from a
    * vanished row after a failed compare-and-swap; the outcome is identical.
    */
-  transaction<T>(fn: () => T): T {
+  /**
+   * 1.5.0 (round 2, S-04): every write starts here. The version is read under the write lock, so a newer Monomem that
+   * upgraded the file from another process can't slip in between the check and the write; this process then refuses.
+   */
+  /** @internal */ beginWrite(): void {
     this.db.exec("BEGIN IMMEDIATE");
+    const uv = Number((this.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
+    if (uv > SCHEMA_VERSION) {
+      this.db.exec("ROLLBACK");
+      throw new SchemaNewerError(uv);
+    }
+  }
+
+  /** One write through beginWrite (S-04: refused under a newer schema); inside a caller's transaction it just runs. */
+  private writeTx<T>(fn: () => T): T {
+    if (this.db.isTransaction) return fn();
+    this.beginWrite();
+    try {
+      const out = fn();
+      this.commitTx();
+      return out;
+    } catch (e) {
+      this.rollbackTx();
+      throw e;
+    }
+  }
+
+  transaction<T>(fn: () => T): T {
+    this.beginWrite();
     try {
       const out = fn();
       this.commitTx();
@@ -4914,63 +5455,70 @@ export class Store {
       withTagPrefix?: string;
       /** v16: newest-created first or oldest-created first, instead of last-updated first (timelines). */
       order?: "created_desc" | "created_asc";
+      /** 1.5.0 F-01: false skips the COUNT(*); `total` is then just the page size. Default true. */
+      count?: boolean;
+      /** Round 4: count at most this many + 1 rows (a total above the cap means "more than cap"; no full scan). */
+      countCap?: number;
     } & RangeOpts = {}
   ): {
     notes: NoteRecord[];
     total: number;
   } {
-    const limit = clampInt(opts.limit, 50, 1, 500);
-    const offset = clampInt(opts.offset, 0, 0, Number.MAX_SAFE_INTEGER);
-    const range = this.rangeFor(opts, opts.namespaces ?? (opts.namespace ? [opts.namespace] : undefined));
-    const tagF = tagClause(opts.withTags, opts.withoutTags, opts.withTagPrefix);
+    if (opts.namespaces && opts.namespaces.length === 0) return { notes: [], total: 0 };
+    const q = this.listQuery(opts, "*");
+    const rows = q.rows as unknown as NoteRow[];
+    // 1.5.0 F-01: callers that ignore `total` (session start) skip the COUNT, a row scan when a tag filter is set.
+    const total = opts.count === false ? rows.length : q.count();
+    const out = rows.filter(q.exact).map((r) => this.rec(r));
+    return { notes: opts.includeDistrusted ? this.markDistrusted(out) : out, total };
+  }
+
+  /** The ids list() would return (same filters, order, paging), without reading or decrypting bodies. 1.5.0 F-02. */
+  listIds(opts: Parameters<Store["list"]>[0] = {}): number[] {
+    if (opts.namespaces && opts.namespaces.length === 0) return [];
+    const q = this.listQuery(opts, "id, tags");
+    return (q.rows as unknown as Array<{ id: number; tags: string }>).filter(q.exact).map((r) => r.id);
+  }
+
+  /** Shared by list() and listIds(): the page of `cols` plus what the COUNT needs. */
+  private listQuery(opts: Parameters<Store["list"]>[0], cols: string) {
+    const o = opts ?? {};
+    const limit = clampInt(o.limit, 50, 1, 500);
+    const offset = clampInt(o.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+    const range = this.rangeFor(o, o.namespaces ?? (o.namespace ? [o.namespace] : undefined));
+    const tagF = tagClause(o.withTags, o.withoutTags, o.withTagPrefix);
     // Archived filter: default hides archived; archivedOnly inverts it.
-    const archSql = archivedClause(opts.includeArchived, opts.archivedOnly, opts.includeSuperseded, opts.supersededOnly);
+    const archSql = archivedClause(o.includeArchived, o.archivedOnly, o.includeSuperseded, o.supersededOnly);
     const extra = [...range.params, ...tagF.params];
     // SQL LIKE is only a prefilter (tags are a JSON array string); the exact
     // match is re-checked below so a tag never matches inside another value.
-    const exact = (r: NoteRow): boolean => tagsMatch(r.tags, opts.withTags, opts.withoutTags, opts.withTagPrefix);
-    const orderSql = opts.order === "created_asc" ? "created_at ASC, id ASC" : opts.order === "created_desc" ? "created_at DESC, id DESC" : "updated_at DESC, id DESC";
-
-    let rows: NoteRow[];
-    let total: number;
-
-    if (opts.namespaces) {
-      if (opts.namespaces.length === 0) return { notes: [], total: 0 };
-      const inList = `namespace IN (${opts.namespaces.map(() => "?").join(",")})`;
-      rows = this.db
-        .prepare(
-          `SELECT * FROM notes WHERE ${inList}${archSql}${range.sql}${tagF.sql} ORDER BY ${orderSql} LIMIT ? OFFSET ?`
-        )
-        .all(...opts.namespaces, ...extra, limit, offset) as unknown as NoteRow[];
-      total = (
-        this.db
-          .prepare(`SELECT COUNT(*) as c FROM notes WHERE ${inList}${archSql}${range.sql}${tagF.sql}`)
-          .get(...opts.namespaces, ...extra) as { c: number }
-      ).c;
-    } else if (opts.namespace) {
-      rows = this.db
-        .prepare(
-          `SELECT * FROM notes WHERE namespace = ?${archSql}${range.sql}${tagF.sql} ORDER BY ${orderSql} LIMIT ? OFFSET ?`
-        )
-        .all(opts.namespace, ...extra, limit, offset) as unknown as NoteRow[];
-      total = (
-        this.db
-          .prepare(`SELECT COUNT(*) as c FROM notes WHERE namespace = ?${archSql}${range.sql}${tagF.sql}`)
-          .get(opts.namespace, ...extra) as { c: number }
-      ).c;
+    const exact = (r: { tags: string }): boolean => tagsMatch(r.tags, o.withTags, o.withoutTags, o.withTagPrefix);
+    const orderSql = o.order === "created_asc" ? "created_at ASC, id ASC" : o.order === "created_desc" ? "created_at DESC, id DESC" : "updated_at DESC, id DESC";
+    let scope: string;
+    let scopeArgs: Array<string | number>;
+    if (o.namespaces) {
+      scope = `namespace IN (${o.namespaces.map(() => "?").join(",")})`;
+      scopeArgs = o.namespaces;
+    } else if (o.namespace) {
+      scope = "namespace = ?";
+      scopeArgs = [o.namespace];
     } else {
-      rows = this.db
-        .prepare(
-          `SELECT * FROM notes WHERE 1 = 1${archSql}${range.sql}${tagF.sql} ORDER BY ${orderSql} LIMIT ? OFFSET ?`
-        )
-        .all(...extra, limit, offset) as unknown as NoteRow[];
-      total = (
-        this.db.prepare(`SELECT COUNT(*) as c FROM notes WHERE 1 = 1${archSql}${range.sql}${tagF.sql}`).get(...extra) as { c: number }
-      ).c;
+      scope = "1 = 1";
+      scopeArgs = [];
     }
-
-    const out = rows.filter(exact).map((r) => this.rec(r));
-    return { notes: opts.includeDistrusted ? this.markDistrusted(out) : out, total };
+    // Round 4: a rare tag with its own partial index is read through it (the literal term is what makes the index usable).
+    const tagIdx = [...(o.withTags ?? []).map((t) => TAG_INDEXES[t]), o.kinds?.length === 1 && o.kinds[0] === "summary" ? SUMMARY_INDEX : undefined].find(
+      (i): i is ListIndex => i !== undefined && this.hasIndex(i.name)
+    );
+    const from = tagIdx ? `notes INDEXED BY ${tagIdx.name}` : "notes";
+    const where = `${scope}${archSql}${range.sql}${tagF.sql}${tagIdx ? ` AND ${tagIdx.term}` : ""}`;
+    const rows = this.db
+      .prepare(`SELECT ${cols} FROM ${from} WHERE ${where} ORDER BY ${orderSql} LIMIT ? OFFSET ?`)
+      .all(...scopeArgs, ...extra, limit, offset);
+    const capped = o.countCap !== undefined ? clampInt(o.countCap, 1000, 1, Number.MAX_SAFE_INTEGER) + 1 : 0;
+    const countSql = capped ? `SELECT COUNT(*) as c FROM (SELECT 1 FROM ${from} WHERE ${where} LIMIT ${capped})` : `SELECT COUNT(*) as c FROM ${from} WHERE ${where}`;
+    const count = (): number => (this.db.prepare(countSql).get(...scopeArgs, ...extra) as { c: number }).c;
+    return { rows, exact, count };
   }
 
   /**
@@ -5015,16 +5563,18 @@ export class Store {
     const matchQuery = buildMatchQuery(query, opts.anyTerm);
     if (!matchQuery) return []; // query was all punctuation/stopwords
     const range = this.rangeFor(opts, opts.namespace ? [opts.namespace] : undefined);
+    // C-06: the same two queries; only the table differs (the in-memory body index while encryption is on).
+    const fts = this.bodyIndex.table();
 
     try {
       let rows: Array<NoteRow & { score: number }>;
       if (opts.namespace) {
         rows = this.db
           .prepare(
-            `SELECT notes.*, -bm25(notes_fts, ${FTS_WEIGHTS}) AS score FROM notes_fts
-             JOIN notes ON notes.id = notes_fts.rowid
-             WHERE notes_fts MATCH ? AND notes.namespace = ? AND ${liveSql(opts.includeSuperseded)}${range.sql}
-             ORDER BY bm25(notes_fts, ${FTS_WEIGHTS}), notes.updated_at DESC, notes.id DESC
+            `SELECT notes.*, -bm25(${fts}, ${FTS_WEIGHTS}) AS score FROM ${fts}
+             JOIN notes ON notes.id = ${fts}.rowid
+             WHERE ${fts} MATCH ? AND notes.namespace = ? AND ${liveSql(opts.includeSuperseded)}${range.sql}
+             ORDER BY bm25(${fts}, ${FTS_WEIGHTS}), notes.updated_at DESC, notes.id DESC
              LIMIT ?`
           )
           .all(matchQuery, opts.namespace, ...range.params, limit) as unknown as Array<
@@ -5033,10 +5583,10 @@ export class Store {
       } else {
         rows = this.db
           .prepare(
-            `SELECT notes.*, -bm25(notes_fts, ${FTS_WEIGHTS}) AS score FROM notes_fts
-             JOIN notes ON notes.id = notes_fts.rowid
-             WHERE notes_fts MATCH ? AND ${liveSql(opts.includeSuperseded)}${range.sql}
-             ORDER BY bm25(notes_fts, ${FTS_WEIGHTS}), notes.updated_at DESC, notes.id DESC
+            `SELECT notes.*, -bm25(${fts}, ${FTS_WEIGHTS}) AS score FROM ${fts}
+             JOIN notes ON notes.id = ${fts}.rowid
+             WHERE ${fts} MATCH ? AND ${liveSql(opts.includeSuperseded)}${range.sql}
+             ORDER BY bm25(${fts}, ${FTS_WEIGHTS}), notes.updated_at DESC, notes.id DESC
              LIMIT ?`
           )
           .all(matchQuery, ...range.params, limit) as unknown as Array<
@@ -5051,6 +5601,82 @@ export class Store {
       // SQLITE_NOTADB) is rethrown, so it is reported instead of looking like "no notes".
       if (/fts5|syntax error|unterminated|no such column/i.test(e instanceof Error ? e.message : String(e))) return [];
       throw e;
+    }
+  }
+
+  /**
+   * How many live notes contain a word starting with each prefix (`n` = live notes), read from the FTS vocabulary of the
+   * table search uses right now. A prefix sums the counts of its words, capped at n, so "camp" counts a note with both
+   * "camp" and "camping" twice: close enough for a rarity weight. Returns an empty map when no vocabulary can be read,
+   * and the caller then weighs every keyword the same (the plain coverage share).
+   */
+  prefixDocFreqs(prefixes: string[]): { n: number; df: Map<string, number> } {
+    const df = new Map<string, number>();
+    try {
+      // Called right after searchRanked, which already brought the body index up to date: read its choice, don't redo it.
+      const table = this.bodyIndex.currentTable();
+      const schema = table === "notes_fts" ? "main" : "bodyidx";
+      this.db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS temp.om_vocab_${schema} USING fts5vocab(${schema}, ${table}, 'row')`);
+      const n = this.liveNoteTotal();
+      // A vocab 'row' read walks every posting under the prefix (tens of ms for a common word at 100k notes), and the counts
+      // are only a weight: reuse them until the store grows or shrinks by more than 1 % (or 10 minutes pass).
+      // ponytail: tolerance-based staleness; exact per-write invalidation if a weight ever needs to be exact.
+      const c = this.dfCache;
+      const fresh = c !== null && c.table === table && Math.abs(n - c.n) <= Math.max(10, c.n * 0.01) && Date.now() - c.at < 600_000;
+      const cache = fresh ? c.df : new Map<string, number>();
+      if (!fresh) this.dfCache = { table, n, at: Date.now(), df: cache };
+      let st: { get: (...a: string[]) => unknown } | null = null;
+      for (const p of prefixes) {
+        let d = cache.get(p);
+        if (d === undefined) {
+          st ??= this.db.prepare(`SELECT COALESCE(SUM(doc), 0) AS d FROM temp.om_vocab_${schema} WHERE term >= ? AND term < ?`);
+          d = Number((st.get(p, p + "\uffff") as { d: number }).d);
+          if (cache.size < 5000) cache.set(p, d);
+        }
+        df.set(p, Math.min(n, d));
+      }
+      return { n, df };
+    } catch {
+      // No readable vocabulary (an old SQLite without fts5vocab, a closed store): every keyword weighs the same.
+      return { n: 0, df: new Map() };
+    }
+  }
+
+  /** prefixDocFreqs' counts per prefix, for one search table and store size (see the tolerance there). */
+  private dfCache: { table: string; n: number; at: number; df: Map<string, number> } | null = null;
+
+  /** Live notes in the whole store, reused while nothing changed (same key as unconfirmedRows): a search must not add a scan. */
+  private liveTotalCache: { key: string; n: number } | null = null;
+  private liveNoteTotal(): number {
+    const t = (this.db.prepare("SELECT total_changes() AS t").get() as { t: number }).t - this.bookkeepingChanges;
+    const key = `${t}:${this.dataVersion()}`;
+    if (this.liveTotalCache?.key === key) return this.liveTotalCache.n;
+    const n = Number((this.db.prepare("SELECT COUNT(*) AS c FROM notes WHERE archived_at IS NULL").get() as { c: number }).c);
+    this.liveTotalCache = { key, n };
+    return n;
+  }
+
+  /** C-06: the in-memory body index's state in this process (encrypt status, the CLI search notice, tests). */
+  bodyIndexInfo(): BodyIndexInfo {
+    return this.bodyIndex.info();
+  }
+
+  /** C-06: searches so far that ran on titles and tags only while bodies are sealed (take it before a search, for bodySearchNotice). */
+  bodyIndexFallbacks(): number {
+    return this.bodyIndex.fallbackCount();
+  }
+
+  /** C-06: the reply notice when a search since `since` (bodyIndexFallbacks() before it) did not search sealed bodies; else null. */
+  bodySearchNotice(since: number): string | null {
+    return this.bodyIndex.notice(since);
+  }
+
+  /** C-06: build the body index now (servers call this just after start-up, so the first agent search does not wait). Never throws. */
+  warmBodyIndex(): void {
+    try {
+      this.bodyIndex.table();
+    } catch {
+      /* table() falls back by itself; a closed store has nothing to warm */
     }
   }
 
@@ -5699,15 +6325,29 @@ export class Store {
     );
     for (const id of [...idx.revs.keys()]) if (!live.has(id)) dropFromIndex(idx, id);
     const changed = [...live].filter(([id, rev]) => idx!.revs.get(id) !== rev).map(([id]) => id);
-    const fetch = this.db.prepare("SELECT id, rev, title, body FROM notes WHERE id = ?");
+    const fetch = this.db.prepare("SELECT id, rev, namespace, title, body, body_enc FROM notes WHERE id = ?");
     for (const id of changed) {
-      const r = fetch.get(id) as { rev: number; title: string; body: string } | undefined;
+      const r = fetch.get(id) as EdgeRow | undefined;
       dropFromIndex(idx, id);
-      if (r) addToIndex(idx, id, Number(r.rev), termFreq(tokenize(`${r.title} ${r.body}`)));
+      if (r) addToIndex(idx, id, Number(r.rev), termFreq(tokenize(this.edgeText(id, r))));
     }
     idx.ver = ver;
     this.evictEdgeIndexes(namespace);
     return idx;
+  }
+
+  /**
+   * 1.5.0 (round 2, P6): the text a note's similarity is scored on. With encryption on, `body` is empty and the text is in
+   * body_enc, so it is decrypted here exactly as a live write scores it (noteWritten gets the plaintext). Only scores are
+   * kept, never text. A row that will not decrypt is scored on its title, so one bad row does not stop the rebuild.
+   */
+  private edgeText(id: number, r: EdgeRow): string {
+    if (!r.body_enc) return `${r.title} ${r.body}`;
+    try {
+      return `${r.title} ${decryptIfEncrypted(r.body_enc, this.readKey(), noteAad(id, r.namespace))}`;
+    } catch {
+      return r.title;
+    }
   }
 
   /** Live (not archived) notes in a namespace; remembered for a minute because it is asked on every write to a big one. */
@@ -5750,7 +6390,7 @@ export class Store {
       this.db.prepare("SELECT id FROM notes WHERE namespace = ? AND archived_at IS NULL ORDER BY id").all(namespace) as Array<{ id: number }>
     ).map((r) => Number(r.id));
     const idx: NsEdgeIndex = { ver: -1, used: Date.now(), revs: new Map(), tf: new Map(), tfNorm: new Map(), postings: new Map() };
-    const fetch = this.db.prepare("SELECT rev, title, body FROM notes WHERE id = ? AND archived_at IS NULL");
+    const fetch = this.db.prepare("SELECT rev, namespace, title, body, body_enc FROM notes WHERE id = ? AND archived_at IS NULL");
     let i = 0;
     const step = (): void => {
       if (this.closed) return;
@@ -5758,12 +6398,13 @@ export class Store {
       const until = performance.now() + sliceMs;
       try {
         while (i < ids.length && performance.now() < until) {
-          const r = fetch.get(ids[i]) as { rev: number; title: string; body: string } | undefined;
-          if (r) addToIndex(idx, ids[i], Number(r.rev), termFreq(tokenize(`${r.title} ${r.body}`)));
+          const r = fetch.get(ids[i]) as EdgeRow | undefined;
+          if (r) addToIndex(idx, ids[i], Number(r.rev), termFreq(tokenize(this.edgeText(ids[i], r))));
           i++;
         }
-      } catch {
+      } catch (e) {
         this.edgeBuilds.delete(namespace); // e.g. the file went away; the next write tries again
+        this.noteEdgeBuildFailure(namespace, e);
         return;
       }
       if (i < ids.length) {
@@ -5774,10 +6415,38 @@ export class Store {
       // Done. ver = -1 makes the next use diff against the database, which picks up everything written during the build.
       this.edgeIndexes.set(namespace, idx);
       this.edgeBuilds.delete(namespace);
-      if (waiting.size) void this.linkIds(namespace, [...waiting]).catch(() => undefined);
+      this.clearEdgeBuildFailure(namespace);
+      if (waiting.size) void this.linkIds(namespace, [...waiting]).catch((e) => this.noteEdgeBuildFailure(namespace, e));
     };
     const t = setTimeout(step, 0);
     t.unref?.();
+  }
+
+  /** 1.5.0 (F-06): remember that a background edge build/link failed, where `monomem doctor` (another process) can read it. */
+  private noteEdgeBuildFailure(namespace: string, e: unknown): void {
+    const msg = String((e as Error)?.message ?? e).replace(/\s+/g, " ").slice(0, 200);
+    try {
+      this.setMeta(`${EDGE_FAIL_PREFIX}${namespace}`, `${new Date().toISOString()}|${msg}`);
+    } catch {
+      /* the file may be the very thing that failed */
+    }
+  }
+
+  private clearEdgeBuildFailure(namespace: string): void {
+    try {
+      this.db.prepare("DELETE FROM _meta WHERE key = ?").run(`${EDGE_FAIL_PREFIX}${namespace}`);
+    } catch {
+      /* best effort */
+    }
+  }
+
+  /** Background similarity-index builds that failed and have not since succeeded (doctor shows them). */
+  edgeBuildFailures(): Array<{ namespace: string; at: string; error: string }> {
+    const rows = this.db.prepare("SELECT key, value FROM _meta WHERE key LIKE ? ORDER BY key").all(`${EDGE_FAIL_PREFIX}%`) as Array<{ key: string; value: string }>;
+    return rows.map((r) => {
+      const i = r.value.indexOf("|");
+      return { namespace: r.key.slice(EDGE_FAIL_PREFIX.length), at: r.value.slice(0, i), error: r.value.slice(i + 1) };
+    });
   }
 
   /** Give these notes their similarity links now that the namespace index exists (a few at a time, yielding between). */
@@ -6323,7 +6992,7 @@ export class Store {
         // snapshot's would resurrect stale ones. INSERT OR IGNORE keeps
         // resume-redo and edges a concurrent create() already wrote from
         // aborting the transaction on PK conflicts.
-        this.db.exec("BEGIN IMMEDIATE");
+        this.beginWrite();
         try {
           const live = new Map(
             (liveRevsStmt.all(nsName) as Array<{ id: number; rev: number }>).map((r) => [
@@ -6619,6 +7288,7 @@ export class Store {
       changes: [],
       counts: { created: 0, updated: 0, deleted: 0, total: 0 },
       bySource: {},
+      byWriter: {},
       quarantined: 0,
       nextCursor: null,
       consumer: c.c ?? null,
@@ -6683,10 +7353,11 @@ export class Store {
     // A change to a note above the caller's ceiling is not in its feed (a deleted note answers with the label it had).
     const ceilFeed = this.ceilingSql("COALESCE(n.sensitivity, e.note_sensitivity)");
     const eventsSql = `
-      WITH ev AS (SELECT seq, note_id, kind FROM change_log
+      WITH ev AS (SELECT seq, note_id, kind, written_by FROM change_log
                    WHERE seq > ? AND seq <= ?${nsSql}${srcSql}${wbSql}${exSql}),
-           g AS (SELECT note_id, MAX(seq) AS last, MAX(kind = 'created') AS born FROM ev GROUP BY note_id)
-      SELECT e.seq AS seq,
+           g AS (SELECT note_id, MAX(seq) AS last, MAX(kind = 'created') AS born,
+                        MAX(CASE WHEN kind = 'created' THEN COALESCE(written_by, '') END) AS born_by FROM ev GROUP BY note_id)
+      SELECT e.seq AS seq, g.born_by AS born_by,
              CASE WHEN e.kind = 'deleted' THEN 'deleted' WHEN g.born THEN 'created' ELSE 'updated' END AS kind,
              e.note_id AS id, e.namespace AS namespace, e.title AS title, e.source AS source,
              e.changed_at AS at, e.rev AS rev, e.written_by AS written_by,
@@ -6697,15 +7368,34 @@ export class Store {
         LEFT JOIN notes n ON n.id = e.note_id
        WHERE 1 = 1${noteSql}${dis.sql}${ceilFeed}`;
     const eventParams = [c.f, c.t, ...nsParams, ...srcParams, ...wbParams, ...exParams, ...noteParams, ...dis.params];
+    // F-04: the rows of one page, streamed in seq order so a page costs O(limit), not O(window). Same answer as eventsSql:
+    // an event is its note's LAST in the window (nothing later passes the event filters), and the note was born in the
+    // window when ANY filtered 'created' event sits in (f, t], also one at or before the cursor.
+    const evSql = `${nsSql}${srcSql}${wbSql}${exSql}`;
+    const evParams = [...nsParams, ...srcParams, ...wbParams, ...exParams];
+    const pagedSql = `
+      SELECT e.seq AS seq,
+             CASE WHEN e.kind = 'deleted' THEN 'deleted'
+                  WHEN EXISTS (SELECT 1 FROM change_log b WHERE b.note_id = e.note_id AND b.kind = 'created' AND b.seq > ? AND b.seq <= ?${evSql}) THEN 'created'
+                  ELSE 'updated' END AS kind,
+             e.note_id AS id, e.namespace AS namespace, e.title AS title, e.source AS source,
+             e.changed_at AS at, e.rev AS rev, e.written_by AS written_by,
+             ${cur.writer} AS cur_writer, (n.id IS NOT NULL) AS live,
+             (n.archived_at IS NOT NULL AND n.superseded_by IS NULL) AS forgotten,
+             ${cur.attWriter} AS cur_att_writer, ${cur.attBy} AS cur_att_by, ${cur.merged} AS cur_merged
+        FROM (SELECT * FROM change_log WHERE seq > ? AND seq <= ?${evSql}) e
+        LEFT JOIN notes n ON n.id = e.note_id
+       WHERE NOT EXISTS (SELECT 1 FROM change_log x WHERE x.note_id = e.note_id AND x.seq > e.seq AND x.seq <= ?${evSql})${noteSql}${dis.sql}${ceilFeed}`;
+    const pagedParams = [c.f, c.t, ...evParams, c.a, c.t, ...evParams, c.t, ...evParams, ...noteParams, ...dis.params];
 
     const tail = opts.tail !== undefined ? clampInt(opts.tail, 30, 1, CHANGES_MAX_LIMIT) : 0;
     const rowsRaw = this.db
       .prepare(
         tail
-          ? `SELECT * FROM (${eventsSql}) WHERE seq > ? ORDER BY seq DESC LIMIT ?`
-          : `SELECT * FROM (${eventsSql}) WHERE seq > ? ORDER BY seq ASC LIMIT ?`
+          ? `SELECT * FROM (${pagedSql}) ORDER BY seq DESC LIMIT ?`
+          : `SELECT * FROM (${pagedSql}) ORDER BY seq ASC LIMIT ?`
       )
-      .all(...eventParams, c.a, (tail || limit) + 1) as Array<{
+      .all(...pagedParams, (tail || limit) + 1) as Array<{
       seq: number;
       kind: ChangeEntry["kind"];
       id: number;
@@ -6761,15 +7451,20 @@ export class Store {
     let totals = c.n;
     if (!totals) {
       const grouped = this.db
-        .prepare(`SELECT source, kind, COUNT(*) AS n FROM (${eventsSql}) GROUP BY source, kind`)
-        .all(...eventParams) as Array<{ source: string; kind: ChangeEntry["kind"]; n: number }>;
+        // A note born in the window counts as "+" under the writer who CREATED it, not whoever touched it last (1.5.0 final panel).
+        .prepare(`SELECT source, CASE WHEN kind = 'created' AND born_by IS NOT NULL THEN born_by ELSE written_by END AS written_by, kind, COUNT(*) AS n FROM (${eventsSql}) GROUP BY 1, 2, 3`)
+        .all(...eventParams) as Array<{ source: string; written_by: string | null; kind: ChangeEntry["kind"]; n: number }>;
       const counts = { created: 0, updated: 0, deleted: 0, total: 0 };
       const bySource: Record<string, ChangeCounts> = {};
+      const byWriter: Record<string, ChangeCounts> = {};
       for (const g of grouped) {
         const n = Number(g.n);
         const key = g.source ?? "";
         bySource[key] ??= { created: 0, updated: 0, deleted: 0 };
         bySource[key][g.kind] += n;
+        const w = g.written_by ?? "";
+        byWriter[w] ??= { created: 0, updated: 0, deleted: 0 };
+        byWriter[w][g.kind] += n;
         counts[g.kind] += n;
         counts.total += n;
       }
@@ -6782,9 +7477,10 @@ export class Store {
             .get(c.s, c.u, ...nsParams, ...srcParams) as { c: number }
         ).c
       );
-      totals = { counts, bySource, q };
+      totals = { counts, bySource, byWriter, q };
     }
     const { counts, bySource } = totals;
+    const byWriter = totals.byWriter ?? {}; // a cursor minted before 1.5.0 carries no byWriter
     const quarantined = totals.q;
     const last = pageRows[pageRows.length - 1];
     return {
@@ -6793,6 +7489,7 @@ export class Store {
       changes: page,
       counts,
       bySource,
+      byWriter,
       quarantined,
       nextCursor: more && last ? this.encodeCursor({ ...c, a: Number(last.seq), n: totals }) : null,
       consumer: c.c ?? null,
@@ -6875,45 +7572,29 @@ export class Store {
    * `writer_id`.
    */
   serverId(): string {
-    return this.serverIdValue || (this.serverIdValue = this.storeId());
+    return trustOps.serverId(this);
   }
 
   /** `<server_id>/<label>`: the stable id of a writer on this server ("" for an unknown writer). */
   writerId(label: string): string {
-    return makeWriterId(this.serverId(), label);
+    return trustOps.writerId(this, label);
   }
 
-  /** Who is changing the trust configuration right now, for the log. */
-  private trustActor(): string {
-    return currentWriter() || currentActor() || "unknown";
+  /** @internal */ trustActor(): string {
+    return trustOps.trustActor(this);
   }
 
-  private logTrust(action: string, namespace: string, subject: string): void {
-    const actor = this.trustActor();
-    this.db
-      .prepare("INSERT INTO trust_log (at, actor, action, namespace, subject) VALUES (?, ?, ?, ?, ?)")
-      .run(new Date().toISOString(), actor, action, namespace, subject);
-    this.pruneTrustLog(namespace);
-    this.audit({ op: `trust.${action}`, namespace, label: actor, kind: "trust", detail: subject.slice(0, 200) });
+  /** @internal */ logTrust(action: string, namespace: string, subject: string): void {
+    return trustOps.logTrust(this, action, namespace, subject);
   }
 
-  /**
-   * Bounded per namespace: each namespace keeps its own newest MAX_TRUST_LOG_ROWS rows (the server-wide lines, namespace `*`,
-   * their own bucket of MAX_TRUST_LOG_ROWS_GLOBAL), so a pinned admin flooding its own namespace can only push out its own lines,
-   * never another admin's or the attester / key-rotation lines. The audit log keeps the full trail.
-   */
-  private pruneTrustLog(namespace: string): void {
-    const keep = namespace === ALL_NAMESPACES ? MAX_TRUST_LOG_ROWS_GLOBAL : MAX_TRUST_LOG_ROWS;
-    this.db
-      .prepare("DELETE FROM trust_log WHERE namespace = ? AND seq NOT IN (SELECT seq FROM trust_log WHERE namespace = ? ORDER BY seq DESC LIMIT ?)")
-      .run(namespace, namespace, keep);
+  /** @internal */ pruneTrustLog(namespace: string): void {
+    return trustOps.pruneTrustLog(this, namespace);
   }
 
   /** The distrust list (every namespace). Cheap: a tiny table read per query, so a change elsewhere is seen at once. */
   distrustRules(): DistrustRule[] {
-    return this.db
-      .prepare("SELECT namespace, writer, added_at, added_by FROM trust_distrust ORDER BY namespace, writer")
-      .all() as unknown as DistrustRule[];
+    return trustOps.distrustRules(this);
   }
 
   /**
@@ -6922,60 +7603,22 @@ export class Store {
    * scope is checked by the caller; the change is logged. Returns the rule.
    */
   distrustAdd(namespace: string, writer: string): DistrustRule {
-    const ns = typeof namespace === "string" ? namespace.trim() : "";
-    if (!ns) throw new ValidationError('namespace is required (use "*" for every namespace)');
-    if (ns.length > 200) throw new ValidationError("namespace is too long");
-    const parsed = canonicalRuleWriter(writer);
-    if (!parsed.ok) throw new ValidationError(parsed.error);
-    const canonical = parsed.writer;
-    const addedBy = this.trustActor();
-    const at = new Date().toISOString();
-    this.transaction(() => {
-      const have = this.db.prepare("SELECT 1 FROM trust_distrust WHERE namespace = ? AND writer = ?").get(ns, canonical);
-      if (have) return;
-      const perNs = Number((this.db.prepare("SELECT COUNT(*) AS c FROM trust_distrust WHERE namespace = ?").get(ns) as { c: number }).c);
-      if (perNs >= MAX_DISTRUST_RULES_PER_NAMESPACE) {
-        throw new ValidationError(`the distrust list for ${ns === "*" ? "the * bucket" : `namespace ${ns}`} is full (${MAX_DISTRUST_RULES_PER_NAMESPACE} entries); remove one first`);
-      }
-      const n = Number((this.db.prepare("SELECT COUNT(*) AS c FROM trust_distrust").get() as { c: number }).c);
-      if (n >= MAX_DISTRUST_RULES) throw new ValidationError(`the distrust list is full (${MAX_DISTRUST_RULES} entries); remove one first`);
-      // Namespace-specific rules may not use the room reserved for the `*` bucket, so ten namespaces
-      // (or ten pinned admins) cannot lock the server-wide admin out of adding a `*` rule.
-      if (ns !== ALL_NAMESPACES && n >= MAX_DISTRUST_RULES - MAX_DISTRUST_RULES_PER_NAMESPACE) {
-        throw new ValidationError(`the distrust list is full for namespace-specific entries (${MAX_DISTRUST_RULES - MAX_DISTRUST_RULES_PER_NAMESPACE}; the rest is kept for "*" entries); remove one first`);
-      }
-      this.db.prepare("INSERT INTO trust_distrust (namespace, writer, added_at, added_by) VALUES (?, ?, ?, ?)").run(ns, canonical, at, addedBy);
-      this.logTrust("distrust", ns, canonical);
-    });
-    return (this.db.prepare("SELECT namespace, writer, added_at, added_by FROM trust_distrust WHERE namespace = ? AND writer = ?").get(ns, canonical) as unknown) as DistrustRule;
+    return trustOps.distrustAdd(this, namespace, writer);
   }
 
   /** How many stored notes the rule `(namespace, writer)` hides right now (0 usually means a misspelt label). */
+  /** The stamped writers of stored notes (at most 500), for a "Did you mean" on a mistyped writer name. Names only. */
+  writerNames(): string[] {
+    return (this.db.prepare("SELECT DISTINCT written_by AS w FROM notes WHERE written_by <> '' LIMIT 500").all() as Array<{ w: string }>).map((r) => r.w);
+  }
+
   distrustMatchCount(namespace: string, writer: string): number {
-    const parsed = canonicalRuleWriter(writer);
-    if (!parsed.ok) return 0;
-    const rule: DistrustRule = { namespace, writer: parsed.writer, added_at: "", added_by: "" };
-    const d = distrustSql([rule], this.serverId(), NOTE_COLUMNS);
-    if (!d.sql) return 0;
-    const nsSql = namespace === ALL_NAMESPACES ? "" : " AND notes.namespace = ?";
-    const nsParams = namespace === ALL_NAMESPACES ? [] : [namespace];
-    const all = Number((this.db.prepare(`SELECT COUNT(*) AS c FROM notes WHERE 1 = 1${nsSql}${this.ceilingSql("notes.sensitivity")}`).get(...nsParams) as { c: number }).c);
-    const visible = Number((this.db.prepare(`SELECT COUNT(*) AS c FROM notes WHERE 1 = 1${nsSql}${d.sql}${this.ceilingSql("notes.sensitivity")}`).get(...nsParams, ...d.params) as { c: number }).c);
-    return all - visible;
+    return trustOps.distrustMatchCount(this, namespace, writer);
   }
 
   /** Take a writer off the list. True if it was there. */
   distrustRemove(namespace: string, writer: string): boolean {
-    const ns = typeof namespace === "string" ? namespace.trim() : "";
-    const parsed = canonicalRuleWriter(writer);
-    if (!ns || !parsed.ok) throw new ValidationError("namespace and writer are required");
-    const canonical = parsed.writer;
-    let removed = false;
-    this.transaction(() => {
-      removed = Number(this.db.prepare("DELETE FROM trust_distrust WHERE namespace = ? AND writer = ?").run(ns, canonical).changes) > 0;
-      if (removed) this.logTrust("undistrust", ns, canonical);
-    });
-    return removed;
+    return trustOps.distrustRemove(this, namespace, writer);
   }
 
   /**
@@ -6985,17 +7628,7 @@ export class Store {
    * or other tenants' subjects.
    */
   trustLog(limit = 20, pinnedNamespace?: string): Array<{ at: string; actor: string; action: string; namespace: string; subject: string }> {
-    const n = clampInt(limit, 20, 1, 200);
-    return (
-      pinnedNamespace === undefined
-        ? this.db.prepare("SELECT at, actor, action, namespace, subject FROM trust_log ORDER BY seq DESC LIMIT ?").all(n)
-        : this.db
-            .prepare(
-              `SELECT at, actor, action, namespace, subject FROM trust_log
-               WHERE (namespace = ? OR namespace = '*') AND action NOT LIKE 'attester-%' AND action <> 'key-rotate' ORDER BY seq DESC LIMIT ?`
-            )
-            .all(pinnedNamespace, n)
-    ) as unknown as Array<{ at: string; actor: string; action: string; namespace: string; subject: string }>;
+    return trustOps.trustLog(this, limit, pinnedNamespace);
   }
 
   /**
@@ -7009,35 +7642,26 @@ export class Store {
     revoked: ReturnType<Store["revocationList"]>;
     log: ReturnType<Store["trustLog"]>;
   } {
-    const pinned = pinnedNamespace !== undefined;
-    return {
-      distrust: this.distrustRules().filter((r) => !pinned || r.namespace === pinnedNamespace || r.namespace === ALL_NAMESPACES),
-      attesters: pinned ? [] : this.attesterList(),
-      revoked: pinned ? [] : this.revocationList(),
-      log: this.trustLog(20, pinnedNamespace),
-    };
+    return trustOps.trustView(this, pinnedNamespace);
   }
 
   /** Does the distrust list name a writer that touched this note (current writer, attested original, merged sources)? */
   isDistrusted(n: WriterFacts): boolean {
-    return matchesDistrust(this.distrustRules(), n, this.serverId());
+    return trustOps.isDistrusted(this, n);
   }
 
   /** isDistrusted against rules the caller already loaded (hot loops). */
   isDistrustedWith(rules: readonly DistrustRule[], serverId: string, n: WriterFacts): boolean {
-    return matchesDistrust(rules, n, serverId);
+    return trustOps.isDistrustedWith(this, rules, serverId, n);
   }
 
   /** Flag (distrusted: true) the notes whose writer is on the list. Used where a read opted in with include_distrusted. */
   markDistrusted<T extends NoteRecord>(notes: T[]): T[] {
-    const rules = this.distrustRules();
-    if (rules.length === 0) return notes;
-    const id = this.serverId();
-    return notes.map((n) => (matchesDistrust(rules, n, id) ? { ...n, distrusted: true as const } : n));
+    return trustOps.markDistrusted(this, notes);
   }
 
   /** The query fragment hiding distrusted rows (empty when the list is empty). */
-  private distrustFragment(cols = NOTE_COLUMNS, namespaces?: readonly string[]): { sql: string; params: string[] } {
+  /** @internal */ distrustFragment(cols = NOTE_COLUMNS, namespaces?: readonly string[]): { sql: string; params: string[] } {
     return distrustSql(this.distrustRules(), this.serverId(), cols, namespaces);
   }
 
@@ -7046,7 +7670,7 @@ export class Store {
   // (the operator, stdio, the CLI, a token without one) = no filter and the SQL is byte-identical to before.
 
   /** " AND <col> IN ('public','internal')": hides notes above the caller's ceiling; "" when it has none. Fail closed: NULL and unknown labels never match. */
-  private ceilingSql(col = "sensitivity"): string {
+  /** @internal */ ceilingSql(col = "sensitivity"): string {
     const max = currentCeiling();
     if (max === undefined) return "";
     const levels = levelsAtOrBelow(max);
@@ -7055,68 +7679,38 @@ export class Store {
 
   /** Operator-level (no ceiling): how many notes carry a label other than "internal". Used only for start-up and sync warnings. */
   labelledAboveDefault(): number {
-    return Number((this.db.prepare("SELECT COUNT(*) AS c FROM notes WHERE sensitivity <> ?").get(DEFAULT_SENSITIVITY) as { c: number }).c);
+    return trustOps.labelledAboveDefault(this);
   }
 
   /** Operator-level: is there any note labelled private? */
   hasPrivateNotes(): boolean {
-    return !!this.db.prepare("SELECT 1 FROM notes WHERE sensitivity = 'private' LIMIT 1").get();
+    return trustOps.hasPrivateNotes(this);
   }
 
   /** True when this row is above the caller's ceiling (and so must read as "not found"). */
-  private hiddenByCeiling(row: { sensitivity?: string | null }): boolean {
+  /** @internal */ hiddenByCeiling(row: { sensitivity?: string | null }): boolean {
     return !sensitivityVisible(row.sensitivity ?? DEFAULT_SENSITIVITY, currentCeiling());
   }
 
   /** True when note `id` exists but is above the caller's ceiling (for callers that hold a bare id from a side table, e.g. a session's summary). */
   hiddenFromCaller(id: number): boolean {
-    if (currentCeiling() === undefined) return false;
-    const row = this.db.prepare("SELECT sensitivity FROM notes WHERE id = ?").get(id) as { sensitivity: string } | undefined;
-    return !!row && this.hiddenByCeiling(row);
+    return trustOps.hiddenFromCaller(this, id);
   }
 
-  /** By-id guard for the write/move paths that touch a row without reading it first: true when the caller may not see note `id`. */
   private idHidden(id: number): boolean {
-    if (currentCeiling() === undefined) return false;
-    const row = this.db.prepare("SELECT sensitivity FROM notes WHERE id = ?").get(id) as { sensitivity: string } | undefined;
-    return !row || this.hiddenByCeiling(row);
+    return trustOps.idHidden(this, id);
   }
 
-  /** The label a new note gets: the one asked for (checked against the ceiling), else "internal" -- or the ceiling itself when that is lower. */
   private labelForNew(raw: unknown): Sensitivity {
-    const max = currentCeiling();
-    if (raw === undefined || raw === null) {
-      if (max === undefined) return DEFAULT_SENSITIVITY;
-      const levels = levelsAtOrBelow(max);
-      if (levels.length === 0) throw new ValidationError("this token's sensitivity ceiling is not a valid label, so it cannot write");
-      return levels.includes(DEFAULT_SENSITIVITY) ? DEFAULT_SENSITIVITY : levels[levels.length - 1];
-    }
-    const label = parseSensitivity(raw);
-    if (!label) throw new ValidationError(`sensitivity must be ${SENSITIVITY_HELP}`);
-    if (!sensitivityVisible(label, max)) {
-      throw new ValidationError(`this token cannot write a "${label}" note: its sensitivity ceiling is "${String(max)}"`);
-    }
-    return label;
+    return trustOps.labelForNew(this, raw);
   }
 
-  /** A relabel of an existing note: undefined when nothing changes; otherwise the new label, after the ceiling and declassify checks. */
   private labelForRelabel(raw: unknown, current: string | undefined): Sensitivity | undefined {
-    const label = parseSensitivity(raw);
-    if (!label) throw new ValidationError(`sensitivity must be ${SENSITIVITY_HELP}`);
-    const max = currentCeiling();
-    if (!sensitivityVisible(label, max)) {
-      throw new ValidationError(`this token cannot label a note "${label}": its sensitivity ceiling is "${String(max)}"`);
-    }
-    const now = current ?? DEFAULT_SENSITIVITY;
-    if (label === now) return undefined;
-    if (sensitivityRank(label) < sensitivityRank(now) && actorStore.getStore()?.canDeclassify === false) {
-      throw new ValidationError("lowering a note's sensitivity label needs an admin token (raising it does not)");
-    }
-    return label;
+    return trustOps.labelForRelabel(this, raw, current);
   }
 
   /** rangeClause + the distrust exclusion (unless the caller opted in) + the sensitivity ceiling (always). */
-  private rangeFor(opts: RangeOpts, namespaces?: readonly string[]): { sql: string; params: string[] } {
+  /** @internal */ rangeFor(opts: RangeOpts, namespaces?: readonly string[]): { sql: string; params: string[] } {
     const base = rangeClause(opts, this.serverId());
     const ceil = this.ceilingSql();
     const r = ceil ? { sql: base.sql + ceil, params: base.params } : base;
@@ -7236,22 +7830,33 @@ export class Store {
             `INSERT INTO trust_attesters (key_id, public_key, server_id, label, added_at, added_by, not_after) VALUES (?, ?, ?, ?, ?, ?, '')
              ON CONFLICT(key_id) DO NOTHING`
           )
-          .run(old.keyId, old.publicKey, this.serverId(), "retired key of this server", new Date().toISOString(), this.trustActor());
+          .run(old.keyId, old.publicKey, this.serverId(), RETIRED_OWN_KEY_LABEL, new Date().toISOString(), this.trustActor());
         recordedNow = Number(r.changes) > 0;
       });
     }
     let k!: SigningKey;
+    const endRotation = beginKeyRotation(); // other writers' audit lines wait until the key-rotate line and the swap are both done
     try {
-      k = replaceSigningKey(this.keyDir, oldFile ?? undefined);
+      // The signed audit log hands over to the new key: a key-rotate line signed by the OLD key (the file is not swapped
+      // yet), naming the new public key. Only when the log beside this store is the one this key signs.
+      const handOver = !!old; // a log elsewhere is signed by a copy of this key beside it (mirrorKeyToLog), so it hands over too
+      k = replaceSigningKey(this.keyDir, oldFile ?? undefined, handOver ? (next) => this.audit({ op: "key-rotate", detail: `${old.keyId} -> ${next.keyId}`, new_pub: next.publicKey }) : undefined);
     } catch (e) {
       if (old && recordedNow) {
         try {
-          this.db.prepare("DELETE FROM trust_attesters WHERE key_id = ? AND label = 'retired key of this server'").run(old.keyId);
+          this.db.prepare("DELETE FROM trust_attesters WHERE key_id = ? AND label = ?").run(old.keyId, RETIRED_OWN_KEY_LABEL);
         } catch {
           /* harmless: the current key listed as trusted */
         }
       }
       throw e;
+    } finally {
+      try {
+        withAuditPath(this.auditLog, () => this.mirrorKeyToLog()); // a log elsewhere keeps signing with the key beside it: hand that copy over in the same window
+      } catch {
+        /* the copy beside the log is refreshed again at the next open */
+      }
+      endRotation();
     }
     this.signingKey = null; // the next use re-reads the file and its stamp
     this.signingStamp = "";
@@ -7378,6 +7983,11 @@ export class Store {
     if (key_id === this.identity().key_id) throw new ValidationError("that is this server's own current key: it is always trusted for this server's own exports");
     if (this.revokedKeys().has(key_id)) throw new ValidationError(`key ${key_id} is on the revocation list; run \`monomem trust attester-unrevoke ${key_id}\` first if you really want to trust it again`);
     const label = cleanWriter(input.label ?? "").slice(0, 100);
+    // Reserved: ownKeyring() (audit verify, verify-receipt) trusts rows with this label as this server's own retired keys.
+    // Only rotateSigningKey writes it; an admin adding a key under it could sign receipts the server never gave.
+    if (label.trim().toLowerCase() === RETIRED_OWN_KEY_LABEL) {
+      throw new ValidationError(`"${RETIRED_OWN_KEY_LABEL}" is reserved for keys this server rotated out itself; choose another label`);
+    }
     let replaced: { server_id: string; not_after: string } | undefined;
     this.transaction(() => {
       const prev = this.db.prepare("SELECT server_id, not_after FROM trust_attesters WHERE key_id = ?").get(key_id) as { server_id: string; not_after: string } | undefined;
@@ -7415,6 +8025,7 @@ export class Store {
    * (unlike `not_after`, which only expires trust). Kept in the database, so it survives restarts and backups.
    */
   revokedKeys(): Set<string> {
+    if (this.metaJson("revoked_attester_keys", isPlainObject).damaged) return new AllRevoked();
     return new Set(Object.keys(this.revocations()));
   }
 
@@ -7424,14 +8035,12 @@ export class Store {
   }
 
   private revocations(): Record<string, { at: string; by: string; reason: string }> {
-    const raw = this.getMeta("revoked_attester_keys");
-    if (!raw) return {};
-    try {
-      const v = JSON.parse(raw) as unknown;
-      return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, { at: string; by: string; reason: string }>) : {};
-    } catch {
-      return {};
-    }
+    return (this.metaJson("revoked_attester_keys", isPlainObject).v ?? {}) as Record<string, { at: string; by: string; reason: string }>;
+  }
+
+  /** A3: true when this key id is revoked, or the revocation list is damaged (then no attester key is believed). */
+  isKeyRevoked(keyId: string): boolean {
+    return this.revokedKeys().has(keyId);
   }
 
   /** Revoke a key (any attester's, or one of this server's retired keys). Refuses this server's CURRENT key (rotate first). */
@@ -7471,7 +8080,7 @@ export class Store {
   }
 
   /** Read a _meta value (null when unset or unreadable). */
-  private getMeta(key: string): string | null {
+  /** @internal */ getMeta(key: string): string | null {
     try {
       const row = this.db.prepare("SELECT value FROM _meta WHERE key = ?").get(key) as
         | { value: string }
@@ -7482,8 +8091,17 @@ export class Store {
     }
   }
 
+  /** @internal */ metaJson<T>(key: string, ok: (v: unknown) => v is T): { v: T | null; damaged: boolean } {
+    return gateOps.metaJson(this, key, ok);
+  }
+
+  /** 1.5.0 (A3): the trust settings whose stored value is damaged (doctor reports them). */
+  damagedTrustSettings(): string[] {
+    return gateOps.damagedTrustSettings(this);
+  }
+
   /** Upsert a _meta value. Internal keys only -- never caller-chosen. */
-  private setMeta(key: string, value: string): void {
+  /** @internal */ setMeta(key: string, value: string): void {
     this.db
       .prepare(
         "INSERT INTO _meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
@@ -7538,6 +8156,7 @@ export class Store {
             key ? encrypt(preview, key, ACCESS_AAD) : preview,
             Math.max(0, Math.floor(results) || 0)
           );
+        this.bookkeepingChanges += 1;
         wrote = true;
       });
       if (!wrote && !Store.accessSkipReported) {
@@ -7596,46 +8215,70 @@ export class Store {
   // --- Flood guard (v17) -----------------------------------------------------
   // The paused set is a JSON list in _meta (like approve_first), so a restart does not clear it.
 
+  /** R2-02: flag a note this caller may see as looking wrong (the note does not change). Null = no such note. */
+  flagNote(id: number, reason: unknown): { note_id: number; rev: number; at: string } | null {
+    return flagOps.flagNote(this, id, reason);
+  }
+
+  /** R2-02: live notes with flags that count, for `monomem review`. */
+  flaggedList(namespaces?: string[]): FlaggedItem[] {
+    return flagOps.flaggedList(this, namespaces);
+  }
+
+  /** R2-02: a person keeps a flagged note: the flags on its current version are cleared. Returns how many. */
+  /** R2-03: live notes whose anchored files changed in git, for `monomem stale --code` and `monomem review`. */
+  codeChangedList(namespaces?: string[]): CodeChangedItem[] {
+    return codeAnchorOps.codeChangedList(this, namespaces);
+  }
+
+  /** R2-03: a person keeps a code-changed note: its anchors move to the files at HEAD. Returns how many moved. */
+  refreshCodeAnchors(id: number): number {
+    return codeAnchorOps.refreshAnchors(this, id);
+  }
+
+  keepFlagged(id: number): number {
+    return flagOps.keepFlagged(this, id);
+  }
+
+  /** R2-08: record what happened to a writer's write (inside the action's own transaction). */
+  /** @internal */ recordWriterEvent(writer: string, event: WriterEvent, noteId: number | null): void {
+    reputationOps.recordWriterEvent(this, writer, event, noteId);
+  }
+
+  /** R2-08: per writer, the last `days` (30) of held, rejected, rolled-back, flag-upheld and replaced writes. Counts only. */
+  writerReputation(days?: number): Record<string, WriterCounts> {
+    return reputationOps.writerReputation(this, days);
+  }
+
+  /** R2-04: create, unless this writer's `clientKey` already made a note (then that note, deduplicated: true, no write). */
+  createOnce(input: NoteInput, clientKey: string | undefined, opts: Parameters<Store["create"]>[1] = {}): { note: NoteRecord; deduplicated?: true } {
+    return clientKeyOps.createOnce(this, input, clientKey, opts);
+  }
+
   /** Writer identities the flood guard paused (sorted). */
   pausedWriters(): string[] {
-    try {
-      const v = JSON.parse(this.getMeta("flood_paused") ?? "[]") as unknown;
-      return Array.isArray(v) ? v.filter((n): n is string => typeof n === "string").sort() : [];
-    } catch {
-      return [];
-    }
+    return gateOps.pausedWriters(this);
+  }
+
+  /** @internal */ isPaused(w: string): boolean {
+    return gateOps.isPaused(this, w);
   }
 
   /** Lift a pause and clear that writer's count. Returns false when the writer was not paused. */
   resumeWriter(label: string): boolean {
-    const w = cleanWriter(label);
-    if (!w) throw new ValidationError("writer label is required");
-    const all = this.pausedWriters();
-    if (!all.includes(w)) return false;
-    this.setMeta("flood_paused", JSON.stringify(all.filter((x) => x !== w)));
-    // A fresh hour: otherwise its very next write would trip the guard again on the old count.
-    this.db.prepare("DELETE FROM write_rate WHERE writer = ?").run(w);
-    this.audit({ op: "flood-resume", label: w });
-    return true;
+    return gateOps.resumeWriter(this, label);
   }
 
-  /** The identity the flood guard counts, or null for writes it leaves alone: see floodGate. */
-  private floodSubject(mode: LintMode): string | null {
-    const w = currentWriter();
-    return isOperatorWrite(mode) || w === "" || w === "server" ? null : w;
+  /** @internal */ floodSubject(mode: LintMode): string | null {
+    return gateOps.floodSubject(this, mode);
   }
 
-  /** archive / restore: refused for a paused writer (they are not counted). */
   private refusePaused(): void {
-    const w = this.floodSubject("full");
-    if (w !== null && this.pausedWriters().includes(w)) throw this.pausedError(w);
+    return gateOps.refusePaused(this);
   }
 
-  private pausedError(w: string): WriterPausedError {
-    return new WriterPausedError(
-      `writer "${w}" is paused by the flood guard (more than ${floodWritesPerHour()} writes in an hour). ` +
-        `Its writes are refused until an operator runs: monomem resume ${w}`
-    );
+  /** @internal */ pausedError(w: string): WriterPausedError {
+    return gateOps.pausedError(this, w);
   }
 
   /**
@@ -7646,57 +8289,116 @@ export class Store {
    * consolidation (isOperatorWrite), the server's own jobs (`server`), callers with no writer identity (library use),
    * and importNotes (a restore).
    */
-  private floodGate(mode: LintMode, count = true): void {
-    const w = this.floodSubject(mode);
-    if (w === null) return;
-    if (this.pausedWriters().includes(w)) throw this.pausedError(w);
-    const limit = floodWritesPerHour();
-    if (limit === 0 || !count) return;
-    const now = Date.now();
-    // ponytail: count-then-insert is not atomic across processes; concurrent writers can overshoot by a few.
-    const n = Number(
-      (this.db.prepare("SELECT COUNT(*) AS n FROM write_rate WHERE writer = ? AND at >= ?").get(w, new Date(now - 3_600_000).toISOString()) as { n: number }).n
-    );
-    if (n >= limit) {
-      // One statement, no transaction: a write can run inside a caller's transaction (which this throw rolls back, pause
-      // included; the count stays, so the next write pauses it again).
-      this.setMeta("flood_paused", JSON.stringify([...new Set([...this.pausedWriters(), w])].sort()));
-      this.audit({ op: "flood-pause", label: w, detail: `${n} writes in the last hour (limit ${limit})` });
-      console.error(`[monomem] flood guard: paused writer "${w}" after ${n} writes in an hour. Resume with: monomem resume ${w}`);
-      throw this.pausedError(w);
-    }
-    this.db.prepare("INSERT INTO write_rate (writer, at) VALUES (?, ?)").run(w, new Date(now).toISOString());
+  /** @internal */ floodGate(mode: LintMode, count = true): void {
+    return gateOps.floodGate(this, mode, count);
   }
 
   /** Audit lines written inside a transaction wait here until it commits; a rollback drops them. */
-  private pendingAudit: Array<Parameters<typeof audit>[0]> = [];
+  private pendingAudit: Array<[Parameters<typeof audit>[0], receiptOps.ReceiptContent | undefined]> = [];
 
-  /** Audit line, except from an in-memory store with no MONOMEM_AUDIT_LOG: that must never touch the owner's real log. */
-  private audit(entry: Parameters<typeof audit>[0]): void {
+  /**
+   * Audit line, except from an in-memory store with no MONOMEM_AUDIT_LOG: that must never touch the owner's real log.
+   * `receipt` (note id, rev, content hash) goes only into the write's receipt, never into the line.
+   */
+  /** @internal */ audit(entry: Parameters<typeof audit>[0], receipt?: receiptOps.ReceiptContent): void {
     if (this.dbPath === ":memory:" && !process.env.MONOMEM_AUDIT_LOG) return;
+    if (receipt) this.ensureAuditKey();
     // Name the key that made the change (a label, never the key itself) so `monomem audit` can say who did what.
     const who = actorStore.getStore()?.label;
     const e = entry.label === undefined && who ? { ...entry, label: who } : entry;
     // Inside a transaction the write may still be rolled back: the line is written only once it commits (commitTx).
-    if (this.db.isTransaction) return void this.pendingAudit.push(e);
+    if (this.db.isTransaction) return void this.pendingAudit.push([e, receipt]);
     this.flushAudit();
-    audit(e);
+    receiptOps.noteAudited(this, e.op, withAuditPath(this.auditLog, () => audit(e)), receipt);
   }
 
   private flushAudit(): void {
     const q = this.pendingAudit;
     this.pendingAudit = [];
-    for (const e of q) audit(e);
+    for (const [e, r] of q) receiptOps.noteAudited(this, e.op, withAuditPath(this.auditLog, () => audit(e)), r);
+  }
+
+  /**
+   * 1.5.0 signed log: the first note write of a file store whose audit log sits beside it makes the store key (the same
+   * .attest-key exports sign with), so its lines and receipts are signed from then on. audit() itself never creates a key.
+   */
+  private auditKeyChecked = false;
+  private ensureAuditKey(): void {
+    if (this.auditKeyChecked || this.dbPath === ":memory:") return;
+    this.auditKeyChecked = true;
+    try {
+      this.signing();
+      withAuditPath(this.auditLog, () => this.mirrorKeyToLog(false));
+    } catch (e) {
+      console.error(`[monomem] audit lines stay unsigned: could not create the signing key (${(e as Error).message})`);
+    }
+  }
+
+  /**
+   * A log elsewhere (MONOMEM_AUDIT_LOG) is signed by the key found beside it, so that folder gets a copy of the store key
+   * (mode 0600, written to a temp name and renamed). Rotation refreshes it. An in-memory store never does this.
+   */
+  private mirrorKeyToLog(replace = true): void {
+    const logDir = dirname(auditPath());
+    if (this.dbPath === ":memory:" || resolve(logDir) === resolve(this.keyDir)) return;
+    const src = attestKeyPath(this.keyDir);
+    const dest = attestKeyPath(logDir);
+    if (resolve(src) === resolve(dest)) return; // MONOMEM_ATTEST_KEY_FILE names one file for both
+    // Only key rotation may replace a key already there. On open, a DIFFERENT key beside the log belongs to another store
+    // (a copy opened while the log path still points at the real folder): overwriting it would break that store's signed
+    // log and every receipt it gave. Leave it, and say so.
+    if (!replace && existsSync(dest)) {
+      if (!readFileSync(dest).equals(readFileSync(src))) {
+        console.error(`[monomem] not replacing the signing key beside ${auditPath()}: it belongs to another store`);
+      }
+      return;
+    }
+    mkdirSync(logDir, { recursive: true, mode: 0o700 });
+    const tmp = `${dest}.${process.pid}.tmp`;
+    copyFileSync(src, tmp);
+    chmodQuiet(tmp, 0o600);
+    renameSync(tmp, dest);
+  }
+
+  /** The current key and every retired own key (key id -> public key): what `audit verify` and `verify-receipt` trust. */
+  ownKeyring(): Record<string, string> {
+    const ring: Record<string, string> = {};
+    for (const a of this.attesterList()) if (a.label === RETIRED_OWN_KEY_LABEL && a.server_id === this.serverId()) ring[a.key_id] = a.public_key;
+    const cur = this.peekIdentity();
+    if (cur.key_id && cur.public_key) ring[cur.key_id] = cur.public_key;
+    return ring;
+  }
+
+  /** `monomem audit checkpoint`: the log's head as a signed receipt (decision "checkpoint") to keep off this machine. */
+  auditCheckpoint(): receiptOps.WriteReceipt {
+    const key = peekSigningKey(dirname(auditPath()));
+    if (!key) throw new ValidationError("no signing key beside the audit log, so a checkpoint cannot be signed (`monomem trust identity` creates one)");
+    const head = auditHead();
+    if (!head) throw new ValidationError("the audit log is empty: nothing to checkpoint yet");
+    return receiptOps.makeReceipt({ seq: head.seq, chain_hash: head.hash, decision: "checkpoint", ts: new Date().toISOString(), server_id: this.serverId() }, key);
+  }
+
+  /** @internal R2-06: the newest write decision this store audited, until a surface takes it (store/write-receipt.ts). */
+  lastWriteReceipt: receiptOps.PendingReceipt | undefined;
+
+  /** R2-06: the receipt `{seq, chain_hash, decision}` of the write that just ran, cleared as it is read. */
+  takeWriteReceipt(): receiptOps.WriteReceipt | undefined {
+    return receiptOps.takeWriteReceipt(this);
+  }
+
+  /** R2-06: the receipt for a write that ended in error `e` (held, or refused with a ValidationError); undefined for a fault. */
+  refusedWriteReceipt(e: unknown, id?: number): receiptOps.WriteReceipt | undefined {
+    return receiptOps.refusedWriteReceipt(this, e, id);
   }
 
   /** COMMIT (or a savepoint RELEASE), then write the audit lines it held, once the outermost transaction has ended. */
-  private commitTx(sql = "COMMIT"): void {
+  /** @internal */ commitTx(sql = "COMMIT"): void {
     this.db.exec(sql);
     if (!this.db.isTransaction) this.flushAudit();
   }
 
   /** ROLLBACK (or ROLLBACK TO a savepoint); when the whole transaction is gone, so are the audit lines it held. */
-  private rollbackTx(sql = "ROLLBACK"): void {
+  /** @internal */ rollbackTx(sql = "ROLLBACK"): void {
     try {
       this.db.exec(sql);
     } finally {
@@ -7709,38 +8411,26 @@ export class Store {
 
   /** Namespaces whose agent writes wait in the quarantine queue for an operator (sorted). */
   approveFirstNamespaces(): string[] {
-    try {
-      const v = JSON.parse(this.getMeta("approve_first") ?? "[]") as unknown;
-      return Array.isArray(v) ? v.filter((n): n is string => typeof n === "string").sort() : [];
-    } catch {
-      return [];
-    }
+    return gateOps.approveFirstNamespaces(this);
   }
 
   /** True when approve-first is on for every namespace, including ones created later. */
   approveFirstAll(): boolean {
-    return this.getMeta("approve_first_all") === "1";
+    return gateOps.approveFirstAll(this);
   }
 
   isApproveFirst(namespace: string): boolean {
-    return this.approveFirstAll() || this.approveFirstNamespaces().includes(namespace);
+    return gateOps.isApproveFirst(this, namespace);
   }
 
   /** Turn approve-first on or off for every namespace at once. Operator-only, like the per-namespace switch. */
   setApproveFirstAll(on: boolean): void {
-    this.setMeta("approve_first_all", on ? "1" : "0");
-    this.audit({ op: on ? "approve-first-all-on" : "approve-first-all-off" });
+    return gateOps.setApproveFirstAll(this, on);
   }
 
   /** Turn approve-first on or off for a namespace. Writes already held stay in the queue either way. */
   setApproveFirst(namespace: string, on: boolean): void {
-    const ns = typeof namespace === "string" ? namespace.trim() : "";
-    if (!ns) throw new ValidationError("namespace is required");
-    this.transaction(() => {
-      const rest = this.approveFirstNamespaces().filter((n) => n !== ns);
-      this.setMeta("approve_first", JSON.stringify(on ? [...rest, ns].sort() : rest));
-    });
-    this.audit({ op: on ? "approve-first-on" : "approve-first-off", namespace: ns });
+    return gateOps.setApproveFirst(this, namespace, on);
   }
 
   // --- Pinned notes (v18) ----------------------------------------------------
@@ -7753,32 +8443,187 @@ export class Store {
    * token included), the server's own jobs, library callers. Reading is not affected.
    */
   refuseAgentOnPinned(id: number, what: string): void {
-    if (currentWriter() === "cli") return;
-    const r = this.db.prepare("SELECT pinned FROM notes WHERE id = ?").get(id) as { pinned: number } | undefined;
-    if (r && Number(r.pinned) === 1) {
-      throw new ValidationError(`note ${id} is pinned by the operator: ${what} is done by the operator (monomem CLI), not by an agent. It can still be read.`);
-    }
+    return gateOps.refuseAgentOnPinned(this, id, what);
   }
 
   /** Pin or unpin a note. False when there is no such note. Not a content change: rev, written_by and the change feed are untouched. */
   setPinned(id: number, on: boolean, namespaces?: string[]): boolean {
-    if (namespaces && namespaces.length === 0) return false;
-    const where = namespaces ? ` AND namespace IN (${namespaces.map(() => "?").join(",")})` : "";
-    const res = this.db.prepare(`UPDATE notes SET pinned = ? WHERE id = ?${where}`).run(on ? 1 : 0, id, ...(namespaces ?? []));
-    const ok = Number(res.changes) > 0;
-    if (ok) this.audit({ op: on ? "pin" : "unpin", id });
-    return ok;
+    return gateOps.setPinned(this, id, on, namespaces);
+  }
+
+  // --- Outside-content taint and confirms (1.4.0, taint.ts) -------------------------------------------
+
+  private taintFor(declared: boolean | undefined, writer: string | null): string[] {
+    return taintOps.taintFor(this, declared, writer);
+  }
+
+  /** @internal */ readTaintLive(reads: ReadonlyMap<number, number> | undefined): boolean {
+    return taintOps.readTaintLive(this, reads);
+  }
+
+  private derivedIds(list: unknown, self?: number): number[] {
+    return taintOps.derivedIds(this, list, self);
+  }
+
+  private inheritedTaint(parents: number[]): string[] {
+    return taintOps.inheritedTaint(this, parents);
+  }
+
+  private stampCliTerminal(id: number, writer: string): void {
+    return taintOps.stampCliTerminal(this, id, writer);
+  }
+
+  private addLinks(id: number, parents: number[], by: string, at: string): void {
+    return taintOps.addLinks(this, id, parents, by, at);
+  }
+
+  /** @internal */ activeSessions(): Array<{ id: string; cwd: string; outside_at: string | null }> {
+    return taintOps.activeSessions(this);
+  }
+
+  /** @internal */ windowSessions(cwd: string | undefined): Array<{ id: string; cwd: string; outside_at: string }> {
+    return taintOps.windowSessions(this, cwd);
+  }
+
+  /** @internal */ windowCache = new Map<string, { at: number; tags: string[] }>();
+
+  /** @internal */ sessionOutsideTags(cwd: string | undefined): string[] {
+    return taintOps.sessionOutsideTags(this, cwd);
+  }
+
+  /** @internal */ windowTools(ids: string[], cutoff: string): string[] {
+    return taintOps.windowTools(this, ids, cutoff);
+  }
+
+  /** @internal */ computeWindowTags(cwd: string | undefined): string[] {
+    return taintOps.computeWindowTags(this, cwd);
+  }
+
+  /** `monomem taint clear`: a person ends the open outside windows (all, one session, or the ones of one folder). Stamps already written stay. */
+  taintClear(sel: { all?: boolean; session?: string; cwd?: string }): number {
+    return taintOps.taintClear(this, sel);
+  }
+
+  /** The windows open now, for doctor and session start: folder, tools, minutes since the outside read. */
+  openWindows(cwd?: string): Array<{ cwd: string; tools: string[]; minutes: number }> {
+    return taintOps.openWindows(this, cwd);
+  }
+
+  /** Session-start lines for a writer in `cwd` whose folder has an open outside window (none when no window is open). */
+  openWindowLines(cwd: string): string[] {
+    return taintOps.openWindowLines(this, cwd);
+  }
+
+  /**
+   * A spooled outside-content event stored late (capture.ts drainSpool): notes written by LOCAL unauthenticated writers (stdio,
+   * a non-terminal cli) since that read, within the taint window, in the session's folder (or of unknown origin) get its stamp
+   * now. Add-only, no rev bump (the content did not change). Returns how many notes it marked.
+   */
+  retroTaint(cwd: string, atIso: string, tool: string): number {
+    return taintOps.retroTaint(this, cwd, atIso, tool);
+  }
+
+  /** Live unconfirmed notes (tainted, not grandfathered, no confirm for the current rev), in `namespaces` or everywhere. */
+  unconfirmedCount(namespaces?: string[]): number {
+    return confirmOps.unconfirmedCount(this, namespaces);
+  }
+
+  /** The unconfirmed notes by cause (each counted once: tool, else via memory, else declared). Counts only; no titles. */
+  unconfirmedBreakdown(namespaces?: string[]): { tool: number; via: number; declared: number } {
+    return confirmOps.unconfirmedBreakdown(this, namespaces);
+  }
+
+  /** A backlog nobody can see is not "healthy": 10 or more unconfirmed notes, or one older than 7 days, caps the grade at B. */
+  confirmBacklog(): { count: number; oldest_days: number; capped: boolean; reason: string } {
+    return confirmOps.confirmBacklog(this);
+  }
+
+  /**
+   * unconfirmedRows' last answer, reused while nothing in the database changed: total_changes() moves on this connection's
+   * writes, PRAGMA data_version on another process's commit. Session start asks once per prompt; the scan is the cost.
+   */
+  /** @internal */ unconfirmedCache: { key: string; rows: ReviewRow[] } | null = null;
+  /** Rows this connection wrote that are not notes (access counts, access log, write_rate): subtracted from total_changes() in the cache key. */
+  /** @internal */ bookkeepingChanges = 0;
+
+  /** @internal */ unconfirmedRows(namespaces?: string[]): ReviewRow[] {
+    return confirmOps.unconfirmedRows(this, namespaces);
+  }
+
+  /** @internal */ unconfirmedSql(namespaces?: string[]): { sql: string; params: Array<string | number> } {
+    return confirmOps.unconfirmedSql(this, namespaces);
+  }
+
+  /** @internal */ scanUnconfirmed(namespaces?: string[]): ReviewRow[] {
+    return confirmOps.scanUnconfirmed(this, namespaces);
+  }
+
+  // --- Re-confirmation expiry (1.4.0, 1a) ---------------------------------------------------------------------------
+  // Settings in _meta (confirm_mode, confirm_days, confirm_mode_set_at), like approve_first. Read at most once a second
+  // per Store (every record read consults them), so a change made by another process shows within a second.
+  /** @internal */ confirmCache: { at: number; v: ConfirmSettings } | null = null;
+
+  confirmSettings(): ConfirmSettings {
+    return confirmOps.confirmSettings(this);
+  }
+
+  /**
+   * Change the expiry settings (operator: the CLI gates lowering protection). A mode change records when, so turning
+   * expiry on starts every note's clock then, not at its last edit.
+   */
+  setConfirmSettings(next: { mode?: ConfirmMode; days?: number }): ConfirmSettings {
+    return confirmOps.setConfirmSettings(this, next);
+  }
+
+  /** @internal */ expiredRows(namespaces?: string[]): ReviewRow[] {
+    return confirmOps.expiredRows(this, namespaces);
+  }
+
+  /** How many notes are past their re-confirmation date, in `namespaces` or everywhere (0 when the mode is off). */
+  expiredCount(namespaces?: string[]): number {
+    return confirmOps.expiredCount(this, namespaces);
+  }
+
+  /** `monomem review`: unconfirmed and expired notes, with why and who wrote them. For a person at a terminal only. */
+  reviewList(namespaces?: string[]): ReviewItem[] {
+    return confirmOps.reviewList(this, namespaces);
+  }
+
+  /** Plain-English lines for `monomem doctor` and `monomem health`: one per 1.4.0 confirm rule, with counts. */
+  confirmRuleLines(): string[] {
+    return confirmOps.confirmRuleLines(this);
+  }
+
+  /**
+   * Promotion guard (pin, replace-with, keep-as-history): a tainted note needs a HUMAN confirm for its current rev. The
+   * local CLI (writer `cli`) gets through and its pass is recorded as the human confirm: the CLI command asks for the
+   * operator gate (terminal + typed yes) before it calls this. Everyone else, admin tokens included, is refused.
+   */
+  requireHumanConfirm(id: number, verb: string): void {
+    return confirmOps.requireHumanConfirm(this, id, verb);
+  }
+
+  /**
+   * Confirm a note (bound to its current rev). Who counts (SPEC 1c):
+   *   human        the local CLI (writer `cli`; the command runs the operator gate first). Always counts.
+   *   admin        `opts.admin` (the dashboard / an admin REST token). Releases the session-start hold, not the promotion block.
+   *   corroborated a different AUTHENTICATED token writer naming a source whose key differs from the note's own source and
+   *                every earlier qualifying confirm of this rev. Releases the session-start hold only.
+   * Recorded but not counted: the note's own writers (written_by, created_by, attested_writer, merged_from_writers), any
+   * stdio / unauthenticated writer, a distrusted writer, a connection that read this note while unconfirmed, a writer with a
+   * note derived from this one, and a second confirm by the same writer for the same rev. Confirms count in the flood guard.
+   */
+  confirm(id: number, opts: { source?: string; admin?: boolean; dashboard?: boolean } = {}): ConfirmResult | null {
+    return confirmOps.confirm(this, id, opts);
+  }
+
+  /** @internal */ confirmRefusal(n: NoteRecord, w: string, human: boolean, admin: boolean, key: string, dashboard = false): { code: string; message: string } | null {
+    return confirmOps.confirmRefusal(this, n, w, human, admin, key, dashboard);
   }
 
   /** Pinned notes (id, namespace, title), oldest first; `namespaces` limits it to those. */
   pinnedNotes(namespaces?: string[]): Array<{ id: number; namespace: string; title: string }> {
-    if (namespaces && namespaces.length === 0) return [];
-    const where = namespaces ? ` AND namespace IN (${namespaces.map(() => "?").join(",")})` : "";
-    return this.db.prepare(`SELECT id, namespace, title FROM notes WHERE pinned = 1${where}${this.ceilingSql()} ORDER BY id`).all(...(namespaces ?? [])) as unknown as Array<{
-      id: number;
-      namespace: string;
-      title: string;
-    }>;
+    return gateOps.pinnedNotes(this, namespaces);
   }
 
   // --- Rollback by writer (v18) ------------------------------------------------
@@ -7788,19 +8633,7 @@ export class Store {
    * last written by it then, or with a kept or dropped history version it replaced then. `family`: "stdio" also means stdio:<app>.
    */
   rollbackCandidates(writer: string, family: boolean, sinceIso: string, namespaces?: string[]): number[] {
-    if (namespaces && namespaces.length === 0) return [];
-    const m = (col: string) => nameIsSql(col, writer, family);
-    const [c, w, h, d] = [m("created_by"), m("written_by"), m("h.saved_by"), m("d.saved_by")];
-    const nsSql = namespaces ? ` AND namespace IN (${namespaces.map(() => "?").join(",")})` : "";
-    const rows = this.db
-      .prepare(
-        `SELECT id FROM notes WHERE ((${c.sql} AND created_at >= ?) OR (${w.sql} AND updated_at >= ?)
-           OR id IN (SELECT h.note_id FROM note_history h WHERE ${h.sql} AND h.saved_at >= ?)
-           OR id IN (SELECT d.note_id FROM note_history_dropped d WHERE ${d.sql} AND d.last_at >= ?))${nsSql}${this.ceilingSql()}
-         ORDER BY id`
-      )
-      .all(...c.params, sinceIso, ...w.params, sinceIso, ...h.params, sinceIso, ...d.params, sinceIso, ...(namespaces ?? [])) as Array<{ id: number }>;
-    return rows.map((r) => Number(r.id));
+    return confirmOps.rollbackCandidates(this, writer, family, sinceIso, namespaces);
   }
 
   /** Mark a confirmation code's nonce used (the supersede_used table); throws when it already was. Caller holds the write lock. */
@@ -7812,7 +8645,6 @@ export class Store {
 
   // --- Quarantine (v7) -----------------------------------------------------
 
-  /** Hold a linter-flagged write for admin review; returns its quarantine id. */
   private quarantineWrite(q: {
     op: "create" | "update";
     targetId?: number;
@@ -7823,6 +8655,10 @@ export class Store {
     tags?: string[];
     source?: string;
     createdAt?: string;
+    /** The write's forget_after days and confidence claim, applied on approval (v20; before, a hold dropped them). */
+    forgetAfter?: number | null;
+    /** A patch's `confidence: null` (clear) is carried too (the `clears` column), so approval clears it. */
+    confidence?: number | null;
     /** op=update: the original patch moved the note to `namespace`. */
     setNamespace?: boolean;
     /** The label the held write carries (create: the new note's; update: the note's label after the write). */
@@ -7835,110 +8671,20 @@ export class Store {
     /** ... and (create) linked to its (origin, id). */
     syncIdentity?: { origin: string; id: number };
   }): number {
-    // Held writes are the flagged ones (secrets, injections): when at-rest
-    // encryption is on they are sealed too. The key state is read under the
-    // write lock (see writeKey) so a concurrent `encrypt disable` cannot
-    // strand a sealed row.
-    const nested = this.db.isTransaction;
-    if (!nested) this.db.exec("BEGIN IMMEDIATE");
-    let id: number;
-    try {
-      const key = this.writeKey();
-      const sealCol = (col: string, v: string | null): string | null =>
-        v === null || !key ? v : encrypt(v, key, quarantineAad(col, q.namespace));
-      const res = this.db
-        .prepare(
-          `INSERT INTO quarantine (op, target_id, if_rev, namespace, title, body, tags, source,
-                                   created_at_override, reasons, created_at, set_namespace, sealed, written_by, sensitivity)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .run(
-          q.op,
-          q.targetId ?? null,
-          q.ifRev ?? null,
-          q.namespace,
-          sealCol("title", q.title ?? null),
-          sealCol("body", q.body ?? null),
-          sealCol("tags", q.tags === undefined ? null : JSON.stringify(q.tags)),
-          q.source === undefined ? null : q.source.replace(/[\u{E0000}-\u{E007F}]/gu, ""),
-          isoOrNull(q.createdAt),
-          JSON.stringify(q.findings),
-          new Date().toISOString(),
-          q.setNamespace ? 1 : 0,
-          key ? 1 : 0,
-          q.writtenBy !== undefined ? cleanWriter(q.writtenBy) : currentWriter(),
-          q.sensitivity ?? DEFAULT_SENSITIVITY
-        );
-      id = Number(res.lastInsertRowid);
-      if (q.importedUnverified || q.syncIdentity) {
-        this.db
-          .prepare("UPDATE quarantine SET imported_unverified = ?, sync_origin = ?, sync_origin_id = ? WHERE id = ?")
-          .run(q.importedUnverified ? 1 : 0, q.syncIdentity?.origin ?? null, q.syncIdentity?.id ?? null, id);
-      }
-      if (!nested) this.commitTx();
-    } catch (e) {
-      if (!nested) {
-        try {
-          this.rollbackTx();
-        } catch {
-          /* already rolled back */
-        }
-      }
-      throw e;
-    }
-    // Audit records the decision, never the content.
-    this.audit({ op: "quarantine", id, namespace: q.namespace, bytes: (q.body ?? "").length });
-    return id;
+    return quarantineOps.quarantineWrite(this, q);
   }
 
-  private quarantineRow(row: Record<string, unknown>): QuarantineEntry {
-    if (Number(row.sealed) === 1) {
-      const key = this.readKey();
-      const ns = String(row.namespace);
-      for (const col of ["title", "body", "tags"]) {
-        if (typeof row[col] === "string") row[col] = decryptIfEncrypted(row[col] as string, key, quarantineAad(col, ns));
-      }
-    }
-    let reasons: LintFinding[] = [];
-    try {
-      reasons = JSON.parse(String(row.reasons)) as LintFinding[];
-    } catch {
-      /* corrupt row: show it with no reasons rather than hide it */
-    }
-    return {
-      id: Number(row.id),
-      op: row.op === "update" ? "update" : "create",
-      target_id: row.target_id === null ? null : Number(row.target_id),
-      namespace: String(row.namespace),
-      title: (row.title as string | null) ?? null,
-      body: (row.body as string | null) ?? null,
-      tags: row.tags === null ? null : parseTags(String(row.tags)),
-      source: (row.source as string | null) ?? null,
-      written_by: typeof row.written_by === "string" ? row.written_by : "",
-      reasons,
-      created_at: String(row.created_at),
-    };
+  /** @internal */ quarantineRow(row: Record<string, unknown>): QuarantineEntry {
+    return quarantineOps.quarantineRow(this, row);
   }
 
   /** Pending quarantined writes, oldest first (optionally per namespace set). */
   listQuarantine(opts: { namespaces?: string[]; limit?: number } = {}): QuarantineEntry[] {
-    if (opts.namespaces && opts.namespaces.length === 0) return [];
-    const limit = clampInt(opts.limit, 50, 1, 500);
-    const where = `WHERE 1 = 1${
-      opts.namespaces ? ` AND namespace IN (${opts.namespaces.map(() => "?").join(",")})` : ""
-    }${this.ceilingSql()}`;
-    const rows = this.db
-      .prepare(`SELECT * FROM quarantine ${where} ORDER BY id ASC LIMIT ?`)
-      .all(...(opts.namespaces ?? []), limit) as Array<Record<string, unknown>>;
-    return rows.map((r) => this.quarantineRow(r));
+    return quarantineOps.listQuarantine(this, opts);
   }
 
   getQuarantine(id: number): QuarantineEntry | null {
-    const row = this.db.prepare("SELECT * FROM quarantine WHERE id = ?").get(id) as
-      | Record<string, unknown>
-      | undefined;
-    // A held write above the caller's ceiling does not exist as far as it can tell.
-    return row && !this.hiddenByCeiling(row as { sensitivity?: string | null }) ? this.quarantineRow(row) : null;
+    return quarantineOps.getQuarantine(this, id);
   }
 
   /**
@@ -7951,91 +8697,57 @@ export class Store {
    * named a namespace.
    */
   approveQuarantine(id: number): NoteRecord {
-    const q = this.getQuarantine(id);
-    if (!q) throw new ValidationError(`no quarantined write with id ${id}`);
-    const drop = this.db.prepare("DELETE FROM quarantine WHERE id = ?");
-    let note: NoteRecord;
-    if (q.op === "create") {
-      const row = this.db
-        .prepare("SELECT created_at_override, written_by, sensitivity, imported_unverified, sync_origin, sync_origin_id FROM quarantine WHERE id = ?")
-        .get(id) as {
-        created_at_override: string | null;
-        written_by: string | null;
-        sensitivity: string;
-        imported_unverified: number;
-        sync_origin: string | null;
-        sync_origin_id: number | null;
-      };
-      note = this.transaction(() => {
-        const n = this.create(
-          {
-            namespace: q.namespace,
-            title: q.title ?? "",
-            body: q.body ?? "",
-            tags: q.tags ?? undefined,
-            source: q.source ?? undefined,
-            created_at: row.created_at_override ?? undefined,
-            sensitivity: row.sensitivity,
-          },
-          { lint: "none", writtenBy: row.written_by ?? "", importedUnverified: Number(row.imported_unverified) === 1 }
-        );
-        if (row.sync_origin !== null && row.sync_origin_id !== null) {
-          this.syncLink(row.sync_origin, Number(row.sync_origin_id), n.id);
-          // What this store has now synced for the note, so an origin edit before the next sync merges as an update.
-          this.setSyncBase(n.id, syncContentHash(n));
-        }
-        drop.run(id);
-        return n;
-      });
-    } else {
-      const held = this.db
-        .prepare("SELECT if_rev, set_namespace, written_by, sensitivity, imported_unverified, sync_origin FROM quarantine WHERE id = ?")
-        .get(id) as { if_rev: number | null; set_namespace: number; written_by: string | null; sensitivity: string; imported_unverified: number; sync_origin: string | null };
-      const ifRev = held.if_rev;
-      // Rows from before 1.1.0 may lack the rev the update was based on;
-      // applying them unguarded could overwrite later edits.
-      if (ifRev === null) {
-        throw new ValidationError(
-          `quarantined update #${id} predates rev tracking, so it can't be applied safely; reject it and re-submit the change`
-        );
-      }
-      // A stale if_rev makes update() throw "stale write" -- a conflict the
-      // admin resolves (reject, or re-submit), never a silent overwrite.
-      const updated = this.update(
-        q.target_id ?? -1,
-        {
-          ...(held.set_namespace ? { namespace: q.namespace } : {}),
-          ...(q.title !== null ? { title: q.title } : {}),
-          ...(q.body !== null ? { body: q.body } : {}),
-          ...(q.tags !== null ? { tags: q.tags } : {}),
-          ...(q.source !== null ? { source: q.source } : {}),
-          // The rev pin above means the note is exactly as it was when the write was held, so re-applying its label is a no-op
-          // unless the write itself relabelled the note.
-          sensitivity: held.sensitivity,
-        },
-        { ifRev, lint: "none", writtenBy: held.written_by ?? "", importedUnverified: Number(held.imported_unverified) === 1 }
-      );
-      if (!updated) {
-        throw new ValidationError(
-          `quarantined update #${id} targets note ${q.target_id}, which no longer exists; reject it instead`
-        );
-      }
-      // A held sync update: record the synced content as the merge base (else the next origin edit looks like a conflict).
-      if (held.sync_origin !== null) this.setSyncBase(updated.id, syncContentHash(updated));
-      drop.run(id);
-      note = updated;
-    }
-    this.audit({ op: "quarantine-approve", id, namespace: q.namespace });
-    return note;
+    return quarantineOps.approveQuarantine(this, id);
+  }
+
+  /** @internal */ applyHeld(id: number, q: QuarantineEntry): NoteRecord {
+    return quarantineOps.applyHeld(this, id, q);
+  }
+
+  /** @internal */ heldExtras(held: HeldRow, id: number): { forget_after?: number; confidence?: number | null } {
+    return quarantineOps.heldExtras(this, held, id);
+  }
+
+  /** @internal */ applyHeldCreate(q: QuarantineEntry, held: HeldRow): NoteRecord {
+    return quarantineOps.applyHeldCreate(this, q, held);
+  }
+
+  /** @internal */ applyHeldUpdate(id: number, q: QuarantineEntry, held: HeldRow): NoteRecord {
+    return quarantineOps.applyHeldUpdate(this, id, q, held);
+  }
+
+  /**
+   * What changed while held write `id` waited (1.4.0): live notes in its namespace saved (created or edited) since it was
+   * held that share its topic, newest first. Ids, titles, times and writers only, never the held text. For a held edit
+   * the target note is left out of the list; `target_changed` says whether it changed since (then approval will fail,
+   * because a held edit is applied only to the exact version it was written against). The caller's own read rules apply
+   * (distrusted writers, sensitivity ceiling). null when there is no such held write.
+   */
+  quarantineContext(id: number): QuarantineContext | null {
+    return quarantineOps.quarantineContext(this, id);
+  }
+
+  /** @internal */ heldClears(id: number): { clears?: string[] } {
+    return quarantineOps.heldClears(this, id);
+  }
+
+  /** @internal */ heldRev(id: number): number | null {
+    return quarantineOps.heldRev(this, id);
+  }
+
+  /**
+   * "Keep as history" (1.4.0): approve held write `id` with its written time, then mark the note replaced by a newer related
+   * note (by default the newest one quarantineContext lists; `byId` must be one of them). The note is kept whole and
+   * retired exactly like a confirmed replacement (archived, superseded_by set, undo with supersede undo). Refused, with the
+   * write left queued, when nothing newer and related was saved since it was held.
+   */
+  keepQuarantineAsHistory(id: number, byId?: number): { note: NoteRecord; superseded_by: number } {
+    return quarantineOps.keepQuarantineAsHistory(this, id, byId);
   }
 
   /** Discard a quarantined write. Returns false when no such entry. */
   rejectQuarantine(id: number): boolean {
-    const q = this.getQuarantine(id);
-    if (!q) return false;
-    this.db.prepare("DELETE FROM quarantine WHERE id = ?").run(id);
-    this.audit({ op: "quarantine-reject", id, namespace: q.namespace });
-    return true;
+    return quarantineOps.rejectQuarantine(this, id);
   }
 
   // --- Plain-file sync identity (v7) ---------------------------------------
@@ -8168,7 +8880,7 @@ interface FeedCursor {
   /** exclude_self: hide changes whose source equals this label */
   x?: string;
   /** The window's totals, counted once on the first page and carried (signed) to the later ones. */
-  n?: { counts: ChangesPage["counts"]; bySource: ChangesPage["bySource"]; q: number };
+  n?: { counts: ChangesPage["counts"]; bySource: ChangesPage["bySource"]; byWriter?: ChangesPage["byWriter"]; q: number };
 }
 
 /** Most "last" markers a store keeps (see Store.setFeedMarker). */

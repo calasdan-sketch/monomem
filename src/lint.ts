@@ -37,7 +37,7 @@
 
 import { isIPv4, isIPv6 } from "node:net";
 import { HIGH_ENTROPY_LABEL, normalizeForScan, scanForSecrets } from "./security.js";
-import { configuredTokenValues } from "./config.js";
+import { configuredTokenValues, sha256Hex } from "./config.js";
 
 export type LintCategory = "secret" | "injection" | "entropy" | "pii" | "directive";
 export type LintAction = "block" | "quarantine" | "warn";
@@ -378,6 +378,24 @@ export function scanForDirective(text: string | undefined): string | null {
 export const OWN_TOKEN_LABEL = "Monomem access token";
 
 /**
+ * 1.5.0: keys kept as hashes cannot be searched for as text, so every key-shaped run in the note (64 hex characters, or any
+ * run of 32+ letters and digits; at most 50 per text) is hashed and compared. Keys made by Monomem are 64 hex characters;
+ * a key you chose yourself is found when it stands alone or is joined to other text only by punctuation.
+ */
+function containsHashedKey(hashes: ReadonlySet<string>, ...texts: string[]): boolean {
+  if (!hashes.size) return false;
+  const seen = new Set<string>();
+  for (const t of texts) {
+    for (const m of t.matchAll(/[0-9a-f]{64}|[A-Za-z0-9]{32,}/gi)) {
+      if (seen.size >= 50) break;
+      seen.add(m[0]);
+    }
+  }
+  for (const c of seen) if (hashes.has(sha256Hex(c).toLowerCase())) return true;
+  return false;
+}
+
+/**
  * Lint a note's free-text fields. Returns every finding (at most one per
  * category per field) so the caller can apply the policy and report them.
  */
@@ -397,8 +415,8 @@ export function lintContent(input: {
   const liveTokens = configuredTokenValues();
   for (const [field, text] of fields) {
     // One of this server's own access tokens, pasted verbatim. The label never carries the value.
-    const norm = text && liveTokens.length ? normalizeForScan(text) : "";
-    const live = !!text && liveTokens.some((tok) => text.includes(tok) || norm.includes(tok));
+    const norm = text && (liveTokens.plain.length || liveTokens.hashes.size) ? normalizeForScan(text) : "";
+    const live = !!text && (liveTokens.plain.some((tok) => text.includes(tok) || norm.includes(tok)) || containsHashedKey(liveTokens.hashes, text, norm));
     const s = live ? OWN_TOKEN_LABEL : scanForSecrets(text);
     if (s) out.push({ category: s === HIGH_ENTROPY_LABEL ? "entropy" : "secret", label: s, field });
     // Provenance labels are not instructions an agent reads as prose.
@@ -413,10 +431,7 @@ export function lintContent(input: {
   return out;
 }
 
-/** "GitHub token in body; instruction override in title" */
-export function describeFindings(findings: LintFinding[]): string {
-  return findings.map((f) => (f.category === "approval" ? f.label : `${f.label} in ${f.field}`)).join("; ");
-}
+export { describeFindings } from "./lint-describe.js";
 
 // Body/fact mismatch (warn only). A note that carries `facts` but whose own text states another value for one of those keys
 // ("deploy target is vercel" with fact deploy_target=render) leaves two answers in one note. Deterministic: the key's words, a

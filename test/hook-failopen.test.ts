@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { Store, SCHEMA_VERSION } from "../src/store.js";
 import { SPOOL_FILE } from "../src/capture.js";
+import { ensureKey } from "../src/crypto.js";
 
 const CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "cli.js");
 const SECRET = "AKIAIOSFODNN7EXAMPLE";
@@ -62,6 +63,21 @@ describe("hook fail-open", () => {
       assert.equal(lines.length, 1);
       assert.ok(!lines[0].includes(SECRET), "the spool holds only redacted text");
       assert.match(lines[0], /\[REDACTED:AWS access key\]/);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("S-02b: a key beside the database seals the spooled line (no command text on disk)", () => {
+    const home = mkdtempSync(join(tmpdir(), "om-hook-k-"));
+    try {
+      ensureKey(home);
+      const r = hook(home, "post-tool", payload({ tool_input: { command: "echo HOOKSPOOLCANARY" } }));
+      assert.equal(r.status, 0, r.stderr);
+      const lines = spooled(home);
+      assert.equal(lines.length, 1);
+      assert.ok(!lines[0].includes("HOOKSPOOLCANARY"), lines[0]);
+      assert.match(lines[0], /"sealed":"v2:/);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

@@ -127,13 +127,25 @@ describe("prompt-injection detection", () => {
 describe("linter hardening (r3)", () => {
   afterEach(() => setPolicy(SAVE));
 
-  test("ReDoS: 256KB floods of newlines / spaces / CRLF / eyJ- lint in < 200ms total", () => {
+  test("ReDoS: 256KB floods of newlines / spaces / CRLF / eyJ- lint in linear time", () => {
+    // A fixed "< 200ms" measured machine load under the full suite, not complexity. Compare N/4 with N instead:
+    // linear is about 4x, quadratic about 16x. The min of 3 runs drops scheduler noise; a loose ceiling catches a hang.
+    const floods = (n: number) => ["\n".repeat(n), " ".repeat(n), "\r\n".repeat(n / 2), "eyJ-".repeat(n / 4), "## \n".repeat(n / 4)];
+    const time = (n: number): number => {
+      const bodies = floods(n);
+      let best = Infinity;
+      for (let i = 0; i < 3; i++) {
+        const t0 = performance.now();
+        for (const body of bodies) lintContent({ title: "t", body });
+        best = Math.min(best, performance.now() - t0);
+      }
+      return best;
+    };
     const N = 256 * 1024;
-    const floods = ["\n".repeat(N), " ".repeat(N), "\r\n".repeat(N / 2), "eyJ-".repeat(N / 4), "## \n".repeat(N / 4)];
-    const t0 = performance.now();
-    for (const body of floods) lintContent({ title: "t", body });
-    const ms = performance.now() - t0;
-    assert.ok(ms < 200, `took ${ms.toFixed(0)}ms`);
+    const small = time(N / 4);
+    const big = time(N);
+    assert.ok(big < 2000, `took ${big.toFixed(0)}ms`);
+    assert.ok(big / Math.max(small, 1) < 8, `N/4 ${small.toFixed(1)}ms, N ${big.toFixed(1)}ms: grows faster than linear`);
   });
 
   test("obfuscated injection is normalized before scanning", () => {
@@ -378,7 +390,7 @@ describe("store write path under each policy", () => {
     assert.equal(q.target_id, n.id);
     // The note moved on: the held update is now stale and stays queued.
     s.update(n.id, { body: "ship friday" });
-    assert.throws(() => s.approveQuarantine(q.id), /stale write/);
+    assert.throws(() => s.approveQuarantine(q.id), /note changed since this edit was held/);
     assert.equal(s.listQuarantine().length, 1);
     assert.equal(s.rejectQuarantine(q.id), true);
     assert.equal(s.rejectQuarantine(q.id), false);

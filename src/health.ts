@@ -44,7 +44,9 @@ export const NOT_COVERED = "Not covered: the injection check is a pattern linter
 /** The grade, computed only from the check statuses (the drill check failing is the F case). */
 export function gradeOf(checks: Pick<HealthCheck, "id" | "status">[]): string {
   if (checks.some((c) => c.id === "drill" && c.status === "fail")) return "F";
-  let i = checks.filter((c) => c.status === "warn").length;
+  // A backlog of unconfirmed notes never grades A, but it is not a step on its own: it caps the grade at B.
+  let i = checks.filter((c) => c.status === "warn" && c.id !== "confirm-backlog").length;
+  if (checks.some((c) => c.id === "confirm-backlog" && c.status === "warn")) i = Math.max(i, 1);
   if (checks.some((c) => c.status === "fail")) i = Math.max(i, 3);
   return LETTERS[Math.min(i, LETTERS.length - 1)];
 }
@@ -245,6 +247,8 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
   let notes = 0, held = 0, distrust = 0, marked = 0, dbOk = false;
   let meterText = "meter unavailable";
   let piiNotes = 0, privateNotes = 0, labelledNotes = 0;
+  let confirmLines: string[] = [];
+  let backlog = "";
   let audit: Result | undefined;
   if (existsSync(dbPath)) {
     try {
@@ -255,6 +259,17 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
           const d = describeDbFailure(dbPath, new Error(damaged));
           add("database", "Database", "fail", `${d.problem}. ${d.fix}`);
         } else {
+          // A3: a damaged trust setting is read in its strictest form; say so and how to reset it.
+          const bad = s.damagedTrustSettings();
+          if (bad.length) {
+            const how: Record<string, string> = {
+              approve_first: "every namespace is approve-first until you set it again: monomem approve-first <namespace> on|off",
+              flood_paused: "every agent writer is paused until you resume one: monomem resume <writer>",
+              revoked_attester_keys: "no attester key is believed until the list is rewritten: monomem trust attester-revoke <key>",
+              confirm_mode: "expiry runs in enforce mode until you set it: monomem config set confirm-mode label",
+            };
+            add("trust-settings", "Trust settings", "warn", `damaged stored setting${bad.length === 1 ? "" : "s"}, read in the strictest form: ${bad.map((k) => `${k} (${how[k]})`).join("; ")}`);
+          }
           // Each count on its own: one that fails is a warning of its own and lowers the grade, the others still run.
           const step = (id: string, label: string, f: () => void): void => {
             try {
@@ -266,6 +281,11 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
           notes = s.countAll();
           step("held", "Held writes", () => void (held = s.listQuarantine({ limit: 500 }).length));
           step("distrust", "Distrusted writers", () => void (distrust = s.distrustRules().length));
+          step("confirm", "Confirm rules", () => void (confirmLines = s.confirmRuleLines()));
+          step("confirm-backlog", "Unconfirmed backlog", () => {
+            const b = s.confirmBacklog();
+            if (b.capped) backlog = b.reason;
+          });
           step("redacted", "Note scan", () => {
             // ponytail: loads every live note to count markers; use SQL if a store gets big enough for this to show up in the runtime
             const live = s.exportAll({ live: true }); // gate-ok: operator CLI, counts redaction markers only; no note content is returned or printed
@@ -325,7 +345,6 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
   if (dbOk) {
     try {
       const d: DrillReport = await (o.drill ?? runDrill)({ dbPath });
-      const known = d.reached.length - d.unexpected.length;
       add("drill", "Drill", d.ok ? "ok" : "fail", d.ok ? (d.reached.length ? `${d.attacks - d.reached.length} of ${d.attacks} known attacks blocked; ${d.reached.length === 1 ? "the 1 that gets through is a known limit" : `the ${d.reached.length} that get through are known limits`}` : `none of ${d.attacks} known attacks reached the agent`) + (d.approve_first ? " (approve-first is on: held writes wait for your review; approving one unread lets it in)" : "") : `${d.unexpected.length} unexpected of ${d.attacks} attacks reached the agent: ${d.unexpected.map((x) => x.id).join(", ")} (monomem drill has the detail)`);
     } catch (e) {
       add("drill", "Drill", "warn", `could not run: ${(e as Error).message}`);
@@ -390,6 +409,8 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
   if (dbOk) {
     add("held", "Held writes", "info", held ? `${held >= 500 ? "500 or more writes" : plural(held, "write")} held for review: the defence working, nothing was stored without you (monomem quarantine list)` : "no writes waiting for review");
     add("distrust", "Distrusted writers", "info", `${plural(distrust, "distrust rule")}${distrust ? " (their notes are hidden from agents)" : ""}`);
+    if (confirmLines.length) add("confirm", "Confirm rules", "info", confirmLines.join("; "));
+    if (backlog) add("confirm-backlog", "Unconfirmed backlog", "warn", `${backlog}: review them with monomem review (the grade is capped at B until they are dealt with)`);
     add("redacted", "Redacted notes", "info", `notes with a [REDACTED:...] marker (secret redaction replaced a credential): ${marked}`);
     add("memory", "Memory size", "ok", meterText);
   }

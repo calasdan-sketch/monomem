@@ -1,4 +1,4 @@
-// Trust policy primitives (1.4.0): stable writer ids, the per-namespace
+// Trust policy primitives (from OneMemory 1.4.x): stable writer ids, the per-namespace
 // `distrust_writers` list, and the one place that turns the list into a
 // predicate (in JS) and a SQL fragment, so every read path asks the same
 // question the same way.
@@ -19,6 +19,7 @@
 // a later content edit by someone else makes THEM the author, and a claim is
 // only a claim. (Documented in docs/trust.md.)
 import { cleanWriter, squashWriter } from "./actor.js";
+import { didYouMean } from "./suggest.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -140,6 +141,34 @@ export function nameIs(v: unknown, name: string, family: boolean): boolean {
   return v === name || (family && typeof v === "string" && v.startsWith(name + ":"));
 }
 
+/**
+ * People know a local app as "cursor"; its notes are stamped "stdio:cursor" (a token's as "token:<label>" only when the
+ * label collides with a marker). When `writer` is a bare name, return the first stamped form that `count` finds notes
+ * for, so a command that matched nothing can say "Did you mean ...". Suggest only: callers never widen a name on their own.
+ */
+export function suggestWriter(writer: string, count: (name: string) => number): { writer: string; notes: number } | undefined {
+  if (!writer || writer.includes(":") || writer.includes("/") || stdioFamily(writer)) return undefined;
+  for (const name of [`stdio:${writer}`, `token:${writer}`]) {
+    const notes = count(name);
+    if (notes > 0) return { writer: name, notes };
+  }
+  return undefined;
+}
+
+/**
+ * The stamped writer closest to a mistyped name ("curser" -> stdio:cursor) among `known`, when `count` finds notes for it.
+ * A local app is known by its bare name too: "curser" is near "cursor", which is stamped stdio:cursor. Suggest only.
+ */
+export function nearWriter(writer: string, known: readonly string[], count: (name: string) => number): { writer: string; notes: number } | undefined {
+  const byName = new Map<string, string>(known.map((w) => [w, w]));
+  for (const w of known) if (w.startsWith("stdio:") && !byName.has(w.slice(6))) byName.set(w.slice(6), w);
+  const guess = didYouMean(writer, [...byName.keys()]);
+  const stamped = guess === null ? undefined : byName.get(guess);
+  if (!stamped || stamped === writer) return undefined;
+  const notes = count(stamped);
+  return notes > 0 ? { writer: stamped, notes } : undefined;
+}
+
 /** SQL twin of nameIs. GLOB is exact (case-sensitive) and safe here: a family name is "stdio" or "<uuid>/stdio". */
 export function nameIsSql(col: string, name: string, family: boolean): { sql: string; params: string[] } {
   return family ? { sql: `(${col} = ? OR ${col} GLOB ?)`, params: [name, `${name}:*`] } : { sql: `${col} = ?`, params: [name] };
@@ -150,7 +179,7 @@ function ruleApplies(rule: DistrustRule, namespace: string): boolean {
 }
 
 /** Does `rule` name a writer that touched these facts? `localId` is this database's server_id. */
-export function ruleMatches(rule: DistrustRule, f: WriterFacts, localId: string): boolean {
+function ruleMatches(rule: DistrustRule, f: WriterFacts, localId: string): boolean {
   if (!ruleApplies(rule, f.namespace)) return false;
   const ref = parseWriterRef(rule.writer);
   if (!ref.label) return false;
@@ -205,7 +234,7 @@ export function mergedHasSql(col: string): string {
  * empty taint set (nearly all) cost one string comparison. `n` bound
  * parameters: the tokens themselves, then `globs` GLOB patterns (a stdio family's `<name>:*`).
  */
-export function mergedHasAnySql(col: string, n: number, globs = 0): string {
+function mergedHasAnySql(col: string, n: number, globs = 0): string {
   const g = " OR value GLOB ?".repeat(globs);
   return `(${col} <> '' AND EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(${col}) THEN ${col} ELSE '[]' END) WHERE type = 'text' AND (value IN (${Array(n).fill("?").join(",")})${g})))`;
 }
@@ -358,4 +387,27 @@ export function writerTaintFilterSql(cols: WriterColumns, value: string, localId
   return foreign
     ? { sql: `(NOT (${cols.attBy} = ? AND ${a.sql}) AND NOT ${merged})`, params: [ref.serverId, ...a.params, ...m] }
     : { sql: `(NOT ${a.sql} AND NOT ${merged})`, params: [...a.params, ...m] };
+}
+
+/**
+ * Why an `include_distrusted` opt-in is refused, or null when it is honoured (1.5.0 P-01: the one rule REST and MCP share).
+ * The opt-in turns the distrust policy OFF for the call, so it is an admin decision: `local` = the stdio transport, which runs
+ * as admin with no token (nobody chose to give that agent admin); `not-admin` = a read or write caller; `other-namespace` = a
+ * namespace-pinned admin that also has read grants names a namespace other than its own (those belong to their own admins).
+ * A by-id read names no namespace: it is checked against the note's own namespace where the note is read.
+ */
+export type DistrustedOptInRefusal = "local" | "not-admin" | "other-namespace";
+export function distrustedOptInRefusal(c: {
+  admin: boolean;
+  local?: boolean;
+  byId: boolean;
+  /** Pinned to a namespace and able to read another one. */
+  pinnedWithGrants: () => boolean;
+  ownNs: string;
+  nsHint: unknown;
+}): DistrustedOptInRefusal | null {
+  if (c.local) return "local";
+  if (!c.admin) return "not-admin";
+  if (!c.byId && c.pinnedWithGrants() && c.nsHint !== c.ownNs) return "other-namespace";
+  return null;
 }

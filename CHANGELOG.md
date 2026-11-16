@@ -4,6 +4,430 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-11-16
+
+This release includes 1.4.0 below, which was never published on its own: the release before it is 1.3.5, and
+upgrading from 1.3.x takes one step (docs/upgrading.md).
+
+### Security
+
+- **App keys in `tokens.json` are stored as one-way hashes, and existing ones are hashed automatically on the first start.**
+  The rewrite is atomic, no plain-text `tokens.json.bak` is left, and running it again changes nothing. Your apps keep working
+  with the keys they already hold. **Going back to 1.3.x (the previous release) cannot read hashed keys:** run `monomem connect <app>` again
+  for each app. The main key (`.token`) stays in plain text. `monomem token harden` does it by hand; `monomem doctor` warns
+  about any key still in plain text.
+- **Honest key disclosure.** SECURITY.md and docs/trust.md now list every place a key sits (`.token`, `tokens.json`, each
+  connected app's own config, `.key`, `.attest-key`, the dashboard's `sessionStorage`, the `login-code` file's forgeable flag)
+  and say plainly that a key proves which key wrote, not which agent. `monomem doctor` names the key files that exist here. A
+  test fails if a connect target that can hold a key is not named in SECURITY.md.
+- **Windows data folder is limited to its owner.** A data folder Monomem creates gets `icacls` permissions for your account and
+  SYSTEM only (best effort: a failure is one warning), also when it was created from an administrator prompt. `monomem doctor` checks an existing folder and prints the fix command.
+  This keeps other accounts on the PC out; it does not stop programs running as you.
+- **`connect --project` will not commit a key.** In a git repository that does not ignore `.mcp.json`, a connection that
+  carries a key is refused (also with `--yes`); keyless entries are unchanged.
+- A reply from any route or tool that carries an unconfirmed note now marks the reader, and a test enumerates every route
+  and tool so a new one cannot skip it (`memory_since` was one that did).
+- **With encryption on, automatic capture keeps your words out of plain text.** Captured notes get fixed titles ("Decision
+  (sealed)", "Session 2026-11-14"), the sentence goes into the sealed body, no `obs.concept:` word tags are made, and each
+  `capture-spool.jsonl` line is sealed. Notes captured before the key existed keep their old titles. File paths and working
+  folders stay plain text (docs/encryption-retention.md lists them).
+- **Held writes are sealed bound to their own queue row**, so one held body moved into another row no longer opens. Older
+  rows are still read. The docs now say plainly that encryption gives confidentiality, not rollback protection.
+- `MONOMEM_ENCRYPT=0` is no longer read: it only made `encrypt status` say "off" while writes were still sealed.
+- **Hidden notes leak nothing through errors.** `state_write` checks what the caller may see before its reserved-tag rule, so
+  a refusal no longer tells a hidden note from a missing one. A script running `quarantine approve <id>` is refused before it
+  learns whether the id exists.
+- **A damaged trust setting fails closed.** A stored setting that can't be read makes Monomem stricter, never looser:
+  approve-first applies everywhere, agent writers are paused, no attester key is believed, and expiry runs in enforce mode.
+  `monomem doctor` names the setting and the command that resets it.
+- **Sealed git sync can't be rolled back.** Each sealed file carries a version inside the seal; a computer that already synced
+  a newer version stops instead of accepting an older file replayed from the repository's history.
+- **Approving a held write never echoes its text.** REST approve and keep-history reply with ids only, as MCP already did.
+- **An app older than the database refuses to write.** If a newer Monomem upgraded the file while an older one was running,
+  the older one says "restart this app" instead of writing rows in the old shape.
+- **`doctor` tells the truth about encryption:** it fails when encrypted notes have no key and warns about readable bodies
+  next to a key; `encrypt status` counts them. `restore` recognises an encrypted backup again.
+- **`derived_from` no longer leaks across namespaces.** A note's `derived_from` list names only parents the reader may
+  see, so a parent's id in a namespace the reader cannot read is no longer shown. Deleting a note removes its links and
+  confirmations.
+- **`service install` with a non-loopback `MONOMEM_BIND` or `MONOMEM_ALLOWED_HOSTS` needs a person at a terminal.** It asks
+  you to type yes; an agent's shell or a script is refused and nothing is installed. `--print` is never gated, and a
+  loopback-only service is not asked. The Windows task now carries `MONOMEM_HOME` and the other settings (never a key).
+- **The signing key exists from the moment a store is opened**, not from its first write, so the first audit line is already
+  signed. With `MONOMEM_AUDIT_LOG` pointing to another folder, a copy of the key sits beside that log (and `trust rotate`
+  updates it), so that log is signed too. An in-memory store writes unsigned lines (documented in SECURITY.md).
+- **`trust rotate` no longer races other writers.** While the key-rotate line and the key swap run, other processes' audit
+  lines wait (at most 5 s), so no line is signed by the retired key after the hand-over line. `audit verify` still warns
+  about an unsigned line after signing began and `--strict` fails on it.
+- **A flood pause set while flagging a note now sticks** (the throw used to roll the pause back, so the writer was never
+  paused). A refusal that pauses a writer is one audit line, not two.
+
+### Changed
+
+- **Keyword search ranks better (round 3, item 4).** The any-keyword search also matches other forms of a word ("camping"
+  finds "camped"; plural s/es, ed and ing only), and a note's keyword-coverage share now weighs each keyword by how rare it is in
+  the store, so the note holding a question's one rare word beats one holding two common ones. Full runs, keyword-only,
+  before / after: LongMemEval-S strict recall-all@5 84.0 to 85.7 (R@5 96.8 to 97.2), LoCoMo-10 by turn R@5 57.8 to 60.8, by
+  session 90.4 to 90.9. Tuned on half the questions; on the validation half (never tuned on, but used to keep or drop each candidate) every metric rose or held (LoCoMo-10 session R@10 unchanged), except LoCoMo-10
+  session R@5, which fell 0.3 (about 3 questions). Identical with encryption on at the time; LoCoMo-10 by turn later moved to the
+  chat layout and differs slightly when encrypted (below). docs/BENCHMARK.md has both halves.
+
+- **`monomem setup --yes` adds the start-of-session hook for Claude Code** (it is what makes remembered notes reach a new
+  session). It says what it added; leave it out with `--no-hook`, take it back with `setup --undo`. When the hook is not
+  installed, setup says so on its last line.
+- **`monomem doctor` only reports.** It no longer upgrades an older database (apps still running would keep writing in the
+  old shape); it says how to upgrade.
+- **The HTTP server waits at most 2 seconds for a busy database**, then REST answers 503 with `Retry-After` and MCP tools say
+  "busy, try again". The CLI and the stdio server still wait up to 20 seconds.
+- `changes` groups by the server-stamped writer; the writer's stated source is shown as a claim.
+- A held write that looks like an injected instruction is reported to the agent as that, also in an approve-first namespace.
+
+### Added
+
+- **Your past Claude Code conversations, searchable: `monomem import --from claude-code-chats`.** Reads
+  `~/.claude/projects/*/*.jsonl` (read only, local) and stores one note per message: what you typed and Claude's written
+  replies, without tool calls, tool output, thinking, subagent turns, slash commands or `<system-reminder>` blocks. Each note
+  also carries the first 400 characters of the message it replied to, so a search for a question finds its answer (left
+  out when that message holds a secret or a linter hit). Notes go
+  into the `chats` namespace (or `--namespace`), are tagged `imported:claude-code-chats` and `chat.session:<id>`, Claude's carry the model-written
+  label, and **chat notes are never shown at session start or in the "new notes" line**. Same rules as the other imports:
+  dry run first, secrets skipped and never shown, the linter may hold a message, re-runs add only new messages; the dry run
+  also counts files over 256 MB and damaged lines it skipped. The LoCoMo-10 by-turn benchmark now builds its notes with the
+  same code: keyword R@5 / strict Rall@5 / R@10 60.8 / 52.2 / 67.7 -> **67.4 / 58.4 / 76.3** (validation half b, never tuned on but used to reject a next-turn variant:
+  58.8 / 49.6 / 65.1 -> 64.6 / 55.4 / 73.2); LongMemEval-S and LoCoMo by session unchanged. On an encrypted store a chat note gets the fixed title
+  `Chat message (sealed)` and its real title becomes the sealed body's first line (as captured notes do), so no message
+  text sits in plaintext titles; encrypted by turn 67.6 / 58.2 / 76.9.
+- **Search shows the part of a long note that matched.** When `state_search` cuts a body to 600 characters, it now shows the
+  600 characters with the most of your query words instead of the first 600, and `body_offset` says where they start. It
+  works on encrypted notes too. `state_list` and short notes are unchanged (docs/search.md).
+- **Write receipts.** `state_write` and REST `POST`/`PUT /notes` answer with a `receipt` for an accepted, held or refused
+  write: the audit-log line that recorded the decision. `monomem verify-receipt <seq> <hash>` checks that line is still in
+  an unbroken audit chain and names the first broken line if not. Audit lines now carry a `seq` number.
+- **Signed audit log and signed receipts.** Every audit line and every write receipt is Ed25519-signed by the store's own
+  key (the existing `.attest-key`; the first note write creates it if missing). Receipts (`v: 2`) carry `note_id`, `rev`
+  and `content_hash`, the hash of the exact content accepted or held; a refused write gets a signed receipt with no
+  content hash. The content hash is in the receipt only, never in the audit log. `monomem verify-receipt --file r.json
+  --pubkey <key>` checks a receipt offline with only the public key, `--note <id>` says whether the note is unchanged
+  since, and docs/verify-receipt.mjs does the check with plain Node, no install. `monomem audit checkpoint` prints a signed
+  head to keep elsewhere; `audit verify --checkpoint <file>` checks it, `--all-signatures` checks every line and `--strict`
+  fails on unsigned lines after signing began. An upgraded log gets a `sign-start` line that freezes the unsigned history
+  before it; `trust rotate` writes a `key-rotate` line signed by the old key, and a key change without one is a bad
+  signature. **What it does not prove:** a program running as you can read the key and rewrite everything after the last
+  receipt or checkpoint someone else holds, or cut the newest lines off; keep a checkpoint off the machine (SECURITY.md has
+  the full list). Compared with an unsigned hash chain and unsigned receipts, this adds signatures, offline checking and
+  content binding. Measured on one Windows PC (1,000 creates, p50): 3.20 ms before, 3.33 ms after.
+- **Claude Code `PreCompact` hook.** `monomem hook pre-compact` saves the session so far as its summary note before the
+  context is compacted (same redaction, stamps and spool as the other capture hooks). `setup --capture` adds it for
+  Claude Code only; `setup --undo` removes it. Run `setup --capture` again to add it to an existing install.
+- **`monomem encrypt status --surfaces`** lists every place note text can exist (bodies, titles, tags, sources, old
+  versions, held writes, captured events and titles, the capture spool, file paths, the search index, the change feed,
+  embeddings, the access and audit logs, the server log, backups, exports, sync files) and whether each is encrypted on
+  this store right now, with counts. Backups and sync folders are outside the database, so the report says "not checked"
+  for them. docs/encryption-retention.md now lists the same places.
+- `monomem show`, `ls` and `why` print the trust state: unconfirmed, expired and built-on-distrusted labels, a plain origin
+  line, confirmations (counted or not, and why) and who approved a held write. `ls --archived` includes notes kept as history.
+- `monomem review --step`: one typed yes, then y / n / q per note.
+- **Disputed facts are marked on every read**, not only at session start: a note whose fact another writer's live note
+  contradicts carries `disputed` (who says what, and whether a person confirmed it) on REST and MCP reads, searches, lists
+  and `memory_get` / `memory_index`; MCP shows a `DISPUTED key: #id says "value"` line. A side a person confirmed is listed
+  first and the other side is labelled "disputed by a confirmed note". Nothing is hidden, and a note the reader may not see
+  is never named. See docs/search.md.
+- **Agents can flag a note that looks wrong** instead of overwriting it: `memory_flag` (opt-in with `MONOMEM_TOOLS`) and
+  `POST /notes/:id/flag`, with a one-line reason. The note does not change. A flagged note no person confirmed leaves session
+  start; a person-confirmed note stays, labelled. Own-note flags are refused, distrusted writers' flags ignored, 20 a day per
+  writer. `monomem review` lists flagged notes; `monomem review keep <id>` keeps one. The reason is never shown at session
+  start. See docs/trust.md.
+- `monomem trust` shows each writer's record for the last 30 days: writes held by the linter, rejected by a person, rolled
+  back, flags upheld and replaced by someone else. Counts only: nothing is held or hidden because of them.
+- **Retry-safe note writes:** `client_key` on `state_write` and `POST /notes` (as tasks already had). A retry with the same key
+  from the same writer gets back the note the first write made (`deduplicated: true`; REST answers 200 instead of 201) and
+  writes nothing, so it does not count toward the flood guard. Keys are per writer and stored hashed. Not covered: a write
+  that was held for approval is held again on retry.
+- Line-by-line diff of what changes in `supersede preview`, `quarantine show` and the dashboard.
+- `monomem service install | status | uninstall` (Windows Task Scheduler, macOS LaunchAgent, Linux systemd user unit; never
+  run by setup) and `start --log` writing a rotated `server.log`.
+- `monomem bench --longmemeval | --locomo` prints strict recall-all@5 (`Rall@5`, every gold session in the top 5) next to
+  the any-hit `R@5`. LongMemEval-S keyword: 97.2 any-hit, 85.7 strict (docs/BENCHMARK.md). `--split a|b` runs half the
+  data: LongMemEval-S by a hash of the question id, LoCoMo by conversation (1-5 = a, 6-10 = b), so a ranking change can be
+  tuned on one half and checked on the other, and a checked question never shares a conversation with a tuning one.
+- `monomem bench --scale 10k`: session start, search and write p50/p95 on a synthetic store in a temp folder, plain and
+  encrypted, with the 50 ms encrypted session-start gate (exit 1 when it fails). On the development PC at 10k notes:
+  encrypted session start 12-18 ms p50, plain 9-10 ms (docs/BENCHMARK.md).
+- `monomem bench --longmemeval | --locomo --encrypted` runs the same retrieval benchmark on encrypted stores.
+- **Keyword search finds words in encrypted note bodies (C-06).** With encryption on, the on-disk search index can only hold
+  titles and tags, so before this change keyword recall on LongMemEval-S fell from 96.8 to 0.0 R@5. Each Monomem process that
+  searches now keeps a second index of every note's decrypted body **in memory only** (an attached in-memory SQLite database
+  on its own connection; nothing is written to the database, the WAL or a temp file, and a test checks the files). It covers
+  every note, so ranking is the plain store's: encrypted recall is now identical to plain on LongMemEval-S (97.2 / 85.7 R@5 /
+  Rall@5) and LoCoMo-10 by session. LoCoMo-10 by turn differs slightly (67.6 / 58.2 / 76.9 vs 67.4 / 58.4 / 76.3 R@5 / Rall@5 /
+  R@10) because chat notes get a fixed sealed title on an encrypted store. Kept current for this process's writes by connection-only triggers, and for other
+  processes' writes from the change log. The REST and MCP servers build it just after start-up (about 0.5 s at 10,000 notes
+  and 4-6 s at 100,000 notes; the build runs in batches of 1,000 notes. Memory: `bench --scale` measures about +22 MB at
+  10,000 and +155 MB at 100,000 inside an already-running process; a freshly started server grows by about +60 MB at 10,000
+  and about +235 MB at 100,000, to about 305 MB in total; see the body-index line in docs/BENCHMARK.md); the hooks never build it, so session start stays fast. On an encrypted store session start
+  matches titles and tags itself and, when a Monomem server for the same store runs on this computer, asks that server
+  (127.0.0.1 only, at most 0.3 s) which notes' bodies match; with no server, or a slow one, it stays on titles and tags.
+  The hook sends its main key only after the server proves, over a fresh nonce, that it holds the same key and store
+  (`GET /proof`), and it takes only note ids back: every note is re-read and filtered locally. Not built above 100,000 notes. `MONOMEM_BODY_INDEX=off` turns it
+  off. **Security change:** while a server runs, every body's words are in its memory, which the system can page to swap or a
+  hibernation file or write into a crash dump; use whole-disk encryption too (SECURITY.md, docs/encryption-retention.md,
+  `encrypt status --surfaces` lists it). A search that finds nothing says bodies were not searched only when that is true.
+  A search that runs on titles and tags only while bodies are sealed (over the cap, inside a write before the index is
+  built, or after a failed build) is never silent: REST `/search` and `/relevant` and MCP replies carry a `body_search`
+  notice with the reason, every one is counted, and the new admin-only `GET /status` and `monomem doctor` (for a server it
+  has verified is this store's) show the index state, unreadable bodies and the fallback count. `/health` is unchanged.
+- **137 deterministic scenarios** (was 131): A 38, B 31, C 27, D 19, E 22. Obsolete-fact scenarios A33 and A34 in `monomem bench`. With the replace step the old value never reaches the agent (A34
+  passes). Without it, search used to rank the outdated note above its update (A33): first recorded as the known gap
+  `GAP-OBSOLETE-UNREPLACED`, now fixed (below). **0 known gaps are open.** MemoryAgentBench was not run (docs/BENCHMARK.md says why).
+- **A later restatement by the same writer ranks first, labelled (GAP-OBSOLETE-UNREPLACED fixed).** When the same writer later
+  writes a note on the same subject (the same fact key with another value, or a similarity link of at least 0.6) and the two are a
+  near tie (old score at most 1.5x the new one), search, the "what is relevant" lookup and session start put the newer note first and
+  the older one right behind it, with `restated_by`, `restated_label` and an explain line (REST, MCP, the CLI). Nothing is hidden.
+  Never for a different writer (the dispute label covers that), over a note a person confirmed, or behind a held, replaced or
+  distrusted note. Guard scenarios A35 to A38; the bench has a new `confirm` step. LongMemEval-S and LoCoMo-10 retrieval figures are
+  unchanged (docs/BENCHMARK.md).
+- **Notes can say which files they are about, and are labelled when that code changes.** `files: ["src/auth.ts"]` on
+  `state_write` / `POST /notes` (creating, at most 20 git-tracked files in the writer's repository). After a commit changes
+  one, reads and session start show `[code changed since this was written: src/auth.ts]` and `code_changed`; the note is not
+  hidden, and a pinned one stays pinned. `monomem stale --code` and `monomem review` list them; `review keep <id>` marks them
+  checked. Compares with committed code only, using local git once per new commit. No git: nothing changes. Files cannot be
+  added to an existing note yet (docs/trust.md).
+- **`monomem project-rules` copies the notes a person stands behind into AGENTS.md or CLAUDE.md.** Opt-in, for apps that
+  read only rules files. Only notes a person confirmed (this version) or pinned go in; unconfirmed, admin- or agent-confirmed,
+  distrusted, private, flagged, disputed, code-changed and linter-flagged notes stay out, and the command says why. It shows
+  the change and needs a typed yes at a terminal; it writes only inside its `<!-- monomem:begin v1 -->` block and a rerun with
+  nothing new writes nothing. The README promise is now "never written unless you run project-rules" (docs/trust.md).
+- `/health` returns the version and schema; `doctor` warns when the running server is older than the CLI.
+- Pins travel through file sync (a file never unpins, and never pins an unconfirmed outside note).
+- Clearer everyday commands: a mistyped writer name gets "did you mean `stdio:…`" instead of an empty plan or a useless
+  distrust entry; `ls` and `search` say how many notes the distrust list hides (and `--include-distrusted` shows them);
+  `edit <id> -` refuses a one-line pipe that would empty the body (`--title` sets the title); `restore <id> <version>` points
+  to `history restore`; `undo`, `approve`, `reject` and `distrust` print the real commands; plainer words in `why`, held
+  writes and the dashboard; the dashboard's confirm button no longer moves and waits 10 seconds.
+
+### Fixed
+
+- `monomem bench --longmemeval` / `--locomo` refused to run ("data path ... is not inside the benchmark temp folder") on any
+  machine that already had a store: a late change made the command line load the settings before the benchmark moved
+  `MONOMEM_HOME` to its temp folder. Nothing was touched (the guard stopped it). A test now fails if that load order comes
+  back. The retrieval benchmark also no longer prints "not replacing the signing key" once per conversation.
+- Final ease-of-use panel: a missing encryption key file is named first ("the key file <path> is missing, so note N
+  cannot be read") and `doctor`'s Fix says to restore that key file from your backup (a database backup is sealed with
+  the same key); `doctor` lists `.key` and `.attest-key` under "keys are kept in"; `doctor` with no data folder says
+  "not set up: monomem setup" and creates nothing; held-write reasons read "namespace requires approval" (no
+  "in namespace"); `changes` counts a note born in the window under the writer who created it and drops "claims X" when X
+  is the writer; `why` lists a replaced version before "version N is current" and names `encrypt enable` / `disable`
+  instead of "metadata changed by unknown"; `encrypt status`, `encrypt enable` and docs/encryption-retention.md give the
+  same sentence about the session-start hook and encrypted bodies; `service status` with no service installed prints
+  only "Not installed" (exit 1, as before); `trust distrust` refuses a near-miss writer name with "Did you mean"
+  (`--force` saves it as typed); `setup --yes` lists the start-of-session hook as a step; write receipts (MCP and REST)
+  come with a `receipt_check` line naming `monomem verify-receipt`.
+- Messages: the missing-key error no longer starts with "monomem: monomem:"; the "database is newer than this build" error
+  gives the same steps as docs/upgrading.md (close apps, `monomem restore <file> --yes`, install the older version);
+  `why` and `receipts` say why times are local, what the offset means and which end comes first; `doctor` prints
+  "encryption on: N bodies sealed with the key at ..." when that is true.
+- First-run walk as a new user: `doctor` now says when held writes wait for a decision instead of a bare "All good", and
+  `service status` with no service installed says so in plain words (it used to print the task manager's "cannot find the
+  file" as a failure).
+- `monomem drill` no longer prints a "NEW attestation key" warning for every server it starts on its throwaway copy.
+- git sync: a computer that resurrects a note another computer deleted (after losing its seen record) makes that other
+  computer stop with the "older than one this computer already synced" message. Reproduced and pinned by a test; this is
+  by design (a deleted note leaves no tombstone, so it looks like a replay), the message names the recovery step.
+- Similarity links in an encrypted store survive a restart (the rebuild now reads the decrypted text).
+- Pinning a note with only an admin (dashboard) confirm explains that a person must confirm it at a terminal.
+- First run: an empty store scores 100 for tidiness, the first note is #1, and Windows shows one folder-permission line.
+- `doctor` warns about pre-upgrade copies older than 14 days and about failed background index builds.
+- The remote-access guide works as written (`MONOMEM_ALLOWED_HOSTS`, `tailscale serve`, `monomem` on the Docker image's PATH).
+- **An unchanged write is a no-op.** A write that changes nothing in the note (same text, title, tags and settings) no longer bumps
+  its `rev`, adds a history version or counts toward the write-flood limit. REST PUT and MCP `state_write` replies carry
+  `unchanged: true`. API callers that expected a new `rev` on every write see the old one.
+- **A retro-taint now bumps `rev` and `updated_at`.** When a note is marked as written after outside content after the
+  fact, the change feed and `sync` carry the mark. Feed consumers see one more change for that note.
+- **Races fixed.** Two processes confirming the same note at once can no longer both count (the confirm rules run inside
+  the write transaction). Approve, keep and reject of a held write are race-safe, and a damaged held write refuses to be
+  cleared instead of half-applying.
+- `quarantine` context lists every note saved since the hold, not only the newest 500.
+- `doctor` names the right old program for each old-style setting it maps: `ONEMEMORY_*` (from OneMemory),
+  `CLAUDE_BRIDGE_*` (from claude-bridge). It used to call them all claude-bridge. Both old names still work.
+- Windows `service install`: the task no longer breaks when the data folder holds a `%` (so it is left out of the task)
+  and the cli.js path holds a space. The task now always sets `MONOMEM_SERVICE=1` first, so cmd.exe keeps the quotes.
+- Windows `service install`: node.exe and cli.js are always quoted in the task (a folder like `R&D` broke it), and a `%` or
+  `"` in those paths is refused with a plain message (cmd.exe cannot carry them safely). The task belongs to the installing
+  user (`<UserId>`; no administrator needed), and a 5-minute repeat starts the server again after a crash or a closed
+  window (it does nothing while the server runs).
+- Running `service install` again restarts the server on every OS, so an upgrade takes effect: Windows ends the old task
+  before it creates and runs the new one, macOS takes the old agent out (`launchctl bootout`) before `bootstrap` (it used to
+  fail with "Bootstrap failed: 5") and retries `bootstrap` once after 1 s if it fails, and Linux runs `systemctl --user
+  restart`. `uninstall --purge` on Windows also finds the task by its name when `monomem-task.xml` was deleted.
+- Chat import: a note's "(replying to ...)" context is left out when the message it replied to holds a secret or a linter
+  hit, so a skipped secret cannot come back inside the next message's note.
+- `monomem doctor` lists the connected apps, and warns when an app is installed but none is connected to Monomem.
+- `monomem setup`'s first run creates the data folder locked to you (on Windows only you and SYSTEM; owner-only elsewhere):
+  opening a store now creates a new data folder owner-only. An existing folder is left as it is.
+- `MONOMEM_RECALL_TIMEOUT_MS` can raise the 5-second session-start cap (never lower it; at most 60 s). The test suite sets
+  it so a loaded CI runner does not trip the cap; a user does not need it.
+- `monomem rollback` without `--since` now names the flag and shows an example.
+- `monomem bench --help` and `help --all` name all five suites (including `poison`) and the retrieval `--split a|b`.
+
+### Performance
+
+- A 64 MB page-cache cap, a once-per-database check for old ciphertext, fewer counts at session start, an id-only profile
+  step, one file open per audit line and a change feed that pages in constant time. On a 10,000-note encrypted store,
+  session start went from about 108 ms to about 13 ms (measured on the development machine).
+- Database schema v22 (still one upgrade from 1.3.x, backup at `<database>.pre-v22-backup`): a redundant similarity-link
+  index is dropped (less work per write) and a live-notes index makes the unfiltered note count cheap. v22 also adds indexes
+  for capture types, open tasks, conventions, the latest summary, pinned notes and fact notes (`idx_notes_obs`,
+  `idx_notes_tag_task`, `idx_notes_tag_convention`, `idx_notes_kind_summary`, `idx_notes_pinned`, `idx_notes_facts`); they
+  cost a little disk space and write time on every store, including one upgraded from 1.3.x.
+- Session start on a 100,000-note store: about 430 ms before, 7-12 ms p50 after on a quiet PC, up to about 18 ms on a loaded one
+  (encrypted; release gate 50 ms, PASS), from
+  the v22 indexes above. Recent file paths now come from the newest 2,000 notes, and the "Showing X of N memories" line
+  counts up to 2,000 and then says "2,000+" (for example "Showing 12 of 2,000+ memories").
+- At 100,000 notes, keyword search time follows how many notes contain the query's words, not how many notes there are:
+  words in under 5 % of notes 0.6-8 ms p50 (the bench's realistic-words line 1.5-4 ms), words in most notes about
+  110-190 ms p50 plain, up to about 260 ms encrypted or on a loaded PC (`monomem bench --scale 100k`; its
+  made-up vocabulary makes the average query match about 82 % of notes, so its own search figure is the slow case).
+  docs/BENCHMARK.md has the numbers.
+- Repeated searches with embeddings on reuse the query's embedding: each process keeps the last 256 query vectors (keyed by
+  embedding URL, model and query text; failures are not kept), which saves one call to the embedding server per repeat.
+
+### Also in 1.5.0: the trust work first planned as 1.4.0 (never published on its own)
+
+**What this release can't do.** Monomem marks a note as from outside content only when it can see the outside read: a
+hook-equipped session (Claude Code) that ran `WebFetch`, `WebSearch` or another MCP server's tool, a connection that read
+an unconfirmed note, or a writer that declares it. It does not see `Read`, `Bash` (`curl`, `git pull`), or apps without
+Monomem's hooks, so an unmarked note is not thereby safe. It never judges whether text is true. A stated confirm source is a
+claim Monomem does not fetch or check, and a second agent's confirm is corroboration, not verification. A local (stdio)
+app's confirm never counts, because its name is a config claim. `derived_from` only helps when agents fill it in, and it
+looks one hop back. The read signal is per connection and resets when the server restarts. Upgrading hides nothing; about
+30 days after the upgrade, notes nobody has touched or confirmed get a `[expired - ...]` label (labels only, unless you
+turn on `enforce`). Upgrade notes: docs/upgrading.md (schema v19 to v21, one way, verified backup first).
+
+### Added
+
+- **Notes written after an agent read outside content land unconfirmed.** A note gets a reserved `obs.origin:*` mark
+  when Monomem can see one of three things: a hook-equipped session in the same namespace read outside content within
+  the last 12 hours and has not ended (`MONOMEM_TAINT_WINDOW_HOURS`, `0` = off); the connection writing it had read an
+  unconfirmed note; or the writer declared it (`outside: true` on MCP `state_write`, REST `POST`/`PUT /notes`,
+  `monomem add --outside`, or `"reads_outside": true` on a token). The local `monomem` command counts as the person
+  only at a real terminal: run from an agent's shell tool or a script (`monomem add`), its notes are
+  marked like any other writer's. The mark only grows: no update path, import or agent
+  write removes it. An unconfirmed note is kept out of session start (text and title; one count line says
+  `Monomem: N notes from outside content wait for confirmation (not shown). Review: monomem review`), labelled
+  `[unconfirmed - from outside content]` in search and reads, ranked slightly lower (x0.9), and still returned. It is
+  never hidden or deleted. Open tasks and handoffs follow the same rule: an unconfirmed one is left off the session-start
+  board and counted in the same line. The window is per namespace, so a browsing session can mark a sibling session's
+  notes; a person's confirm clears that. Notes that existed before the upgrade are exempt from this hold. See docs/trust.md.
+- **Confirming notes.** `monomem confirm <id> [--source "what you checked"]` (asks you to type yes) records who, when
+  and against what: `Confirmed "Acme pricing" by cli at 2026-11-13 14:02. Checked against: vendor site. Next check due
+  2026-12-13.` Also REST `POST /notes/:id/confirm` (write scope), a **Confirm** button in the dashboard, and the MCP tool
+  `memory_confirm` (not in the default tool set; turn it on with `MONOMEM_TOOLS`). A person's confirm always counts. An
+  admin key (dashboard, REST) releases the session-start hold. The dashboard opened with `monomem open` at a terminal
+  (a sign-in session of 8 hours, bound to the key it signed in as) may confirm a note it has listed; any other key that
+  was handed the note while unconfirmed (the primary admin key included) is refused. `monomem open` run without a
+  terminal still signs in, with "Confirms here count as the key's, because this link wasn't opened from a terminal."
+  Another agent counts only with its own key, a different
+  writer from the note's, a stated source different from the note's own and from earlier confirms, and only if its
+  connection has not read the note while unconfirmed and has not written a note built from it. That is corroboration,
+  not verification: a lying agent can still claim a different source. A local (stdio) app's confirm is recorded but
+  never counts. A refused confirm names the rule (`Not counted: research-bot wrote this note, so it can't confirm it. A
+  person or a different agent must confirm.`). A confirm is bound to the note's version: an edit makes a marked note
+  unconfirmed again. Only a confirm at least as strong as the note's current one (person > admin > agent) restarts the
+  re-confirmation clock; an agent's corroboration after a person's confirm is recorded and changes nothing, and the reply
+  gives the date stored. To an agent the reply names the note by id, not by its title. See docs/trust.md, "Confirming notes".
+- **No promotion without a person.** A marked note that no person has confirmed cannot be pinned (CLI, REST
+  `PUT /pinned`, dashboard), used as the replacement in a replace, or kept as history over another note. The refusal
+  reads `Can't pin: this note came from outside content. A person must confirm it first: monomem confirm <id>`. In a
+  terminal, `monomem pin` and `monomem supersede` ask you to type yes and record that as your confirm. An admin key's
+  or another agent's confirm does not lift this block. This also applies to notes from before the upgrade that carry a
+  1.3.5 outside-content stamp: they stay in session start as before, but pinning one now needs a person. See docs/trust.md.
+- **Re-confirmation expiry, label only by default.** A note nobody has changed or confirmed in 30 days gets
+  `[expired - not re-confirmed in 30 days]` on reads, search and session-start index lines. It is still shown, ranked as
+  before, never archived or deleted. `monomem config set confirm-mode enforce` also keeps expired notes out of session
+  start (one count line) and ranks them slightly lower; `confirm-mode off` turns it off (asks you to type yes);
+  `monomem config set confirm-days <n>` changes the period (1 to 3650; under `enforce`, shortening it asks you to type yes
+  and restarts the clock, so nothing disappears at once). The clock starts at the latest of the last edit,
+  a confirm of the current version, the upgrade, and the last mode change. Pinned, replaced, archived and captured rows, tasks and handoffs
+  are exempt. No per-tag or per-writer periods yet. See docs/search.md, "Re-confirmation expiry".
+- **`monomem review`** lists notes waiting for a person (unconfirmed and expired: id, namespace, title, writer, why).
+  `--confirm-all` confirms every listed note as you after one typed yes; `--json` for scripts. Titles go only to your
+  terminal, never to session start or an MCP reply.
+- **`derived_from`: say what a note was built from.** Optional list of up to 20 note ids on MCP `state_write`, REST
+  `POST`/`PUT /notes` and `monomem add --derived-from 3,7`. Links are only ever added. A note built from an unconfirmed
+  note is marked as well. A note built from a note a distrusted writer touched is labelled
+  `[built on a distrusted writer]` and kept out of session start, but still listed and searchable. It only works when
+  agents fill it in, and it looks one hop back. A held write keeps the mark but not its links. See docs/provenance.md.
+- **Held-write approval context.** Before you approve a held write, `monomem quarantine show <id>`, the dashboard's Held
+  tab, MCP `memory_quarantine action:"context"` and REST `GET /quarantine/:id/context` list the other notes in the same
+  namespace saved since it was held that share a title or tag word with it (ids, titles, times, writers; never the held
+  text over MCP). It is a simple word match, so it can miss a differently worded correction. A new third choice, **Keep
+  as history**, stores the held write with its written time and marks it replaced by the newer note (`supersede undo`
+  brings it back); it is offered only when such a note exists. Held edits stay compare-and-swap: if the note changed
+  since, approval fails and the write stays queued. See docs/memory-linter.md.
+- **Benchmark E21 and E22: laundering outside content into a pinned note.** A trusted writer that rewrites a web page in
+  its own words (E21), or an agent that summarises an unconfirmed note it read (E22), gets a note marked as from outside
+  content; pinning it is refused until a person confirms it, and its text stays out of session start. Held in our drill:
+  `monomem drill` now replays 25 attacks (the same 2 known misses).
+- **131 deterministic scenarios** (was 129): A 32, B 31, C 27, D 19, E 22.
+- **`monomem doctor` and `monomem health`** print one line per new rule: unconfirmed notes, the expiry mode and how many
+  are past due, the outside-content window, and that the read signal is per connection.
+
+### Changed
+
+- **Schema v21.** New columns on notes (`content_at`, `writer_cwd`, `grandfathered_at`, `approved_at`/`approved_by`, `confirmed_*`), on held
+  writes (forget date, confidence) and on capture sessions, plus two add-only tables (confirms, derived-from links). A
+  verified backup `<database>.pre-v21-backup` is made first; older builds refuse a v21 file. No note text is rewritten,
+  and list, search and session start show the same notes right after the upgrade. Records gain the new fields only when
+  they are set. See docs/upgrading.md.
+- **The 1.3.5 outside-content stamp now applies to every marked note**, not only captured session summaries; summaries
+  stamped before the upgrade keep their 1.3.5 treatment (title only at session start). See docs/trust.md.
+
+### Fixed
+
+- **Approving a held write no longer makes it look newer than it is.** Approval used to stamp the approval time, so an
+  old claim approved late could outrank a correction saved while it waited. The note now keeps the time the write was
+  made; `approved_at` and `approved_by` record the approval. A held edit's time never moves a note backwards. See
+  docs/memory-linter.md.
+- **A held write no longer drops its forget date and confidence.** Both are kept and applied on approval; the forget date
+  counts from the time the write was made. A held edit that clears them (`null`) clears them on approval, and the approval
+  view (CLI, dashboard, MCP and REST context) says so.
+- **docs/memory-linter.md** said approval kept a held note's creation time. It did not; it does now, and the page says
+  exactly what approval keeps.
+
+- **`monomem supersede` and `monomem history` refuse a repeated option** (`--new-id 5 --new-id 9`, `--confirm-token` twice):
+  the typed-yes check and the command could read different values. The checks now run inside the command, on the notes it
+  acts on, including the notes a `--confirm-token` names.
+
+### Limits found in review, not changed in this release
+
+- Restoring a backup from before the upgrade and upgrading it again marks every note in it as from before the upgrade
+  (exempt from the session-start hold) again. That is by design: the notes really are that old.
+- `monomem import` (admin) and the foreign, rules and `--claude` imports bring notes in unmarked: the file says nothing
+  about where its text came from. Review an imported file before importing it.
+- Whoever holds the primary key can make more keys, so one holder can forge the corroboration rule (SECURITY.md).
+- `monomem open` hands its one-time sign-in code (60 seconds, single use) to the system's "open" command in the address,
+  so it is briefly visible in the list of running programs.
+- A shell that looks like a terminal counts as a person: the terminal check (stdin and stdout are terminals) is the same
+  as for typed-yes commands, and an agent tool that opens a pseudo-terminal passes it.
+
+### Not in this release (not yet built)
+
+- Per-tag and per-writer expiry periods, per-namespace `enforce`, and a warning 7 days before notes expire.
+- Following `derived_from` more than one hop back, and a session-start count line for notes built on a distrusted writer.
+- Any proof that a confirm's stated source differs from the note's (today it is compared as stated, URL by host).
+- Per-agent scratchpad namespaces, and `monomem session new` to reset a session's outside-content mark.
+- Carrying `derived_from` links through a held write, and `--derived-from` on `monomem edit`.
+
+### Ideas from
+
+- Re-confirmation expiry, and outside content landing unconfirmed: suggested by u/theagenticenterprise on Reddit
+  ("Provenance tells you where a note came from. Expiry tells you whether anyone still stands behind it.").
+- Held-write approval context, separate written and approved times, and keeping a held write as history: suggested by
+  u/AlexWorkGuru.
+- `derived_from`: suggested by u/Ctbhatia.
+- Session taint and no promotion to rules: from discussion by KolmoPDF, Raju Dandigam and Sammi De Blas in the comments
+  on the dev.to drill article.
+
 ## [1.3.5] - 2026-11-11
 
 ### Added

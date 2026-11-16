@@ -12,7 +12,8 @@ All environment variables are optional. This table lists **every** `MONOMEM_*` v
 | `MONOMEM_WAIT_MAX_TOTAL` | `64` | Live wait: max parked requests per process |
 | `MONOMEM_AUDIT_LOG` | `<data dir>/audit.log` | Audit log path (create/update/delete, task / handoff / catch_up / approve entries with the token label and kind; never note text or tokens) |
 | `MONOMEM_AUDIT_MAX_BYTES` | `5000000` | Rotate audit.log when it reaches this size (`0` = never) |
-| `MONOMEM_AUDIT_KEEP` | `5` | Rotated audit files kept (`audit.log.1` ... `.N`) |
+| `MONOMEM_AUDIT_KEEP` | `5` | Rotated audit files kept (`audit.log.1` ... `.N`). These two also rotate `server.log` (what a server started with `start --log`, `monomem open` or `monomem service` prints) |
+| `MONOMEM_SERVICE` | unset | Set to `1` by the Windows task that `monomem service install` creates. Nothing reads it: it is there so the task line never starts with a quote, which cmd.exe would strip. Do not set it yourself |
 | `MONOMEM_ACCESS_LOG_DAYS` | `30` | Days the read access log is kept (who read memory, with which tool, a redacted 120-character query preview and a result count; never note text). `0` = nothing is logged and the next hourly sweep empties it. See [access-log.md](./access-log.md) |
 | `MONOMEM_FLOOD_WRITES_PER_HOUR` | `500` | Flood guard: a writer label that makes this many counted creates/updates in a rolling hour is paused (its writes are refused) until `monomem resume <label>`. `0` = off. See [access-log.md](./access-log.md) |
 | `MONOMEM_RUNNER_TASK_NAMESPACE` | unset | Runner and server: namespace whose admin-approved command tasks the runner executes. Unset = command tasks off. See [RUNNER.md](https://github.com/calasdan-sketch/monomem/blob/main/docs/RUNNER.md) |
@@ -52,7 +53,7 @@ All environment variables are optional. This table lists **every** `MONOMEM_*` v
 | `MONOMEM_IMPORT_REQUIRE_ATTESTATION` | unset (off) | `1` = an import (`monomem import --file`, `POST /import`) rejects every note that does not come with an attestation that verifies against a trusted key. Off by default: notes imported without one are accepted and flagged `imported_unverified`. Per import: `--require-attestation`, `?require_attestation=1`. See [trust.md](./trust.md) |
 | `MONOMEM_NO_CHMOD` | unset | `1` = never tighten data-dir permissions to 0700/0600 (for deliberately shared dirs) |
 | `MONOMEM_TOKEN` | auto-generated → `<data dir>/.token` | Primary bearer token; required to bind a public interface. **It is always an admin token**, so an agent holding it can switch the distrust policy off (`include_distrusted`): give agents a `write` or `read` token from `MONOMEM_TOKENS` and keep the primary one off them (`monomem doctor` warns when distrust rules exist and no other token does) |
-| `MONOMEM_TOKENS` | unset | Optional JSON array of extra scoped tokens: `[{"token":"…","scope":"read\|write\|admin","label":"…","namespace":"…","max_sensitivity":"…"}]` (also readable from `<data dir>/tokens.json`). `namespace` optionally pins a token to one namespace — per-token isolation on a shared server, so several agents can share one bridge without seeing each other's notes. See [token-namespaces.md](./token-namespaces.md). `max_sensitivity` (`public`, `internal` or `private`) is a ceiling on which notes the token can see or write, whatever namespace it is in. See [sensitivity-labels.md](./sensitivity-labels.md) |
+| `MONOMEM_TOKENS` | unset | Optional JSON array of extra scoped tokens: `[{"token":"…","scope":"read\|write\|admin","label":"…","namespace":"…","max_sensitivity":"…"}]` (also readable from `<data dir>/tokens.json`). `namespace` optionally pins a token to one namespace — per-token isolation on a shared server, so several agents can share one bridge without seeing each other's notes. See [token-namespaces.md](./token-namespaces.md). `max_sensitivity` (`public`, `internal` or `private`) is a ceiling on which notes the token can see or write, whatever namespace it is in. See [sensitivity-labels.md](./sensitivity-labels.md). `"reads_outside": true` (1.4.0) says the agent behind this token reads outside content (web pages, documents): every note it writes is marked `obs.origin:declared` and stays unconfirmed until confirmed. Only `true` counts; when a token is listed twice, either listing marking it is enough. See [trust.md](./trust.md#outside-content-and-taint-140) |
 | `MONOMEM_BIND` | `127.0.0.1` | Interface to bind (`0.0.0.0` inside Docker) |
 | `MONOMEM_PORT` | `8790` | HTTP API + dashboard port |
 | `MONOMEM_MCP_PORT` | `8791` | MCP-over-HTTP port (for apps that connect over HTTP with a key) |
@@ -66,6 +67,7 @@ All environment variables are optional. This table lists **every** `MONOMEM_*` v
 | `MONOMEM_EMBED_TIMEOUT_MS` | `30000` (`5000` with `MONOMEM_EMBEDDINGS=auto`) | Timeout per embedding call; raise if a local model's first (cold) call is slow |
 | `MONOMEM_SCAN_CACHE_SECONDS` | `60` | How long the dashboard reuses its quality and health scans (they read every note). `0` = never reuse. |
 | `MONOMEM_ALLOWED_HOSTS` | unset | Comma-separated host names this server may be reached under (ports ignored; `*` allows any). Without it, `localhost` and any IP address are accepted and a request under any other name is refused (403) as a guard against DNS rebinding. Forwarding headers (`X-Forwarded-For`, `X-Real-IP`) are not trusted, because a caller can send them itself. **Behind a tunnel or reverse proxy, set this to the public name** (the 403 message tells you the exact value). Set it to turn the check strict: then only `localhost` and the listed names pass. Example for a custom name on your network: `MONOMEM_ALLOWED_HOSTS=mynas.local` |
+| `MONOMEM_NO_SERVER_PROBE` | unset | `1` stops `monomem doctor` from asking the server on `127.0.0.1:<MONOMEM_PORT>/health` which version it runs (the test suite sets it) |
 | `MONOMEM_MAX_CONNECTIONS` | `512` | Most connections each server (API, MCP) holds open at once |
 | `MONOMEM_HEADERS_TIMEOUT_MS` | `20000` | How long a client has to send its request headers |
 | `MONOMEM_REQUEST_TIMEOUT_MS` | `300000` | How long a client has to send a whole request (a large `/import` over a slow link needs this) |
@@ -85,7 +87,7 @@ All environment variables are optional. This table lists **every** `MONOMEM_*` v
 | `MONOMEM_EDGE_INDEX_MAX_NOTES` | `50000` | Most notes kept in the in-memory similarity index across namespaces; least-recently-used namespaces are released beyond it (rebuilt on next use) |
 | `MONOMEM_EDGE_INDEX_IDLE_MS` | `600000` | A namespace's similarity index is released after this long unused |
 | `MONOMEM_ACCESS_BOOST` | on | Set to `0` to turn off the access-count boost and staleness penalty in search ranking (results then follow native relevance only, as in 1.0.0); access counts are still recorded |
-| `MONOMEM_ENCRYPT` | unset | `0` = hard-disable at-rest encryption even if a key file exists (used by tests). It never turns encryption **on**: that is decided by the presence of the key file, created by `monomem encrypt enable`. See [encryption-retention.md](./encryption-retention.md) |
+| `MONOMEM_ENCRYPT` | unset | Not read since 1.5.0. Encryption is on exactly when the key file exists (`monomem encrypt enable` creates it, `disable` removes it); before 1.5.0 `0` only made `encrypt status` say "off" while writes were still sealed. See [encryption-retention.md](./encryption-retention.md) |
 | `MONOMEM_KEY_FILE` | `<data dir>/.key` | Path of the 32-byte encryption key file. Keep it with the same care as the database: anyone holding both can read the notes |
 | `MONOMEM_SYNC_KEY_FILE` | your at-rest key if you have one, else `<data dir>/.sync-key` | The 32-byte key file `monomem sync --git --encrypt` seals files with (see [file-sync.md](./file-sync.md)). It must be outside the repository (a key inside it is refused); copy it to your other computers yourself |
 | `MONOMEM_IMPORT_MAX_BYTES` | `67108864` (64 MB) | Request-body cap for `POST /import` (clamped to 1 MB - 2 GB; it was 256 MB before the lowered default, so raise it if a restore of a very large backup is refused with 413). Other routes keep the 1 MB cap |
@@ -97,7 +99,8 @@ All environment variables are optional. This table lists **every** `MONOMEM_*` v
 | `MONOMEM_CAPTURE` | on (once the hooks are installed) | `off` = the capture hooks record nothing (the session-start context still works). Also readable from `<data dir>/capture.json` as `{"capture":"off"}`; the variable wins |
 | `MONOMEM_CAPTURE_EXCLUDE` | unset | Comma-separated globs (`*`, `**`) on the working directory; sessions in a matching folder are not recorded (e.g. `**/secret-*,C:/clients/**`) |
 | `MONOMEM_CAPTURE_SKIP_TOOLS` | unset | Comma-separated tool names the capture hooks ignore (e.g. `TodoWrite,WebFetch`). Monomem's own `mcp__monomem__*` tools are always skipped |
-| `MONOMEM_LOCAL_MCP_SERVERS` | unset | Comma-separated MCP server names (the `<server>` in `mcp__<server>__tool`) that return only local content, such as a code index. Their output does not earn a session summary the "read outside content" stamp ([trust.md](./trust.md#the-outside-content-stamp)). Unset = every MCP server except Monomem counts as outside |
+| `MONOMEM_LOCAL_MCP_SERVERS` | unset | Comma-separated MCP server names (the `<server>` in `mcp__<server>__tool`) that return only local content, such as a code index. Their output does not count as outside content: it neither stamps a session summary nor marks notes through `MONOMEM_TAINT_WINDOW_HOURS` ([trust.md](./trust.md#outside-content-and-taint-140)). Unset = every MCP server except Monomem counts as outside |
+| `MONOMEM_TAINT_WINDOW_HOURS` | `12` | A note written by an agent (not the `monomem` CLI) is marked as from outside content, and stays unconfirmed until confirmed, when a hook-equipped session in the writer's folder read outside content within this many hours, has not ended and was active in the last 30 minutes. Local apps without a key of their own are matched by the folder they were launched in (an unknown folder gets any open window); apps with their own key are not marked by it (`monomem taint clear` ends open windows). Only what the hooks can see counts. `0` turns this signal off; the other two (an agent that read unconfirmed memory, a declared write or token) stay. See [trust.md](./trust.md#outside-content-and-taint-140) |
 | `MONOMEM_CAPTURE_RETENTION_DAYS` | `7` | Raw captured events are deleted after this many days (the observations distilled from them are kept like notes) |
 | `MONOMEM_DECAY_DAYS` | `30` | Captured observations nobody updated or read for this many days are **archived** (never deleted; `monomem restore <id>` brings one back) by the expiry sweep and at session end. Never decayed: your own notes, decisions, rows tagged `pinned`. `0` = decay off. Preview with `monomem decay --dry-run` |
 | `MONOMEM_DECAY_SUMMARY_DAYS` | `180` | The same for session summaries. `0` = summaries never decay |
@@ -105,6 +108,8 @@ All environment variables are optional. This table lists **every** `MONOMEM_*` v
 | `MONOMEM_LLM_MODEL` | unset | The model name sent to `MONOMEM_LLM_URL` (e.g. `qwen2.5:7b`) |
 | `MONOMEM_LLM_TIMEOUT_MS` | `30000` | Upper bound on the one summary call (1000 - 300000) |
 | `MONOMEM_LLM_ALLOW_REMOTE` | unset | `1` = allow an `MONOMEM_LLM_URL` that is not this machine. Session text then leaves the PC; leave unset unless you mean it |
+| `MONOMEM_BODY_INDEX` | on | `off` = never build the in-memory index that lets keyword search find words in encrypted note bodies: search then covers titles and tags only on an encrypted store, and no decrypted words are held in RAM. Read by each process when it opens the database. The hooks never build it either way. See [encryption-retention.md](./encryption-retention.md) |
+| `MONOMEM_RECALL_TIMEOUT_MS` | `5000` | The most time the session-start hook may take before it gives up and adds nothing. It can only be raised (at most 60000); a lower value is ignored. The test suite raises it so a loaded CI runner does not trip it; you do not need it |
 | `MONOMEM_RECALL_TOKENS` | `1500` | Token budget (about 4 characters each) of the context the session-start hook injects |
 | `MONOMEM_PROFILE_TOKENS` | `300` | Share of that budget (at most half) for the "What I know about this project" block at the top: decisions, conventions (notes tagged `convention`), key files, last session, open-task count, built from stored notes with no model |
 | `MONOMEM_RECALL_MAX_SENSITIVITY` | unset | `public`, `internal` or `private`: the session-start hook (and the file-context hook) leave out every note labelled above it. Anything else injects nothing. See [sensitivity-labels.md](./sensitivity-labels.md) |
@@ -117,6 +122,26 @@ All environment variables are optional. This table lists **every** `MONOMEM_*` v
 | `MONOMEM_HOOK_TOKEN` | unset | A write-scope token for `MONOMEM_HOOK_URL` |
 | `MONOMEM_SPACES` | unset (feature off) | Optional JSON namespace config: `{"spaces":{"/home/you/work":"work"},"default_namespace":"default","reads_from":{"work":["shared"]}}` (or `<data dir>/spaces.json`; env wins). Enables server-side namespace resolution |
 | `MONOMEM_SPACE` | unset | Explicit namespace override: when set, the server uses this namespace directly instead of resolving from the working directory (only meaningful with a spaces config present) |
+
+## Settings kept in the store (`monomem config`)
+
+A few settings live in the database itself, not in the environment, so every process that opens it agrees (a change
+shows in other processes within a second). They have no environment variable on purpose: an environment switch has no
+recorded switch time, so turning `enforce` on that way would hide old notes at once.
+
+```
+monomem config                              # show them (same as: monomem config get)
+monomem config set confirm-mode label       # off | label | enforce
+monomem config set confirm-days 30          # 1 to 3650
+```
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `confirm-mode` | `label` | Re-confirmation expiry. `off`: no note expires. `label`: a note nobody changed or confirmed in `confirm-days` is labelled `[expired - ...]` on reads and search, nothing else. `enforce`: also kept out of session start and ranked slightly lower. Changing the mode restarts every note's clock from that moment. See [search.md](./search.md#re-confirmation-expiry) |
+| `confirm-days` | `30` | The re-confirmation period in days |
+
+Lowering protection (a lower mode, or more days while expiry is on) asks you to type yes in a terminal. Raising it works
+from a script. Each change is written to the audit log.
 
 ## Server-side namespace resolution (optional)
 

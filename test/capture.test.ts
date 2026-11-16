@@ -109,8 +109,8 @@ describe("recordEvent and the spool", () => {
     const dir = mkdtempSync(join(tmpdir(), "om-cap-d-"));
     try {
       const ev = normalizeHookInput("user-prompt", { session_id: "s9", cwd: "/w", prompt: "later" });
-      assert.ok(spoolEvent(dir, { ...ev, namespace: "default" }));
-      assert.ok(spoolEvent(dir, { ...ev, namespace: "default" }));
+      assert.ok(spoolEvent(dir, { ...ev, namespace: "default" }, null));
+      assert.ok(spoolEvent(dir, { ...ev, namespace: "default" }, null));
       writeFileSync(join(dir, SPOOL_FILE), '{"torn', { flag: "a" });
       assert.ok(spoolSize(dir) > 0);
       const s = new Store(join(dir, "state.db"));
@@ -127,7 +127,7 @@ describe("recordEvent and the spool", () => {
     const dir = mkdtempSync(join(tmpdir(), "om-cap-b-"));
     try {
       const ev = normalizeHookInput("user-prompt", { session_id: "s8", cwd: "/w", prompt: "x" });
-      spoolEvent(dir, { ...ev, namespace: "default" });
+      spoolEvent(dir, { ...ev, namespace: "default" }, null);
       const broken = new Store(join(dir, "broken.db"));
       broken.close(); // every recordEvent now throws
       for (let i = 1; i < SPOOL_MAX_TRIES; i++) {

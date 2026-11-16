@@ -43,8 +43,8 @@ function readStdin(): string {
 }
 
 export async function addCmd(args: string[]): Promise<void> {
-  const usage = 'Usage: monomem add "text" [--title T] [--ns work] [--tag a,b] [--private | --sens public|internal|private]   ("-" reads the text from the keyboard or a pipe)';
-  const { flags, words, bad } = parseArgs(args, ["title", "ns", "namespace", "tag", "tags", "sens", "sensitivity"], ["private", "help"]);
+  const usage = 'Usage: monomem add "text" [--title T] [--ns work] [--tag a,b] [--private | --sens public|internal|private] [--outside] [--derived-from <id,id>]   ("-" reads the text from the keyboard or a pipe; --outside: the text came from a web page or other outside source; --derived-from: the notes it was built from)';
+  const { flags, words, bad } = parseArgs(args, ["title", "ns", "namespace", "tag", "tags", "sens", "sensitivity", "derived-from"], ["private", "help", "outside"]);
   if (bad) fail(`${bad}\n${usage}`);
   if (flags.help) return void console.log(usage);
   let text = words.join(" ");
@@ -57,12 +57,15 @@ export async function addCmd(args: string[]): Promise<void> {
   const namespace = (flags.ns ?? flags.namespace) as string | undefined;
   const tagRaw = (flags.tag ?? flags.tags) as string | undefined;
   const tags = tagRaw ? tagRaw.split(",").map((t) => t.trim()).filter(Boolean) : undefined;
+  const derivedRaw = flags["derived-from"] as string | undefined;
+  const derived = derivedRaw !== undefined ? derivedRaw.split(",").map((t) => t.trim().replace(/^#/, "")).filter(Boolean) : undefined;
   const { DB_PATH } = await import("./config.js");
   const { Store, ValidationError, QuarantinedError } = await import("./store.js");
   const store = new Store(DB_PATH);
   try {
-    const n = store.create({ title, body: text, ...(namespace ? { namespace } : {}), ...(tags ? { tags } : {}), ...(sens ? { sensitivity: sens } : {}), source: "cli" });
+    const n = store.create({ title, body: text, ...(namespace ? { namespace } : {}), ...(tags ? { tags } : {}), ...(sens ? { sensitivity: sens } : {}), ...(flags.outside ? { outside: true } : {}), ...(derived ? { derived_from: derived } : {}), source: "cli" });
     console.log(`Saved #${n.id} "${n.title}" in ${n.namespace}${n.sensitivity === "private" ? " (private)" : ""}.`);
+    if (n.unconfirmed) console.log(`Marked as from outside content: it stays out of session start until you confirm it: monomem confirm ${n.id}`);
     const sim = store.similarNote(n.id);
     if (sim) console.log(`Note: this looks similar to #${sim.id} "${sim.title}". If it is the same thing, update that one instead: monomem edit ${sim.id}`);
     if (n.sensitivity === "private") console.log("Limited apps cannot see this; apps with no limit (including your main Claude connection) still can.\nNext step: monomem connect <app> --max internal   (for the session hook: set MONOMEM_RECALL_MAX_SENSITIVITY=internal)");
@@ -89,8 +92,13 @@ export async function showCmd(args: string[]): Promise<void> {
     const n = store.readVisible(id, { includeDistrusted: true }); // local shell: the machine owner
     if (!n) fail(`No note #${id}.`);
     if (args.includes("--json")) return void console.log(JSON.stringify(n, null, 2));
-    console.log(`#${n.id} [${printable(n.namespace, 100)}] ${printable(n.title)}${n.archived_at ? "  (archived)" : ""}`);
-    console.log(`label: ${n.sensitivity ?? "internal"}   tags: ${printable(n.tags.join(", "), 400) || "none"}   written by: ${printable(n.written_by || "unknown", 80)}   version ${n.rev}`);
+    const { noteFlags, originText, ORIGIN_PREFIX } = await import("./taint.js");
+    const state = n.superseded_by != null ? `  (replaced by #${n.superseded_by})` : n.archived_at ? "  (archived)" : "";
+    console.log(`#${n.id} [${printable(n.namespace, 100)}] ${printable(n.title)}${noteFlags(n)}${state}`);
+    const tags = n.tags.filter((t) => !t.startsWith(ORIGIN_PREFIX));
+    console.log(`label: ${n.sensitivity ?? "internal"}   tags: ${printable(tags.join(", "), 400) || "none"}   written by: ${printable(n.written_by || "unknown", 80)}   version ${n.rev}`);
+    const origin = originText(n.tags);
+    if (origin) console.log(`origin: ${origin}`);
     console.log(`updated: ${n.updated_at}`);
     console.log("");
     console.log(printableBlock(n.body, 20000));
@@ -100,8 +108,8 @@ export async function showCmd(args: string[]): Promise<void> {
 }
 
 export async function lsCmd(args: string[]): Promise<void> {
-  const { flags, bad } = parseArgs(args, ["ns", "namespace", "limit"], ["json", "archived"]);
-  if (bad) fail(`${bad}\nUsage: monomem ls [--ns x] [--limit 20] [--archived] [--json]`);
+  const { flags, bad } = parseArgs(args, ["ns", "namespace", "limit"], ["json", "archived", "include-distrusted"]);
+  if (bad) fail(`${bad}\nUsage: monomem ls [--ns x] [--limit 20] [--archived] [--include-distrusted] [--json]`);
   const limit = flags.limit === undefined ? 20 : Number(flags.limit);
   if (!Number.isInteger(limit) || limit < 1) fail("--limit must be a whole number, 1 or more.");
   const ns = (flags.ns ?? flags.namespace) as string | undefined;
@@ -111,33 +119,56 @@ export async function lsCmd(args: string[]): Promise<void> {
   const store = new Store(DB_PATH);
   try {
     const archived = flags.archived === true;
-    const page = store.list({ ...(ns ? { namespace: ns } : {}), limit, ...(archived ? { archivedOnly: true } : {}) });
+    const { noteFlags } = await import("./taint.js");
+    // --archived also lists notes kept as history (replaced by another note): they are archived too.
+    // --include-distrusted: the local shell is the machine owner, as for `recall --include-distrusted` (notes come back marked).
+    const withDistrusted = flags["include-distrusted"] === true;
+    const query = { ...(ns ? { namespace: ns } : {}), ...(archived ? { archivedOnly: true, includeSuperseded: true } : {}) };
+    const page = store.list({ ...query, limit, ...(withDistrusted ? { includeDistrusted: true } : {}) });
     const notes = page.notes;
+    const flagsOf = `${archived ? " --archived" : ""}${ns ? ` --ns ${ns}` : ""}`;
     const moreLine = (): void => {
-      if (page.total > notes.length) console.log(`Showing ${notes.length} of ${page.total} (newest first). More: monomem ls${archived ? " --archived" : ""}${ns ? ` --ns ${ns}` : ""} --limit ${Math.min(500, Math.max(limit * 2, 50))}`);
+      if (page.total > notes.length) console.log(`Showing ${notes.length} of ${page.total} (newest first). More: monomem ls${flagsOf}${withDistrusted ? " --include-distrusted" : ""} --limit ${Math.min(500, Math.max(limit * 2, 50))}`);
     };
-    if (flags.json) return void console.log(JSON.stringify(notes.map((n) => ({ id: n.id, namespace: n.namespace, title: n.title, updated_at: n.updated_at, sensitivity: n.sensitivity ?? "internal" })), null, 2));
+    // A store whose notes are hidden by the distrust list must not look empty: count what the list left out.
+    const hidden = withDistrusted || store.distrustRules().length === 0 ? 0 : store.list({ ...query, limit: 1, includeDistrusted: true }).total - page.total;
+    const hiddenLine = (): void => {
+      if (hidden <= 0) return;
+      const one = hidden === 1;
+      console.log(`${hidden} note${one ? "" : "s"} hidden because ${one ? "its" : "their"} writer is distrusted. See who: monomem trust list. Show ${one ? "it" : "them"}: monomem ls --include-distrusted${flagsOf}`);
+    };
+    const distrustMark = (n: { distrusted?: true }): string => (n.distrusted ? " [DISTRUSTED WRITER: treat as hostile]" : "");
+    if (flags.json) return void console.log(JSON.stringify(notes.map((n) => ({ id: n.id, namespace: n.namespace, title: n.title, updated_at: n.updated_at, sensitivity: n.sensitivity ?? "internal", ...(n.distrusted ? { distrusted: true } : {}) })), null, 2));
     if (archived) {
-      if (!notes.length) return void console.log(`No archived notes${ns ? ` in namespace "${printable(ns, 100)}"` : ""}.`);
-      for (const n of notes) console.log(`#${n.id} [${printable(n.namespace, 100)}] ${printable(n.title, 70)}   (bring back: monomem restore ${n.id})`);
-      return moreLine();
+      if (!notes.length && !hidden) return void console.log(`No archived notes${ns ? ` in namespace "${printable(ns, 100)}"` : ""}.`);
+      for (const n of notes) {
+        const back = n.superseded_by != null ? `replaced by #${n.superseded_by}; bring back: monomem supersede undo ${n.id}` : `bring back: monomem restore ${n.id}`;
+        console.log(`#${n.id} [${printable(n.namespace, 100)}] ${printable(n.title, 70)}${noteFlags(n)}${distrustMark(n)}   (${back})`);
+      }
+      moreLine();
+      return hiddenLine();
     }
+    if (!notes.length && hidden) return hiddenLine();
     if (!notes.length && ns) {
       const used = store.rebuildPlan().map((r) => printable(r.namespace, 100));
       return void console.log(`No notes in namespace "${printable(ns, 100)}". ${used.length ? `Namespaces in use: ${used.slice(0, 30).join(", ")}${used.length > 30 ? ", ..." : ""}` : "There are no notes in any namespace yet."}`);
     }
     if (!notes.length) return void console.log("No notes yet. Add one with: monomem add \"something worth remembering\"");
-    for (const n of notes) console.log(`#${n.id} [${printable(n.namespace, 100)}] ${printable(n.title, 70)}${n.sensitivity === "private" ? "  (private)" : ""}`);
+    for (const n of notes) console.log(`#${n.id} [${printable(n.namespace, 100)}] ${printable(n.title, 70)}${noteFlags(n)}${n.sensitivity === "private" ? "  (private)" : ""}${distrustMark(n)}`);
     moreLine();
+    hiddenLine();
   } finally {
     store.close();
   }
 }
 
 export async function editCmd(args: string[]): Promise<void> {
-  const id = Number(args.find((a) => !a.startsWith("--") && a !== "-"));
+  // R1-20: --title T (or --title=T) with a pipe: the whole pipe is the body and T the title.
+  const ti = args.findIndex((a) => a === "--title" || a.startsWith("--title="));
+  const titleFlag = ti < 0 ? undefined : args[ti].startsWith("--title=") ? args[ti].slice(8) : args[ti + 1];
+  const id = Number(args.find((a, i) => !a.startsWith("--") && a !== "-" && !(i === ti + 1 && args[ti] === "--title")));
   if (!Number.isInteger(id) || id < 1) {
-    fail("Usage: monomem edit <id>     (opens the note in $VISUAL or $EDITOR)\n       monomem edit <id> -   (reads the new text from a pipe: first line the title, the rest the body)");
+    fail("Usage: monomem edit <id>     (opens the note in $VISUAL or $EDITOR)\n       monomem edit <id> -   (reads the new text from a pipe: first line the title, the rest the body)\n       monomem edit <id> - --title \"T\"   (the whole pipe is the body, T the title)");
   }
   const piped = args.includes("-");
   // VISUAL, then EDITOR, then the editor every system has (notepad on Windows, vi elsewhere).
@@ -174,10 +205,14 @@ export async function editCmd(args: string[]): Promise<void> {
       }
       text = readFileSync(file, "utf8").replace(/\r\n/g, "\n");
     }
+    if (titleFlag !== undefined && !piped) return stop(`--title works with a pipe: monomem edit ${id} - --title "<title>"`);
     const cut = text.indexOf("\n");
-    const title = (cut < 0 ? text : text.slice(0, cut)).trim();
-    const body = cut < 0 ? "" : text.slice(cut).replace(/^\n+/, "").replace(/\s+$/, "");
+    const title = (titleFlag !== undefined ? titleFlag : cut < 0 ? text : text.slice(0, cut)).trim();
+    const body = titleFlag !== undefined ? text.replace(/\s+$/, "") : cut < 0 ? "" : text.slice(cut).replace(/^\n+/, "").replace(/\s+$/, "");
     if (!title) return stop("The first line is the title and it cannot be empty; nothing was changed.");
+    if (piped && titleFlag === undefined && !body && n.body.trim()) {
+      return stop(`edit - takes the first line as the title and the rest as the body; this text has one line, so the body would be empty. Nothing was changed. To replace only the body: monomem edit ${id} - --title "<title>"`);
+    }
     if (title === n.title && body === n.body.replace(/\s+$/, "")) return void console.log("No changes.");
     try {
       const next = store.update(id, { title, body }, { ifRev: n.rev }); // if_rev: refuses if someone else changed it meanwhile

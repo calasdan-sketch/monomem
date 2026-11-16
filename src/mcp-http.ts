@@ -20,10 +20,12 @@ import { resolve } from "node:path";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { Store } from "./store.js";
 import { createMcpServer } from "./mcp-server-core.js";
+import { taintRegistryFor } from "./taint.js";
+import { actorStore, currentWriter } from "./actor.js";
 import { originAllowed, hostAllowed, hostRefusal, RateLimiter, AuthTarpit, clientKey, tokenKey, authenticateEntry } from "./security.js";
-import { type TokenEntry } from "./config.js";
+import { type TokenEntry, tokenId } from "./config.js";
 import { type ServerNamespaceOpts, resolveRequestNamespace } from "./namespace.js";
-import { PayloadTooLargeError, readBody, normalizeTokens, exitOnListenError, applyServerLimits } from "./http-common.js";
+import { PayloadTooLargeError, readBody, normalizeTokens, exitOnListenError, applyServerLimits, healthBody } from "./http-common.js";
 
 // Small JSON writer that never writes to an already-finished response.
 function sendJson(res: ServerResponse, status: number, payload: unknown): void {
@@ -52,6 +54,8 @@ export function createMcpHttpServer(
   const authFailures = new RateLimiter();
   const tarpit = new AuthTarpit();
   const perToken = new RateLimiter();
+  // 1.4.0: unconfirmed notes each token has read, kept across its requests and shared with the REST API on the same Store (taint.ts).
+  const taintedReadsOf = taintRegistryFor(store);
 
   // Resolve the namespace context for ONE request: the token's own pin wins
   // over the server's startup-resolved namespace. A fresh McpServer is built
@@ -67,7 +71,7 @@ export function createMcpHttpServer(
     const url = new URL(req.url ?? "/", "http://localhost");
 
     if (req.method === "GET" && url.pathname === "/health") {
-      sendJson(res, 200, { status: "ok" });
+      sendJson(res, 200, healthBody());
       return;
     }
 
@@ -92,7 +96,7 @@ export function createMcpHttpServer(
       else sendJson(res, 401, { error: "unauthorized", hint: "Send your key as the header  Authorization: Bearer <key>.  Your keys: monomem token list." });
       return;
     }
-    if (!perToken.check(tokenKey(principal.token))) {
+    if (!perToken.check(tokenKey(tokenId(principal)))) {
       sendJson(res, 429, { error: "rate limit exceeded" });
       return;
     }
@@ -124,10 +128,13 @@ export function createMcpHttpServer(
       // state is shared between requests.
       const gone = new AbortController();
       const server = createMcpServer(store, scope, resolveNsForRequest(principal.namespace), {
-        waitKey: tokenKey(principal.token),
+        waitKey: tokenKey(tokenId(principal)),
         label: principal.label,
         authed: true,
         ...(principal.max_sensitivity !== undefined ? { maxSensitivity: principal.max_sensitivity } : {}),
+        ...(principal.reads_outside ? { readsOutside: true } : {}),
+        // Keyed like the REST API: the server-stamped writer (a token labelled like a marker is token:<label>).
+        taintedReads: taintedReadsOf(actorStore.run({ label: principal.label, authed: true }, currentWriter)),
         signal: gone.signal,
       });
       const transport = new StreamableHTTPServerTransport({
@@ -166,10 +173,12 @@ async function runStandalone(): Promise<void> {
   const { resolveStartupNamespace } = await import("./namespace.js");
   prepareDataDir();
   assertSafeExposure();
+  (await import("./tokens-admin.js")).hardenTokensFile(); // 1.5.0: plain-text keys in tokens.json become hashes on the first start
   const tokens = resolveTokens();
-  const { openStoreOrExit } = await import("./db-problem.js");
-  const store = openStoreOrExit(DB_PATH);
+  const { openStoreOrExit, SERVER_BUSY_TIMEOUT_MS } = await import("./db-problem.js");
+  const store = openStoreOrExit(DB_PATH, { busyTimeoutMs: SERVER_BUSY_TIMEOUT_MS });
   warnUnlabelledExposure(store, tokens);
+  setImmediate(() => store.warmBodyIndex()); // C-06: build the encrypted-body search index now, not on the first agent search
   startTokenReload(tokens);
   // Namespace resolution happens ONCE here, at startup, from the process cwd.
   const nsOpts = resolveStartupNamespace(process.cwd());

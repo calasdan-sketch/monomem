@@ -1,5 +1,5 @@
 // `monomem hook <event>`: the agent's lifecycle hooks (Claude Code: SessionStart, UserPromptSubmit, PostToolUse,
-// PostToolUseFailure, Stop, SubagentStop, SessionEnd; Codex, Gemini CLI and Muse are mapped onto the same events in setup.ts hookHosts).
+// PostToolUseFailure, Stop, SubagentStop, SessionEnd, PreCompact; Codex, Gemini CLI and Muse are mapped onto the same events in setup.ts hookHosts).
 //
 // FAIL-OPEN, ALWAYS: whatever happens (garbage on stdin, no database, a database from another version, a locked file, a
 // bug) the process exits 0 and prints either nothing or one valid hook JSON object on stdout. Capture is a bonus; it must
@@ -11,6 +11,8 @@
 // user-prompt prints one title line per note other writers saved since the previous prompt (nothing when there are none).
 // file-context (PreToolUse on Read) prints what memory knows about the file about to be read (file-context.ts); advisory only.
 import { existsSync } from "node:fs";
+import { dirname } from "node:path";
+import { loadKey } from "./crypto.js";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { HOOK_EVENTS, type HookEvent, captureSettings, normalizeHookInput, shouldCapture, recordEvent, spoolEvent, drainSpool, type CaptureEvent } from "./capture.js";
@@ -120,14 +122,16 @@ export async function captureHook(event: HookEvent, payload: Record<string, unkn
   let store: InstanceType<typeof Store> | null = null;
   try {
     if (!existsSync(dbPath)) throw new Error("no database yet");
-    store = new Store(dbPath, { noMigrate: true, busyTimeoutMs: HOOK_BUSY_MS });
+    store = new Store(dbPath, { noMigrate: true, busyTimeoutMs: HOOK_BUSY_MS, bodyIndex: "off" });
     const { newSession } = recordEvent(store, ev, namespace);
     const { distillSession, distillStaleSessions } = await import("./extract.js");
     if (newSession || event === "session-start") {
       drainSpool(store, dataDir);
       distillStaleSessions(store, ev.session_id);
     }
-    if (event === "stop" || event === "session-end") distillSession(store, ev.session_id);
+    // pre-compact (R2-05): the context is about to be compacted, so the session so far becomes its (interim) summary now;
+    // a later stop / session-end rebuilds the same summary note from the whole session.
+    if (event === "stop" || event === "session-end" || event === "pre-compact") distillSession(store, ev.session_id);
     if (event === "session-end") {
       // Optional local model (llm.ts, off unless configured): one call per session; on any failure the summary above stays.
       const { llmConfig, llmSummarize } = await import("./llm.js");
@@ -144,7 +148,15 @@ export async function captureHook(event: HookEvent, payload: Record<string, unkn
   } catch (e) {
     process.stderr.write(`monomem hook ${event}: ${(e as Error).message}; keeping the event for later\n`);
     if (await postCapture(env, { ...ev, namespace })) return "posted";
-    return spoolEvent(dataDir, { ...ev, namespace }) ? "spooled" : "dropped";
+    // With a key beside the database the spool line is sealed (S-02b); a key file that cannot be read drops the event
+    // rather than writing it in the clear.
+    let key: Buffer | null;
+    try {
+      key = loadKey(dirname(dbPath));
+    } catch {
+      return "dropped";
+    }
+    return spoolEvent(dataDir, { ...ev, namespace }, key) ? "spooled" : "dropped";
   } finally {
     try {
       store?.close();
@@ -176,7 +188,7 @@ async function newNotesHook(payload: Record<string, unknown>, env: NodeJS.Proces
     const { actorStore, stdioWriter } = await import("./actor.js");
     // The session's own writer is only known when the hook's environment names the app (MONOMEM_CLIENT, as the MCP entry does).
     const self = env.MONOMEM_CLIENT?.trim() ? stdioWriter(env).writer : undefined;
-    const store = new Store(dbPath, { noMigrate: true, busyTimeoutMs: HOOK_BUSY_MS });
+    const store = new Store(dbPath, { noMigrate: true, busyTimeoutMs: HOOK_BUSY_MS, bodyIndex: "off" });
     try {
       const run = (): string => newNotesSince(store, sid, { ...(res.kind === "resolved" ? { namespace: res.namespace } : {}), ...(self ? { notWrittenBy: self } : {}) });
       const text = cap ? actorStore.run({ label: "", maxSensitivity: cap, canDeclassify: false }, run) : run();
@@ -214,7 +226,7 @@ export async function runHook(eventArg: string, stdinText: string, opts: HookOpt
       if (typeof sid !== "string" || !sid || !existsSync(dbPath)) return "";
       const { Store } = await import("./store.js");
       const { llmSummarize } = await import("./llm.js");
-      const store = new Store(dbPath, { noMigrate: true });
+      const store = new Store(dbPath, { noMigrate: true, bodyIndex: "off" });
       try {
         await llmSummarize(store, sid, opts.env ?? process.env);
       } finally {

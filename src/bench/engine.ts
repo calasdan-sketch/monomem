@@ -15,7 +15,6 @@ import {
   type OpResult,
   type Scenario,
   type ScenarioResult,
-  type Suite,
   type WorldSpec,
 } from "./types.js";
 
@@ -34,7 +33,7 @@ const STEP_OPS = new Set([
   "write", "update", "delete", "archive", "unarchive", "read", "search", "list", "recall", "changes", "sweep",
   "distrust", "undistrust", "export", "import", "trust_server", "merge", "wait",
   "supersede_preview", "supersede_confirm", "supersede_undo", "history", "restore_version",
-  "capture", "session_start",
+  "capture", "session_start", "pin", "confirm",
 ]);
 const CHECKS = new Set([
   "outcome", "top", "has", "lacks", "fresh_answer", "hit_count", "field", "no_text", "contains_text", "same_response", "recoverable",
@@ -105,7 +104,7 @@ export function validateScenario(s: Scenario, gaps: Record<string, KnownGap> = {
     }
     if (raw.op === "restore_version" && (typeof raw.version !== "number" || typeof raw.id !== "string")) return `step ${i + 1} (restore_version): version (a number) and id are required`;
     if (raw.op === "supersede_preview" && typeof raw.id === "string") previewIds.add(raw.id);
-    if (["update", "delete", "archive", "unarchive", "read", "supersede_undo", "history", "restore_version"].includes(raw.op)) {
+    if (["update", "delete", "archive", "unarchive", "read", "pin", "confirm", "supersede_undo", "history", "restore_version"].includes(raw.op)) {
       if (typeof raw.ref !== "string" || !refs.has(raw.ref)) return `step ${i + 1} (${raw.op}): ref "${String(raw.ref)}" was not created by an earlier write`;
     }
     if (raw.op === "merge") {
@@ -136,7 +135,7 @@ export function validateScenario(s: Scenario, gaps: Record<string, KnownGap> = {
 
 function defaultStepId(step: AnyStep): string | undefined {
   if (typeof step.id === "string") return step.id;
-  if (typeof step.ref === "string" && ["write", "update", "delete", "archive", "unarchive", "read", "merge", "supersede_undo"].includes(step.op)) return `${step.op}:${step.ref}`;
+  if (typeof step.ref === "string" && ["write", "update", "delete", "archive", "unarchive", "read", "pin", "confirm", "merge", "supersede_undo"].includes(step.op)) return `${step.op}:${step.ref}`;
   if (["distrust", "undistrust", "trust_server"].includes(step.op)) return `${step.op}:${String(step.writer ?? step.of)}`;
   return undefined;
 }
@@ -192,6 +191,8 @@ function neededCapabilities(s: Scenario): Capability[] {
     if (raw.op === "history" || raw.op === "restore_version") need.add("history");
     if (raw.op === "capture") need.add("capture");
     if (raw.op === "session_start") need.add("session_start");
+    if (raw.op === "pin") need.add("pin");
+    if (raw.op === "confirm") need.add("confirm");
   }
   return [...need];
 }
@@ -204,6 +205,7 @@ function worldFor(s: Scenario): WorldSpec {
       writer: a.writer ?? name,
       server: a.server ?? "main",
       ...(a.namespace ? { namespace: a.namespace } : {}),
+      ...(a.reads_outside ? { reads_outside: true } : {}),
     };
   }
   return { actors, grants: s.grants ?? {}, ...(s.settings ? { settings: s.settings } : {}) };
@@ -275,6 +277,7 @@ async function execStep(a: MemoryAdapter, run: Run, step: AnyStep): Promise<void
         forget_after: step.forget_after as number | undefined,
         namespace: step.namespace as string | undefined,
         setup: step.setup === true || undefined,
+        outside: step.outside === true || undefined,
       });
       if (r.outcome === "ok" && r.note) run.refs.set(step.ref as string, r.note.id);
       keep(r);
@@ -292,6 +295,12 @@ async function execStep(a: MemoryAdapter, run: Run, step: AnyStep): Promise<void
     }
     case "delete":
       keep(await a.delete(as, run.idOf(step.ref as string)));
+      return;
+    case "pin":
+      keep(a.pin ? await a.pin(as, run.idOf(step.ref as string)) : { outcome: "unsupported" });
+      return;
+    case "confirm":
+      keep(a.confirm ? await a.confirm(as, run.idOf(step.ref as string)) : { outcome: "unsupported" });
       return;
     case "archive":
     case "unarchive":
@@ -364,7 +373,7 @@ async function execStep(a: MemoryAdapter, run: Run, step: AnyStep): Promise<void
       return;
     }
     case "export": {
-      const r = a.exportAll ? await a.exportAll(as, { attest: step.attest === true }) : ({ outcome: "unsupported" } as OpResult);
+      const r = a.exportAll ? await a.exportAll(as, { attest: step.attest === true }) : ({ outcome: "unsupported" } as OpResult); // gate-ok: bench adapter over HTTP GET /export (admin-only), not a Store read
       if (r.outcome === "ok") run.exports.set(step.id as string, r.data?.payload);
       keep(r);
       return;

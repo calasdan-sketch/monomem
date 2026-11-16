@@ -59,7 +59,7 @@ immediately visible through the others:
   `rev` for compare-and-swap, a provenance `source`, tags, and namespaces.
 - **`src/api.ts`** — a small HTTP/JSON API + a built-in web dashboard, on
   plain `node:http` (no framework).
-- **`src/mcp-server-core.ts`** — the transport-agnostic MCP server with thirty-five tools, nine of them registered by default (see MONOMEM_TOOLS),
+- **`src/mcp-server-core.ts`** — the transport-agnostic MCP server with thirty-seven tools, nine of them registered by default (see MONOMEM_TOOLS),
   tools, shared by both MCP transports.
 - **`src/mcp-stdio.ts`** — stdio entry point for local Claude Code / Desktop
   / editors.
@@ -112,6 +112,8 @@ immediately visible through the others:
 | `memory_supersede_preview` | write | Step 1 of replacing notes: changes nothing; returns the plain-language "Are you sure?" warning and a one-time code ([replacing-memories.md](./replacing-memories.md)) |
 | `memory_supersede_confirm` | write | Step 2: replaces the previewed notes, only with the preview's code (once, in time, for the same caller). Nothing is deleted. A RED FLAG also needs an admin and `acknowledge_risk` |
 | `memory_supersede_undo` | write | Bring a replaced note back (recorded) |
+| `memory_confirm` | write | Confirm a note from outside content against a named source. Counts only for a different writer with its own key, a different source, and no earlier read of the note; corroboration, not verification. Lets the note back into session start, never lets it be pinned. Not in the default set ([trust.md](./trust.md)) |
+| `memory_flag` | write | Flag a note that looks wrong, with a one-line reason; the note does not change. A note no person confirmed leaves session start until a person keeps it (`monomem review keep <id>`) or replaces it; a person-confirmed note stays, labelled. Own-note flags refused, distrusted writers' flags ignored, 20 a day. Not in the default set ([trust.md](./trust.md#agent-flags-150)) |
 | `memory_history` | admin | Earlier versions of a note (bounded per note) |
 | `memory_restore_version` | admin | Put an earlier version back as a new version (`if_rev` supported) |
 | `memory_history_purge` | admin | Forget a note's earlier versions (cannot be undone) |
@@ -131,8 +133,12 @@ immediately visible through the others:
 `GET /changes`, `POST /supersede/preview` · `POST /supersede/confirm` · `POST /supersede/undo`,
 `GET /notes/:id/history` · `POST /notes/:id/history/restore` · `DELETE /notes/:id/history` (admin), plus open
 `GET /health` (liveness) and `GET /ready` (DB-touch readiness, used by the
-Docker healthcheck) and the dashboard at `/`. Every route except `/health`,
-`/ready`, and the dashboard requires `Authorization: Bearer <token>`.
+Docker healthcheck), `GET /proof?nonce=` (1.5.0: an HMAC of the nonce and the store id under the main key's hash, so the
+session-start hook can check it reached this store's server before it sends the key; no key or note data) and the
+dashboard at `/`. Every route except `/health`, `/ready`, `/proof` and the dashboard requires `Authorization: Bearer <token>`.
+`GET /status` (admin) adds what `/health` leaves out for unauthenticated callers: the in-memory body index's state, note
+count, unreadable bodies and how many searches fell back to titles and tags (with the last reason); `monomem doctor` shows
+it for a verified server of this store.
 
 `PUT /notes/:id` takes an optional `if_rev` (the `rev` you last read), as the MCP tool `state_write` does: if the note has
 been changed since, the edit is refused with `409 { error: "stale write: ..." }` instead of replacing the newer write. Without

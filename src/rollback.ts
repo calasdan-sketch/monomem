@@ -22,7 +22,7 @@ import { Store, StaleWriteError, historyLimits, type NoteRecord } from "./store.
 import { SupersedeError, callerKey, supersedeTtlSeconds, type Caller } from "./supersede.js";
 import { safe } from "./supersede-text.js";
 import { maybeEmbed } from "./search-service.js";
-import { nameIs, stdioFamily } from "./trust.js";
+import { nameIs, nearWriter, stdioFamily, suggestWriter } from "./trust.js";
 
 const TOKEN_DOMAIN = "rollback-v1";
 /** How many lines of each list the plain-text preview prints (the JSON always has all of them). */
@@ -65,6 +65,8 @@ export interface RollbackPreview extends RollbackPlan {
   token: string;
   expires_at: string;
   expires_in_seconds: number;
+  /** Set when the name matched nothing but its stamped form did (`cursor` -> `stdio:cursor`). Never applied on its own. */
+  did_you_mean?: { writer: string; notes: number };
 }
 
 /** `since`: an ISO date/time, or a duration back from now (30m, 2h, 7d, 1w). Returns ISO. */
@@ -163,7 +165,7 @@ function gate(caller: Caller): string[] | undefined {
   return caller.ownNamespace !== undefined ? [caller.ownNamespace] : undefined;
 }
 
-function previewText(p: RollbackPlan, ttl: number, how: string): string {
+function previewText(p: RollbackPlan, ttl: number, how: string, hint?: { writer: string; notes: number }): string {
   const line = (x: { id: number; namespace: string; title: string; pinned?: true }): string =>
     `note ${x.id} [${safe(x.namespace, 40)}] "${safe(x.title, 80)}"${x.pinned ? " (PINNED)" : ""}`;
   const list = <T,>(rows: T[], f: (r: T) => string): string[] => [
@@ -174,13 +176,21 @@ function previewText(p: RollbackPlan, ttl: number, how: string): string {
   const rest = p.actions.filter((a) => a.action === "restore");
   const out = [`Roll back everything "${safe(p.writer, 60)}" did since ${p.since}${stdioFamily(p.writer) ? " (every stdio:<app> too)" : ""}:`];
   if (p.actions.length === 0) out.push("Nothing to do.");
+  if (hint) {
+    out.push(
+      `Did you mean "${safe(hint.writer, 60)}" (${hint.notes} note${hint.notes === 1 ? "" : "s"} changed since then)? Writer names must match exactly; ` +
+        `\`monomem show <id>\` prints a note's "written by:". Run: monomem rollback --writer ${safe(hint.writer, 60)} --since ${p.since}`
+    );
+  }
   if (arch.length) out.push(`Archive ${arch.length} note(s) it created:`, ...list(arch, (a) => line(a) + (a.conflict ? " (others changed it too)" : "")));
   if (rest.length) out.push(`Put back the earlier text of ${rest.length} note(s) it changed:`, ...list(rest, (a) => `${line(a)} -> version ${a.restore_version}${a.conflict ? " (overwrites later changes by others)" : ""}`));
   if (p.skipped.length) out.push(`Skipped ${p.skipped.length} note(s):`, ...list(p.skipped, (s) => `${line(s)}: ${s.reason.replace(/_/g, " ")}, ${s.detail}`));
+  // An empty plan has nothing to confirm: no code, no --yes line (round-2 ease of use: "add --yes to go ahead" with nothing to do misled).
+  if (p.actions.length === 0) return out.join("\n");
   out.push(
     "Nothing is deleted: archived notes come back with `monomem restore <id>`, and each restored note keeps the text it replaces in its history " +
       "(`monomem history restore <id> <version>` undoes it).",
-    `This code works once, for ${Math.round(ttl / 60)} minute(s). ${how}`
+    `This plan can be confirmed once, within ${Math.round(ttl / 60)} minute(s). ${how}`
   );
   return out.join("\n");
 }
@@ -196,6 +206,9 @@ export function rollbackPreview(
   const writer = parseWriter(req.writer);
   const since = parseSince(req.since);
   const plan = planRollback(store, writer, since, req.include_conflicts === true, namespaces);
+  // Counted within the caller's namespaces only, so the hint reveals nothing a preview of that name would not.
+  const count = (w: string): number => store.rollbackCandidates(w, false, since, namespaces).length;
+  const hint = plan.actions.length === 0 && plan.skipped.length === 0 ? suggestWriter(writer, count) ?? nearWriter(writer, store.writerNames(), count) : undefined;
   const ttl = supersedeTtlSeconds();
   const expMs = Date.now() + ttl * 1000;
   const token = store.mintToken(TOKEN_DOMAIN, {
@@ -210,7 +223,8 @@ export function rollbackPreview(
   return {
     ok: true,
     ...plan,
-    warning: previewText(plan, ttl, howToConfirm.replace("{token}", token)),
+    warning: previewText(plan, ttl, howToConfirm.replace("{token}", token), hint),
+    ...(hint ? { did_you_mean: hint } : {}),
     token,
     expires_at: new Date(expMs).toISOString(),
     expires_in_seconds: ttl,
@@ -254,6 +268,8 @@ export function rollbackConfirm(store: Store, caller: Caller, req: { token: unkn
     const archived: number[] = [];
     const restored: RollbackResult["restored"] = [];
     for (const a of plan.actions) {
+      // R2-08: counted against the note's writer as it stands before the rollback (a family name like "stdio" is not a writer).
+      store.recordWriterEvent(store.read(a.id)?.written_by ?? "", "rolled_back", a.id); // gate-ok: operator rollback, only the writer name is used
       if (a.action === "archive") {
         store.archive(a.id);
         archived.push(a.id);

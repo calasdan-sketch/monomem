@@ -7,6 +7,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:f
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
+import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -35,7 +36,7 @@ interface ActorHandle {
   namespace?: string;
 }
 
-const CAPS: Capability[] = ["read", "list", "restore", "retire", "trust", "export_import", "attestation", "merge", "recall", "changes", "tenants", "cas", "supersede", "history", "capture", "session_start"];
+const CAPS: Capability[] = ["read", "list", "restore", "retire", "trust", "export_import", "attestation", "merge", "recall", "changes", "tenants", "cas", "supersede", "history", "capture", "session_start", "pin", "confirm"];
 
 function toOutcome(status: number): Outcome {
   if (status === 200 || status === 201) return "ok";
@@ -117,7 +118,7 @@ export class MonomemAdapter implements MemoryAdapter {
     const byServer = new Map<string, TokenEntry[]>();
     for (const [name, a] of Object.entries(world.actors)) {
       const token = `bench-${name}-${randomBytes(16).toString("hex")}`;
-      const entry: TokenEntry = { token, scope: a.scope, label: a.writer, ...(a.namespace ? { namespace: a.namespace } : {}) };
+      const entry: TokenEntry = { token, scope: a.scope, label: a.writer, ...(a.namespace ? { namespace: a.namespace } : {}), ...(a.reads_outside ? { reads_outside: true } : {}) };
       this.actors.set(name, { name, server: a.server, token, scope: a.scope, writer: a.writer, namespace: a.namespace });
       const list = byServer.get(a.server) ?? [];
       list.push(entry);
@@ -129,10 +130,19 @@ export class MonomemAdapter implements MemoryAdapter {
       mkdirSync(folder, { recursive: true });
       if (this.seedDb && name === "main") {
         copyFileSync(this.seedDb, join(folder, "state.db"));
+        // The copy gets its own throwaway signing key: forget the original's key id so no "a NEW key was created" warning fires.
+        const meta = new DatabaseSync(join(folder, "state.db"));
+        try {
+          meta.exec("DELETE FROM _meta WHERE key = 'attest_key_id'");
+        } finally {
+          meta.close();
+        }
         const seedKey = join(dirname(this.seedDb), ".key"); // an encrypted store's key travels with its copy
         if (existsSync(seedKey)) copyFileSync(seedKey, join(folder, ".key"));
       }
-      const store = new Store(join(folder, "state.db"));
+      // Its own audit log beside its own key: one shared log made every server after the first warn that the key beside
+      // the log "belongs to another store" (final3 EASE-SF1), on stderr of demo, drill and health.
+      const store = new Store(join(folder, "state.db"), { auditLog: join(folder, "audit.log") });
       const http = createApiServer(store, tokens, this.serverOpts());
       await new Promise<void>((resolve, reject) => {
         http.once("error", reject);
@@ -263,6 +273,7 @@ export class MonomemAdapter implements MemoryAdapter {
     if (input.confidence !== undefined) body.confidence = input.confidence;
     if (input.forget_after !== undefined) body.forget_after = input.forget_after;
     if (input.namespace !== undefined) body.namespace = input.namespace;
+    if (input.outside) body.outside = true;
     const r = await this.http(actor, "POST", "/notes", body);
     if (r.status !== 201) return this.fail(r.status, r.json);
     // Stored, but the linter may have warned (category + label only, never the matched text).
@@ -371,6 +382,19 @@ export class MonomemAdapter implements MemoryAdapter {
   async unarchive(actor: string, id: string): Promise<OpResult> {
     const r = await this.http(actor, "POST", `/notes/${encodeURIComponent(id)}/restore`);
     return r.status === 200 ? { outcome: "ok" } : this.fail(r.status, r.json);
+  }
+
+  /** The operator pin over REST (PUT /pinned, admin): a note from outside content no person confirmed is refused (400). */
+  async pin(actor: string, id: string): Promise<OpResult> {
+    const r = await this.http(actor, "PUT", "/pinned", { id: Number(id), pinned: true });
+    return r.status === 200 ? { outcome: "ok" } : this.fail(r.status, r.json);
+  }
+
+  /** POST /notes/:id/confirm. An admin token's confirm counts as a person's (kind `admin`, what the dashboard sends). */
+  async confirm(actor: string, id: string): Promise<OpResult> {
+    const r = await this.http(actor, "POST", `/notes/${encodeURIComponent(id)}/confirm`, {});
+    if (r.status !== 200) return this.fail(r.status, r.json);
+    return r.json.counted === true ? { outcome: "ok", data: { kind: r.json.kind } } : { outcome: "invalid", detail: `confirm not counted (${String(r.json.reason ?? r.json.kind)})` };
   }
 
   async sweep(actor: string): Promise<OpResult> {

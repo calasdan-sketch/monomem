@@ -7,7 +7,7 @@ import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file r
 import { test, describe, afterEach, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { Store } from "../src/store.js";
-import { embed, embeddingsConfig, resetEmbeddingsAuto, type EmbeddingsConfig } from "../src/embeddings.js";
+import { embed, embeddingsConfig, resetEmbeddingsAuto, clearQueryVectors, type EmbeddingsConfig } from "../src/embeddings.js";
 import { runSearch } from "../src/search-service.js";
 
 const CFG: EmbeddingsConfig = {
@@ -81,6 +81,7 @@ describe("runSearch semantic / hybrid / fallback", () => {
 
   beforeEach(() => {
     process.env.MONOMEM_EMBEDDINGS = "on";
+    clearQueryVectors(); // each test stubs its own endpoint; a vector cached by an earlier test would hide "endpoint down"
     store = new Store(":memory:");
   });
   afterEach(() => {
@@ -200,5 +201,39 @@ describe("MONOMEM_EMBEDDINGS=auto", () => {
     const res = await runSearch(s, "deploy", {});
     assert.deepEqual(res.map((n) => n.id), [a.id]);
     s.close();
+  });
+});
+
+describe("round 4: a repeated search reuses its query vector", () => {
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  test("embedQuery calls the endpoint once per (endpoint, model, text); a failure is not remembered", async () => {
+    const { embedQuery, clearQueryVectors } = await import("../src/embeddings.js");
+    clearQueryVectors();
+    let calls = 0;
+    stubFetch(() => {
+      calls++;
+      return openaiResponse([1, 2, 3]);
+    });
+    const a = await embedQuery("deploy steps", CFG);
+    const b = await embedQuery("deploy steps", CFG);
+    assert.deepEqual([...b!], [1, 2, 3]);
+    assert.equal(calls, 1, "second identical search hit the cache");
+    assert.notEqual(a, b, "each caller gets its own copy (no shared mutable vector)");
+    await embedQuery("deploy steps", { ...CFG, model: "other" });
+    assert.equal(calls, 2, "another model is another vector");
+    stubFetch(() => {
+      calls++;
+      return { ok: false, status: 500, json: async () => ({}) };
+    });
+    assert.equal(await embedQuery("new words", CFG), null);
+    stubFetch(() => {
+      calls++;
+      return openaiResponse([4]);
+    });
+    assert.deepEqual([...(await embedQuery("new words", CFG))!], [4], "a failed call is retried, not cached as null");
+    clearQueryVectors();
   });
 });

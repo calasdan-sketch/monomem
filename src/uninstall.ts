@@ -10,6 +10,8 @@ import { cpSync, existsSync, readdirSync, readFileSync, rmSync, statSync, unlink
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
+import { execFileSync } from "node:child_process";
+import { servicePlan, TASK_NAME } from "./service.js";
 import { dataHome, detectClients, hookHosts, readHistory, saveHistory, stamp, undoSession, type HistorySession, type SetupEnv, type SetupIO } from "./setup.js";
 
 export interface UninstallOptions {
@@ -17,6 +19,10 @@ export interface UninstallOptions {
   yes: boolean;
   purge: boolean;
   noBackup: boolean;
+  /** Runs `monomem service uninstall` (tests pass a stub; nothing real is ever called from a test). Returns its exit code. */
+  removeService?: () => number;
+  /** Windows: is a task by Monomem's name registered (`schtasks /Query /TN Monomem`)? Tests pass a stub. */
+  taskExists?: () => boolean;
 }
 
 type Change = HistorySession["changes"][number];
@@ -72,7 +78,7 @@ export function dirBytes(dir: string, deadline: number = Date.now() + DIR_BYTES_
  * also holds anything else, so a MONOMEM_HOME pointed at a busy folder never loses files that are not Monomem's.
  */
 const OWN_ENTRY =
-  /^(?:state\.db.*|demo\.db.*|\.token.*|\.key.*|\.attest-key.*|\.sync-key.*|\.last-backup|tokens\.json.*|spaces\.json.*|setup-history\.json.*|setup-hooks-declined|capture\.json.*|capture-spool\.jsonl.*|claude-import-held\.json.*|runner-allow\.json.*|runner-seen\.json.*|runner\.lock|login-code.*|audit\.log.*|spool|backups|sync-conflicts|\.sync-work-.*|README\.txt)$/;
+  /^(?:state\.db.*|demo\.db.*|\.token.*|\.key.*|\.attest-key.*|\.sync-key.*|\.last-backup|tokens\.json.*|spaces\.json.*|setup-history\.json.*|setup-hooks-declined|capture\.json.*|capture-spool\.jsonl.*|claude-import-held\.json.*|runner-allow\.json.*|runner-seen\.json.*|runner\.lock|login-code.*|audit\.log.*|server\.log.*|sync-git-seen-[0-9a-f]+\.json.*|monomem-task\.xml|spool|backups|sync-conflicts|\.sync-work-.*|README\.txt)$/;
 
 /** Entries of `dir` that are not Monomem's (empty when it cannot be read). */
 export function foreignEntries(dir: string): string[] {
@@ -129,6 +135,33 @@ async function finalBackup(dir: string, out: string): Promise<void> {
   cpSync(dir, out, { recursive: true, force: false, errorOnExist: false, filter: (src) => !/[\\/]state\.db(-wal|-shm|-journal)?$/.test(src) });
 }
 
+/**
+ * The file `monomem service install` wrote, when it is there (the unit, the LaunchAgent, or on Windows the task XML it
+ * keeps in the data folder). A service left behind would start `monomem start` again at the next sign-in and make a new
+ * data folder and token, so --purge removes it first.
+ */
+function installedService(e: SetupEnv, dir: string, taskExists: () => boolean): string {
+  const path = servicePlan({ platform: e.platform, node: e.execPath, cli: e.cliPath, home: e.home, dataDir: dir, env: e.env }).file.path;
+  if (existsSync(path)) return path;
+  // The task XML deleted by hand: the task itself would still start Monomem (and recreate the data folder) every 5 minutes.
+  return e.platform === "win32" && taskExists() ? `the scheduled task "${TASK_NAME}"` : "";
+}
+
+/** `schtasks /Query /TN Monomem` exits 0 when the task is registered. Read only. */
+function defaultTaskExists(): boolean {
+  try {
+    execFileSync("schtasks", ["/Query", "/TN", TASK_NAME], { stdio: "ignore", windowsHide: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function defaultRemoveService(e: SetupEnv, dir: string): Promise<number> {
+  const { serviceCmd } = await import("./service.js");
+  return serviceCmd("uninstall", false, { platform: e.platform, node: e.execPath, cli: e.cliPath, home: e.home, dataDir: dir, uid: process.getuid?.(), env: e.env });
+}
+
 export async function runUninstall(e: SetupEnv, io: SetupIO, opts: UninstallOptions): Promise<number> {
   const all = readHistory(e);
   const sessions = all.filter((s) => !s.undone).reverse(); // newest first: each one's backup is the state the older one left
@@ -148,6 +181,9 @@ export async function runUninstall(e: SetupEnv, io: SetupIO, opts: UninstallOpti
     return 1;
   }
   const others = opts.purge && existsSync(dir) ? foreignEntries(dir) : [];
+  const service = installedService(e, dir, opts.taskExists ?? defaultTaskExists);
+  if (service && opts.purge) io.out(`  ${n++}. Stop and remove the background service (monomem service install): ${service}`);
+  else if (service) io.out(`  (left alone) a background service starts Monomem when you sign in (${service}); remove it: monomem service uninstall`);
   if (opts.purge) {
     if (existsSync(dir)) {
       if (!opts.noBackup) io.out(`  ${n++}. Make a final backup of ${dir} at ${backupDir}`);
@@ -168,7 +204,7 @@ export async function runUninstall(e: SetupEnv, io: SetupIO, opts: UninstallOpti
   for (const f of left) io.out(`  (left alone) ${f} mentions Monomem, but setup did not add it; take it out by hand if you want`);
   io.out("");
 
-  const nothing = sessions.length === 0 && !(opts.purge && (existsSync(dir) || configBackups.length));
+  const nothing = sessions.length === 0 && !(opts.purge && (existsSync(dir) || configBackups.length || service));
   if (nothing) {
     io.out("Nothing to remove.");
     return 0;
@@ -200,6 +236,15 @@ export async function runUninstall(e: SetupEnv, io: SetupIO, opts: UninstallOpti
   if (failed) {
     io.err(`\n${failed} file(s) could not be put back (see above), so I stopped${opts.purge ? " and did NOT delete your data" : ""}. Fix that, then run uninstall again.`);
     return 1;
+  }
+  if (opts.purge && service) {
+    const code = opts.removeService ? opts.removeService() : await defaultRemoveService(e, dir);
+    if (code !== 0) {
+      io.err(`
+The background service could not be removed, so I stopped and did NOT delete your data (it would start Monomem again). Run: monomem service uninstall   then run uninstall --purge again.`);
+      return 1;
+    }
+    io.out(`  removed the background service`);
   }
   if (opts.purge) {
     if (existsSync(dir)) {

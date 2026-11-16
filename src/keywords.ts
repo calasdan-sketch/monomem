@@ -144,3 +144,24 @@ export function extractKeywords(text: string): string[] {
   if (out.length === 0) for (const p of shortHeld.slice(0, MAX_KEYWORDS)) pushKeyword(seen, out, p);
   return out;
 }
+
+/**
+ * Search-side suffix trim for an extracted keyword, so its prefix match also finds the other forms of the word: "bikes" ->
+ * "bike" (bike, bikes, biker), "camped" / "camping" -> "camp", "painted" -> "paint", "watches" -> "watch". Only a plural
+ * "s"/"es", "ed" and "ing" are trimmed, only from letters-only words, and only when at least STEM_MIN letters are left (so
+ * "news", "going", "moved" stay as typed). Hashtags and words with digits are never trimmed. The index is unchanged: this
+ * only widens what a query keyword matches as a prefix.
+ */
+export const STEM_MIN = 4;
+export function searchStem(k: string): string {
+  if (!/^\p{L}+$/u.test(k)) return k;
+  const cut = (stem: string): string => (stem.length >= STEM_MIN ? stem : k);
+  if (/(?:ss|us|is|ous)$/.test(k)) return k;
+  if (/(?:ches|shes|xes|sses|zes)$/.test(k)) return cut(k.slice(0, -2));
+  if (/ies$/.test(k)) return k;
+  if (/s$/.test(k)) return cut(k.slice(0, -1));
+  const undouble = (st: string): string => (/([b-df-hj-np-tv-z])\1$/.test(st) && !/(?:ll|ss|zz)$/.test(st) ? st.slice(0, -1) : st);
+  if (/ed$/.test(k) && !/eed$/.test(k)) return cut(undouble(k.slice(0, -2)));
+  if (/ing$/.test(k)) return cut(undouble(k.slice(0, -3)));
+  return k;
+}

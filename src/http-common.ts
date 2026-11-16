@@ -4,7 +4,23 @@
 
 import type { IncomingMessage, Server } from "node:http";
 import { StringDecoder } from "node:string_decoder";
-import { envNum as num, type TokenEntry } from "./config.js";
+import { createHmac } from "node:crypto";
+import { envNum as num, PACKAGE_VERSION, type TokenEntry } from "./config.js";
+import { SCHEMA_VERSION } from "./store.js";
+
+/** GET /health on both servers (no auth, no DB): liveness plus the build and schema, so `monomem doctor` can tell a server
+ * still running the old version after an upgrade (1.5.0, U-10). */
+export const healthBody = (): { status: "ok"; version: string; schema: number } => ({ status: "ok", version: PACKAGE_VERSION, schema: SCHEMA_VERSION });
+
+/**
+ * 1.5.0: GET /proof's answer. The session-start hook sends the main key only to a server that proves it holds the same key
+ * and has the same store open: an HMAC, keyed by the key's SHA-256 (what the server keeps), over a fresh nonce and the store
+ * id. It reveals neither, and is accepted nowhere as a credential.
+ */
+export const serverProof = (keySha256Hex: string, nonce: string, storeId: string): string =>
+  createHmac("sha256", keySha256Hex.toLowerCase()).update(`monomem-local-proof
+${nonce}
+${storeId}`).digest("hex");
 
 // 1MB cap so a bad client can't OOM the process. Shared by both servers.
 export const MAX_BODY_BYTES = 1_000_000;

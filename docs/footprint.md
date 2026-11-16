@@ -2,8 +2,10 @@
 
 Monomem keeps to two places on its own: **its data folder** and **the config files of the apps you connect with
 `monomem setup`**. It never writes into your project folders unless you ask for it with a command that names the
-folder (`setup --project`, `export --dir`, `export --out`, `backup --out`, `sync --git`). It writes no `CLAUDE.md` or
-`AGENTS.md` anywhere, runs no background service you did not start, and every queue it keeps has a size or retry limit.
+folder (`setup --project`, `export --dir`, `export --out`, `backup --out`, `sync --git`). It never writes a `CLAUDE.md` or
+`AGENTS.md` unless you run `monomem project-rules` (1.5.0) in that repository at a terminal and type yes; then it writes
+only between its own `<!-- monomem:begin v1 -->` and `<!-- monomem:end -->` lines (delete those lines and what is between
+them to remove it). It runs no background service you did not start (`monomem service install` adds one; see below), and every queue it keeps has a size or retry limit.
 
 To take it all out: `monomem uninstall` (configs) or `monomem uninstall --purge` (configs and data, after a final
 backup). Both show the plan first and change nothing until you type `y`; `--dry-run` only shows it.
@@ -20,11 +22,14 @@ folder). `monomem doctor` prints which one, and its size.
 | `.token`, `tokens.json` | first start (the API token) / by you | `uninstall --purge` |
 | `.key`, `.attest-key`, `.sync-key` | `encrypt enable` / first signed export / first `sync --git --encrypt` (`MONOMEM_KEY_FILE`, `MONOMEM_ATTEST_KEY_FILE`, `MONOMEM_SYNC_KEY_FILE` move them) | `uninstall --purge` (a key moved elsewhere: by hand) |
 | `audit.log`, `audit.log.1..5` | every API write; rotated at 5 MB, 5 kept (`MONOMEM_AUDIT_LOG`, `_MAX_BYTES`, `_KEEP`) | `uninstall --purge` |
+| `server.log`, `server.log.1..5` | a server with no terminal (`monomem open`, `monomem service`, `start --log`): what it prints (paths, ports, errors; no note text, no key); rotated like `audit.log` | `uninstall --purge` |
 | `capture-spool.jsonl` (+ `.draining`) | a capture hook could not open the database; capped at 10 MB, drained by the next hook | `uninstall --purge` |
 | `capture.json`, `spaces.json` | by you | `uninstall --purge` |
 | `setup-history.json` | each `setup` that changed a file (what `--undo` / `uninstall` replay) | `uninstall --purge` |
 | `claude-import-held.json` | `import --claude` (files you chose to hold back) | `uninstall --purge` |
 | `.sync-work-*`, `sync-conflicts/<time>/` | `sync --git --encrypt` (work folder, removed after); the losing side of an edit conflict | `uninstall --purge` |
+| `sync-git-seen-<id>.json` | `sync --git`: the highest version synced per file, one per repository | `uninstall --purge` |
+| `monomem-task.xml` | Windows only, `monomem service install` (the task definition it hands to Task Scheduler) | `service uninstall` / `uninstall --purge` |
 | `.migrate.lock` | a few ms while a 1.0.x database is moved out of the package | removed by itself |
 
 ## App config files (only with `monomem setup`)
@@ -40,6 +45,19 @@ changed since.
 since is put back byte for byte from its backup, and a file the app changed since keeps those changes and loses only the
 Monomem part. An entry setup did not add (one you wrote by hand) is listed, not removed. `--purge` also deletes the
 `.monomem-backup-*` copies setup recorded; `...-before-undo` copies are always kept for you to check.
+
+## The background service (only with `monomem service install`)
+
+| OS | Writes | Remove |
+|---|---|---|
+| Windows | Task Scheduler task `Monomem` (at sign-in, restarted if it stops) and `<data folder>/monomem-task.xml` | `monomem service uninstall`, or `uninstall --purge` |
+| macOS | `~/Library/LaunchAgents/io.monomem.server.plist` (RunAtLoad, KeepAlive) | `monomem service uninstall`, or `uninstall --purge` |
+| Linux | `~/.config/systemd/user/monomem.service` (Restart=always) | `monomem service uninstall`, or `uninstall --purge` |
+
+`uninstall --purge` finds the service and removes it (through `monomem service uninstall`) before it deletes any data:
+left behind, it would start the server again at the next sign-in and make a new data folder and token. If that removal
+fails, nothing is deleted and the command to run is printed. Plain `uninstall` lists the service and the command, and
+leaves it running. On Windows the task is found by its `monomem-task.xml` in the data folder.
 
 ## Written only where you point it
 
@@ -67,6 +85,8 @@ Monomem part. An entry setup did not add (one you wrote by hand) is listed, not 
 | Dashboard page (`src/dashboard.ts`) | opening the dashboard | the Monomem server that served the page (API calls, and the one-time sign-in code that `monomem open` hands over) |
 | `monomem open` (`src/cli.ts`) | running the command | `http://127.0.0.1:<api port>/health`, to see whether your own server is up |
 | `monomem restore` (`src/cli.ts`) | running the command | `http://127.0.0.1:<api port>/health`, only to print a hint when something answers there (whether the database is in use is judged by its lock) |
+| `monomem doctor` (`src/cli.ts`) | running the command | `http://127.0.0.1:<api port>/health`, to warn when the server running there is older than the CLI (`MONOMEM_NO_SERVER_PROBE=1` skips it) |
+| Encrypted session start (`src/local-server.ts`, `src/recall.ts`) | the store is encrypted and a Monomem server for this store runs on this computer | that server on `127.0.0.1`: `GET /proof` (to check it holds the same main key; the key itself is never sent) and `POST /relevant` (to match note bodies; falls back to titles and tags if nothing answers) |
 
 Not Monomem's own calls: `npx monomem` downloads the package from npm, and `sync --git` runs `git`, which pushes where your
 repository's remote points.

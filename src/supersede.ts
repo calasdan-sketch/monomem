@@ -16,10 +16,12 @@ import { currentWriter } from "./actor.js";
 import { type Scope } from "./config.js";
 import { scopeAllows } from "./security.js";
 import { annotateStaleness } from "./staleness.js";
-import { assertPlainWriteTags, isReservedTag } from "./reserved-tags.js";
-import { Store, ValidationError, StaleWriteError, validateConfidence, type NoteRecord, type HistoryEntry } from "./store.js";
+import { assertPlainWriteTags, isManagedTag } from "./reserved-tags.js";
+import { Store, ValidationError, StaleWriteError, validateConfidence, needsHumanConfirm, type NoteRecord, type HistoryEntry } from "./store.js";
+import { promotionRefusal } from "./taint.js";
 import { DEFAULT_SENSITIVITY, sensitivityRank, strictestLabel } from "./sensitivity.js";
 import { PREVIEW_MAX_OLD, type SupersedeReplacementInput } from "./supersede-shared.js";
+import { lineDiff } from "./line-diff.js";
 import { blockedText, doneText, previewText, safe, type PreviewFlags, type PreviewNote } from "./supersede-text.js";
 
 export { PREVIEW_MAX_OLD, type SupersedeReplacementInput } from "./supersede-shared.js";
@@ -141,6 +143,17 @@ export interface SupersedePreview {
   flags: PreviewFlags;
   /** How many notes will be replaced: the number a person types to confirm in the terminal. */
   count: number;
+  /**
+   * C-02: the change line by line ("- " removed, "+ " added; printable, capped) when ONE note is replaced. Only the first
+   * SNIPPET_PREVIEW characters of each text are compared: no more note text than notes_to_retire[].snippet already carries.
+   */
+  diff?: string[];
+}
+
+function previewDiff(oldBody: string, newBody: string): string[] {
+  const d = lineDiff(oldBody.slice(0, SNIPPET_PREVIEW), newBody.slice(0, SNIPPET_PREVIEW));
+  const cut = oldBody.length > SNIPPET_PREVIEW || newBody.length > SNIPPET_PREVIEW;
+  return d.length && cut ? [...d, `  (only the first ${SNIPPET_PREVIEW} characters of each are compared)`] : d;
 }
 
 /** Step 1. Reads only. Nothing is written, nothing is reserved, no note is touched. */
@@ -162,7 +175,7 @@ export function supersedePreview(
     if (o.namespace !== ns) throw new SupersedeError("notes from different namespaces cannot be replaced together");
     if (o.status === "superseded") throw new SupersedeError(`note ${o.id} was already replaced by ${o.superseded_by !== undefined ? `note ${o.superseded_by}` : "another note"}`, 409);
     if (o.archived_at) throw new SupersedeError(`note ${o.id} is archived, not a live note, so there is nothing to replace`, 409);
-    if (o.tags.some(isReservedTag)) throw new SupersedeError(`note ${o.id} is a task or handoff, or captured work; those are managed by their own tools, not replaced`);
+    if (o.tags.some(isManagedTag)) throw new SupersedeError(`note ${o.id} is a task or handoff, or captured work; those are managed by their own tools, not replaced`);
     // A pinned note: the confirm would be refused (Store.refuseAgentOnPinned), so say so now.
     if (o.pinned && currentWriter() !== "cli") throw new SupersedeError(`note ${o.id} is pinned by the operator: replacing it is done by the operator (monomem CLI), not by an agent`, 403);
   }
@@ -180,8 +193,10 @@ export function supersedePreview(
     const target = writable(store, caller, nid);
     if (target.namespace !== ns) throw new SupersedeError("the replacing note must be in the same namespace");
     if (target.status === "superseded" || target.archived_at) throw new SupersedeError(`note ${nid} is not a live note, so it cannot take the place of another`, 409);
-    if (target.tags.some(isReservedTag)) throw new SupersedeError(`note ${nid} is a task or handoff, or captured work, and cannot replace a note`);
+    if (target.tags.some(isManagedTag)) throw new SupersedeError(`note ${nid} is a task or handoff, or captured work, and cannot replace a note`);
     if (store.isDistrusted(target)) throw new SupersedeError("a note from a writer on the distrust list cannot replace another note", 403);
+    // 1.4.0: the confirm would be refused (Store.supersedeCommit), so say so now.
+    if (currentWriter() !== "cli" && needsHumanConfirm(target)) throw new SupersedeError(promotionRefusal("use it as a replacement", nid, target.confirmed_kind === "admin" && target.confirmed_rev === target.rev), 403);
     newId = nid;
     newRev = target.rev;
     content = { title: target.title, body: target.body, tags: target.tags, confidence: target.confidence ?? null };
@@ -231,6 +246,7 @@ export function supersedePreview(
     r: flags.needs_admin_ack ? 1 : 0,
   });
 
+  const diff = olds.length === 1 ? previewDiff(olds[0].body, content.body) : [];
   const notes = olds.map((o) => describeOld(store, o, annotateStaleness(o).stale));
   const how = flags.needs_admin_ack ? howToConfirm.replace("{token}", token) + "\n(You must also say you accept the red flag above: acknowledge_risk.)" : howToConfirm.replace("{token}", token);
   const warning = previewText({
@@ -252,6 +268,7 @@ export function supersedePreview(
     replacement: replacementView,
     flags,
     count: olds.length,
+    ...(diff.length ? { diff } : {}),
   };
 }
 
@@ -261,6 +278,17 @@ export interface SupersedeResult {
   retired: Array<{ id: number; title: string; status: "superseded"; superseded_by: number }>;
   replacement: NoteRecord;
   created_replacement: boolean;
+}
+
+/**
+ * The notes a confirmation code names: the ones it retires and the existing replacement (newId 0 = a new note; both empty
+ * for a code that does not open). The CLI gates on these before confirming (supersede-cli.ts).
+ */
+export function supersedeTokenTargets(store: Store, token: string): { oldIds: number[]; newId: number } {
+  const t = store.openToken(TOKEN_DOMAIN, token);
+  if (!t) return { oldIds: [], newId: 0 };
+  const olds = Array.isArray(t.o) ? (t.o as unknown[]).map((p) => (Array.isArray(p) ? Number(p[0]) : NaN)).filter(Number.isInteger) : [];
+  return { oldIds: olds, newId: Number(t.ni) || 0 };
 }
 
 /** Step 2. The ONLY path that retires a note. Needs a valid, unexpired, unused code made for this caller. */

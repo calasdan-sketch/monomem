@@ -19,7 +19,10 @@ To check your own setup, run `monomem drill` (replays 20 known memory-poisoning 
   defense); browser origins are blocked unless listed in
   `MONOMEM_ALLOWED_ORIGINS`.
 - **Auth:** a bearer token is required on every route except `/health` and
-  `/ready`, and the static pages `/`, `/ui`, `/dashboard.js` and `/favicon.ico`, which hold no notes. Each token is compared in constant time (a minor side-channel on
+  `/ready`, and the static pages `/`, `/ui`, `/dashboard.js` and `/favicon.ico`, which hold no notes. `/health` (on the
+  API and on the MCP port) answers before the host check and the rate limiter, and its reply names the exact Monomem
+  version and database schema (`{"status":"ok","version":...,"schema":...}`): anyone who can reach the port can learn
+  which version runs. It carries no note text and no key. Each token is compared in constant time (a minor side-channel on
   token length/count is not fully eliminated, which is immaterial for the
   high-entropy tokens this uses behind a tunnel). Tokens are never placed in
   URLs and are never logged. The primary token file is created `0600` and is
@@ -54,12 +57,63 @@ To check your own setup, run `monomem drill` (replays 20 known memory-poisoning 
   `prev`; verify counts that as a fork, not a break, and keeps going. This is **tamper-evident, not
   tamper-proof**: it detects lines edited or removed *inside* the chain. A forged line inserted with a valid `prev`
   also looks like a fork, and after a real race the line nobody points to can be edited or removed unseen; forks are
-  reported, so a count you did not expect is worth a look. The hashes are not keyed, so any program
-  running as you with a shell or file access (including an agent with a shell tool) can rewrite the whole chain or cut
-  off its newest lines, and deleting rotated files is not detected. `audit verify` prints the head hash: note it
-  somewhere else to catch a later rewrite. Lines written before this was added have no `prev` and are counted as
-  unchained. Archive through MCP `state_delete` currently writes two lines (one from the store, one
+  reported, so a count you did not expect is worth a look. Since 1.5.0 every line is also signed (next item), but a
+  program running as you can read the key, so it can still rewrite the chain after the last anchor someone else holds.
+  `audit verify` prints the head hash: note it somewhere else to catch a later rewrite. Lines written before this was
+  added have no `prev` and are counted as unchained. Archive through MCP `state_delete` currently writes two lines (one from the store, one
   from the tool, which names the caller).
+- **Signed audit log and signed write receipts (1.5.0).** Every audit line carries `kid` and an Ed25519 `sig` over the
+  line (so over its `prev` chain hash too), made with the store's own key: the same `.attest-key` (mode 0600) that signs
+  exports; there is no new key file. Opening a file store makes the key if it has none (not the first write); with
+  `MONOMEM_AUDIT_LOG` pointing to another folder, a copy of the key (kept in step by `trust rotate`) sits beside that log.
+  An in-memory store (tests, `--db :memory:`) writes unsigned lines: it has no key file, by design. The audit code itself
+  never creates a key, so a process that cannot read the key writes an unsigned line, as before. The first signed line of a
+  log is a `sign-start` line naming the key and the head of the unsigned history before it: from then on that history
+  cannot change without breaking the signed line after it. It proves nothing about edits made before the upgrade.
+  `monomem trust rotate` writes a `key-rotate` line signed by the OLD key naming the new public key. A key is valid only
+  up to the line that retires it, and a key change without such a line counts as a bad signature.
+
+  A note write through MCP `state_write` or REST `POST`/`PUT /notes` answers with a signed receipt, the same shape on
+  both: `{v: 2, seq, chain_hash, decision, ts, server_id, note_id?, rev?, content_hash?, key_id, sig}`, for an `accepted`,
+  `held` (waiting for a person) or `refused` write (by the store's checks: linter, secret guard, paused writer, stale
+  `if_rev`, tag rules; the refusal line names the error type, never the note text). `content_hash` is the hash of the exact
+  title, body and tags accepted or held; a refused write has none. **The hash is in the receipt only, never in the audit
+  log:** the log stays free of anything derived from note text, so a reader of the log cannot confirm a guess at a short
+  note. `monomem verify-receipt --file r.json --pubkey <key>` checks a receipt offline with only the public key (`monomem
+  trust identity` prints it); [docs/verify-receipt.mjs](https://github.com/calasdan-sketch/monomem/blob/main/docs/verify-receipt.mjs)
+  does the same with plain Node and no Monomem install. Without `--pubkey` it also checks that the line is still in the
+  unbroken, signed log, and `--note <id>` says whether the note is unchanged since. `monomem verify-receipt <seq>
+  <chain_hash>` still works. `monomem audit checkpoint --out <file>` writes the log head as a signed checkpoint, and
+  `monomem audit verify --checkpoint <file>` checks it later. `seq` counts from the first line written by 1.5.0, and two
+  apps writing at the same moment can give two lines the same `seq` (the hash tells them apart). No receipt comes back
+  when nothing was written (an unchanged update), for a request refused before it reached the store (wrong key scope,
+  malformed request), or when the audit log could not be written. A store with no key beside its log gives unsigned
+  receipts.
+
+  **What it proves:** a receipt was issued by the holder of the store's key, and anyone with the public key can check
+  that offline. The store accepted, held or refused a write of exactly this content (`content_hash`), as audit line
+  `seq` / `chain_hash`. With the log: that line is still there, unchanged, in an unbroken chain. **Anything before a
+  receipt or checkpoint you hold cannot later be edited or removed undetected, even by someone with the key:** your copy
+  is evidence they cannot recall. Someone who can write `audit.log` but cannot read `.attest-key` (a different OS user, a
+  copy of the log synced elsewhere, a tool that only reaches that file) cannot forge or edit any line. That holds only
+  while the key stays out of their reach: with `MONOMEM_AUDIT_LOG` in another folder, a copy of the private key sits beside
+  the log (on Windows with that folder's permissions, not 0600), so a log folder that is synced or shared shares the key
+  too. Keep `MONOMEM_AUDIT_LOG` in a private folder. The trust label `retired key of this server` is reserved for keys
+  this server rotated out itself: an admin cannot add a key under it, so an admin token cannot mint receipts.
+
+  **What it does not prove:**
+  - Anything against **you or anything running as you**. An agent with a shell tool can read `.attest-key` (0600 stops
+    other users, not your own processes). It can then rewrite and re-sign the whole log, or cut off its newest lines,
+    after the last receipt or checkpoint anyone else holds.
+  - That the log is complete. Cutting off the newest lines leaves a validly signed shorter chain; only an anchor newer
+    than the cut shows it.
+  - That deleted rotated files existed.
+  - That the content is true, or who a stdio writer really was (stdio writer names are declared by the caller).
+  - With a leaked key, nothing beyond the anchors held before the leak. Rotate (`trust rotate`), then
+    `trust attester-revoke <old key id>`.
+
+  An unsigned line after signing began (an older Monomem, a process that could not read the key, or a stripped
+  signature) is a warning in `audit verify`; `--strict` fails on it. Keep a checkpoint off this machine.
 - **Supply chain:** committed lockfile + `npm ci`, Dependabot, `npm audit` in
   CI, and MIT-licensed with only two production dependencies.
 
@@ -127,8 +181,22 @@ limits, stated plainly:
 
 - **Titles, tags, timestamps and the writer (`written_by` / `created_by`,
   the token label that wrote a note) stay plaintext.** Search and namespace
-  isolation need them. Keyword search covers title + tags only while
-  encryption is on.
+  isolation need them. The on-disk search index holds titles and tags only
+  while encryption is on.
+- **Body search keeps decrypted words in memory (1.5.0).** To search sealed
+  bodies, each Monomem process that searches (the servers, from start-up;
+  never the hooks) builds an index of every body's words in RAM only. Nothing
+  of it is written to the database, the WAL or a temp file, so a stolen
+  database file still holds no body text. But the operating system can write
+  that memory to the swap or page file, the hibernation file, or a crash /
+  core dump, and an index with word positions is enough to rebuild much of
+  the text. Use whole-disk encryption (it covers all three), keep full crash
+  dumps off on encrypted stores (`ulimit -c 0` on Linux), or set
+  `MONOMEM_BODY_INDEX=off` to search titles and tags only. The new path is
+  for someone who gets the disk (or its swap, hibernation or dump files) but
+  not the key file, for example when the key is kept elsewhere with
+  `MONOMEM_KEY_FILE`: before 1.5.0 they found only the bodies a process
+  happened to have read; now every body's words can be there.
 - **Embeddings bypass encryption.** If you enable semantic search, the
   decrypted body is sent to your `MONOMEM_EMBED_URL` endpoint, and the
   resulting vectors are stored unencrypted (vectors can leak information
@@ -142,8 +210,17 @@ limits, stated plainly:
   ciphertext to its note id and namespace, so someone who could write to the
   SQLite file could copy ciphertext between rows. OneMemory 1.2.1 addresses this (see
   the CHANGELOG; confirm for the version you run).
+- **No rollback protection.** The binding covers the note id and namespace, not
+  its version: someone who can write the file but has no key can put back an
+  older sealed body of the same note from an earlier copy, and it reads as
+  current. Encryption here is confidentiality only. Access-log rows are not
+  bound to their row.
 - Quarantined (linter-held) writes are sealed too in OneMemory 1.2.1; in 1.2.0 they
-  were stored in plaintext.
+  were stored in plaintext. Monomem 1.5.0 binds each one to its own queue row.
+- Automatic capture with a key (Monomem 1.5.0): captured notes get fixed titles and
+  no word tags, and the capture spool is sealed. Captured file paths and working
+  folders stay plaintext. Imported Claude Code chats (`import --from claude-code-chats`)
+  get the fixed title `Chat message (sealed)` the same way; their session-id tag stays plaintext.
 - `GET /export` returns decrypted bodies, so treat exports as sensitive.
 - Details: [docs/encryption-retention.md](./docs/encryption-retention.md).
 
@@ -191,9 +268,15 @@ prompt-injection / "memory poisoning"** channel. Layers:
 These protect memory from agents that reach it through MCP or REST. **An agent with a shell tool can run the `monomem`
 CLI itself, so none of them stops an agent that can run commands.**
 
+- **Outside-content marks follow the writer, not the namespace (1.5.0).** When a hooked session read the web, the notes written
+  by local apps with no key of their own (a stdio server, matched by the folder it was launched in; the `monomem` command
+  without a terminal) are marked while that session is active (30 minutes idle ends it) and within `MONOMEM_TAINT_WINDOW_HOURS`.
+  Not covered, by design: an app with its own key (set `reads_outside` on it), an agent that starts a stdio server from a
+  folder with a clean hooked session, and what Monomem cannot see (`Bash` `curl`, apps without hooks). A person can end open
+  windows with `monomem taint clear`. A session summary is written only by the capture hooks; an agent cannot edit one.
 - **Operator gate on the CLI.** These commands lower protection, so they refuse to run unless both standard input and
   output are a terminal, and then ask for a typed `yes`; there is no `--yes` for them: `unpin`, `approve-first <ns> off`, `approve-first --all off`,
-  `resume`, `quarantine approve`, `trust undistrust`, `trust attester-add`, `trust attester-unrevoke` and `token add`. The same gate applies to a **pinned** note: `archive`, `restore`, `delete` (with or
+  `resume`, `quarantine approve`, `trust undistrust`, `trust attester-add`, `trust attester-unrevoke`, `token add`, `connect <app> --restricted`, `connect <app> --max <level>` and `connect <app> --print` (each makes a new write key; `--dry-run` makes none and is not gated) and `taint clear` (ends an open outside-content window). The same gate applies to a **pinned** note: `archive`, `restore`, `delete` (with or
   without `--yes`), `supersede` (its `--old` notes and `supersede undo`) and `history restore` / `history purge` on a note you
   pinned need the terminal and the typed `yes`. Also gated: `merge --yes` when any note in a group is pinned. Not gated, even on pinned notes: `rollback`, `decay --purge`, `import`,
   and anything that calls the library directly (the gate is in the CLI, not the store).
@@ -210,6 +293,11 @@ CLI itself, so none of them stops an agent that can run commands.**
   self-declared, so this stops runaway loops, not a hostile app that changes its label.
 - **Rollback by writer** (`monomem rollback`): undoes what one writer label created or changed; it does not undo tag
   edits, archives, replacements or deletes, and it relies on the same self-declared label.
+- **Restated notes** (1.5.0): a later note by the same writer on the same subject ranks ahead of the older one (both returned,
+  the older labelled `restated_by`). It relies on the stamped writer, which for a local stdio app is the same self-declared label: a
+  local process can claim to be "alice" and so move alice's note back one place. That process could already edit alice's note in
+  place (audited, kept in history), so this does not widen what it can do. A different writer never reorders, and an unconfirmed
+  note never moves one a person confirmed.
 - **Read access log** (`monomem access`): records which writer read what (query preview, counts, no note text), kept
   30 days by default.
 
@@ -270,6 +358,15 @@ None of the controls above stops an agent that can run commands as you. These do
   still be triggered with a harmless-looking value. Distrusting the writer
   (`monomem trust distrust <writer>`) removes it from the notice.
 - Encryption limits are listed above.
+- **Whoever holds the primary key is the owner.** It is an admin key: it can make new keys (each a separate writer), so
+  one holder can play several agents and forge the corroboration rule (a second key's confirm of an outside-content
+  note). Corroboration is not verification (docs/trust.md). Only a person at a terminal lifts the pin block.
+- **The dashboard's confirm exemption needs a terminal, and a terminal check can be fooled.** A dashboard opened with
+  `monomem open` run at a terminal gets a sign-in session (8 hours, bound to the key it signed in as) whose Confirm button
+  may confirm a note the dashboard listed. `monomem open` run without a terminal (an agent's shell, a script) still
+  signs in, but its confirms count as the key's. A tool that opens a pseudo-terminal passes that check, as it does for
+  every typed-yes command. The one-time sign-in code (60 seconds, single use) is in the browser address that
+  `monomem open` passes to the system's "open" command, so for a moment it is visible in the list of running programs.
 
 ## Your data
 
@@ -293,7 +390,14 @@ disclosure within 90 days. Please do not file public issues for security reports
 
 These are known gaps, written down so nobody assumes they are covered:
 
-- **Keys are stored as they are.** Tokens in `tokens.json` and the main token file are kept in plain text (mode 0600), not as one-way hashes. Anyone who can read your data folder can use them. Hashing them is planned; until then protect the folder.
+- **Hidden notes answer like missing ones, but not in the same time.** A note a key cannot see (other namespace, above its ceiling, a distrusted writer) gets the same status and body as an id that does not exist, on every by-id route and tool, and a note's `derived_from` lists only parents that key could read itself. A caller that measures response time may still tell the two apart; that is not covered.
+- **Where your keys sit, and what follows from it.** A key is kept in each of these places, and anything that can read the file has the key:
+  - `.token` in the data folder: the primary (admin) key, plain text by design, because the CLI and the dashboard sign-in need it.
+  - `tokens.json` in the data folder: your app keys. Stored as one-way hashes (1.5.0; keys made by an older version are hashed the first time 1.5.0 starts). `tokens.json.bak` is not kept.
+  - Each connected app's own config, which must hold the key in plain text to send it: `~/.claude.json` (Claude Code), `~/.cursor/mcp.json` (Cursor), VS Code's `Code/User/mcp.json`, and `./.mcp.json` when you connect with `--project`. (Keyless stdio entries hold no key.)
+  - `.key` (the encryption key) and `.attest-key` (the signing key) in the data folder; the dashboard's `sessionStorage` while a tab is open; and the `login-code` file, whose `t` flag ("minted at a terminal") any program running as you can forge.
+  On Windows a data folder that Monomem creates is limited to your account and SYSTEM (`icacls`); that keeps other accounts on the PC out, not programs running as you. An older folder is checked by `monomem doctor`, which prints the fix command. `monomem connect ... --project` refuses to write a key into `./.mcp.json` when the folder is a git repository that does not ignore that file (it would be committed).
+  Any program running as your user, including an agent with a shell tool, can read these and act as that app. A key proves which key wrote, not which agent. That is why a second key's confirm is called corroboration ("two keys agreed") and never lifts the promotion block. `monomem doctor` lists which of these files exist and hold keys.
 - **No key rotation for at-rest encryption.** `monomem encrypt` uses one key. Changing it means decrypting and re-encrypting by hand (export, new store, import).
 - **A backup does not carry the encryption key by default** (`monomem backup --include-key` does copy it). Keep your own copy of the key somewhere separate.
 - **Host check is a second layer, not a wall.** A request under an unexpected host name is refused (see `MONOMEM_ALLOWED_HOSTS`), but a request through a proxy or tunnel is let through that check and still needs a valid key.

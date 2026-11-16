@@ -62,9 +62,38 @@ const V14_DELETE_TRIGGER = `
 `;
 
 /** Rewrite the database file at `path` (closed by the caller) as it looked at `version`. */
-export function downgradeTo(path: string, version: 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18): void {
+export function downgradeTo(path: string, version: 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21): void {
   const raw = new DatabaseSync(path);
   try {
+    // v22 additions (1.5.0 round 2), removed for every older shape; the v21 delete trigger and edge index come back.
+    raw.exec(`
+      DROP TABLE IF EXISTS note_flags; DROP TABLE IF EXISTS note_client_keys; DROP TABLE IF EXISTS writer_events; DROP TABLE IF EXISTS code_anchors; DROP INDEX IF EXISTS idx_notes_live_kind; DROP INDEX IF EXISTS idx_notes_obs; DROP INDEX IF EXISTS idx_notes_tag_task; DROP INDEX IF EXISTS idx_notes_tag_convention; DROP INDEX IF EXISTS idx_notes_kind_summary; DROP INDEX IF EXISTS idx_notes_pinned; DROP INDEX IF EXISTS idx_notes_facts;
+      CREATE INDEX IF NOT EXISTS idx_note_edges_note_id ON note_edges(note_id);
+      DROP TRIGGER IF EXISTS notes_links_ad;
+      CREATE TRIGGER notes_links_ad AFTER DELETE ON notes BEGIN
+        DELETE FROM note_links WHERE note_id = old.id OR derived_from = old.id;
+        DELETE FROM confirmations WHERE note_id = old.id;
+      END;
+    `);
+    if (version === 21) {
+      raw.exec("PRAGMA user_version = 21");
+      return;
+    }
+    // v21 additions (1.5.0), removed for every older shape.
+    for (const c of ["content_at", "writer_cwd"]) raw.exec(`ALTER TABLE notes DROP COLUMN ${c}`);
+    raw.exec("DROP TRIGGER IF EXISTS notes_links_ad; DROP INDEX IF EXISTS idx_notes_origin; DROP INDEX IF EXISTS idx_capture_spool; ALTER TABLE capture_events DROP COLUMN spool_id;");
+    if (version === 20) {
+      raw.exec("PRAGMA user_version = 20");
+      return;
+    }
+    // v20 additions (1.4.0 trust: approval/confirm columns, confirmations, note_links), removed for every older shape.
+    raw.exec("DROP TABLE IF EXISTS confirmations; DROP TABLE IF EXISTS note_links;");
+    for (const c of ["grandfathered_at", "approved_at", "approved_by", "confirmed_at", "confirmed_by", "confirmed_kind", "confirmed_rev", "cli_tty"]) raw.exec(`ALTER TABLE notes DROP COLUMN ${c}`);
+    raw.exec("DROP INDEX IF EXISTS idx_sessions_ns_open; ALTER TABLE quarantine DROP COLUMN forget_after; ALTER TABLE quarantine DROP COLUMN confidence; ALTER TABLE quarantine DROP COLUMN clears; ALTER TABLE sessions DROP COLUMN outside_at;");
+    if (version === 19) {
+      raw.exec("PRAGMA user_version = 19");
+      return;
+    }
     // v19 additions (per-memory sensitivity labels), removed for every older shape. The delete trigger names the new
     // columns, so it goes first; the v14-style one is put back for the shapes that keep it.
     raw.exec("DROP TRIGGER IF EXISTS notes_log_ad; DROP INDEX IF EXISTS idx_notes_ns_sensitivity; DROP INDEX IF EXISTS idx_notes_ns_updated; DROP INDEX IF EXISTS idx_notes_live_updated;");

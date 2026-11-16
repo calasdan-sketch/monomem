@@ -53,7 +53,7 @@ git clone https://github.com/calasdan-sketch/monomem && cd monomem && cp .env.ex
 
 ```bash
 npx monomem setup
-npx monomem drill   # replays 23 known poisoning attacks on a copy of your store
+npx monomem drill   # replays 25 known poisoning attacks on a copy of your store
 ```
 
 `setup` finds Claude Code, Claude Desktop, Cursor, Codex, Gemini CLI, Muse, VS Code and Zed on this computer, shows you in plain words what it will do and the exact
@@ -65,7 +65,9 @@ are. Step by step, with troubleshooting: [docs/live-claude-code.md](./docs/live-
 Already have notes in Claude Code? `monomem import --claude --dry-run` shows what could be brought in from your `CLAUDE.md` files and
 Claude Code's auto memory (secrets are skipped, nothing leaves your computer). Coming from claude-mem, mem0, basic-memory or the official MCP memory server?
 `monomem import --from claude-mem --dry-run` (or `mem0 --path export.json`, `basic-memory`, `mcp-memory`); see [docs/switching.md](./docs/switching.md)
-for the import and a clean uninstall of the old tool.
+for the import and a clean uninstall of the old tool. To make your past Claude Code conversations searchable too:
+`monomem import --from claude-code-chats --dry-run` (one note per message, each with the message it replied to; they go into the
+`chats` namespace and are never pushed into a new session, only found when searched).
 
 In Claude Code you can also install Monomem as a plugin instead of running `setup` ([what the plugin does and does not do](./docs/plugin.md)):
 
@@ -228,6 +230,10 @@ monomem setup --capture        # or answer y to "Also record what <agent> does i
   `--capture`) tells the agent which memories are linked to that file, once per session per file. It is advisory
   only: it never blocks, allows or changes the Read. Same namespace, trust and UNTRUSTED-banner rules as the
   start-of-session context.
+- **Before the context is compacted (Claude Code only):** a `PreCompact` hook (`monomem hook pre-compact`, installed
+  with `--capture`) saves the session so far as its summary note before `/compact` or an automatic compaction, so the
+  work is not only in the context being shortened. Same redaction, stamps and spool as the other capture hooks; a later
+  stop or session end updates the same summary.
 - **In the dashboard:** the **Sessions** tab lists recorded sessions; open one for its timeline (summary, prompts,
   observations, oldest first).
 - **Optional local model:** set `MONOMEM_LLM_URL` (an OpenAI-compatible server such as Ollama,
@@ -236,7 +242,7 @@ monomem setup --capture        # or answer y to "Also record what <agent> does i
   by `MONOMEM_LLM_TIMEOUT_MS`; the answer is redacted and linted like any write, and on any failure the automatic
   summary stays.
 - **Moves with your data:** export / import and the Markdown vault sync carry an observation's kind, session, type
-  and files; `monomem encrypt enable` seals captured event outputs too. Captured rows are left out of the stale
+  and files; `monomem encrypt enable` seals the bodies of captured rows too (with the key present they get fixed titles and no word tags, and the capture spool is sealed; file paths and working folders stay plain text: see [what is protected](https://github.com/calasdan-sketch/monomem/blob/main/docs/encryption-retention.md#what-is-protected-and-what-is-not)). Captured rows are left out of the stale
   count, `memory_stats` totals and consolidation.
 - **Old captured rows fade out:** an observation nobody updated or read for 30 days (`MONOMEM_DECAY_DAYS`; summaries
   180, `MONOMEM_DECAY_SUMMARY_DAYS`) is archived, never deleted, by the expiry sweep or at session end. Your own notes,
@@ -284,7 +290,7 @@ dashboard's **Usage** view. Tokens are estimates at about 4 characters a token.
   in total, mostly the MCP SDK's own), no native modules, no vector database,
   no Python. Back it up by copying one file.
 - **Change feed.** `memory_since` / `GET /changes`: "what changed while I was
-  away" — created, updated **and deleted** notes grouped by source, with a
+  away" — created, updated **and deleted** notes grouped by the writer that made them, with a
   per-device "since I last looked" marker. Driven by a local change log, so
   restores, file-sync imports and deletes are never missed. → [docs/change-feed.md](./docs/change-feed.md)
 - **Live wait.** `GET /changes?wait=25` / `memory_since { wait_seconds: 25 }` parks
@@ -342,12 +348,12 @@ the same store.
 
 ## How it compares
 
-The closest well-known alternative is the official
+The common baseline is the official
 [MCP memory server](https://github.com/modelcontextprotocol/servers/tree/main/src/memory)
 (`@modelcontextprotocol/server-memory`), a small knowledge graph kept in one file.
 It is a good fit if you want that and nothing more. This table only lists things you can check:
 the left column against [its README](https://github.com/modelcontextprotocol/servers/blob/main/src/memory/README.md)
-(read on 5 November 2026; check it again, it changes), the right against this repository.
+(read on 15 November 2026; check it again, it changes), the right against this repository.
 
 | | Official MCP memory server | Monomem |
 |---|---|---|
@@ -384,7 +390,7 @@ shipped in the npm package** — build it from the repo.
 
 | Tool | Scope | |
 |---|---|---|
-| `state_write` / `state_read` / `state_delete` | write / read / admin | Write with compare-and-swap (`if_rev`) and provenance (`source`); read; forget. `state_delete` archives (restorable); a permanent delete is for a person, in the dashboard or with `monomem delete <id>` |
+| `state_write` / `state_read` / `state_delete` | write / read / admin | Write with compare-and-swap (`if_rev`) and provenance (`source`); `client_key` makes a create retry-safe (also on REST `POST /notes`); read; forget. `state_delete` archives (restorable); a permanent delete is for a person, in the dashboard or with `monomem delete <id>` |
 | `state_search` / `state_relevant` / `state_list` | read | keyword, semantic or hybrid search, or vague-message recall with `mode: "relevant"`; listing. `state_relevant` does the same recall as its own tool and is no longer registered by default |
 | `memory_since` | read | change feed (`wait_seconds` = live wait) |
 | `task_put` / `task_list` / `task_get` | write / read / read | shared task board across devices and models; `client_key` makes a create retry-safe |
@@ -395,6 +401,9 @@ shipped in the npm package** — build it from the repo.
 | `memory_ack` | read | confirm a manual-ack change-feed page |
 | `memory_stats` | read | totals, most-read, never-read, stale |
 | `memory_quarantine` | admin | review linter-held writes |
+| `memory_confirm` | write | record that you checked an unconfirmed note against a source (counts only for a token caller that did not write the note; a person's pin still needs a person) |
+| `memory_flag` | write | say a note looks wrong, with a one-line reason, instead of overwriting it |
+| `memory_receipt` / `memory_why` | read | which notes session start showed an agent and why; why a note is where it is (titles only, never the body) |
 | `trust_policy` | admin | list / change the per-namespace distrust list and the trusted attester keys ([docs/trust.md](./docs/trust.md)) |
 | `memory_supersede_preview` / `memory_supersede_confirm` / `memory_supersede_undo` | write | replace a note in two steps (preview changes nothing; confirm needs its one-time code); undo ([docs/replacing-memories.md](./docs/replacing-memories.md)) |
 | `memory_history` / `memory_restore_version` / `memory_history_purge` | admin | earlier versions of a note; put one back as a new version; forget them |
@@ -408,9 +417,10 @@ REST mirrors them (`/notes`, `/search`, `/relevant`, `/changes`, `/tasks`, `/han
 
 ```
 monomem start | mcp | doctor | init
-monomem setup [--dry-run] [--yes] [--only claude-code,claude-desktop,cursor,codex,gemini,muse,vscode,zed] [--hook] [--undo]   # connect your apps; safe, backed up, undoable
+monomem setup [--dry-run] [--yes] [--only claude-code,claude-desktop,cursor,codex,gemini,muse,vscode,zed] [--hook|--no-hook] [--undo]   # connect your apps; safe, backed up, undoable (--yes also adds the Claude Code start-of-session hook unless --no-hook)
 monomem import --claude [--dry-run] [--update] [--project <folder>]   # bring in CLAUDE.md files and Claude Code auto memory
 monomem import --from claude-mem|mem0|basic-memory|mcp-memory [--path p] [--dry-run]   # switch from another memory tool (docs/switching.md)
+monomem import --from claude-code-chats [--dry-run]   # make past Claude Code conversations searchable (docs/switching.md)
 monomem sync --git ~/my-private-memory-repo [--encrypt]   # keep your computers in step through YOUR private git repository
 monomem changes --since last --consumer laptop
 monomem runner-status                           # is each PC's runner listening? commands waiting?
@@ -421,7 +431,7 @@ monomem backup [--out dir] [--include-approval-key] [--include-attest-key]   # h
 monomem export --format md --dir ~/memory     monomem import --dir ~/memory
 monomem export --format json [--attest] --out a.json     monomem import --file a.json [--require-attestation]
 monomem supersede --old 12 --title "..." --body "..."   # replace a note: shows what you would lose, asks you to type the count
-monomem supersede undo <id>     monomem history <id> | restore <id> <version> | purge <id>
+monomem supersede undo <id>     monomem history <id>     monomem history restore <id> <version>     monomem history purge <id>
 monomem quarantine [list | approve <id> | reject <id>]
 monomem approve-first [<namespace> on|off | --all on|off]   # hold every agent write (one namespace, or all) for your approval
 monomem pin [<id>]     monomem unpin <id>     # agents can read a pinned note; only this CLI can change it
@@ -433,7 +443,7 @@ monomem label <id> [public|internal|private]    # show or set a note's sensitivi
 monomem connect <app> [--restricted]     monomem open     # one app with its own key and limit; open the dashboard signed in
 monomem pii scan     monomem digest [--since 24h]     monomem scrub     monomem safety-report --out report.html     # checkups (docs/checkups.md)
 monomem consolidate | rebuild-edges | reindex | relevant "…" | recall
-monomem bench [--json] [--suite stale|contradiction|isolation|provenance] [--strict-gaps]   # provenance benchmark (docs/BENCHMARK.md)
+monomem bench [--json] [--suite stale|contradiction|isolation|provenance|poison] [--strict-gaps]   # provenance benchmark (docs/BENCHMARK.md)
 ```
 
 `monomem help` explains each. Upgrading an existing OneMemory 1.3.x install (the earlier name of this project, not monomem 1.2.0): [docs/upgrading.md](./docs/upgrading.md). The CLI runs with full local trust (no
@@ -474,10 +484,21 @@ Details and limits: [docs/provenance.md](./docs/provenance.md).
 writer on a per-namespace **distrust list** (`monomem trust distrust <writer> --namespace work`, the
 `trust_policy` MCP tool, `/trust` REST): its notes, tasks, handoffs and feed entries are then left out of every
 read path unless an **admin** passes `include_distrusted`, they stay hidden after anyone else edits them, and a
-distrusted command task is never run. A JSON export made with `--attest` (`?attest=1`) carries a per-note Ed25519
+distrusted command task is never run. `monomem ls` and `monomem search` say how many notes they left out this way,
+and `--include-distrusted` shows them, marked. A local app's notes are written by `stdio:<app>` (`stdio:cursor`, not
+`cursor`); `monomem show <id>` prints a note's writer, and `trust distrust cursor` refuses and suggests the right name. A JSON export made with `--attest` (`?attest=1`) carries a per-note Ed25519
 **attestation**; an import that trusts the exporting server's key keeps the original author as `attested_writer`,
 otherwise it marks the note `imported_unverified`. (Attestations are **experimental**.) What that proves and what it
 does not: [docs/trust.md](./docs/trust.md).
+
+**Outside content (1.4.0).** A note written after an agent read a web page or another MCP server's output, **when
+Monomem can see it** (Claude Code's hooks, a connection that read an unconfirmed note, or `outside: true`), lands
+**unconfirmed**: labelled, kept out of session start, and never pinned until a person runs `monomem confirm <id>`. Another
+agent's confirm, with its own key and a different stated source, is corroboration, not verification. Not seen: `Read`,
+`Bash`, and apps without the hooks. Notes can also say what they were built from (`derived_from`), and notes nobody
+re-confirmed in 30 days are labelled `[expired - ...]` (labels only by default; `monomem config`). `monomem review` lists
+what waits for you. Details and limits: [docs/trust.md](./docs/trust.md#outside-content-limits-first-140),
+[docs/search.md](./docs/search.md#re-confirmation-expiry).
 
 ## Benchmark
 
@@ -488,28 +509,35 @@ It has five suites, as plain JSON scenario files you can extend in [`bench/scena
 
 | Suite | Scenarios | What it checks | Headline number |
 |---|---|---|---|
-| A  Stale memory | 32 | a fact updated, replaced, deleted, aged: is the current value first and the old one never shown (or flagged)? Includes the two-step replace (preview writes nothing; the code is single-use, expires, and is bound to one caller) | `stale-hit-rate@1/@5`, `current-recall@1` |
+| A  Stale memory | 38 | a fact updated, replaced, deleted, aged: is the current value first and the old one never shown (or flagged)? Includes the obsolete-fact test (an update in different words, with and without a replace, and the guards: another writer, a confirmed note, another subject, outside content) and the two-step replace (preview writes nothing; the code is single-use, expires, and is bound to one caller) | `stale-hit-rate@1/@5`, `current-recall@1` |
 | B  Contradiction recovery | 31 | writer A vs writer B, then a trusted correction; distrusting the bad writer; weak overwrite of a trusted note; restoring the trusted text from history; the trust guard on replacing | resolved to the correction, loser stays visible, overwrite protected |
 | C  Permission isolation | 27 | cross-tenant read/write/search/export/import/merge/sweep, token scopes, admin-only flags, signed imports, and that one tenant cannot read another's history, preview, undo or reuse a confirmation code | `leakage-count` (must be 0), `unexpected-denials` |
 | D  Provenance retention | 19 | source, writer, creator, timestamps, deletion deadline, confidence after export, import, merge, update | `fields-lost` |
-| E  Memory poisoning | 20 | injected or malicious memories never reach an agent as trusted content: prompt-injection (plain, forged tags, zero-width-obfuscated, hidden in invisible Unicode tag characters, a booking-policy override) is quarantined; a sleeper trigger or curl-pipe-to-shell note is stored with a warning; a reworded override that passes the gate leaves all four booking answers once its writer is distrusted; a distrusted/low-trust writer cannot outrank or silently overwrite a trusted fact; secrets are redacted (capture) or blocked (write); a forged writer/namespace is stamped with the real one; an unsigned import cannot pose as verified; a captured web fetch is not trusted memory; a trusted writer claiming its note is its own is still checked; SessionStart injection carries the untrusted-data banner and leaves distrusted notes out; mass near-duplicate flooding cannot bury the answer | `poison-reach-count` (must be 0) |
+| E  Memory poisoning | 22 | injected or malicious memories never reach an agent as trusted content: prompt-injection (plain, forged tags, zero-width-obfuscated, hidden in invisible Unicode tag characters, a booking-policy override) is quarantined; a sleeper trigger or curl-pipe-to-shell note is stored with a warning; a reworded override that passes the gate leaves all four booking answers once its writer is distrusted; a distrusted/low-trust writer cannot outrank or silently overwrite a trusted fact; secrets are redacted (capture) or blocked (write); a forged writer/namespace is stamped with the real one; an unsigned import cannot pose as verified; a captured web fetch is not trusted memory; a trusted writer claiming its note is its own is still checked; a trusted writer's paraphrase of a web page, or an agent's summary of an unconfirmed note, is marked and cannot be pinned; SessionStart injection carries the untrusted-data banner and leaves distrusted notes out; mass near-duplicate flooding cannot bury the answer | `poison-reach-count` (must be 0) |
 
 **Retrieval quality.** `monomem bench --longmemeval` and `--locomo` score retrieval on the public datasets, with no model
-and no judge (does the right conversation come back?). On one Windows PC, 2026-11-09, keyword search (the default, no model):
+and no judge (does the right conversation come back?). On one Windows PC, 2026-11-15, keyword search (the default, no model).
+"Strict" counts a question only when *every* right conversation is in the top 5:
 
-| Dataset | Recall@5 | Recall@10 | Search time (p50) |
-|---|---|---|---|
-| LongMemEval-S, 470 of 500 questions (the 30 abstention questions have no right answer to find) | 96.6 % | 98.3 % | 2.8 ms |
-| LoCoMo-10, 1,982 questions, by session | 90.3 % | 95.5 % | 1.0 ms |
-| LoCoMo-10, 1,982 questions, by turn (the hard one: our weakest number) | 57.8 % | 65.0 % | 1.1 ms |
+| Dataset | Recall@5 | Strict recall@5 | Recall@10 | Search time (p50) |
+|---|---|---|---|---|
+| LongMemEval-S, 470 of 500 questions (the 30 abstention questions have no right answer to find) | 97.2 % | 85.7 % | 98.7 % | 3.9 ms |
+| LoCoMo-10, 1,982 questions, by session | 90.9 % | 82.4 % | 96.0 % | 1.6 ms |
+| LoCoMo-10, 1,982 questions, by turn (the hard one: our weakest number), each turn stored with the turn it replied to, as `import --from claude-code-chats` does (one turn per note without the replied-to text: 60.8 % / 52.2 % / 67.7 %) | 67.4 % | 58.4 % | 76.3 % | 3.2 ms |
 
-Optional hybrid search (keywords plus a local embedding model, `nomic-embed-text` via Ollama) does better still: LoCoMo-10
-by session 91.8 % / 96.7 %, by turn 66.3 % / 74.9 %, LongMemEval-S 98.5 % / 99.4 % (recall@5 / @10, full runs,
-13 to 22 ms per search (p50), measured 2026-11-09 with this code). Ties between equal scores go to the newest note, so a re-run
+The same numbers with encryption on, except by turn: 67.6 % / 58.2 % / 76.9 % (chat notes get a fixed sealed title there). The search index of decrypted bodies is kept in memory only (see Encryption below).
+The ranking settings were tuned on half the questions and checked on the other half (never tuned on, but used to keep or
+drop each change); docs/BENCHMARK.md shows both halves, including the one figure that dipped on the checking half.
+
+Optional hybrid search (keywords plus a local embedding model, `nomic-embed-text` via Ollama) does better still (recall@5 / @10, full runs):
+LoCoMo-10 by session 92.2 % / 96.9 % and by turn 75.9 % / 84.6 % (measured 2026-11-15 on this release, 18 and 25 ms per
+search, p50); LongMemEval-S 98.5 % / 99.4 % (measured 2026-11-09, before the 1.5.0 keyword ranking changes; not re-run since). Ties between equal scores go to the newest note, so a re-run
 can move a by-turn figure by about 0.1 to 0.2 points.
 
 These are retrieval numbers, not the end-to-end QA accuracy memory vendors usually publish, so they are not comparable with
-those. Every number, the per-type breakdown, where hybrid is worse, and the caveats: [docs/BENCHMARK.md](./docs/BENCHMARK.md#retrieval-longmemeval-s-and-locomo).
+those. They are not the highest published retrieval numbers either: Vestige, among others, reports higher LongMemEval-S,
+LoCoMo session and LoCoMo by-turn figures, and MemPalace a higher LongMemEval-S recall@5 on its own held-out questions (their
+own numbers, not re-run by us); docs/BENCHMARK.md names them with their caveats. Every number, the per-type breakdown, where hybrid is worse, and the caveats: [docs/BENCHMARK.md](./docs/BENCHMARK.md#retrieval-longmemeval-s-and-locomo).
 
 **What it does not measure.** The provenance suites above are not a retrieval-quality or semantic-search benchmark (keyword search, made-up unique words, no
 embeddings). It does not measure speed, scale or concurrency, and "0 leaks" means none of *these* probes leaked; it is a regression gate,
@@ -520,7 +548,11 @@ writing a small adapter (write, update, delete, search, plus the actor: writer a
 stop appearing in search, then a confirm with the preview's one-time code. Nothing is deleted, undo is one command, and every
 edit keeps the text it replaces. See [docs/replacing-memories.md](./docs/replacing-memories.md).
 
-**Known gaps in the benchmark:** none open. Scenarios for behaviour Monomem lacks are kept and marked rather than deleted, and the history
+**Known gaps in the benchmark:** none open. The last one, `GAP-OBSOLETE-UNREPLACED` (scenario A33), is fixed in 1.5.0: when the
+same writer later restates a fact in different words and nobody replaces the old note, the newer note now ranks first in search,
+the "what is relevant" lookup and session start, and the old note comes right behind it, labelled `restated_by`. It is not
+reordered for a different writer, over a note a person confirmed, or for unconfirmed outside content (A35 to A38); replacing the
+old note (preview, then confirm) still removes the old value everywhere. Scenarios for behaviour Monomem lacks are kept and marked rather than deleted, and the history
 of each one and how it was fixed is in [docs/BENCHMARK.md](./docs/BENCHMARK.md#known-gaps-history), with the provenance-field breakdown.
 
 Limits no scenario can show (what the benchmark cannot see) are listed next, under Known limits.
@@ -532,6 +564,13 @@ Limits no scenario can show (what the benchmark cannot see) are listed next, und
 - Local apps connected over stdio have no key, so a limit on other apps does not apply to them. A note marked `private` is hidden from
   apps given a limit; apps with no limit (including your main Claude connection) still see it.
 - The writer name of a local app comes from its config file: it tells your apps apart, but it is not proof.
+- A later note by the same writer on the same subject ranks ahead of the older one (labelled `restated_by`, both returned). "Same
+  subject" is a shared fact key with another value, or a close similarity link; two notes with neither (a bulk import builds no
+  links) are left in search order. Replace the old note to retire it for good.
+- Notes are marked as from outside content only when Monomem sees the outside read. `Read`, `Bash` (`curl`) and apps
+  without the hooks are not seen, and a confirm's stated source is a claim Monomem does not check.
+- With encryption on (`monomem encrypt enable`), search finds words in note bodies from an index kept **in memory only** by the process that searches (LongMemEval-S keyword R@5: 97.2 encrypted, the same as plain; [BENCHMARK.md](https://github.com/calasdan-sketch/monomem/blob/main/docs/BENCHMARK.md)). Monomem writes no body text to disk for it, but the system can page that memory to swap or a hibernation file and a crash dump can hold it: use whole-disk encryption too. It takes about 0.5 s to build at 10,000 notes and 4-6 s at 100,000 notes, in each server process, and is not built above 100,000 notes. Memory: the bench measures about +22 MB at 10,000 notes and +155 MB at 100,000 inside a process that is already running; a freshly started server grows by about +60 MB at 10,000 and about +235 MB at 100,000 (to about 305 MB in total) (docs/BENCHMARK.md). The session-start hook does not build it: on an encrypted store it matches titles and tags, and asks a running Monomem server for the same store (on this computer, within 0.3 s) for body matches. `MONOMEM_BODY_INDEX=off` turns it off.
+- Measured at 100,000 notes (`monomem bench --scale 100k`, one PC): encrypted session start about 7-12 ms p50 on a quiet PC, up to about 18 ms while other work loads it (release gate 50 ms). Keyword search time follows how many notes contain the words, not store size: words in under 5 % of notes 0.6-8 ms p50 (the bench's realistic-words line 1.5-4 ms), words in most notes about 110-190 ms plain, up to about 260 ms encrypted or on a loaded PC. The body index's memory at that size: see the C-06 body-index line in [BENCHMARK.md](https://github.com/calasdan-sketch/monomem/blob/main/docs/BENCHMARK.md).
 - Keyword search finds words, not meaning. Semantic search needs a local embedding service (Ollama); without one you get keyword results.
 - Upgrading the database is one way (older versions refuse a newer file). A backup copy is made first and `monomem restore` goes back.
 - Needs Node 22.16 or newer, because it uses Node's built-in SQLite (Node 20 does not have it; checked). Docker is the way around that.
@@ -552,12 +591,17 @@ Limits no scenario can show (what the benchmark cannot see) are listed next, und
 Loopback by default and fail-closed: it refuses to bind a public interface
 without an explicit `MONOMEM_TOKEN`. Constant-time bearer auth on every
 data route, scoped tokens, DNS-rebinding Origin checks, per-client rate
-limits, size caps, an append-only audit log without note content, a read access log (who read
+limits, size caps, an append-only audit log without note content (hash-chained and, since 1.5.0, Ed25519-signed with
+the store's key; every note write, including a held or refused one, answers with a signed receipt you can check
+offline with only the public key, using `monomem verify-receipt --pubkey` or the standalone
+[docs/verify-receipt.mjs](https://github.com/calasdan-sketch/monomem/blob/main/docs/verify-receipt.mjs); a program
+running as you can still read the key and rewrite everything after the last receipt or checkpoint someone else holds,
+so keep a `monomem audit checkpoint` off the machine), a read access log (who read
 what, with a redacted query preview and never note text) and a per-writer flood guard, the
 write-time linter above, and an untrusted-data banner on every MCP read (REST responses do not
 carry it) so agents treat note content as data, not instructions. Optional AES-256-GCM
 encryption at rest for note bodies only (`monomem encrypt enable`; titles,
-tags, timestamps and embeddings stay readable), per-note
+tags, timestamps and embeddings stay readable; body search then runs from an index held only in memory, which the system can page to swap, so pair it with whole-disk encryption), per-note
 TTL with reversible soft-archive, and `?explain=1` so a caller can see why
 a memory was retrieved. **Per-token namespace permissions** pin a token to
 one namespace so a single shared bridge stays isolated per agent — a pinned
@@ -576,7 +620,8 @@ recall@1 on it. See [docs/encryption-retention.md](./docs/encryption-retention.m
 
 Monomem writes to its data folder (`~/.monomem`) and, through `monomem setup`, to the one `monomem` entry in each
 app's config, with a backup beside it. Nothing lands in your projects unless you name the folder (`--project`, `--dir`,
-`--out`, `sync --git`), no `CLAUDE.md` is ever written, and every retry has a limit. `monomem uninstall` takes it out
+`--out`, `sync --git`), a `CLAUDE.md` or `AGENTS.md` is never written unless you run `monomem project-rules` (and then only inside its fenced
+block), and every retry has a limit. `monomem uninstall` takes it out
 of every app (byte for byte where it can), `--purge` also deletes the data after a final backup. Every file, and how to
 remove it: [docs/footprint.md](./docs/footprint.md).
 
@@ -605,7 +650,7 @@ remove it: [docs/footprint.md](./docs/footprint.md).
 | [docs/checkups.md](./docs/checkups.md) | `pii scan`, `digest`, `scrub`, `safety-report`, `audit` |
 | [docs/token-namespaces.md](./docs/token-namespaces.md) | per-token namespace permissions — one shared bridge, isolated agents |
 | [docs/replacing-memories.md](./docs/replacing-memories.md) | replacing a note in two steps, undo, version history and restore, confidence, the trust guard |
-| [docs/BENCHMARK.md](./docs/BENCHMARK.md) | `monomem bench`: stale memory, contradiction recovery, permission isolation, provenance retention; scenario format; adapting it to another memory system |
+| [docs/BENCHMARK.md](./docs/BENCHMARK.md) | `monomem bench`: stale memory, contradiction recovery, permission isolation, provenance retention, memory poisoning; scenario format; adapting it to another memory system |
 | [docs/footprint.md](./docs/footprint.md) | every file Monomem writes, where and when, how to remove it; `uninstall`; retry limits; every outbound call (none by default) and the token cost of memory |
 | [docs/architecture.md](./docs/architecture.md) | modules, tools, REST API, schema |
 | [SKILL.md](./SKILL.md) | when and how an agent should use the memory |

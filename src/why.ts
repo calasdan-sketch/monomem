@@ -2,9 +2,9 @@
 // supersede log, held writes, receipts, distrust list, pin flag). Nothing new is recorded for it.
 // Text rule: titles only (printed through printable()); a body only when the operator passes --body on the CLI.
 import { isWriterMarker } from "./actor.js";
-import { accessLogDays, type NoteRecord, type Store } from "./store.js";
-import { describeWriter, printable, printableWords } from "./security.js";
-import { localTime, whyText } from "./receipts.js";
+import { accessLogDays, ENCRYPT_ACTOR, type NoteRecord, type Store } from "./store.js";
+import { printable, printableWords } from "./security.js";
+import { localTime, timeLegend, whyText } from "./receipts.js";
 
 export interface WhyEvent {
   at: string;
@@ -17,6 +17,16 @@ export interface WhyShown {
   rank: number;
   why: string;
 }
+export interface WhyConfirmation {
+  at: string;
+  by: string;
+  version: number;
+  kind: string;
+  source: string;
+  /** Released the hold for that version; false = recorded but not counted (`reason` says why). */
+  counted: boolean;
+  reason: string;
+}
 export interface Why {
   id: number;
   namespace: string;
@@ -28,6 +38,8 @@ export interface Why {
   approve_first_namespace: boolean;
   created_by: { writer: string; kind: string };
   timeline: WhyEvent[];
+  /** 1.5.0 (R1-18): every confirm of this note, counted or not, oldest first. */
+  confirmations: WhyConfirmation[];
   shown_to: { total: number; recent: WhyShown[]; retention_days: number };
   reads: { total: number; last: string | null; attributable: false };
   body?: string;
@@ -37,7 +49,7 @@ export interface Why {
 const SHOWN_LIMIT = 20;
 export const NOT_RECORDED =
   "Not recorded: who read this note (only a total and the last read time are kept), when it was pinned or by whom, " +
-  "the approval of a held write once it is approved, and versions older than the history limit or sessions older than the access-log retention.";
+  "and versions older than the history limit or sessions older than the access-log retention.";
 
 /** What a stored writer label is: a marker set by Monomem's own entry point, or a label from your config. */
 export function writerKind(w: string, claimed = false): string {
@@ -50,8 +62,16 @@ export function writerKind(w: string, claimed = false): string {
 
 const p = (v: unknown): string => printableWords(v, 80);
 const plural = (n: number, one: string): string => `${n} ${one}${n === 1 ? "" : "s"}`;
-/** A writer label in the same words the rest of Monomem uses (describeWriter), through printable(). */
-const who = (w: string): string => p(describeWriter(w));
+/** Short kinds for `why`'s timeline (one legend line explains them): the long describeWriter wording was cut off mid-phrase. */
+const SHORT_KIND: Record<string, string> = { stdio: "local app", cli: "this computer's monomem command", server: "Monomem itself", runner: "command runner", "import:claude": "Claude import", capture: "capture hook" };
+export const WRITER_LEGEND =
+  "Writers: local app = an app on this computer with no sign-in, its name comes from its launch config; token = stamped by the server from the app's key.";
+/** The stamped name in full (the name rollback and distrust need), then a short kind. */
+const who = (w: string): string => {
+  if (!w) return "an unknown writer (stored before writers were recorded)";
+  const kind = w.startsWith("stdio:") ? SHORT_KIND.stdio : isWriterMarker(w) ? SHORT_KIND[w] : "token";
+  return `${printable(w, 100)} (${kind})`;
+};
 
 /** Build the story for a note the caller already read (and, for agents, already passed through the trust gate). */
 export function noteWhy(store: Store, note: NoteRecord, opts: { namespaces?: string[]; body?: boolean } = {}): Why {
@@ -75,12 +95,21 @@ export function noteWhy(store: Store, note: NoteRecord, opts: { namespaces?: str
   }
   const dropped = store.historyDropped(id).reduce((a, d) => a + Number(d.count), 0);
   if (dropped) tl.push({ at: note.updated_at, what: `${dropped} older version${dropped === 1 ? "" : "s"} no longer kept` });
-  if (note.rev > 1 || hist.length) tl.push({ at: note.updated_at, what: `version ${note.rev} is current, last written by ${who(note.written_by)}` });
+  // The history row is stamped a moment after the note row it replaces: "current" must not sort before "replaced".
+  const currentAt = hist.reduce((m, h) => (h.saved_at > m ? h.saved_at : m), note.updated_at);
+  if (note.rev > 1 || hist.length) tl.push({ at: currentAt, what: `version ${note.rev} is current, last written by ${who(note.written_by)}` });
 
   // Metadata-only changes (tags, archive, move): change-log rows whose revision did not move.
   const log = db.prepare("SELECT kind, rev, changed_at, actor FROM change_log WHERE note_id = ? ORDER BY seq").all(id) as Array<{ kind: string; rev: number | null; changed_at: string; actor: string }>;
   log.forEach((r, i) => {
-    if (r.kind === "updated" && i > 0 && r.rev === log[i - 1].rev) tl.push({ at: r.changed_at, what: `metadata changed (tags, archive or move) by ${p(r.actor || "unknown")}` });
+    if (!(r.kind === "updated" && i > 0 && r.rev === log[i - 1].rev)) return;
+    const what =
+      r.actor === ENCRYPT_ACTOR.enable
+        ? "body encrypted at rest by monomem encrypt enable (content unchanged)"
+        : r.actor === ENCRYPT_ACTOR.disable
+          ? "body decrypted at rest by monomem encrypt disable (content unchanged)"
+          : `metadata changed (tags, archive or move) by ${p(r.actor || "unknown")}`;
+    tl.push({ at: r.changed_at, what });
   });
 
   const sup = db.prepare("SELECT at, actor, action, old_id, new_id FROM supersede_log WHERE old_id = ? OR new_id = ? ORDER BY seq").all(id, id) as Array<{ at: string; actor: string; action: string; old_id: number; new_id: number | null }>;
@@ -104,6 +133,10 @@ export function noteWhy(store: Store, note: NoteRecord, opts: { namespaces?: str
     tl.push({ at: q.created_at, what: `an edit by ${p(q.written_by || "unknown")} is HELD, waiting for approval${why ? ` (${why})` : ""}` });
   }
 
+  if (note.approved_at) tl.push({ at: note.approved_at, what: `held write approved by ${who(note.approved_by ?? "")}` });
+  const confirmations = (db.prepare("SELECT at, by, note_rev, kind, source, reason FROM confirmations WHERE note_id = ? ORDER BY at, id").all(id) as Array<{ at: string; by: string; note_rev: number; kind: string; source: string; reason: string }>)
+    .map((c) => ({ at: c.at, by: c.by, version: Number(c.note_rev), kind: c.kind, source: p(c.source), counted: c.kind !== "not_counted", reason: p(c.reason) }));
+
   // Receipts: which session starts showed it (ids and tags only; kept for the access-log window).
   let shown: WhyShown[] = [];
   const hasReceipts = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_receipts'").get();
@@ -126,6 +159,7 @@ export function noteWhy(store: Store, note: NoteRecord, opts: { namespaces?: str
     approve_first_namespace: store.isApproveFirst(note.namespace),
     created_by: { writer: creator, kind: writerKind(creator, claimed) },
     timeline: tl,
+    confirmations,
     shown_to: { total: shown.length, recent: shown.slice(0, SHOWN_LIMIT), retention_days: accessLogDays() },
     reads: { total: note.access_count, last: note.last_accessed, attributable: false },
     ...(opts.body ? { body: note.body } : {}),
@@ -155,10 +189,19 @@ export async function whyCmd(args: string[]): Promise<void> {
     console.log(`#${w.id} "${printable(w.title)}"  namespace ${printable(w.namespace)}`);
     for (const e of w.timeline) console.log(`  ${localTime(e.at)}  ${e.what}`);
     const flags = [w.pinned ? "pinned by the operator" : "", w.distrusted_writer ? "writer is distrusted: hidden from agents" : "", w.approve_first_namespace ? "namespace is approve-first" : ""].filter(Boolean);
+    if (w.confirmations.length) {
+      console.log("Confirmations:");
+      for (const c of w.confirmations) {
+        const counted = c.counted ? `counted (${p(c.kind)})` : `not counted: ${c.reason || "no reason recorded"}`;
+        console.log(`  ${localTime(c.at)}  version ${c.version} by ${who(c.by)}, source ${c.source || "none"}, ${counted}`);
+      }
+    }
     console.log(`status: ${w.status}${flags.length ? ` (${flags.join("; ")})` : ""}`);
     console.log(`shown at ${plural(w.shown_to.total, "session start")} (receipts kept ${w.shown_to.retention_days} days)`);
     console.log(`read ${plural(w.reads.total, "time")}${w.reads.last ? `, last ${localTime(w.reads.last)}` : ""}; who read it is not recorded`);
     if (w.body !== undefined) console.log(`body:\n${w.body.split("\n").map((l) => printable(l, 500)).join("\n")}`);
+    console.log(timeLegend("Oldest first"));
+    console.log(WRITER_LEGEND);
     console.log(w.not_recorded);
   } finally {
     store.close();

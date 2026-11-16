@@ -143,11 +143,251 @@ monomem trust undistrust phone --namespace work
 
 Take a writer off with `undistrust`; its notes come back at once (nothing was changed or deleted).
 
-## The outside-content stamp
+## Outside content: limits first (1.4.0)
 
 The writer label says **who** saved a note. It cannot say where the text came from: an agent that read a poisoned web page
-and wrote the payload in its own words is still a trusted writer (the drill's known miss `SELF`). The stamp covers the part
-of that path Monomem can actually see.
+and wrote the payload in its own words is still a trusted writer (the drill's known miss `SELF`). Since 1.4.0 Monomem marks
+notes written after an outside read **when Monomem can see it**, keeps them out of session start until confirmed, and
+refuses to make them pinned notes until a person confirms them. Read what it cannot do before relying on it:
+
+- **It only sees what it can see.** Not seen: `Read`, `Grep` and `Bash` (`curl`, `git pull`), and apps without Monomem's
+  capture hooks (Cursor, Codex over plain MCP). A note **without** the mark is not thereby safe. Every note is still
+  untrusted data.
+- **It does not judge truth.** A marked note may be correct; an unmarked one may be poisoned.
+- **The read signal is per connection** (one stdio server, or one key on one server: REST and MCP over HTTP share it)
+  and **resets when the server restarts**. Since 1.5.0 it also fades: a write is marked `via:memory` only while a note the
+  connection read within the taint window is still unconfirmed, so a person's confirm ends it. A reply that carries an
+  unconfirmed note counts as a read on every route and tool, not only the read ones. Session start says how many unconfirmed
+  notes wait and why (web session / read of unconfirmed notes / declared), and `monomem health` never grades A with 10 or more
+  waiting or one waiting more than 7 days (capped at B).
+- **A local (stdio) app's confirm never counts.** Its name (`stdio:<app>`) comes from its config file, so one process could
+  play two writers.
+- **A stated source is a claim.** Monomem never fetches it. A second agent's confirm is corroboration, not verification:
+  a lying agent can name any source.
+- **A key proves which key wrote, not which agent.** App keys sit in the app's own config file (and the primary key in `.token`);
+  any program running as your user, including an agent with a shell tool, can read them and act as that app. That is why a second
+  key's confirm is only corroboration ("two keys agreed") and never lifts the promotion block. The full list of files is in SECURITY.md.
+- **`derived_from` only works if agents fill it in**, and it looks one hop back. A copy without it is not linked.
+- **An admin key can release the session-start hold.** REST cannot tell a person from an agent holding an admin key; only
+  the pin block needs a person at the terminal. An admin key that was handed the note while unconfirmed is refused like
+  any agent; only the dashboard opened with `monomem open` **at a terminal** (its sign-in session: 8 hours, bound to the
+  key it signed in as) is treated as a person looking at it. `monomem open` from an agent's shell or a script signs in
+  without that session and says so. Whoever holds the primary key can make more keys, and so can forge corroboration.
+- **A shell that looks like a terminal counts as a person.** "At a terminal" means stdin and stdout are terminals; an
+  agent tool that opens a pseudo-terminal passes that check, for the typed-yes commands and for the CLI's exemption from
+  the session signal below alike. Monomem cannot tell that apart.
+
+The word "taint" below means this outside-content mark (reserved `obs.origin:*` tags). It is separate from the **taint set**
+of writers described above (`merged_from_writers`).
+
+## Outside content and taint (1.4.0)
+
+A note is **marked** (tainted) when it carries a reserved `obs.origin:*` tag. Only Monomem sets one. Three signals, each
+of which only adds:
+
+| Mark | When |
+|---|---|
+| `obs.origin:tool:<name>` | A hook-equipped session recorded output from an outside tool (`WebFetch`, `WebSearch`, any MCP server except Monomem and those in `MONOMEM_LOCAL_MCP_SERVERS`) within the last `MONOMEM_TAINT_WINDOW_HOURS` (default 12; `0` = off), has not ended and had an event in the last 30 minutes (an idle or crashed session stops counting at once). Up to 3 tool names, or `other`. **1.5.0: the window follows the writer, not the namespace.** It marks only local writers that have no key of their own: a stdio server (matched by the folder it was launched in: the same folder as the session, or one containing the other) and the `monomem` command run without a terminal. The namespace a write names does not matter. A local server whose folder matches no active session is an unknown origin and gets the worst case (any open window). Apps with their own key (REST, MCP over HTTP, the admin key, the dashboard) are **not** marked by it; set `reads_outside` on such a key, or declare writes with `outside: true`. A person can close the open windows with `monomem taint clear [--all | --session <id> | --here]` (terminal and typed yes; marks already written stay). Writes by capture, the server's own jobs, the runner and imports are not marked by this signal, and neither are writes by the `monomem` CLI **at a terminal** (stdin and stdout both terminals). Run from an agent's shell tool, a script or a pipe, `monomem add` is marked like any other writer. |
+| `obs.origin:via:memory` | The connection writing the note had been handed an unconfirmed note (in a read, a search or a list), or the note names an unconfirmed note in `derived_from`. |
+| `obs.origin:declared` | The writer said so: `outside: true` on MCP `state_write` or REST `POST`/`PUT /notes`, `monomem add --outside`, or a token entry with `"reads_outside": true` ([configuration.md](./configuration.md)). `outside: false` removes nothing. |
+
+The session signal is per namespace on purpose: the MCP server never learns the host's session id, so a browsing session
+can mark a sibling session's notes. A person's confirm clears that. An outside-tool event that was spooled (the database was
+busy) marks, when it is stored, the notes written in that namespace within the window after it.
+
+**It cannot be removed.** Every update path re-adds a dropped `obs.origin:*` tag (REST, MCP, file sync, restoring an older
+version). An agent's write cannot add or remove `obs.` tags itself; only the `outside` flag adds one.
+
+**Unconfirmed.** A marked note that has no counted confirm for its current version is **unconfirmed**. It is:
+
+- kept out of session start: its text, its title, the pinned list, the profile, the fact-dispute line, the task board
+  (an unconfirmed task or handoff is left off it), the per-prompt new-notes block and the file-context hook (which says how
+  many notes about the file it held back, without titles). One
+  line, with no titles, says how many: `Monomem: 3 notes from outside content wait for confirmation (not shown). Review:
+  monomem review`;
+- labelled `[unconfirmed - from outside content]` in search, reads, index lines and the dashboard (records carry
+  `unconfirmed: true` and `unconfirmed_label`);
+- ranked slightly lower in search (score x0.9) and still returned;
+- never hidden, archived or deleted.
+
+A marked note that **is** confirmed is shown at session start as an index line only, never its text. Notes that existed
+before the 1.4.0 upgrade are exempt from this hold (`grandfathered_at`) until an edit brings outside content into them
+(a mark, new or one they already carry) or a spooled outside read marks them. They are **not** exempt from the promotion
+block below.
+
+**Who has read an unconfirmed note.** A connection is marked once it is handed an unconfirmed note: in a read, search,
+list, task or handoff read, `catch_up`, `memory_why`, `memory_receipt`, `memory_supersede_preview` or the held-write
+context. Over HTTP this is kept per key and shared by the REST API and MCP over HTTP on the same server, so a read over
+one and a write over the other is the same writer.
+
+## Confirming notes
+
+A confirm records who checked a note, when, and against what. It is bound to the note's current version: an edit makes a
+marked note unconfirmed again.
+
+| Surface | How | Counts as |
+|---|---|---|
+| CLI | `monomem confirm <id> [--source "what you checked"]` (asks you to type yes in a terminal) | **human**: always counts |
+| CLI | `monomem review` lists what waits (id, namespace, title, writer, why); `--confirm-all [--source s]` confirms them all as you after one typed yes | human |
+| Dashboard | **Confirm** button on an unconfirmed or expired note (admin key; source "checked in the dashboard") | **admin** |
+| REST | `POST /notes/:id/confirm {"source": "..."}` (write scope; an admin key confirms as admin). Answers 200 with `counted` | admin, or corroborated, or not counted |
+| MCP | `memory_confirm {id, source}`. Not in the default tool set: turn it on with `MONOMEM_TOOLS` | corroborated, or not counted |
+
+```
+$ monomem confirm 42 --source "vendor site"
+Confirmed "Acme pricing" by cli at 2026-11-13 14:02. Checked against: vendor site. Next check due 2026-12-13.
+```
+
+("Next check due" appears unless re-confirmation expiry is off; see [search.md](./search.md#re-confirmation-expiry).)
+
+**An agent's confirm (corroborated) counts only when all of these hold:** it connects with its own key (not stdio); it did
+not write the note (`written_by`, `created_by`, `attested_writer` or the taint set); it is not distrusted; its connection
+has not been handed this note while unconfirmed; it has not written a note built from this one (`derived_from`); and it
+names a source whose key differs from the note's own `source` and from every earlier counted confirm of this version (a URL
+or bare host name, with or without a path or port, compares by host, lowercased, without `www.` or a trailing dot,
+international names as punycode; other
+text as lowercased text). With expiry on, a confirm older than the expiry period no longer blocks the same writer or the
+same source. One counted confirm per writer per version. Confirms by agents count toward the flood guard.
+
+The dashboard's **Confirm** button, in a dashboard opened with `monomem open` at a terminal, is not refused because the dashboard listed
+the note: a person is looking at it, and an admin confirm only releases the session-start hold. Any other key (the primary
+admin key included) that was handed the note while unconfirmed is refused with `read_it`. A dashboard signed in by pasting
+a key has no sign-in session, so it is treated like that key. The reply to an agent or a key names the note by id, not by its title (the title
+is outside text); `monomem confirm` in your terminal shows the title.
+
+Otherwise the confirm is **recorded but not counted**, and the reply names the rule:
+
+```
+Not counted: research-bot wrote this note, so it can't confirm it. A person or a different agent must confirm.
+```
+
+A local stdio app is told `Not counted: ... is a local connection without its own key, so its name is a claim, not an
+identity.` Every confirm, counted or not, is kept in the `confirmations` table and the audit log (a repeat of a confirm
+that already counted is answered but not stored).
+
+**What each kind releases.** Human, admin and corroborated confirms all let the note back into session start. Only a
+**human** confirm lifts the promotion block below. Only a confirm at least as strong as the note's current one for this
+version (human > admin > corroborated) replaces it. Only a human or admin confirm restarts the expiry clock: a corroboration
+("two keys agreed") releases the session-start hold but never restarts it, and the reply says so. An agent's corroboration
+after a person's or an admin's confirm is recorded but changes nothing: if that confirm has expired, a person or an admin
+must confirm again. A metadata-only edit (tags, confidence, source) keeps a confirm of the current version; a content edit does not.
+
+## No promotion without a person
+
+A marked note without a **human** confirm for its current version cannot be (this includes notes from before the 1.4.0
+upgrade that carry a 1.3.5 outside-content stamp: they keep their session-start treatment, but promoting one needs a person):
+
+- pinned (`monomem pin`, REST `PUT /pinned`, the dashboard);
+- used as the replacement in a replace (`monomem supersede`, the replace preview and confirm on every surface);
+- used in **Keep as history**, as the held write or as the note that replaces it
+  ([memory-linter.md](./memory-linter.md#quarantine)).
+
+The refusal reads:
+
+```
+Can't pin: this note came from outside content. A person must confirm it first: monomem confirm <id>
+```
+
+Admin keys and agents are refused too. The only way through is the `monomem` CLI in a terminal: `monomem pin`,
+`monomem supersede` (also with `--confirm-token`) and `monomem quarantine keep-history` ask you to type yes first, and that
+yes is recorded as your human confirm, in the same transaction as the pin or replace (if that fails, no confirm is left). An agent that can run shell commands can run the CLI itself; see SECURITY.md. A marked note can still be replaced
+**by** a clean note.
+
+## `derived_from`
+
+A write may list the notes it was built from: `derived_from` on MCP `state_write` and REST `POST`/`PUT /notes` (up to 20
+ids, numbers or digit strings), or `monomem add --derived-from 3,7`. Each id must be a note you can read, never the note
+itself. Links are only ever added: an update adds new ones, and `[]` or leaving it out changes nothing. Reads show
+`derived_from: [ids]`.
+
+- A note built from an **unconfirmed** note gets `obs.origin:via:memory`. A confirmed parent passes nothing on.
+- A note built from a note that a **distrusted** writer touched (one hop: the parent's own writers) is labelled
+  `[built on a distrusted writer]` and kept out of session start. Unlike the distrusted writer's own notes, it is still
+  listed and searchable.
+- A writer that built a note from the target cannot confirm the target.
+
+Limits: it only works when agents fill it in, it looks one hop back, a held write keeps its mark but loses its links, and
+there is no session-start count line for notes built on a distrusted writer.
+
+## Agent flags (1.5.0)
+
+An agent that thinks a note is wrong or out of date can say so without overwriting it: `memory_flag {id, reason}` (not in
+the default tool set; add it with `MONOMEM_TOOLS`) or REST `POST /notes/:id/flag {reason}`. The reason is one line of at
+most 200 characters. The note itself does not change.
+
+- A flag counts for the version (rev) it was about. Reads show `flagged: [{by, reason, at}]` and the label
+  `[flagged by stdio:codex]`; MCP adds `FLAGGED by "stdio:codex": "reason"` to the "who wrote this" block.
+- A flagged note that no person confirmed for its current version leaves session start (search and lists still show it). A
+  note a person confirmed stays at session start with the label: a poisoned agent cannot erase confirmed memory.
+- The reason is the agent's text: it is shown on reads, never at session start. With encryption on it is sealed at rest.
+- Refused or ignored: flagging your own note (change it instead), flags from a writer on the distrust list (ignored when
+  read, so a later distrust entry also cancels earlier flags), more than 20 flags per writer per day. Each flag counts toward
+  the flood guard. With a namespace-pinned key, only notes in its own namespace can be flagged.
+- A person decides: `monomem review` lists flagged notes with who flagged them and why. `monomem review keep <id>` keeps the
+  note as it is (clears the flags on that version; they stay on record); `monomem supersede --old <id> ...` replaces it.
+
+Limits: an edit that makes a new version leaves the old flags behind (flag again if it is still wrong); flags from a session
+that read outside content are not marked differently yet.
+
+## Notes about code that changed (1.5.0)
+
+A note can name the files it is about: `files: ["src/auth.ts"]` on `state_write` or `POST /notes` when creating it (at most
+20). Each file must be tracked by git in the writer's repository: the folder a local MCP server was started in, otherwise the
+folder the Monomem process runs in. Monomem records the file's id in git's index, the commit and the repository folder, using
+the local `git` program only (no network, short timeout, the repository's fsmonitor and hooks switched off).
+
+- When a later commit changes or removes one of those files, reads carry `code_changed: [{path, since_commit}]` and the label
+  `[code changed since this was written: src/auth.ts]`, at session start too. The note is not hidden, deleted or unpinned for
+  it: a pinned note stays pinned, with the label.
+- It is compared with the **committed** code (HEAD), not with unsaved or uncommitted edits. HEAD is read from the `.git`
+  files; git itself runs once per new commit per repository, not once per read.
+- `monomem stale --code` lists these notes; `monomem review` lists them too. `monomem review keep <id>` says the note is still
+  right (its files count as checked against the current commit); `monomem supersede --old <id> ...` replaces it.
+- Refused: a path with `..`, a path outside the repository (absolute, or through a symlink), a folder, a file git does not
+  track. No git, no commit yet, or a folder outside a repository: `files` is accepted and nothing is recorded, as before.
+- Not covered yet: files cannot be added to an existing note (write a new one, or a person runs `review keep`), a write held
+  for approval drops its files, captured observations are not anchored, and anchors are not exported or synced (a backup
+  copy of the database keeps them). The file paths are stored plain, also with encryption on (docs/encryption-retention.md).
+
+## Confirmed notes in AGENTS.md / CLAUDE.md (1.5.0)
+
+`monomem project-rules [--file AGENTS.md|CLAUDE.md] [--ns <namespace>] [--dry-run]` copies notes into a fenced block of the
+current git repository's rules file, for apps that read only rules files. A rules file is read as instructions, so the gate
+is stricter than session start. A note goes in only when **a person** confirmed its current version (`monomem confirm` at a
+terminal) or pinned it, and none of these holds:
+
+- it is outside content no person confirmed (a pin alone does not let it in), or built on a distrusted writer's note;
+- its writer is on the distrust list, it is `private`, an agent flagged it, it is disputed by another note's fact, or a file
+  it is about changed in git since;
+- it is held back from session start (for example past its re-confirmation date with `confirm-mode enforce`);
+- its line fails the memory linter when checked again now.
+
+An admin key's confirm and an agent's corroboration do not count. Each note becomes one line, `- <title>: <text> (om:#12)`,
+cut to 300 characters. The command prints what goes in, what is left out and why, and the change to the block; then a
+person types yes at a terminal (a script, a pipe or an agent's shell tool is refused, and there is no `--yes`). Only the
+text between `<!-- monomem:begin v1 -->` and `<!-- monomem:end -->` is replaced; the rest of the file is kept byte for byte,
+and fence lines that are broken (one missing, twice, out of order) are refused rather than guessed. Running it again with
+nothing new writes nothing. No hook runs it, and Monomem never writes these files any other way.
+
+The block holds the notes' **decrypted** text, and a rules file is usually committed, so check which namespaces go in. Without
+a namespace setting for the folder (and without `--ns`), notes from every namespace qualify; the command then names the
+namespaces it drew from and suggests `--ns <namespace>` to keep it to one.
+
+Limits: it looks at the 1,000 most recently changed notes of the namespace; the block is a copy, so it is only as fresh as
+the last run.
+
+## Writer record (1.5.0)
+
+`monomem trust` (and `monomem trust --json`, field `writer_record_30d`) shows, per writer, what happened to its writes in the
+last 30 days: held by the linter (approve-first holds are not counted: that is the namespace's rule, not the write), rejected
+by a person or admin, rolled back, flags upheld (a flagged version that was then replaced) and replaced by someone else (the
+two-step supersede, which only admin keys and the terminal can do). The numbers are only shown. Monomem does not hold, hide
+or rank anything because of them, and they can only count against a writer, never for it. Counting starts with 1.5.0; older
+events are not reconstructed. Decide yourself whether a writer belongs on the distrust list.
+
+## The outside-content stamp on session summaries (1.3.5)
+
+Before 1.4.0 only captured session summaries were stamped. That path still works, and is one of the signals above.
 
 **What sets it.** When automatic capture distills a Claude Code session, the session summary gets the reserved tag
 `obs.origin:tool:<name>` for each tool in that session that returns outside content and gave output: `WebFetch`,
@@ -175,9 +415,14 @@ it. A tool name that is not plain name characters (letters, digits, `_ . -`, up 
 one the write-time linter refuses, so a hostile name can neither reach the agent's context nor cost the session its
 summary. A stamped note's text is never pasted into the session-start block, pinned or not.
 
+Since 1.4.0 a summary stamped after the upgrade is also unconfirmed like any other marked note (out of session start
+until confirmed). A summary stamped before the upgrade keeps the treatment above.
+
 **What it is not.** A note **without** the stamp is not thereby safe. Every note is still untrusted data. Not covered:
 
-- an agent that paraphrases outside text into an ordinary `state_write` (that is `SELF`, still a reported miss);
+- an agent that paraphrases outside text into an ordinary `state_write` when Monomem saw no outside read (the drill's
+  `SELF` miss stays a reported miss: the write check still cannot tell). Since 1.4.0 the session window above marks such a
+  note when the outside read happened in a hooked session in the writer's folder (local apps only; an app with its own key is not covered by the session window, so set `reads_outside` on its key, and an agent can start a stdio server from a folder that has a clean hooked session; `Bash` `curl` is still not seen);
 - clients without Monomem's capture hooks (Cursor, Codex over plain MCP): nothing is stamped there;
 - local reads (`Read`, `Grep`) and `Bash` (`curl`, `git pull`), which run in nearly every session, so a downloaded README
   read with `Read` is not stamped;
@@ -187,7 +432,8 @@ An agent's own claim of origin stays a claim: the free-text `source` field is sh
 Imported notes keep their own stamped label (`imported WITHOUT a verified attestation`).
 
 The safety does not rest on the stamp: the benchmark's E20 checks that a trusted writer which claims its note is its own is
-still held by the write-time linter.
+still held by the write-time linter. E21 and E22 (1.4.0) check that a trusted writer's paraphrase of a web page, and an
+agent's summary of an unconfirmed note, are marked and cannot be pinned.
 
 ## Stable writer identity
 
@@ -207,8 +453,8 @@ safe, and it loses the information. An attestation brings it back **for servers 
 ### How it works
 
 - Each database has one Ed25519 key pair. The private key is the file `.attest-key` beside the
-  database (mode 0600, re-tightened at every start, created on first signed export or
-  `monomem trust identity`, written atomically; `MONOMEM_ATTEST_KEY_FILE` overrides the path).
+  database (mode 0600, re-tightened at every start, created on the first note write (1.5.0: it signs the audit log),
+  the first signed export or `monomem trust identity`, written atomically; `MONOMEM_ATTEST_KEY_FILE` overrides the path).
   It is **never** exported or sent anywhere. `monomem trust list` never creates one. A corrupt key
   file is an error, never silently replaced by a new identity, and it does not break an import of
   unsigned notes. (Two databases in one directory share a key file; use one directory per database.)
@@ -324,6 +570,40 @@ The same pair as an environment variable on B: `MONOMEM_TRUSTED_ATTESTERS=<A's s
   somewhere safe). `export-key` refuses to write through an existing file or a symlink (also a dangling one).
 - A restored database that imports its **own** earlier export verifies it with its own key, for its
   own server id only.
+
+## Signed audit log and write receipts (1.5.0)
+
+The same `.attest-key` signs the audit log and the write receipts. There is no second key and no second rotation command.
+
+- **Each audit line** carries `kid` and `sig`: an Ed25519 signature over the line, which includes `prev`, the hash of the
+  line before it. The first signed line of a log is `sign-start` (it names the public key and the head of the unsigned
+  lines before it). `trust rotate` first writes a `key-rotate` line signed by the old key that names the new public key;
+  the next lines are signed by the new key. A line signed by a retired key, or by a key no `key-rotate` line handed over
+  to, is a bad signature. A process that cannot read the key writes an unsigned line, as before 1.5.0.
+- **Each write receipt** (accepted, held or refused, from MCP `state_write` and REST `POST`/`PUT /notes`, same shape on
+  both) is signed too and carries `note_id`, `rev` and `content_hash` (the hash of the exact title, body and tags). The
+  content hash is only in the receipt, never in the log.
+- **Check a receipt offline** with only the public key: `monomem verify-receipt --file r.json --pubkey <key or file>`, or
+  without Monomem: `node verify-receipt.mjs r.json <key>` (the 30-line script is
+  [docs/verify-receipt.mjs](https://github.com/calasdan-sketch/monomem/blob/main/docs/verify-receipt.mjs), plain
+  `node:crypto`). `monomem trust identity` prints the public key; keep a copy of it with the receipts. A receipt signed
+  before a rotation verifies with the old public key (`monomem trust list` shows it as a retired key of this server).
+- **Against the log:** `monomem verify-receipt --file r.json` (no `--pubkey`) also checks the line is still in the
+  unbroken, signed log. `--note <id>` prints "unchanged since the receipt" or "changed later (rev N)".
+- **Checkpoints:** `monomem audit checkpoint --out cp.json` signs the current head. Keep it off the machine (a git commit, a
+  password manager, an email to yourself) and check later with `monomem audit verify --checkpoint cp.json`. Every receipt
+  you hold works as a checkpoint too.
+- `monomem audit verify` reports signed lines, bad signatures and unsigned lines before and after signing began.
+  `--all-signatures` checks every line (about 0.1 ms each); by default it checks the newest line, the anchor and the key
+  hand-overs, because the newest signature covers everything before it through `prev`. `--strict` fails on unsigned
+  lines after signing began.
+
+**What it proves and what it does not.** Anything before a receipt or checkpoint someone holds cannot later be edited
+or removed undetected, even by someone with the key, and a process that can write `audit.log` but cannot read
+`.attest-key` cannot forge or edit a line. It does **not** protect against you or anything running as you: a program
+running as the store's user can read `.attest-key`, then rewrite and re-sign everything after the last receipt or
+checkpoint someone else holds, or cut the newest lines off (the shorter log still verifies). It does not prove the content
+is true or who a stdio writer was. The full list is in SECURITY.md.
 
 ## Upgrading and rolling back
 

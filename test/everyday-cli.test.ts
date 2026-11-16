@@ -1,7 +1,7 @@
 // monomem add / show / ls / forget / edit / search-with-no-words: everyday commands that go through the normal store path.
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, chmodSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -147,6 +147,32 @@ describe("search, relevant and recall polish", () => {
       const sem = run(dir, ["search", "zebra", "--mode", "semantic"]);
       assert.match(sem.stdout, /semantic search is not set up; showing keyword results/);
       assert.match(sem.stdout, /#1 \[default\] Zebra/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("R1-20 edit - never silently empties a body", () => {
+  test("a one-line pipe is refused and the note is unchanged; --title makes the whole pipe the body", () => {
+    const dir = mkdtempSync(join(tmpdir(), "om-everyday-"));
+    try {
+      assert.equal(run(dir, ["add", "the original body", "--title", "Keep me"]).status, 0);
+      const r = run(dir, ["edit", "1", "-"], "just one line\n");
+      assert.equal(r.status, 1, r.stdout);
+      assert.match(r.stderr, /body would be empty/);
+      assert.match(r.stderr, /--title/);
+      let show = run(dir, ["show", "1"]).stdout;
+      assert.match(show, /Keep me/);
+      assert.match(show, /the original body/);
+      const t = run(dir, ["edit", "1", "-", "--title", "New title"], "first line of the body\nsecond line\n");
+      assert.equal(t.status, 0, t.stderr);
+      show = run(dir, ["show", "1"]).stdout;
+      assert.match(show, /New title/);
+      assert.match(show, /first line of the body\nsecond line/);
+      const m = run(dir, ["edit", "1", "-"], "Multi title\nmulti body\n");
+      assert.equal(m.status, 0, m.stderr);
+      assert.match(run(dir, ["show", "1"]).stdout, /Multi title[\s\S]*multi body/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

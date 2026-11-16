@@ -22,6 +22,11 @@ process.env.MONOMEM_TOOLS = "all";
 // Bulk tests write thousands of notes as one agent label in seconds; the flood guard would pause them.
 // test/access-log-flood.test.ts owns the flood-guard assertions and sets this variable itself.
 process.env.MONOMEM_FLOOD_WRITES_PER_HOUR = "0";
+// doctor asks the server on MONOMEM_PORT (default 8790) for its version: never a real one on this machine.
+// test/health-version.test.ts owns those assertions, points MONOMEM_PORT at its own fake and clears this.
+process.env.MONOMEM_NO_SERVER_PROBE = "1";
+// Session start gives up after 5 s; on a loaded CI runner that cap fired in recall/everyday-cli/overdue-board tests.
+process.env.MONOMEM_RECALL_TIMEOUT_MS = "30000";
 process.env.MONOMEM_SCAN_CACHE_SECONDS = "0"; // the dashboard scans are cached for a minute in real use; tests want fresh answers
 process.on("exit", () => {
   try {

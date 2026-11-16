@@ -338,7 +338,7 @@ describe("sync --git: the sealed-file format", () => {
     const blob = sealFile("default/note--1.md", "hello", key);
     const name = (blob && blobName("default/note--1.md", key));
     const opened = openFile(name, blob, key);
-    assert.deepEqual(opened, { rel: "default/note--1.md", text: "hello" });
+    assert.deepEqual(opened, { rel: "default/note--1.md", text: "hello", v: 0 });
   });
   test("a sealed file renamed to another name will not open (swap protection)", () => {
     const blob = sealFile("a/b.md", "x", key);
@@ -397,5 +397,51 @@ describe("sync --git: the sealed-file format", () => {
     assert.equal(containedIn(path.posix, "/a/b", "/a/b/c", false), true);
     assert.equal(containedIn(path.posix, "/a/b", "/a/bc", false), false);
     assert.equal(containedIn(path.posix, "/a/b", "/a/b/../c", false), false);
+  });
+});
+
+describe("sync --git --encrypt: a replayed old sealed file is refused (round 2, F1)", { skip }, () => {
+  test("whoever controls the remote cannot roll a note back by pushing an old sealed file from history", async () => {
+    const w = world();
+    put(w.a, "Deploy rule", "OLD-UNSAFE-RULE: deploy straight to prod");
+    assert.equal((await sync(w.a, { encrypt: true })).code, 0);
+    const first = g(w.a.repo, "rev-parse", "HEAD");
+    const s = new Store(w.a.db);
+    const id = s.list({ limit: 5 }).notes[0].id;
+    s.update(id, { body: "NEW-SAFE-RULE: deploy through staging" });
+    s.close();
+    assert.equal((await sync(w.a, { encrypt: true })).code, 0);
+    // The remote side replays the first version of the sealed folder.
+    const evil = join(w.root, "evil");
+    g(w.root, "clone", w.remote, "evil");
+    g(evil, "checkout", "-B", "main", "origin/main");
+    g(evil, "checkout", first, "--", "monomem-enc");
+    g(evil, "commit", "-m", "replay", "--", "monomem-enc");
+    g(evil, "push", "origin", "main");
+    const r = await sync(w.a, { encrypt: true });
+    assert.equal(r.code, 1, r.x.all());
+    assert.match(r.x.all(), /older than one this computer already synced/);
+    const after = new Store(w.a.db);
+    try {
+      assert.match(after.read(id)!.body, /NEW-SAFE-RULE/);
+    } finally {
+      after.close();
+    }
+  });
+
+  test("normal edits on two computers still sync after the version counter is added", async () => {
+    const w = world();
+    put(w.a, "Shared", "v1");
+    assert.equal((await sync(w.a, { encrypt: true })).code, 0);
+    mkdirSync(w.b.dataDir, { recursive: true });
+    writeFileSync(join(w.b.dataDir, ".sync-key"), readFileSync(join(w.a.dataDir, ".sync-key")));
+    assert.equal((await sync(w.b, { encrypt: true })).code, 0);
+    const sb = new Store(w.b.db);
+    sb.update(sb.list({ limit: 5 }).notes[0].id, { body: "v2 from b" });
+    sb.close();
+    assert.equal((await sync(w.b, { encrypt: true })).code, 0);
+    const r = await sync(w.a, { encrypt: true });
+    assert.equal(r.code, 0, r.x.all());
+    assert.match(notes(w.a)[0].body, /v2 from b/);
   });
 });

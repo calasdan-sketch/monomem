@@ -1,6 +1,6 @@
 // The preview must show what would be lost: the old note's real text, writer, dates and tag, plus what is NOT lost.
 import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
-import { test, describe, before, after } from "node:test";
+import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";

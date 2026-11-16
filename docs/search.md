@@ -67,6 +67,16 @@ What it cannot do, and says so:
 - Only text changes make history. Tag or source edits are not reconstructed, and a note whose only later change was such an edit has no recorded writer for the old text. If history was switched off (`MONOMEM_HISTORY_VERSIONS=0`), an edited note is "not kept".
 - Search at a past time scores the rebuilt notes with the keyword scorer (share of your words found, newest first on ties). It does not use the search index, which only holds today's text, and has no semantic ranking, time phrases or writer filters.
 
+## Long notes in search results (1.5.0)
+
+`state_search` and `state_list` cut a body longer than 600 characters (`body_truncated: true`, `body_chars` = the full
+length). In a **search** the 600 characters shown are the part of the note with the most of your query words (counted at
+word starts, accents ignored, like the index), not simply its opening; `body_offset` says where that part starts, so
+`state_read` with `offset` continues from there. When no part beats the opening, or the call is `state_list` (no query),
+you get the first 600 characters as before. Encrypted notes work the same way: the part is chosen from the body after it
+is decrypted in memory for the result, and only from that one note's own text. REST `/search` and `state_read` return
+whole bodies and are unchanged.
+
 ## Relevant-memory search
 
 Don't know the exact wording? `state_search` with `mode: "relevant"` (or the
@@ -107,6 +117,15 @@ placed right behind the lowest-ranked of its fresh newer twins. It is still retu
 A stale note that people keep reading (a clearly active read signal) keeps the place its reads earned. Notes that are not similar to anything are
 untouched. To remove an out-of-date note from search entirely, replace it ([replacing-memories.md](./replacing-memories.md)).
 
+**A restated note goes behind the newer one (1.5.0).** The same pass handles fresh notes too. An older note moves right behind a newer one
+when the **same writer** wrote both, the newer one was written after the older one last changed, they are about the same subject (a fact key
+with another value, or a similarity link of at least 0.6), they match the query about equally well (the older score is at most 1.5 times the
+newer one), and the newer note is in the results you get. The older note is still returned, with `restated_by: <id>` and `restated_label`;
+`explain` adds "Kept behind #N, a newer note by the same writer on the same subject. Not replaced: to retire this one, use
+memory_supersede_preview." It never happens for a different writer (both notes show a dispute label instead), over a note a person
+confirmed (unless the newer one is confirmed too), behind unconfirmed outside content or a flagged, replaced or distrusted note, or when the
+older note is read clearly more than the newer one. Applies to search, `state_relevant` / `POST /relevant` and session start.
+
 Thresholds (env vars, read live — no restart needed to retune):
 
 | Variable | Default | Meaning |
@@ -119,6 +138,71 @@ Thresholds (env vars, read live — no restart needed to retune):
 Invalid values fall back to the defaults. Staleness is per-note and
 namespace-agnostic — it never crosses (or needs to know about) namespace
 isolation boundaries.
+
+## Labels on notes (1.4.0)
+
+Search results, reads, session-start index lines, recall summaries and the dashboard can carry three labels. Each is also
+a field on the record (only when set), so a program can check it:
+
+| Label | Field | Meaning | In search | At session start |
+|---|---|---|---|---|
+| `[unconfirmed - from outside content]` | `unconfirmed`, `unconfirmed_label` | Written after an outside read Monomem could see; nobody has confirmed this version ([trust.md](./trust.md#outside-content-and-taint-140)) | returned, score x0.9 | left out; one count line |
+| `[expired - not re-confirmed in 30 days]` | `expired`, `expired_label` | Nobody changed or confirmed it within the re-confirmation period (the number follows `confirm-days`) | returned; x0.9 only in `enforce` | shown with the label; left out only in `enforce` |
+| `[built on a distrusted writer]` | `built_on_distrusted`, `built_on_distrusted_label` | Its `derived_from` names a note a distrusted writer touched (one hop) | returned | left out |
+
+None of them hides, archives or deletes a note. An unconfirmed note that is also expired in `enforce` mode is ranked at
+most x0.81.
+
+**Disputed facts (1.5.0).** A note whose `facts` another writer's live note contradicts (the same key, or a synonym such as
+`hosting` for `deploy_target`, with a different value) carries `disputed: [{id, key, value, written_by, confirmed}]` on every
+read: REST `GET /notes/:id`, `/notes`, `/search`, `/index`, `POST /get`, and MCP `state_read`, `state_search`, `state_list`,
+`memory_get`, `memory_index`. A note a person confirmed is listed first; when the other side is confirmed by a person and
+this note is not, it also carries `disputed_label: "disputed by a confirmed note"`. MCP adds one line per dispute to the
+"who wrote this" block: `DISPUTED deploy_target: #12 says "fly" ("stdio:cursor", unconfirmed)`. Both notes stay; nothing is
+hidden or re-ranked. Only notes the reader may read count: a note above its sensitivity ceiling, in another namespace or
+from a distrusted writer is never named, and the reply is the same as when there is no dispute. A writer's own older note
+with another value is not a dispute (as at session start). Not covered yet: the looser "key: value" matches that `monomem
+conflicts` lists as possible (they need a scan of the whole namespace on every read).
+
+## Re-confirmation expiry
+
+A fact can stop being true without anyone noticing. Expiry asks a person (or a second agent) to stand behind a note again
+every so often.
+
+**When a note is due.** Due = the latest of these, plus `confirm-days` (default 30):
+
+- the last change to its **title or body** (`content_at`; a tag, source, confidence, namespace or forget-date edit does not count, and an edit that changes nothing is a no-op);
+- the last **person's or admin's** confirm of its current version (a corroboration by another agent releases the session-start hold but never restarts the clock);
+- the 1.4.0 upgrade (`grandfathered_at`, on notes that existed then);
+- the last time the mode was changed.
+
+It is computed on every read, never stored. Pinned, archived and replaced notes and captured rows (observations, session
+summaries), tasks and handoffs never expire. A confirm by another agent (corroboration) is recorded but never restarts the clock. A content change by an agent
+DOES restart it: the note is re-stamped to that agent, a new claim under a new name (and if it is tainted it waits for confirmation anyway).
+
+**Modes.** Set with `monomem config set confirm-mode <mode>` ([configuration.md](./configuration.md#settings-kept-in-the-store-monomem-config)):
+
+| Mode | What an expired note gets |
+|---|---|
+| `off` | nothing |
+| `label` (default) | the `[expired - ...]` label on reads, search and index lines. Ranked as before, still at session start |
+| `enforce` | the label, left out of session start (one line: `Monomem: N notes not re-confirmed in 30 days (not shown). Review: monomem review`), and score x0.9 in search |
+
+No mode ever archives or deletes a note for being expired.
+
+**What this means after an upgrade.** Nothing changes on day 1. About 30 days after upgrading, notes that nobody edited
+or confirmed since start showing `[expired - not re-confirmed in 30 days]`. They are still shown and ranked as before. To
+turn the label off: `monomem config set confirm-mode off` (asks you to type yes). To make expiry hide notes from session
+start: `monomem config set confirm-mode enforce`. Switching between `label` and `enforce` keeps every due date; turning expiry on from `off` starts the clock for every note.
+
+**Re-confirming.** `monomem confirm <id> --source "what you checked"` (a person; see [trust.md](./trust.md#confirming-notes)),
+or `monomem review` to see every expired and unconfirmed note with the reason, and `monomem review --confirm-all` to
+confirm them all as you after one typed yes. A confirm's reply ends with `Next check due YYYY-MM-DD.` while expiry is on.
+The same writer can confirm the same version again once its last confirm is older than the period.
+
+`monomem doctor` and `monomem health` print the mode, the period and how many notes are past due.
+
+Not yet: per-tag or per-writer periods, per-namespace `enforce`, and a warning before notes expire (not yet built).
 
 ## Consolidation (dedup)
 

@@ -218,6 +218,9 @@ export async function meterCmd(args: string[]): Promise<void> {
 
 /** "2026-11-05 14:03:00 -06:00": the reader's local time with its UTC offset (the same format `as-of` prints); the stored string if it does not parse. */
 export const localTime = (iso: string): string => localTimeOffset(iso);
+/** Said once under a listing: why the clock reads as it does, and which end the list starts from. */
+export const timeLegend = (order: "Newest first" | "Oldest first"): string =>
+  `Times are your local time with the offset from UTC (-06:00 = six hours behind UTC), so they match your clock; stored and JSON times are UTC. ${order}.`;
 /** `{files,kw 3d}` -> "files, kw; 3 days old"; `{recent 0d}` -> "recent; today". Anything else is shown as stored. */
 export function whyText(why: string): string {
   const m = /^\{(?:(.*?) )?(\d+)d\}$/.exec(why);
@@ -249,6 +252,7 @@ export async function receiptsCmd(args: string[]): Promise<void> {
     const list = receiptList(store);
     if (json) return console.log(JSON.stringify(list, null, 2));
     if (!list.length) return console.log("No receipts yet: they are written by the next session the SessionStart hook runs for.");
+    console.log(timeLegend("Newest first"));
     for (const s of list) console.log(`${printable(s.session_id)}  ${localTime(s.at)}  ${plural(s.notes, "note")}, ~${s.tokens} tokens of note text  ${printable(s.client || "-")}`);
   } finally {
     store.close();

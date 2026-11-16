@@ -51,7 +51,7 @@ async function fileContext(payload: Record<string, unknown>, opts: HookOptions):
   const { normPath } = await import("./extract.js");
   const cap = recallCeilingFromEnv();
   if (cap === null) return ""; // MONOMEM_RECALL_MAX_SENSITIVITY is set to something that is not a label: say nothing
-  const store = new Store(dbPath, { noMigrate: true, busyTimeoutMs: BUSY_MS });
+  const store = new Store(dbPath, { noMigrate: true, busyTimeoutMs: BUSY_MS, bodyIndex: "off" });
   try {
     // note_files holds the path relative to the session folder when it is inside it, otherwise forward-slashed as given.
     const rel = normPath(file, cwd);
@@ -70,11 +70,17 @@ async function fileContext(payload: Record<string, unknown>, opts: HookOptions):
     store.logAccess({ tool: "hook:file-context", namespaces: notes.map((n) => n.namespace), query: rel, results: notes.length });
     const { indexLine, openHint } = await import("./context-inject.js");
     const { UNTRUSTED_BANNER } = await import("./security.js");
+    const { heldFromSessionStart } = await import("./taint.js");
+    // 1.4.0: like session start, a held note (unconfirmed outside content ...) is counted, never listed: a title is text too.
+    const enforce = store.confirmSettings().mode === "enforce";
+    const shown = notes.filter((n) => !heldFromSessionStart(n, enforce));
+    const held = notes.length - shown.length;
+    const heldLine = held ? `${held} ${held === 1 ? "note" : "notes"} from outside content or waiting for re-confirmation about this file ${held === 1 ? "is" : "are"} not shown (monomem review).` : "";
     const text =
       `Monomem has earlier memory about ${rel} (advisory; read the file as usual):\n` +
-      notes.map((n) => indexLine(n)).join("\n") +
+      [...shown.map((n) => indexLine(n)), heldLine].filter(Boolean).join("\n") +
       // Name only a tool this install registers (memory_get is not in the default set); state_read takes one id.
-      "\n" + openHint();
+      (shown.length ? "\n" + openHint() : "");
     return JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: UNTRUSTED_BANNER + text } });
   } finally {
     store.close();

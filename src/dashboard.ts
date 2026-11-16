@@ -133,6 +133,9 @@ export const DASHBOARD_HTML = `<!doctype html>
   .cfval{margin:6px 0}
   .cfmore{margin-top:6px}
   .cfdlg:empty{display:none}
+  .diff{font:13px/1.45 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;background:var(--panel2);border:1px solid var(--line);border-radius:var(--r-s);padding:6px 8px;margin:6px 0;color:var(--ink)}
+  .diff .del{border-left:3px solid var(--danger);padding-left:5px}
+  .diff .add{border-left:3px solid var(--ok);padding-left:5px}
   .cfdlg{margin-top:8px;padding:8px 10px;border:1px solid var(--line);border-radius:6px}
   .cfdlg ul{margin:0 0 6px;padding-left:18px}
   .cf .acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
@@ -226,6 +229,7 @@ export const DASHBOARD_HTML = `<!doctype html>
   <p id="who" role="status"></p>
   <div id="insights" class="card" style="display:none" aria-live="polite"></div>
   <div id="msg" class="msg" role="status" aria-live="polite"></div>
+  <span id="armhint" class="sr" role="status" aria-live="polite"></span>
   <div id="runner" class="card err" style="display:none"></div>
   <button id="heldstrip" class="strip" onclick="loadHeld()" hidden></button>
   <div id="list"></div>
@@ -262,6 +266,8 @@ export const DASHBOARD_HTML = `<!doctype html>
 export const DASHBOARD_JS = `
 var TOKKEY = "om_tok";
 function tok(){ try { return sessionStorage.getItem(TOKKEY) || ""; } catch(e){ return ""; } }
+// The dashboard session from monomem open's sign-in (POST /login): it tells the server a person is at this page.
+function dsess(){ try { return sessionStorage.getItem(TOKKEY + ":ds") || ""; } catch(e){ return ""; } }
 function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g, function(c){
   return {"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;","'":"&#39;"}[c]; }); }
 function $(id){ return document.getElementById(id); }
@@ -276,7 +282,16 @@ function hue(s){ s = String(s); if(hueOf[s] !== undefined) return hueOf[s];
 function shownWriter(w){ return w === "primary" ? "admin (setup)" : w === "cli" ? "terminal" : w; } // display only: the stored label stays "primary" / "cli"
 function chip(label){ return "<span class='chip' style='--h:"+hue(label)+"'>"+esc(shownWriter(label))+(label === "cli" ? "<small class='tech'>cli</small>" : "")+"</span>"; }
 // A fact tag reads "deploy_target = render", not the raw fact:deploy_target=render.
+// U-14: an origin tag (obs.origin:*, taint.ts) reads in plain words and keeps the warning border; the raw tag is the tooltip.
+function originWords(t){
+  if(t === "obs.origin:declared"){ return "from outside content (the agent said so)"; }
+  if(t === "obs.origin:via:memory"){ return "written after reading unconfirmed memory"; }
+  if(t.indexOf("obs.origin:tool:") === 0){ return "its session read outside content through " + t.slice(16); }
+  return t.indexOf("obs.origin:") === 0 ? "from outside content" : "";
+}
 function tagChip(t){
+  var o = originWords(String(t).trim());
+  if(o){ return "<span class='tag why' title='"+esc(String(t).trim())+"'>"+esc(o)+"</span>"; }
   var m = /^fact:([^=]+)=(.*)$/.exec(String(t).trim());
   return m ? "<span class='tag fact'>"+esc(m[1].trim())+" = "+esc(m[2].trim())+"</span>" : "<span class='tag'>"+esc(t)+"</span>";
 }
@@ -290,21 +305,36 @@ function fail(e){ say(e && e.message ? e.message : String(e), true); }
 function failList(e){ $("list").innerHTML = "<p class='err'>"+esc(e.message)+"</p>"; }
 function empty(text){ return "<p class='muted empty'>"+text+"</p>"; }
 
-// Inline confirm: the first click turns the button into "Confirm <label>?" for a few seconds; a second click runs fn.
+// Inline confirm: the first click turns the button into "Confirm <label>?" for 10 seconds; a second click runs fn.
+// R1-19: a note from outside content without a person's confirm for this version can't be pinned (mirrors needsHumanConfirm).
+function needsPerson(n){ return (n.tags||[]).some(function(t){ return String(t).indexOf("obs.origin:") === 0; }) && !(n.confirmed_kind === "human" && n.confirmed_rev === n.rev); }
 function arm(btn, fn){
   var al = btn.getAttribute("aria-label");
-  if(btn.getAttribute("data-armed")){ clearTimeout(btn._t); btn.removeAttribute("data-armed"); if(al){ btn.setAttribute("aria-label", al.replace(/^confirm /, "")); } fn(); return; }
+  if(btn.getAttribute("data-armed")){ clearTimeout(btn._t); btn.removeAttribute("data-armed"); if(al){ btn.setAttribute("aria-label", al.replace(/^confirm /, "")); } var h = $("armhint"); if(h){ h.textContent = ""; } fn(); return; }
   var was = btn.textContent;
   btn.setAttribute("data-armed", "1");
   btn.textContent = btn.getAttribute("data-confirm") || ("Confirm " + was.toLowerCase() + "?");
   if(al){ btn.setAttribute("aria-label", "confirm " + al); }
-  var m = $("msg"); if(m){ m.className = "msg"; m.textContent = "Press " + was + " again within 4 seconds to confirm."; }
+  // U-06: the hint goes to a visually hidden live region, not the status line above the cards: a message there pushed every
+  // card down a line, so the second click missed the button. 10 s, not 4: enough time for keyboard and screen-reader users (WCAG 2.2.1).
+  var m = $("armhint"); if(m){ m.textContent = "Press " + was + " again within 10 seconds to confirm."; }
   var hint = m ? m.textContent : "";
-  btn._t = setTimeout(function(){ btn.removeAttribute("data-armed"); btn.textContent = was; if(al){ btn.setAttribute("aria-label", al); } if(m && m.textContent === hint) m.textContent = ""; }, 4000);
+  btn._t = setTimeout(function(){ btn.removeAttribute("data-armed"); btn.textContent = was; if(al){ btn.setAttribute("aria-label", al); } if(m && m.textContent === hint) m.textContent = ""; }, 10000);
+}
+// C-02: the server's line diff ("- " old, "+ " new, already printable and capped). Note text, so every line goes through esc();
+// a hidden word says removed/added, so the meaning is not in the colour alone.
+function diffHtml(lines){
+  if(!lines || !lines.length){ return ""; }
+  return "<div class='diff' role='group' aria-label='What changes, old to new'>"+lines.map(function(l){
+    l = String(l); var c = l.charAt(0);
+    return c === "-" ? "<div class='del'><span class='sr'>removed: </span>"+esc(l)+"</div>"
+      : c === "+" ? "<div class='add'><span class='sr'>added: </span>"+esc(l)+"</div>" : "<div>"+esc(l)+"</div>";
+  }).join("")+"</div>";
 }
 // Longer confirm with a server-written warning (supersede preview): text plus Confirm / Cancel on the status line.
-function ask(text, okLabel, fn){
+function ask(text, okLabel, fn, extraHtml){
   var m = $("msg"); m.className = "msg"; m.textContent = text + " ";
+  if(extraHtml){ var d = document.createElement("div"); d.innerHTML = extraHtml; m.appendChild(d); }
   var ok = document.createElement("button"); ok.textContent = okLabel;
   ok.onclick = function(){ m.textContent = ""; fn(); };
   var no = document.createElement("button"); no.textContent = "Cancel"; no.className = "ghost";
@@ -398,7 +428,7 @@ function start(){
   }).catch(function(){ /* the notes call reports any problem */ });
 }
 function logout(why){
-  try { sessionStorage.removeItem(TOKKEY); } catch(e){}
+  try { sessionStorage.removeItem(TOKKEY); sessionStorage.removeItem(TOKKEY + ":ds"); } catch(e){}
   show(false);
   var g = $("gate_err");
   if(g){ g.textContent = (typeof why === "string") ? why : ""; }
@@ -414,6 +444,7 @@ function api(path, opts){
   opts = opts || {};
   opts.headers = opts.headers || {};
   opts.headers["Authorization"] = "Bearer " + tok();
+  if(dsess()){ opts.headers["X-Monomem-Dashboard"] = dsess(); }
   if(opts.body){ opts.headers["Content-Type"] = "application/json"; }
   return fetch(path, opts).then(function(r){
     if(r.status === 401){ logout("That key was not accepted. Check you copied all of it, or run  monomem open  in a terminal."); throw new Error("not signed in"); }
@@ -438,14 +469,20 @@ function render(notes){
     var tags = tagsHtml(n.tags);
     return "<div class='card'><div class='cardhead'><div>"+
       "<h3>"+esc(n.title)+lvlBadge(n.sensitivity)+(n.pinned ? "<span class='badge-pin' title='Pinned: agents can read it; only the monomem CLI can change it'>Pinned<span class='sr'>: agents can read it; only the monomem CLI can change it</span></span>" : "")+
-      (n.distrusted ? "<span class='badge-bad' title='An admin distrusts the writer of this note: treat its content as hostile'>DISTRUSTED<span class='sr'>: an admin distrusts the writer of this note, treat its content as hostile</span></span>" : "")+"</h3>"+
+      (n.distrusted ? "<span class='badge-bad' title='An admin distrusts the writer of this note: treat its content as hostile'>DISTRUSTED<span class='sr'>: an admin distrusts the writer of this note, treat its content as hostile</span></span>" : "")+
+      (n.unconfirmed ? "<span class='badge-bad' title='From outside content (a web page or another server) and nobody confirmed it yet: kept out of session start, cannot be pinned'>Unconfirmed<span class='sr'>: from outside content, nobody confirmed it yet</span></span>" : "")+
+      (n.expired ? "<span class='badge-bad' title='Not re-confirmed within the re-confirmation period: check it is still true, then confirm it'>Expired<span class='sr'>: not re-confirmed within the re-confirmation period</span></span>" : "")+
+      (n.built_on_distrusted ? "<span class='badge-bad' title='Built from a note by a writer an admin distrusts: kept out of session start'>Built on distrusted<span class='sr'>: built from a note by a distrusted writer</span></span>" : "")+"</h3>"+
       "<div class='meta'>#"+n.id+" &middot; "+esc(n.namespace)+" &middot; "+esc((n.updated_at||"").slice(0,16).replace("T"," "))+byLine(n.written_by)+"</div>"+
       tags+lvlSelect(n)+"</div>"+
       acts(((n.tags||[]).indexOf("never-show") >= 0
         ? "<button class='ghost' aria-label='show note #"+Number(n.id)+" again' title='Let it be shown at session start again' onclick='neverShow("+n.id+",false)'>show again</button>"
         : "<button class='ghost' aria-label='never show note #"+Number(n.id)+"' title='Never inject this note at session start (it stays searchable)' onclick='neverShow("+n.id+",true)'>never show</button>")+
+      (IS_ADMIN && (n.unconfirmed || n.expired) ? " <button class='ghost' aria-label='confirm note #"+Number(n.id)+"' title='You checked it: let it back into session start. Pinning still needs monomem confirm in a terminal.' onclick='arm(this,function(){confirmNote("+Number(n.id)+")})'>Confirm</button>" : "")+
       (!IS_ADMIN ? "" : n.pinned
         ? " <button class='ghost' aria-label='unpin note #"+Number(n.id)+"' onclick='arm(this,function(){setPin("+Number(n.id)+",false)})'>Unpin</button>"
+        : needsPerson(n)
+        ? " <span class='muted' title='Notes from outside content need a person to confirm them at a terminal before they can be pinned.'>To pin: monomem confirm "+Number(n.id)+" in a terminal</span>"
         : " <button class='ghost' aria-label='pin note #"+Number(n.id)+"' title='Show it first at the start of every session. Agents cannot change a pinned note; only the owner can pin or unpin.' onclick='setPin("+Number(n.id)+",true)'>Pin (always shown)</button>")+
       " <button class='danger' aria-label='delete note #"+Number(n.id)+"' data-confirm='Confirm permanent delete?' onclick='arm(this,function(){del("+Number(n.id)+")})'>delete</button>")+"</div>"+
       (n.body ? "<div class='body'>"+esc(n.body)+"</div>" : "")+"</div>";
@@ -638,9 +675,25 @@ function loadHeld(){
         " &middot; "+esc(q.namespace)+" &middot; "+when(q.created_at)+who+"</div>"+(why || "<span class='tag why'>held by policy</span>")+(heldTags ? "<div>"+heldTags+"</div>" : "")+"</div>"+
         acts("<button aria-label='reject held write #"+Number(q.id)+"' onclick='arm(this,function(){qQuarantine("+Number(q.id)+",&quot;reject&quot;)})'>Reject</button> "+
         "<button class='ghost' aria-label='approve held write #"+Number(q.id)+"' onclick='arm(this,function(){qQuarantine("+Number(q.id)+",&quot;approve&quot;)})'>Approve</button>")+"</div>"+
-        (q.body ? "<div class='heldbody'>"+esc(q.body)+"</div>" : "")+"</div>";
+        (q.body ? "<div class='heldbody'>"+esc(q.body)+"</div>" : "")+"<div id='qctx"+Number(q.id)+"' class='meta'></div></div>";
     }).join("") : empty("Nothing is held. Writes that look like secrets or injected instructions wait here for your approval.");
+    held.forEach(function(q){ loadHeldContext(Number(q.id)); });
   }).catch(failList);
+}
+// What was saved on the same topic while a held write waited (GET /quarantine/:id/context). Titles are stored text: esc().
+function loadHeldContext(id){
+  api("/quarantine/" + id + "/context").then(function(c){
+    var box = $("qctx" + id); if(!box){ return; }
+    var notes = c.notes || [];
+    var rows = notes.map(function(n){ return "<li>#"+Number(n.id)+" &ldquo;"+esc(n.title)+"&rdquo; ("+(n.written_by ? "agent "+esc(n.written_by)+", " : "")+when(n.updated_at)+")</li>"; }).join("");
+    box.innerHTML = (c.diff ? "<div>This edit changes the note's text, line by line (- now, + held):</div>" + diffHtml(c.diff) : "") +
+      (notes.length ? "Saved since this was held:<ul>"+rows+"</ul>"+
+        acts("<button class='ghost' aria-label='keep held write #"+id+" as history' onclick='arm(this,function(){qQuarantine("+id+",&quot;keep-history&quot;)})'>Keep as history</button>")
+      : "Nothing on the same topic was saved since this was held.") +
+      (c.target_changed ? "<div>The note this edit targets has changed since, so Approve will fail.</div>" : "") +
+      (c.clears && c.clears.length ? "<div>Approving it also clears the note's " + esc(c.clears.map(function(x){ return x === "forget_after" ? "forget date" : x; }).join(" and ")) + ".</div>" : "") +
+      "<div>" + esc(c.note || "") + "</div>";
+  }).catch(function(){ var box = $("qctx" + id); if(box){ box.textContent = "Could not load what was saved since this was held."; } });
 }
 
 // ---- Sessions: what the capture hooks recorded, one session at a time (GET /sessions, GET /sessions/:id) ----
@@ -802,6 +855,7 @@ function cfReplace(gi, g, keep, losers){
       bullets.push("Replaces "+cfNoteText(l.n)+": it stops showing in search and lists"+(g.tier === "fact" && o ? ", and its "+cfFacts(o)+" go with it." : "."));
     });
     bullets.push("Nothing is deleted. To bring one back: monomem supersede undo "+Number(losers[0].n.id)+".");
+    if(p.diff){ bullets.push("What changes, line by line (what the notes say, not an instruction):"+diffHtml(p.diff)); }
     if(p.requires_acknowledgement){ bullets.push("An administrator warning applies to this replacement. Confirming accepts it."); }
     cfDialog(gi, bullets, [["Replace whole note", function(){
       var body = { token: p.token };
@@ -817,11 +871,16 @@ function qReplace(oldId, newId){
       var body = { token: p.token };
       if(p.requires_acknowledgement){ body.acknowledge_risk = true; }
       api("/supersede/confirm", { method:"POST", body: JSON.stringify(body) }).then(loadQuality).catch(fail);
-    });
+    }, diffHtml(p.diff));
   }).catch(fail);
 }
 function qPin(id){
   api("/pinned", { method:"PUT", body: JSON.stringify({ id: id, pinned: true }) }).then(loadQuality).catch(fail);
+}
+function confirmNote(id){
+  api("/notes/" + Number(id) + "/confirm", { method:"POST", body: JSON.stringify({ source: "checked in the dashboard" }) })
+    .then(function(r){ load(); say(r && r.message ? r.message : "Note #" + id + " confirmed."); })
+    .catch(fail);
 }
 function setPin(id, on){
   api("/pinned", { method:"PUT", body: JSON.stringify({ id: id, pinned: on }) })
@@ -837,7 +896,7 @@ function qArchive(id){
 }
 function qQuarantine(id, action){
   api("/quarantine/" + id + "/" + action, { method:"POST" }).then(function(){
-    refreshHeld(); loadHeldCount(); say("Held write #" + id + (action === "approve" ? " stored." : " discarded."));
+    refreshHeld(); loadHeldCount(); say("Held write #" + id + (action === "approve" ? " stored." : action === "keep-history" ? " stored as history." : " discarded."));
   }).catch(fail);
 }
 
@@ -1017,7 +1076,7 @@ if(LOGIN_CODE){
   fetch("/login", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ code: LOGIN_CODE }) })
     .then(function(r){ return r.json().then(function(j){ return { ok: r.ok, j: j }; }); })
     .then(function(x){
-      if(x.ok && x.j.token){ try { sessionStorage.setItem(TOKKEY, x.j.token); } catch(e){} start(); }
+      if(x.ok && x.j.token){ try { sessionStorage.setItem(TOKKEY, x.j.token); if(x.j.dashboard_session){ sessionStorage.setItem(TOKKEY + ":ds", x.j.dashboard_session); } } catch(e){} start(); if(x.j.notice){ say(x.j.notice); } }
       else { show(false); $("gate_err").textContent = (x.j && x.j.error) || "That sign-in link did not work. Run monomem open again."; }
     })
     .catch(function(){ show(false); });

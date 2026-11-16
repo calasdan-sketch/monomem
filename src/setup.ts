@@ -21,6 +21,7 @@ import { createRequire } from "node:module";
 import { applyOps, getMember, getPath, JsonEditError, opsAreApplied, parseDoc, parseJsonc, type Op } from "./jsonc-edit.js";
 import { applyTomlOps, findTable, hasServer, tomlOpsApplied } from "./toml-table.js";
 import { applyLegacyEnv, homeDataDir } from "./legacy-env.js";
+import { privateDir } from "./private-dir.js";
 
 // ---- environment (injectable, so tests never touch a real configuration) ---------------------------------------------
 
@@ -169,6 +170,20 @@ export function detectClients(e: SetupEnv): ClientTarget[] {
   const proj = join(e.cwd, ".mcp.json");
   out.push({ id: "project", label: "This folder's .mcp.json", file: proj, exists: existsSync(proj), present: existsSync(proj) });
   return out;
+}
+
+/** 1.5.0: the app config files that exist and hold an Authorization header (an app key in plain text). Used by `monomem doctor`. */
+export function appKeyFiles(e: SetupEnv): string[] {
+  return detectClients(e)
+    .filter((t) => HTTP_CAPABLE.includes(t.id) && t.exists)
+    .filter((t) => {
+      try {
+        return /"authorization"/i.test(readFileSync(t.file, "utf8"));
+      } catch {
+        return false;
+      }
+    })
+    .map((t) => t.file);
 }
 
 // ---- the entry we write ------------------------------------------------------------------------------------------------
@@ -640,6 +655,28 @@ function tomlEntryProblem(ours: string, version: string): string | null {
  * doctor / health: every detected app whose Monomem entry is stale or outdated (entryProblem), and every hook file whose
  * Monomem hook command pins another version. One line each: "<app>: <reason>".
  */
+/** `monomem doctor`: the apps found on this machine, and which of them have a Monomem entry (any app config setup writes). */
+export function connectedApps(e: SetupEnv): { found: string[]; connected: string[] } {
+  const found = new Set<string>();
+  const connected = new Set<string>();
+  for (const c of detectClients(e)) {
+    if (!c.present) continue;
+    found.add(c.label);
+    const text = c.exists ? readTextFile(c.file) : null;
+    if (!text) continue;
+    if (c.id === "codex") {
+      if (findTable(text, ["mcp_servers", "monomem"])) connected.add(c.label);
+      continue;
+    }
+    try {
+      if (findServers(text, c.id === "claude-code", serversKey(c.id, text)).some((s) => classifyEntry(s.name, safeParseEntry(text, s)) === "monomem")) connected.add(c.label);
+    } catch {
+      /* a config that cannot be read: not connected as far as doctor can tell */
+    }
+  }
+  return { found: [...found], connected: [...connected] };
+}
+
 export function appEntryProblems(e: SetupEnv): string[] {
   const out: string[] = [];
   for (const c of detectClients(e)) {
@@ -798,7 +835,18 @@ function planToml(e: SetupEnv, opts: SetupOptions, target: ClientTarget, text: s
   return { change: { client: target.id, label: target.label, file: target.file, before: text, ops, lines, inverse: [{ op: "remove", path: ["mcp_servers"], key: "monomem" }], allowEmpty: opts.forceEmpty, format: "toml" }, already: [], conflicts: [], warnings: [] };
 }
 
+/** Is `file` inside a git work tree and NOT ignored by it? (No git, or not a repository: false.) */
+function gitWouldCommit(cwd: string, file: string): boolean {
+  const git = (args: string[]): number | null => spawnSync("git", args, { cwd, stdio: "ignore", timeout: 10_000, windowsHide: true }).status;
+  if (git(["rev-parse", "--is-inside-work-tree"]) !== 0) return false;
+  return git(["check-ignore", "-q", file]) !== 0;
+}
+
 export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, shared: SharedPlan): { change: FileChange | null; already: string[]; conflicts: string[]; warnings: string[] } {
+  // 1.5.0: a key in ./.mcp.json of a git repository that does not ignore it would be committed with the next `git add .`.
+  if (target.id === "project" && opts.httpEntry && gitWouldCommit(e.cwd, target.file)) {
+    return { change: null, already: [], conflicts: ["This folder is a git repository and .mcp.json is not ignored, so the key would be committed. Add .mcp.json to .gitignore, or connect without --project."], warnings: [] };
+  }
   const text = readTextFile(target.file);
   if (text === "" && !opts.forceEmpty) return { change: null, already: [], conflicts: [EMPTY_FILE_MSG(target.file)], warnings: [] };
   if (target.id === "codex") {
@@ -1031,6 +1079,8 @@ export const CAPTURE_HOOKS: ReadonlyArray<{ on: string; event: string; async: bo
   { on: "Stop", event: "stop", async: true },
   { on: "SubagentStop", event: "subagent-stop", async: true },
   { on: "SessionEnd", event: "session-end", async: true },
+  // Claude Code only (R2-05): before /compact or an automatic compaction, the session so far is saved as its summary.
+  { on: "PreCompact", event: "pre-compact", async: true },
 ];
 
 /** `monomem hook <event>` as a hook command (same launcher rules as buildHookCommand). */
@@ -1517,7 +1567,8 @@ export function readHistory(e: SetupEnv): HistorySession[] {
 
 export function saveHistory(e: SetupEnv, all: HistorySession[]): void {
   const f = historyFile(e);
-  mkdirSync(dirname(f), { recursive: true, mode: 0o700 });
+  // privateDir, not mkdirSync: on Windows it locks a NEW folder to you and SYSTEM, and this is often setup's first write.
+  privateDir(dirname(f), { platform: e.platform, env: e.env });
   writeAtomic(f, JSON.stringify(all, null, 2) + "\n", 0o600);
 }
 
@@ -1761,17 +1812,33 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   const anyHook = hookPlans.size > 0;
   const hookReplacesOld = [...hookPlans.values()].some((c) => c.lines.some((l) => l.startsWith("replace the start-of-session hook")));
   const anyCapture = capturePlans.size > 0;
+  // The apps that have no start-of-session hook yet (with --no-hook nothing was planned, so look). Without it an assistant
+  // only sees your notes when it decides to search, which is the feature most people install Monomem for: say so at the end.
+  const hookMissing = hosts.filter((h) => (opts.hook === "no" ? !!planHooks(e, opts, hookDb, { recall: true, capture: false }, h).change : hookPlans.has(h)));
+  /** Owner decision (1.5.0, Q1): `--yes` adds the start-of-session hook for Claude Code; other apps' hooks still need --hook. */
+  const yesSkips = new Set<HookHost>();
+  const hookFor = (h: HookHost): boolean => wantHook && !yesSkips.has(h);
+  const hookLines = (): void => {
+    if (opts.terse) return;
+    const names = (hs: HookHost[]): string => closeList(hs.map((h) => h.client));
+    const missing = hookMissing.filter((h) => !hookFor(h));
+    if (missing.length) io.out(`\nNot installed: start-of-session hook. Add it: monomem setup --hook (without it, ${names(missing)} only ${missing.length === 1 ? "sees" : "see"} your notes when it searches for them).`);
+  };
 
   if (plan.changes.length === 0 && !anyHook && !anyCapture) {
     for (const a of plan.already) io.out(`  (already fine) ${a}`);
     for (const w of plan.warnings) io.out(`  (careful) ${w}`);
     io.out(plan.already.length ? "\nNothing to change: Monomem is already connected. To check it, run:  monomem doctor" : "\nNothing was changed.");
+    hookLines();
     return 0;
   }
 
   io.out("What I will do:");
   let n = 1;
   for (const c of plan.changes) for (const l of c.lines) io.out(`  ${l.startsWith("note:") ? "   " : `${n++}. ${c.label}: `}${l}`);
+  // --yes asks nothing, so the hook it adds is a step like any other (Claude Code only, unless --hook: see the else branch below).
+  if (opts.yes && opts.hook !== "no")
+    for (const [h, c] of hookPlans) if (opts.hook === "yes" || h.client === "claude-code") for (const l of c.lines) io.out(`  ${n++}. ${c.label}: ${l}`);
   if (capture === "ask") for (const h of upgradeHosts) io.out(`  ${n++}. ${h.label.replace(/ hook$/, "")}: upgrade your existing automatic memory hooks from the old onememory-mcp package (or another npx version) to this Monomem, same place and settings. They are already installed; this is not a new hook`);
   for (const d of dbs) io.out(`  ${n++}. Database ${d}: ${describeSchema(Store.peekSchemaVersion(d), SCHEMA_VERSION)}`);
   if (!opts.noTestNote) io.out(`  ${n++}. Write a test note, read it back and delete it, so you know writing, reading and deleting all work (only that one note is deleted; no other note is touched)`);
@@ -1785,12 +1852,15 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   io.out("");
 
   // With automatic memory offered, its plan (which includes the start-of-session hook) is the one shown.
-  const optional = hosts.flatMap((h) => capturePlans.get(h) ?? hookPlans.get(h) ?? []);
+  // --yes asks nothing: show only what it will really add (no capture; the start-of-session hook for Claude Code only).
+  const yesCaptureOff = opts.yes && capture === "ask";
+  const yesSkipsHook = (h: HookHost) => opts.yes && opts.hook === "ask" && h.client !== "claude-code";
+  const optional = hosts.flatMap((h) => (yesCaptureOff ? undefined : capturePlans.get(h)) ?? (yesSkipsHook(h) ? undefined : hookPlans.get(h)) ?? []);
   const shown = [...plan.changes, ...optional];
   if (shown.length) {
     io.out("The exact change" + (shown.length > 1 ? "s" : "") + ":");
     for (const c of shown) {
-      if (optional.includes(c)) io.out(`  Optional, only if you agree (${c.lines.join("; ")}):`);
+      if (optional.includes(c)) io.out(opts.yes ? `  Added because of --yes (${c.lines.join("; ")}):` : `  Optional, only if you agree (${c.lines.join("; ")}):`);
       let after: string;
       try {
         after = applyFor(c.before ?? "", c.ops, c.format);
@@ -1806,14 +1876,17 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   if (opts.dryRun) {
     if (offeredRemoval) io.out("(The removal of the old entry above is only done if you say yes when you run setup for real.)");
     io.out("Dry run: nothing was changed. No file was written, and no database was created or upgraded.");
-    if ((anyHook && !wantHook) || (anyCapture && !wantCapture)) io.out("(The hooks above are only added if you say yes to them, or pass --hook / --capture.)");
+    if ((anyHook && !wantHook) || (anyCapture && !wantCapture)) io.out("(The hooks above are only added if you say yes to them, or pass --hook / --capture. With --yes the start-of-session hook for Claude Code is added too; --no-hook leaves it out.)");
     return 0;
   }
   if (plan.changes.length === 0 && !anyHook && !anyCapture) return 0;
 
   if (!opts.yes) {
     if (!io.interactive) {
-      io.err("This is not an interactive terminal, so I cannot ask. Re-run with --yes to go ahead (a backup is still made), or --dry-run to only look.");
+      io.err(
+        "This is not an interactive terminal, so I cannot ask. Re-run with --yes to go ahead (a backup is still made; for Claude Code this also adds the start-of-session hook, " +
+          "so your assistant sees your notes when a session starts; add --no-hook to leave it out), or --dry-run to only look."
+      );
       return 1;
     }
     const a = (await io.ask(plan.changes.length ? "Go ahead with the changes above? Type y to continue, anything else cancels: " : "Install the hooks? Type y: ")).trim().toLowerCase();
@@ -1838,7 +1911,12 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
       wantCapture = c === "y" || c === "yes";
     }
   } else {
-    if (anyHook && opts.hook === "ask") wantHook = false; // --yes alone never adds a hook; it needs --hook
+    // --yes adds the start-of-session hook for Claude Code (owner decision, 1.5.0): without it "remember" only works when the
+    // assistant thinks to search. The other apps' hooks still need --hook, and --no-hook leaves every one out.
+    if (anyHook && opts.hook === "ask") {
+      for (const h of hookPlans.keys()) if (h.client !== "claude-code") yesSkips.add(h);
+      wantHook = yesSkips.size < hookPlans.size;
+    }
     if (anyCapture && capture === "ask") wantCapture = false; // ... or --capture
   }
 
@@ -1856,22 +1934,32 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
             // deletes the one note it writes below, by its id. The old ones are named, never touched.
             const old = s.list({ limit: 50, withTags: ["setup-check"] }).notes;
             if (old.length) io.out(`Database ${d}: an earlier installer left ${old.map((n) => `#${n.id} "${n.title}"`).join(", ")}; I left ${old.length === 1 ? "it" : "them"} as ${old.length === 1 ? "it is" : "they are"} (archive with  monomem forget <id>  if you do not want ${old.length === 1 ? "it" : "them"}).`);
-            {
-              const note = s.create({
+            // A store with no notes at all checks in a scratch copy beside it (same folder, same SQLite), so the person's
+            // first note is #1 and not #2: ids are never reused, and a deleted #1 leaves change-log and sync records behind.
+            const fresh = s.list({ limit: 1, includeArchived: true, includeSuperseded: true, includeDistrusted: true }).total === 0;
+            const scratch = fresh ? join(dirname(d), `.setup-check-${randomBytes(4).toString("hex")}.db`) : "";
+            const t = fresh ? new Store(scratch) : s;
+            try {
+              const note = t.create({
                 title: "Monomem is connected",
                 body: "This note was written by `monomem setup` to check that writing and reading work. You can delete it any time.",
                 tags: ["setup-check"],
                 source: "monomem setup",
               });
-              const back = s.read(note.id); // gate-ok: setup reads back the test note it wrote a moment ago
+              const back = t.read(note.id); // gate-ok: setup reads back the test note it wrote a moment ago
               if (!back || back.title !== note.title || back.body !== note.body) throw new Error("the test note was written but did not read back the same");
               // Then remove it, so a brand-new store starts empty. Leaving it
               // behind made the installer's own note a permanent memory (1 of
               // the 13 notes in the maintainer's own store), and it was the
               // first thing a user ever searched for. Deleting it also proves
               // one more operation works than the old check did.
-              if (!s.delete(note.id)) throw new Error("the test note was written and read back, but could not be deleted");
-              io.out(`Database ${d}: test note written, read back and cleaned up.`);
+              if (!t.delete(note.id)) throw new Error("the test note was written and read back, but could not be deleted");
+              io.out(`Database ${d}: test note written, read back and cleaned up${fresh ? " (in a scratch copy beside it, so your first note is #1)" : ""}.`);
+            } finally {
+              if (fresh) {
+                t.close();
+                for (const f of [scratch, `${scratch}-wal`, `${scratch}-shm`]) rmSync(f, { force: true });
+              }
             }
           } else io.out(`Database ${d}: opens fine.`);
         } finally {
@@ -1893,10 +1981,10 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   // Each hook file: automatic memory (with the start-of-session hook when that was wanted too), else the hook alone.
   const hookChanges = hosts.flatMap((h) => {
     const c = wantCapture
-      ? planHooks(e, opts, hookDb, { recall: wantHook || (opts.hook !== "no" && !hookPlans.has(h)), capture: true }, h).change
+      ? planHooks(e, opts, hookDb, { recall: hookFor(h) || (opts.hook !== "no" && !hookPlans.has(h)), capture: true }, h).change
       : capture !== "no" && upgradeHosts.has(h)
-        ? planHooks(e, opts, hookDb, { recall: wantHook, capture: true, upgradeOnly: true }, h).change
-        : wantHook ? hookPlans.get(h) : null;
+        ? planHooks(e, opts, hookDb, { recall: hookFor(h), capture: true, upgradeOnly: true }, h).change
+        : hookFor(h) ? hookPlans.get(h) : null;
     return c ? [c] : [];
   });
   const toWrite = [...plan.changes, ...hookChanges];
@@ -1923,15 +2011,24 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
     all.push({ id: stamp(e.now()), at: e.now().toISOString(), version: e.version, changes: written, dbs: dbsBefore, migratedLegacy });
     saveHistory(e, all);
   }
+  {
+    const added = hookMissing.filter(hookFor);
+    if (added.length && opts.yes && opts.hook === "ask") {
+      io.out(
+        `Added: the start-of-session hook for ${closeList(added.map((h) => h.client))}, so your assistant sees your recent notes when a session starts. ` +
+          "To leave it out next time: monomem setup --yes --no-hook. To take back this whole setup run, the hook included: monomem setup --undo"
+      );
+    }
+  }
 
   // Remember a no to the Claude Code hook (or clear it after a yes), so `monomem health` reports "you chose no" as info, not a warning.
   const claudeHost = hosts.find((h) => h.client === "claude-code");
   if (claudeHost) {
     const marker = join(dirname(DB_PATH), HOOKS_DECLINED_FILE); // the standard data folder, never an old install's
     try {
-      if (wantHook || wantCapture || (capture !== "no" && upgradeHosts.has(claudeHost))) rmSync(marker, { force: true });
+      if (hookFor(claudeHost) || wantCapture || (capture !== "no" && upgradeHosts.has(claudeHost))) rmSync(marker, { force: true });
       else if (hookPlans.has(claudeHost) || capturePlans.has(claudeHost)) {
-        mkdirSync(dirname(marker), { recursive: true });
+        privateDir(dirname(marker));
         writeFileSync(marker, "The Claude Code hook was declined when setup ran. Run monomem setup --hook to add it.\n");
       }
     } catch {
@@ -1998,6 +2095,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   await offerClaudeMemPreview(e, io, opts, primaryDb);
   await offerServerMemoryPreview(e, io, opts, primaryDb);
   io.out("\nIf monomem is missing or red: docs/live-claude-code.md has the fixes. To go back: monomem setup --undo");
+  hookLines();
   return 0;
 }
 

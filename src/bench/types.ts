@@ -15,11 +15,13 @@ export interface ActorSpec {
   writer?: string;
   /** Which server instance in the scenario this actor talks to. Default "main". Used to move notes between two servers. */
   server?: string;
+  /** The actor's key says its holder reads outside content (Monomem `reads_outside`): everything it writes is marked. A system without the concept ignores it. */
+  reads_outside?: boolean;
 }
 
 /** What a scenario asks the adapter to set up before the first step. */
 export interface WorldSpec {
-  actors: Record<string, Required<Pick<ActorSpec, "scope" | "writer" | "server">> & { namespace?: string }>;
+  actors: Record<string, Required<Pick<ActorSpec, "scope" | "writer" | "server">> & { namespace?: string; reads_outside?: boolean }>;
   /** Operator read grants: tenant -> tenants it may additionally read (Monomem `reads_from`). */
   grants: Record<string, string[]>;
   /** Server settings a scenario needs (for example a very short confirmation window). Applied for this scenario only. */
@@ -106,6 +108,8 @@ export interface WriteInput {
   namespace?: string;
   /** Scenario setup (the honest "before" state), not part of the attack. `monomem drill` seeds it as the operator, so a store-wide approve-first does not hold it. */
   setup?: boolean;
+  /** The writer declares the content came from outside (a web page, another server). A system without the concept ignores it. */
+  outside?: boolean;
 }
 
 export interface UpdateInput {
@@ -146,7 +150,9 @@ export type Capability =
   | "supersede" //   two-step replace (preview, then confirm with a one-time code) and undo
   | "history" //     earlier versions of a note, and restoring one
   | "capture" //     record an automatic-memory hook event (tool output, web fetch) the way the capture hooks do
-  | "session_start"; // produce the SessionStart recall injection an agent receives pre-prompt
+  | "session_start" // produce the SessionStart recall injection an agent receives pre-prompt
+  | "pin" //          promote a note to always-shown (Monomem: the operator pin)
+  | "confirm"; //     a person confirms a note's current version (Monomem: an admin token's confirm, as the dashboard does)
 
 export interface MemoryAdapter {
   readonly name: string;
@@ -197,6 +203,10 @@ export interface MemoryAdapter {
   capture?(actor: string, input: CaptureInput): Promise<OpResult>;
   /** The SessionStart recall text an agent is handed before its first prompt. `text` is the injected context (banner included). */
   sessionStart?(actor: string, opts?: { namespace?: string }): Promise<OpResult>;
+  /** Promote a note so it is always shown at session start (the strongest trust a note can get). */
+  pin?(actor: string, id: string): Promise<OpResult>;
+  /** A person confirms the note's current version. */
+  confirm?(actor: string, id: string): Promise<OpResult>;
 }
 
 /** One automatic-memory hook event, as a capture hook would hand it over. */
@@ -231,7 +241,7 @@ export type Step =
   | ({ op: "update"; as: string; ref: string; id?: string; if_rev_of?: string } & UpdateInput)
   | { op: "capture"; as: string; id: string; event?: string; tool?: string; input?: string; output?: string; session?: string; namespace?: string }
   | { op: "session_start"; as: string; id: string; namespace?: string }
-  | { op: "delete" | "archive" | "unarchive" | "read"; as: string; ref: string; id?: string; include_distrusted?: boolean }
+  | { op: "delete" | "archive" | "unarchive" | "read" | "pin" | "confirm"; as: string; ref: string; id?: string; include_distrusted?: boolean }
   | { op: "search"; as: string; q: string; id: string; limit?: number; include_distrusted?: boolean; include_superseded?: boolean; namespace?: string }
   | { op: "list"; as: string; id: string; namespace?: string; include_archived?: boolean; include_superseded?: boolean }
   | { op: "supersede_preview"; as: string; id: string; old: string[]; new_note?: ReplacementInput; new_ref?: string }

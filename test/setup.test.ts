@@ -547,8 +547,8 @@ describe("setup: moving from claude-bridge", () => {
     const { oldDb } = legacyHome(s, {});
     const io = makeIO();
     await runSetup(s.e, io, opts({ dryRun: true }));
-    assert.match(io.all(), /schema v13; this version upgrades it to v19/);
-    assert.match(io.all(), /pre-v19-backup/);
+    assert.match(io.all(), /schema v13; this version upgrades it to v22/);
+    assert.match(io.all(), /pre-v22-backup/);
     assert.match(io.all(), /close Claude Code/i);
     assert.equal(Store.peekSchemaVersion(oldDb), 13, "a dry run did not upgrade it");
   });
@@ -605,12 +605,16 @@ describe("setup: the start-of-session hook", () => {
     assert.equal(j.theme, "dark");
     assert.equal(listBackups(join(s.home, ".claude", "settings.json")).length, 1);
   });
-  test("--yes alone never adds a hook", async () => {
+  // Owner decision (1.5.0): --yes adds the Claude Code start-of-session hook; --yes --no-hook is the way to leave it out.
+  test("--yes adds the Claude Code hook; --yes --no-hook adds none", async () => {
     const s = sandbox();
     write(ccFile(s.home), "{}");
     write(join(s.home, ".claude", "settings.json"), SETTINGS);
-    await runSetup(s.e, makeIO(), opts({ yes: true, db: s.db, noTestNote: true }));
+    await runSetup(s.e, makeIO(), opts({ yes: true, hook: "no", db: s.db, noTestNote: true }));
     assert.equal(readFileSync(join(s.home, ".claude", "settings.json"), "utf8"), SETTINGS);
+    await runSetup(s.e, makeIO(), opts({ yes: true, db: s.db, noTestNote: true }));
+    const j = JSON.parse(readFileSync(join(s.home, ".claude", "settings.json"), "utf8").replace(/\/\/[^\n]*/g, ""));
+    assert.match(j.hooks.SessionStart[1].hooks[0].command, /recall --budget-ms 800/);
   });
   test("--no-hook never offers it", async () => {
     const s = sandbox();

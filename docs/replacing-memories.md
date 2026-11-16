@@ -4,6 +4,11 @@ Plain version: when a note is out of date, you can **replace** it with a newer o
 quietly. It first shows you exactly what would stop appearing in search, you say yes, and only then does it
 happen. Nothing is deleted, and you can undo it.
 
+**Without the replace step (1.5.0).** When the same writer later restates a fact (the same fact key with another value, or a
+very similar note) and the two match a search about equally well, the newer note now ranks first in search, the "what is relevant"
+lookup and session start. The older note is still returned right behind it, labelled `restated_by`. This never happens for a
+different writer (both notes are shown with a dispute label instead) or over a note a person confirmed. To retire the old note, replace it.
+
 ## Replacing a memory is always two steps
 
 1. **Preview.** Changes nothing. It shows a warning headed **ARE YOU SURE YOU WANT TO REPLACE THIS?** with, for each
@@ -11,6 +16,9 @@ happen. Nothing is deleted, and you can undo it.
    very similar to it, and how many tasks depend on it. It also says what you lose (the old note stops showing up in
    search, lists and "what is relevant" lookups), what you do **not** lose (nothing is deleted; the old note keeps its
    text, writer, dates and tags and can be brought back), and, if it applies, a **RED FLAG** (see below).
+   When one note is replaced, it also shows the change line by line (`- ` old, `+ ` new; the `diff` field over REST and
+   MCP). It compares only the first 600 characters of each text, the same text the preview already carries, with
+   control characters replaced and at most 40 lines.
    It returns a one-time **confirmation code**.
 2. **Confirm.** The only step that changes anything. It needs that code. The code
    - works **once**,

@@ -93,10 +93,11 @@ describe("recall: hook JSON shape", () => {
       const out = await runRecall({ dbPath: join(dir, "state.db") });
       const parsed = JSON.parse(out);
       assert.equal(parsed.hookSpecificOutput.hookEventName, "SessionStart");
+      assert.notEqual(parsed.hookSpecificOutput.additionalContext, "", "session start returned no context: its 5 s cap fired before the notes were read");
       assert.ok(parsed.hookSpecificOutput.additionalContext.includes("Pref"));
       assert.ok(parsed.hookSpecificOutput.additionalContext.includes("Keep replies short."));
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
     }
   });
 });
@@ -139,7 +140,7 @@ describe("recall: fail-silent", () => {
       assert.ok(typeof parsed.hookSpecificOutput.additionalContext === "string");
       assert.ok(elapsed < 10000, `took ${elapsed}ms`);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
     }
   });
 
@@ -201,7 +202,7 @@ describe("recall: namespace isolation (regression)", () => {
       );
     } finally {
       restoreSpaces(prev);
-      rmSync(dirname(dbFile), { recursive: true, force: true });
+      rmSync(dirname(dbFile), { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
     }
   });
 
@@ -235,7 +236,7 @@ describe("recall: namespace isolation (regression)", () => {
     } finally {
       console.error = origError;
       restoreSpaces(prev);
-      rmSync(dirname(dbFile), { recursive: true, force: true });
+      rmSync(dirname(dbFile), { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
     }
   });
 
@@ -261,7 +262,7 @@ describe("recall: namespace isolation (regression)", () => {
     } finally {
       console.error = origError;
       restoreSpaces(prev);
-      rmSync(dirname(dbFile), { recursive: true, force: true });
+      rmSync(dirname(dbFile), { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
     }
   });
 
@@ -286,7 +287,7 @@ describe("recall: namespace isolation (regression)", () => {
         restoreSpaces(prev);
       }
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
     }
   });
 

@@ -1,19 +1,21 @@
 // Entry point: boots the HTTP/JSON API on MONOMEM_PORT (default 8790).
 import "./quiet-sqlite.js"; // first: hide the node:sqlite ExperimentalWarning
 import "./legacy-env.js"; // second: read the old CLAUDE_BRIDGE_* variables as MONOMEM_*
-import { Store } from "./store.js";
 import { createApiServer } from "./api.js";
 import { exitOnListenError } from "./http-common.js";
 import { DB_PATH, API_PORT, BIND_HOST, resolveTokens, startTokenReload, assertSafeExposure, prepareDataDir } from "./config.js";
 import { resolveStartupNamespace } from "./namespace.js";
 import { warnUnlabelledExposure } from "./sensitivity.js";
 import { openStoreOrExit } from "./db-problem.js";
+import { hardenTokensFile } from "./tokens-admin.js";
 
 prepareDataDir();
 assertSafeExposure();
+hardenTokensFile(); // 1.5.0: plain-text keys in tokens.json become hashes on the first start
 const tokens = resolveTokens();
 const store = openStoreOrExit(DB_PATH);
 warnUnlabelledExposure(store, tokens);
+setImmediate(() => store.warmBodyIndex()); // C-06: build the encrypted-body search index now, not on the first agent search
 startTokenReload(tokens);
 // Namespace resolution happens ONCE here, at startup, from the process cwd.
 const nsOpts = resolveStartupNamespace(process.cwd());
