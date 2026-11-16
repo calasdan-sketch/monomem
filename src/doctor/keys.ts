@@ -28,7 +28,7 @@ export async function keyFilesCheck(dr: Doctor): Promise<void> {
     const keyDir = (await import("node:path")).dirname(DB_PATH);
     const { keyPath } = await import("../crypto.js");
     const { attestKeyPath } = await import("../attest.js");
-    const files = [...new Set([resolvePath(DATA_DIR, ".token"), resolvePath(DATA_DIR, "tokens.json"), resolvePath(keyPath(keyDir)), resolvePath(attestKeyPath(keyDir)), ...appKeyFiles(realEnv("", process.argv[1] ?? ""))])].filter((f) => existsSync(f));
+    const files = [...new Set([resolvePath(DATA_DIR, ".token"), resolvePath(DATA_DIR, "tokens.json"), resolvePath(keyPath(keyDir)), resolvePath(attestKeyPath(keyDir)), ...appKeyFiles(realEnv(""))])].filter((f) => existsSync(f));
     if (process.platform === "win32") {
       // 1.5.0 (R1-11): an existing data folder may be open to other accounts on this PC. Read once, here; never on the hot path.
       // On Windows the token file and database get the folder's inherited permissions (chmod does nothing there). Inside

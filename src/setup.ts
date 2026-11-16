@@ -22,6 +22,7 @@ import { applyOps, getMember, getPath, JsonEditError, opsAreApplied, parseDoc, p
 import { applyTomlOps, findTable, hasServer, tomlOpsApplied } from "./toml-table.js";
 import { applyLegacyEnv, homeDataDir } from "./legacy-env.js";
 import { privateDir } from "./private-dir.js";
+import { SELF_CLI, quoteShellArg, selfCommand, selfFacts, selfShellLine, type SelfFacts, type SelfMode } from "./self.js";
 
 // ---- environment (injectable, so tests never touch a real configuration) ---------------------------------------------
 
@@ -33,8 +34,10 @@ export interface SetupEnv {
   cwd: string;
   nodeVersion: string;
   execPath: string;
-  /** Absolute path of this package's cli.js. */
+  /** Absolute path of this package's cli.js (the executable itself in the single-exe build). */
   cliPath: string;
+  /** How this copy is packaged (self.ts); absent = "npm". */
+  mode?: SelfMode;
   version: string;
   now: () => Date;
   /**
@@ -53,7 +56,7 @@ export function longPath(p: string): string {
   }
 }
 
-export function realEnv(version: string, cliPath: string): SetupEnv {
+export function realEnv(version: string, cliPath: string = SELF_CLI): SetupEnv {
   return {
     home: homedir(),
     platform: process.platform,
@@ -62,6 +65,7 @@ export function realEnv(version: string, cliPath: string): SetupEnv {
     nodeVersion: process.versions.node,
     execPath: longPath(process.execPath),
     cliPath: longPath(cliPath),
+    mode: selfFacts().mode,
     version,
     now: () => new Date(),
   };
@@ -250,21 +254,29 @@ export function buildServerEntry(e: SetupEnv, opts: Pick<SetupOptions, "command"
     // the Claude Code MCP docs do not state it (checked), so it is not confirmed there. Verify with `/mcp` after setup.
     entry = e.platform === "win32" ? { command: "cmd", args: ["/c", "npx", "-y", pkg, "mcp"] } : { command: "npx", args: ["-y", pkg, "mcp"] };
   } else {
-    // Absolute node + absolute cli.js: nothing depends on PATH, and it is the same on every OS.
-    entry = { command: e.execPath, args: [e.cliPath, "mcp"] };
+    // Absolute node + absolute cli.js (the executable alone in the single-exe build): nothing depends on PATH, same on every OS.
+    entry = selfCommand(["mcp"], selfOf(e));
   }
   if (withType) entry = { type: "stdio", ...entry };
   if (env && Object.keys(env).length) entry.env = env;
   return entry;
 }
 
-/** The command a hook runs (a shell runs it, so: bare `node`, forward slashes, quoted path). */
+/** self.ts facts for this setup environment (injected paths, so tests never depend on the running process). */
+export function selfOf(e: SetupEnv, cliPath = e.cliPath): SelfFacts {
+  return { mode: e.mode ?? "npm", execPath: e.execPath, cliPath, platform: e.platform };
+}
+
+/** ` --db "<path>"` for a hook command line, or "". */
+const dbArg = (e: SetupEnv, dbPath?: string): string => (dbPath ? ` --db ${quoteShellArg(dbPath, e.platform)}` : "");
+
+/** The command a hook runs (a shell runs it, so: bare `node` in the npm install, forward slashes, quoted path; selfShellLine). */
 export function buildHookCommand(e: SetupEnv, opts: Pick<SetupOptions, "command">, dbPath?: string): string {
   const useNpx = opts.command === "npx" || (opts.command === "auto" && runningFromNpxCache(e.cliPath));
-  const db = dbPath ? ` --db "${dbPath.replace(/\\/g, "/")}"` : "";
+  const db = dbArg(e, dbPath);
   const cli = useNpx && opts.command === "auto" && e.globalCliPath ? e.globalCliPath : null;
   if (useNpx && !cli) return `npx -y monomem@${e.version} recall --budget-ms 800${db}`;
-  return `node "${(cli ?? e.cliPath).replace(/\\/g, "/")}" recall --budget-ms 800${db}`;
+  return selfShellLine(`recall --budget-ms 800${db}`, selfOf(e, cli ?? e.cliPath));
 }
 
 /** Apps whose config accepts a web (HTTP) MCP server with headers: Claude Code and VS Code (type "http"), Cursor (url + headers). */
@@ -1086,11 +1098,11 @@ export const CAPTURE_HOOKS: ReadonlyArray<{ on: string; event: string; async: bo
 /** `monomem hook <event>` as a hook command (same launcher rules as buildHookCommand). */
 export function buildCaptureCommand(e: SetupEnv, opts: Pick<SetupOptions, "command">, event: string, dbPath?: string): string {
   const useNpx = opts.command === "npx" || (opts.command === "auto" && runningFromNpxCache(e.cliPath));
-  const db = dbPath ? ` --db "${dbPath.replace(/\\/g, "/")}"` : "";
+  const db = dbArg(e, dbPath);
   // Every hook runs the installed (global) copy when there is one: pinned, no npx start-up, no download.
   const cli = useNpx && opts.command === "auto" && e.globalCliPath ? e.globalCliPath : e.cliPath;
   if (useNpx && cli === e.cliPath) return `npx -y monomem@${e.version} hook ${event}${db}`;
-  return `node "${cli.replace(/\\/g, "/")}" hook ${event}${db}`;
+  return selfShellLine(`hook ${event}${db}`, selfOf(e, cli));
 }
 
 const CAPTURE_REWRITE = "replace the automatic memory hooks";
@@ -2041,7 +2053,8 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
     io.out("\nmonomem doctor:");
     const env = { ...e.env };
     if (primaryDb !== DB_PATH) env.MONOMEM_DB_PATH = primaryDb;
-    const r = spawnSync(e.execPath, [e.cliPath, "doctor"], { env, encoding: "utf8", timeout: 60_000 });
+    const self = selfCommand(["doctor"], selfOf(e));
+    const r = spawnSync(self.command, self.args, { env, encoding: "utf8", timeout: 60_000 });
     for (const l of `${r.stdout ?? ""}${r.stderr ?? ""}`.split("\n")) if (l.trim()) io.out("  " + l);
   }
 

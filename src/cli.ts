@@ -2,7 +2,7 @@
 import "./quiet-sqlite.js"; // first: hide the node:sqlite ExperimentalWarning
 import "./legacy-env.js"; // second: read the old CLAUDE_BRIDGE_* variables as MONOMEM_*
 import readline from "node:readline";
-import { fileURLToPath } from "node:url";
+import { SELF_CLI, serviceLaunch } from "./self.js";
 import { parseFlags, str, terminalIO } from "./cli/shared.js";
 import { gatePinned, gateOutside, requireOperator } from "./operator-gate.js";
 import { actorStore, setProcessWriter } from "./actor.js";
@@ -1461,7 +1461,7 @@ async function importCmd(): Promise<void> {
     }
     const { realEnv } = await import("./setup.js");
     const { PACKAGE_VERSION } = await import("./config.js");
-    process.exitCode = await runForeignImport(realEnv(PACKAGE_VERSION, fileURLToPath(import.meta.url)), terminalIO(), {
+    process.exitCode = await runForeignImport(realEnv(PACKAGE_VERSION, SELF_CLI), terminalIO(), {
       from,
       path: str(flags.path),
       dryRun: flags["dry-run"] === true,
@@ -1486,7 +1486,7 @@ async function importCmd(): Promise<void> {
     const { runClaudeImport } = await import("./claude-import.js");
     const { realEnv } = await import("./setup.js");
     const { PACKAGE_VERSION } = await import("./config.js");
-    const e = realEnv(PACKAGE_VERSION, fileURLToPath(import.meta.url));
+    const e = realEnv(PACKAGE_VERSION, SELF_CLI);
     process.exitCode = await runClaudeImport(e, terminalIO(), {
       dryRun: flags["dry-run"] === true,
       yes: flags.yes === true,
@@ -2301,7 +2301,7 @@ async function uninstallCmd(): Promise<void> {
   const { runUninstall } = await import("./uninstall.js");
   const { flags } = parseFlags(process.argv.slice(3), { values: [], bools: ["purge", "dry-run", "yes", "no-backup"] });
   const { PACKAGE_VERSION } = await import("./config.js");
-  process.exitCode = await runUninstall(realEnv(PACKAGE_VERSION, fileURLToPath(import.meta.url)), terminalIO(), {
+  process.exitCode = await runUninstall(realEnv(PACKAGE_VERSION, SELF_CLI), terminalIO(), {
     purge: flags.purge === true,
     dryRun: flags["dry-run"] === true,
     yes: flags.yes === true,
@@ -2421,13 +2421,13 @@ async function main(): Promise<void> {
       await import("./mcp-stdio.js");
       break;
     case "doctor":
-      await (await import("./doctor/index.js")).doctor(fileURLToPath(import.meta.url));
+      await (await import("./doctor/index.js")).doctor(SELF_CLI);
       break;
     case "init":
-      await (await import("./cli/connect.js")).init(fileURLToPath(import.meta.url));
+      await (await import("./cli/connect.js")).init(SELF_CLI);
       break;
     case "setup":
-      await (await import("./cli/connect.js")).setupCmd(fileURLToPath(import.meta.url));
+      await (await import("./cli/connect.js")).setupCmd(SELF_CLI);
       break;
     case "uninstall":
       await uninstallCmd();
@@ -2616,7 +2616,7 @@ async function main(): Promise<void> {
       await (await import("./cli/trust.js")).tokenCmd();
       break;
     case "connect":
-      await (await import("./cli/connect.js")).connectCmd(fileURLToPath(import.meta.url));
+      await (await import("./cli/connect.js")).connectCmd(SELF_CLI);
       break;
     case "service": {
       const { flags, rest } = parseFlags(process.argv.slice(3), { values: [], bools: ["print"] });
@@ -2631,8 +2631,7 @@ async function main(): Promise<void> {
       }
       process.exitCode = serviceCmd(rest[0], flags.print === true, {
         platform: process.platform,
-        node: process.execPath,
-        cli: fileURLToPath(import.meta.url),
+        ...serviceLaunch(),
         home: homedir(),
         dataDir: DATA_DIR,
         uid: process.getuid?.(),
@@ -2641,7 +2640,7 @@ async function main(): Promise<void> {
       break;
     }
     case "open":
-      await (await import("./cli/connect.js")).openCmd(fileURLToPath(import.meta.url));
+      await (await import("./cli/connect.js")).openCmd(SELF_CLI);
       break;
     case "supersede":
       await supersedeCmd("supersede");

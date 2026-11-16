@@ -12,7 +12,8 @@ import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { servicePlan, TASK_NAME } from "./service.js";
-import { dataHome, detectClients, hookHosts, readHistory, saveHistory, stamp, undoSession, type HistorySession, type SetupEnv, type SetupIO } from "./setup.js";
+import { serviceLaunch } from "./self.js";
+import { dataHome, detectClients, hookHosts, readHistory, saveHistory, stamp, undoSession, type HistorySession, type SetupEnv, type SetupIO, selfOf } from "./setup.js";
 
 export interface UninstallOptions {
   dryRun: boolean;
@@ -141,7 +142,7 @@ async function finalBackup(dir: string, out: string): Promise<void> {
  * data folder and token, so --purge removes it first.
  */
 function installedService(e: SetupEnv, dir: string, taskExists: () => boolean): string {
-  const path = servicePlan({ platform: e.platform, node: e.execPath, cli: e.cliPath, home: e.home, dataDir: dir, env: e.env }).file.path;
+  const path = servicePlan({ ...serviceLaunch(selfOf(e)), platform: e.platform, home: e.home, dataDir: dir, env: e.env }).file.path;
   if (existsSync(path)) return path;
   // The task XML deleted by hand: the task itself would still start Monomem (and recreate the data folder) every 5 minutes.
   return e.platform === "win32" && taskExists() ? `the scheduled task "${TASK_NAME}"` : "";
@@ -159,7 +160,7 @@ function defaultTaskExists(): boolean {
 
 async function defaultRemoveService(e: SetupEnv, dir: string): Promise<number> {
   const { serviceCmd } = await import("./service.js");
-  return serviceCmd("uninstall", false, { platform: e.platform, node: e.execPath, cli: e.cliPath, home: e.home, dataDir: dir, uid: process.getuid?.(), env: e.env });
+  return serviceCmd("uninstall", false, { ...serviceLaunch(selfOf(e)), platform: e.platform, home: e.home, dataDir: dir, uid: process.getuid?.(), env: e.env });
 }
 
 export async function runUninstall(e: SetupEnv, io: SetupIO, opts: UninstallOptions): Promise<number> {

@@ -17,8 +17,8 @@ const CARRIED_ENV = ["MONOMEM_HOME", "MONOMEM_DB_PATH", "MONOMEM_PORT", "MONOMEM
 
 export interface ServiceEnv {
   platform: NodeJS.Platform;
-  node: string; // absolute path of the node binary (process.execPath)
-  cli: string; // absolute path of dist/src/cli.js
+  node: string; // absolute path of the program to run (node; the executable itself in the single-exe build): selfCommand
+  cli?: string; // absolute path of dist/src/cli.js; absent in the single-exe build
   home: string;
   dataDir: string;
   uid?: number;
@@ -53,7 +53,9 @@ function carried(e: ServiceEnv): Array<[string, string]> {
 }
 
 export function servicePlan(e: ServiceEnv): ServicePlan {
-  const args = [e.cli, "start", "--log"];
+  // node + cli.js, or the executable alone (self.ts); then the subcommand.
+  const launch = e.cli ? [e.node, e.cli] : [e.node];
+  const args = [...launch.slice(1), "start", "--log"];
   if (e.platform === "win32") {
     const path = join(e.dataDir, "monomem-task.xml");
     // A task action cannot hold settings, so cmd.exe sets them and then runs node.exe (release-gate S1: without this the
@@ -69,11 +71,11 @@ export function servicePlan(e: ServiceEnv): ServicePlan {
     }
     // node and cli.js are always quoted: outside quotes cmd.exe reads & as "next command" and ^ as an escape (a user folder
     // named R&D broke the task). % expands even inside quotes and a quote cannot be escaped, so such a path is refused.
-    const odd = [e.node, e.cli].find((x) => /[%"]/.test(x));
+    const odd = launch.find((x) => /[%"]/.test(x));
     const refuse = odd
       ? `The Windows task cannot run Monomem from a path that contains % or a quote (${odd}). Install Node.js and Monomem in a folder without them, then run monomem service install again.`
       : undefined;
-    const cmdArgs = `/d /v:off /c ${sets.join("")}"${e.node}" "${e.cli}" ${args.slice(1).join(" ")}`;
+    const cmdArgs = `/d /v:off /c ${sets.join("")}${launch.map((x) => `"${x}"`).join(" ")} start --log`;
     // The task belongs to this user: a logon trigger with no user means "any user", which needs an administrator to register.
     const user = e.env.USERNAME?.trim();
     const domain = e.env.USERDOMAIN?.trim();
@@ -257,7 +259,7 @@ export function serviceCmd(action: string | undefined, print: boolean, e: Servic
       console.error(`The service was not installed. The file is at ${plan.file.path}; the commands above say what went wrong.`);
       return 1;
     }
-    console.log(`Installed: Monomem now runs in the background (${e.node} ${e.cli} start --log).`);
+    console.log(`Installed: Monomem now runs in the background (${[e.node, ...(e.cli ? [e.cli] : [])].join(" ")} start --log).`);
     for (const n of plan.notes) console.log(n);
     console.log(`Its output goes to ${join(e.dataDir, "server.log")}. Check it: monomem service status. Remove it: monomem service uninstall`);
     return 0;

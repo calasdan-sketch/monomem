@@ -331,8 +331,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
   try {
     const { appEntryProblems, realEnv } = await import("./setup.js");
     const { PACKAGE_VERSION } = await import("./config.js");
-    const { fileURLToPath } = await import("node:url");
-    const probs = appEntryProblems(o.setupEnv ?? realEnv(PACKAGE_VERSION, fileURLToPath(new URL("./cli.js", import.meta.url))));
+    const probs = appEntryProblems(o.setupEnv ?? realEnv(PACKAGE_VERSION));
     if (probs.length) add("apps", "App connections", "warn", `${probs.join("; ")}: run monomem setup`);
   } catch {
     /* configs could not be inspected */
@@ -366,8 +365,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
       try {
         const { detectClients, realEnv } = await import("./setup.js");
         const { PACKAGE_VERSION } = await import("./config.js");
-        const { fileURLToPath } = await import("node:url");
-        const wired = detectClients(realEnv(PACKAGE_VERSION, fileURLToPath(import.meta.url))).filter((c) => {
+        const wired = detectClients(realEnv(PACKAGE_VERSION)).filter((c) => {
           try {
             return c.exists && /"monomem"|\[mcp_servers\.monomem\]/.test(readFileSync(c.file, "utf8")) && !/Authorization/i.test(readFileSync(c.file, "utf8"));
           } catch {

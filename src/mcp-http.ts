@@ -16,6 +16,7 @@ import "./legacy-env.js"; // second: read the old CLAUDE_BRIDGE_* variables as M
 import { createServer, IncomingMessage, Server, ServerResponse } from "node:http";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { isSea } from "./self.js";
 import { resolve } from "node:path";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { Store } from "./store.js";
@@ -209,8 +210,10 @@ async function runStandalone(): Promise<void> {
 // Compare real (symlink-resolved) paths, case-insensitively on Windows, so a
 // drive-letter-case or bin-shim difference doesn't make the standalone entry
 // silently fail to start.
+// In a one-file build (the single executable) every module shares one URL, so the comparison below would be true
+// inside `start` too: a second listener, EADDRINUSE, exit. Only the separate-file build can be run as mcp-http.js.
 function invokedDirectly(): boolean {
-  if (!process.argv[1]) return false;
+  if (!process.argv[1] || isSea() || !/[\\/]mcp-http\.js$/.test(fileURLToPath(import.meta.url))) return false;
   try {
     const norm = (p: string): string => {
       let r: string;

@@ -20,7 +20,6 @@ import {
 import { homedir } from "node:os";
 import { chmodQuiet, privateDir } from "./private-dir.js";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { resolveTimeZone } from "./time-parse.js";
 import { cleanWriter } from "./actor.js";
@@ -28,22 +27,16 @@ import { didYouMean } from "./suggest.js";
 import { type Sensitivity, parseSensitivity, sensitivityRank, defaultCeilingFromEnv, SENSITIVITY_HELP } from "./sensitivity.js";
 export { chmodQuiet, lockdownArgs, wideAccessGroups, privateDir, type PrivateDirOptions } from "./private-dir.js";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-export const PROJECT_ROOT = join(__dirname, "..", "..");
+// The package root and the version come from self.ts, which knows how this copy is packaged (npm, bundled folder, single exe).
+export { PROJECT_ROOT } from "./self.js";
+import { PROJECT_ROOT, selfVersion } from "./self.js";
 
 /** Where 1.0.x kept its state: inside the package (lost on npm update / npx cache purge). */
 /**
- * The real package version (package.json): reported by `monomem --version`
+ * The real package version (package.json, or the build-time define in the bundled builds): reported by `monomem --version`
  * and the MCP serverInfo so clients see the build they are talking to.
  */
-export const PACKAGE_VERSION: string = (() => {
-  try {
-    const pkg = JSON.parse(readFileSync(join(PROJECT_ROOT, "package.json"), "utf8")) as { version?: unknown };
-    return typeof pkg.version === "string" ? pkg.version : "0.0.0";
-  } catch {
-    return "0.0.0";
-  }
-})();
+export const PACKAGE_VERSION: string = selfVersion();
 
 export const LEGACY_DATA_DIR = join(PROJECT_ROOT, "data");
 

@@ -4,6 +4,7 @@
 import { requireOperator } from "../operator-gate.js";
 import { didYouMean } from "../suggest.js";
 import { parseFlags, str, terminalIO } from "./shared.js";
+import { selfCommand, selfFacts } from "../self.js";
 
 const CONNECT_APPS = ["claude-code", "claude-desktop", "cursor", "codex", "gemini", "muse", "vscode", "zed", "windsurf"] as const;
 
@@ -119,7 +120,8 @@ export async function openCmd(cliPath: string): Promise<void> {
   if (!(await up()) && flags.print !== true) {
     console.log("Starting Monomem in the background...");
     const { spawn } = await import("node:child_process");
-    const child = spawn(process.execPath, [cliPath, "start", "--log"], { detached: true, stdio: "ignore", windowsHide: true }); // no terminal: output goes to server.log
+    const self = selfCommand(["start", "--log"], { ...selfFacts(), cliPath });
+    const child = spawn(self.command, self.args, { detached: true, stdio: "ignore", windowsHide: true }); // no terminal: output goes to server.log
     child.unref();
     for (let i = 0; i < 40 && !(await up()); i++) await new Promise((r) => setTimeout(r, 250));
     if (!(await up())) {
@@ -199,9 +201,11 @@ export async function init(cliPath: string): Promise<void> {
     }
     for (const id of restrictedIds) if (!HTTP_CAPABLE.includes(id)) console.log(`(${id}: I cannot write a limited connection into its settings automatically; I will show you what to paste instead.)`);
   }
-  const self = process.argv[1];
   const { spawnSync } = await import("node:child_process");
-  const run = (args: string[]): number => spawnSync(process.execPath, [self, ...args], { stdio: "inherit" }).status ?? 1;
+  const run = (args: string[]): number => {
+    const self = selfCommand(args, { ...selfFacts(), cliPath });
+    return spawnSync(self.command, self.args, { stdio: "inherit" }).status ?? 1;
+  };
   for (const c of chosen) {
     console.log(`\n--- ${c.label} ---`);
     if (restrictedIds.has(c.id)) run(["connect", c.id, "--restricted", "--yes"]);

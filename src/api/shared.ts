@@ -6,6 +6,7 @@ import { Store, ValidationError, QuarantinedError, StaleWriteError, WriterPaused
 import { RECEIPT_CHECK, type WriteReceipt } from "../store/write-receipt.js";
 import { LIMITS, printable } from "../security.js";
 import { type Scope, PROJECT_ROOT } from "../config.js";
+import { assetsRoot } from "../self.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SupersedeError } from "../supersede.js";
@@ -26,7 +27,7 @@ export function signAsset(file: string): string | null {
   if (process.env.MONOMEM_ENABLE_SIGN_PAGE !== "1") return null;
   if (!signCache.has(file)) {
     try {
-      signCache.set(file, readFileSync(join(PROJECT_ROOT, "docs", file), "utf8"));
+      signCache.set(file, readFileSync(join(assetsRoot() ?? PROJECT_ROOT, "docs", file), "utf8"));
     } catch {
       signCache.set(file, null);
     }

@@ -14,7 +14,7 @@ import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { loadKey } from "./crypto.js";
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { selfCommand } from "./self.js";
 import { HOOK_EVENTS, type HookEvent, captureSettings, normalizeHookInput, shouldCapture, recordEvent, spoolEvent, drainSpool, type CaptureEvent } from "./capture.js";
 
 /** stdin is read up to this much; the rest is ignored (a hook payload past 1 MiB is a tool output we only keep 4 KB of). */
@@ -75,8 +75,8 @@ export interface HookOptions {
  */
 function spawnLlmSummary(sessionId: string, dbPath: string, env: NodeJS.ProcessEnv): void {
   try {
-    const cli = fileURLToPath(new URL("./cli.js", import.meta.url));
-    const child = spawn(process.execPath, [cli, "hook", "llm-summary", "--db", dbPath], { env: { ...process.env, ...env }, detached: true, stdio: ["pipe", "ignore", "ignore"], windowsHide: true });
+    const self = selfCommand(["hook", "llm-summary", "--db", dbPath]);
+    const child = spawn(self.command, self.args, { env: { ...process.env, ...env }, detached: true, stdio: ["pipe", "ignore", "ignore"], windowsHide: true });
     child.on("error", () => {});
     child.stdin?.end(JSON.stringify({ session_id: sessionId }));
     child.unref();
