@@ -37,12 +37,12 @@ const REST_PROBES: Record<string, RestProbe> = {
   "POST /get": (c, n) => c("POST", "/get", { ids: [n] }),
   "GET /tasks": (c) => c("GET", "/tasks"),
   "GET /tasks/:id": (c, _n, t) => c("GET", `/tasks/${t}`),
-  "POST /tasks/:id/claim": (c, _n, t) => c("POST", `/tasks/${t}/claim`, { owner: "B" }),
   "PUT /tasks/:id": (c, _n, t) => c("PUT", `/tasks/${t}`, { owner: "B2" }),
   "GET /catch-up": (c) => c("GET", "/catch-up?consumer=zz"),
 };
 /** Routes with no probe, each with the reason it cannot hand a token an unconfirmed note it did not write itself. */
 const REST_EXEMPT: Record<string, string> = {
+  "POST /tasks/:id/claim": "A1: refuses a task that needs a person (unconfirmed outside content) and returns none of it; a claimable task is never unconfirmed (test/taint-reply-register.test.ts)",
   "GET /changes": "titles and ids only; the payload has no unconfirmed flag, so nothing registers (MCP memory_since probes the ids itself). Known gap, not a content leak",
   "GET /notes/:id/history": "admin only",
   "GET /health": "no note content",
@@ -177,7 +177,6 @@ const MCP_PROBES: Record<string, (n: number, t: number) => Record<string, unknow
   catch_up: () => ({ consumer: "zz" }),
   task_get: (_n, t) => ({ id: t }),
   task_list: () => ({}),
-  task_claim: (_n, t) => ({ id: t, owner: "me" }),
   task_put: (_n, t) => ({ id: t, owner: "me2" }),
 };
 /** Replies that carry ids and titles but no unconfirmed flag; the connection marks them by probing the ids (ID_PROBE_TOOLS). */
@@ -196,6 +195,7 @@ const MCP_EXEMPT: Record<string, string> = {
   session_handoff: "creating tool (own handoff)",
   session_list: "session rows, no note text",
   task_approve: "admin",
+  task_claim: "A1: refuses a task that needs a person (unconfirmed outside content) and returns none of it; a claimable task is never unconfirmed (test/taint-reply-register.test.ts)",
   memory_quarantine: "admin",
   runner_status: "no note content",
   trust_policy: "no note content",

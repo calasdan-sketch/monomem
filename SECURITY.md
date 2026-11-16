@@ -6,6 +6,9 @@ content as untrusted input to your agents** — see "Memory safety" below.
 Monomem was renamed from OneMemory. Version numbers in this file that say OneMemory belong to the old name and its
 numbering (1.x and 2.x); Monomem restarted at 1.0.0 (see [CHANGELOG.md](./CHANGELOG.md)).
 
+A command or task that came from outside content (or was built on a distrusted note, or was flagged) cannot be approved,
+claimed or run by any app key, admin keys included, until a person confirms it at a terminal (`monomem confirm <id>`).
+
 To check your own setup, run `monomem drill` (replays 20 known memory-poisoning attacks on a copy of your store) and
 `monomem health` (turns that and your security settings into one A to F grade, with the rule printed).
 

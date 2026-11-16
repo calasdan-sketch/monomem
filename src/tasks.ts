@@ -43,6 +43,8 @@ import {
   commandHash,
   verifyApproval,
   isTaskNote,
+  heldForPerson,
+  heldTaskMessage,
   type TaskStatus,
   type TaskState,
   type BodyParts,
@@ -61,6 +63,7 @@ export {
   isTaskNote,
   approvalNonce,
   classifyQueuedCommand,
+  heldForPerson,
   scanQueuedCommands,
   scanWaitingCommands,
   envRunnerId,
@@ -819,6 +822,7 @@ export function claimTask(
     }
     // A task a distrusted writer wrote is not for the board to hand out (a holder may still let go of a lease).
     if (!input.release && store.isDistrusted(existing)) throw distrustedTaskError(existing.id);
+    if (!input.release && heldForPerson(existing)) throw new ValidationError(heldTaskMessage(existing, "claim"));
     const cur = stateOf(existing);
     if (parseBody(existing.body).command && !input.release) {
       throw new ValidationError(
@@ -912,6 +916,8 @@ export function approveTask(
   }
   // Never put the admin gate in front of a command a distrusted writer wrote.
   if (!input.revoke && store.isDistrusted(existing)) throw distrustedTaskError(existing.id);
+  // Nor a command whose text came from outside content (or a distrusted base, or a flag) that no PERSON confirmed. Revoke always works.
+  if (!input.revoke && heldForPerson(existing)) throw new ValidationError(heldTaskMessage(existing, "approve"));
   const cur = stateOf(existing);
   const cmd = parseBody(existing.body).command;
   const next: TaskState = { ...cur, lease: null }; // approving or revoking also clears any lease
@@ -949,6 +955,19 @@ export function approveTask(
   );
   if (!note) throw new TaskNotFoundError(`no task with id ${input.id}`);
   return taskFromNote(note, store);
+}
+
+/**
+ * The `approve: true` create shortcut: approve, unless the new task is held for a person (outside content etc.). Then the
+ * task stays queued and unapproved (the safe state) and the reason goes back as a warning instead of failing the create.
+ */
+export function approveOrHold(store: Store, task: Task, scope: WriteScope, warnings: import("./lint.js").LintFinding[]): Task {
+  const n = store.read(task.id); // gate-ok: approveOrHold: the task this call just created; only its held flags are read, nothing is returned
+  if (n && heldForPerson(n)) {
+    warnings.push({ category: "approval", label: heldTaskMessage(n, "approve"), field: "command" });
+    return task;
+  }
+  return approveTask(store, { id: task.id, if_rev: task.rev }, scope);
 }
 
 /**

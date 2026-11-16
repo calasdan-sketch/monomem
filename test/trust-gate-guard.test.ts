@@ -114,6 +114,7 @@ const EXPECTED_SITES: Record<string, string[]> = {
     "claimTask: distrusted tasks are refused on the next line",
     "approveTask: distrusted tasks are refused on the next line",
     "finishCommandTask: runner-internal, writes a result, returns nothing",
+    "approveOrHold: the task this call just created; only its held flags are read, nothing is returned",
   ],
 };
 

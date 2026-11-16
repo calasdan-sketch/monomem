@@ -280,7 +280,11 @@ upgrade that carry a 1.3.5 outside-content stamp: they keep their session-start 
 - pinned (`monomem pin`, REST `PUT /pinned`, the dashboard);
 - used as the replacement in a replace (`monomem supersede`, the replace preview and confirm on every surface);
 - used in **Keep as history**, as the held write or as the note that replaces it
-  ([memory-linter.md](./memory-linter.md#quarantine)).
+  ([memory-linter.md](./memory-linter.md#quarantine));
+- approved as a command for the runner, or claimed as a task (`task_approve`, `task_claim`, the REST routes, `approve: true`
+  on create). This one also covers a task built on a note from a distrusted writer, and a flagged task. The runner checks
+  again on every pass, so a mark or flag added after approval stops the run (reason `held`). Revoking an approval and
+  releasing a claim always work. `approve: true` on create leaves the task queued and unapproved, with a warning.
 
 The refusal reads:
 
