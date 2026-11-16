@@ -110,7 +110,7 @@ describe("sync --git: plain files", { skip }, () => {
     assert.match(r.x.all(), /nothing new to commit/);
     assert.equal(g(w.a.repo, "rev-parse", "HEAD"), head);
   });
-  test("a deletion removes the file from the repository; it does not delete the note on the other computer (by design), and is not resurrected", async () => {
+  test("A8: a deletion keeps the file with an archive marker; the other computer archives its copy (never deletes it), and the note does not come back", async () => {
     const w = world();
     put(w.a, "Temporary", "gone soon");
     await sync(w.a);
@@ -120,9 +120,14 @@ describe("sync --git: plain files", { skip }, () => {
     sa.delete(sa.list({}).notes[0].id);
     sa.close();
     await sync(w.a);
-    assert.ok(!g(w.a.repo, "ls-files").includes("temporary"), "the file left the repository");
+    const file = g(w.a.repo, "ls-files").split("\n").find((f) => f.includes("temporary"));
+    assert.ok(file, "the file stays in the repository");
+    assert.match(readFileSync(join(w.a.repo, file!), "utf8"), /\narchived_by: /);
     await sync(w.b);
-    assert.equal(notes(w.b).length, 1, "import never deletes notes (docs/file-sync.md)");
+    assert.equal(notes(w.b).length, 0, "B archived its copy");
+    const sb = new Store(w.b.db);
+    assert.ok(sb.exportAll().some((n) => n.title === "Temporary" && n.archived_at), "import never deletes notes: it is archived, text kept");
+    sb.close();
     await sync(w.b);
     await sync(w.a);
     assert.equal(notes(w.a).length, 0, "and the deleted note did not come back on the computer that deleted it");
@@ -205,6 +210,7 @@ describe("sync --git: plain files", { skip }, () => {
     put(w.a, "Shared", "base");
     await sync(w.a);
     await sync(w.b);
+    await sync(w.a); // B's first sync pushed its computer label (.machines/): A takes it in, so both start level
     // hand-edit the SAME file differently in both repos and commit, so git itself cannot merge
     const fileOf = (d: Dev): string => {
       const dir = join(d.repo, "monomem", "default");
@@ -255,7 +261,8 @@ describe("sync --git: encrypted", { skip }, () => {
     // and not in git history either
     const all = g(w.a.repo, "log", "-p", "--all");
     assert.ok(!all.includes("SECRETWORD") && !all.includes(key.toString("base64")));
-    assert.match(readdirSync(join(w.a.repo, "monomem-enc"))[0], /^[0-9a-f]{32}\.enc$/);
+    // Sealed notes (.enc) and this computer's sealed label (.mach, device sync): both opaque names.
+    for (const f of readdirSync(join(w.a.repo, "monomem-enc"))) assert.match(f, /^[0-9a-f]{32}\.(enc|mach)$/);
   });
   test("the key stays out of the repository: a key file inside it is refused", async () => {
     const w = world();

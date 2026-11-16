@@ -33,6 +33,7 @@ folder). `monomem doctor` prints which one, and its size.
 | `claude-import-held.json` | `import --claude` (files you chose to hold back) | `uninstall --purge` |
 | `.sync-work-*`, `sync-conflicts/<time>/` | `sync --git --encrypt` (work folder, removed after); the losing side of an edit conflict | `uninstall --purge` |
 | `sync-git-seen-<id>.json` | `sync --git`: the highest version synced per file, one per repository | `uninstall --purge` |
+| `sync.json`, `sync-status.json`, `sync-repo/` | `sync setup`: where to sync and whether the timer is on; the last sync's time and result; the local copy of a git address | `uninstall --purge` |
 | `monomem-task.xml` | Windows only, `monomem service install` (the task definition it hands to Task Scheduler) | `service uninstall` / `uninstall --purge` |
 | `.migrate.lock` | a few ms while a 1.0.x database is moved out of the package | removed by itself |
 
@@ -72,6 +73,7 @@ leaves it running. On Windows the task is found by its `monomem-task.xml` in the
 | `backup [--out <d>]` | `<d>`, default `~/monomem-backup-<time>`, or next to the data folder when `MONOMEM_HOME` is set (never the current folder: a backup and its key must not land in a repo) |
 | `uninstall --purge` | the final backup, `~/monomem-final-backup-<time>` (unless `--no-backup`) |
 | `sync --git <repo>` | `<repo>/monomem/` or `<repo>/monomem-enc/`, and git commits in that repo |
+| `sync setup <folder>` / `sync` | `<folder>/monomem-enc/` (sealed note files `*.enc` and this computer's sealed name `*.mach`) |
 | `npm run runner` (a Monomem checkout only, not in the npm package) | `<checkout>/data/runner.lock`, `runner-seen.json` |
 
 ## Network calls and AI cost
@@ -95,7 +97,9 @@ leaves it running. On Windows the task is found by its `monomem-task.xml` in the
 | `monomem update` (`src/update.ts`) | typing the command (never automatic, never in a hook) | `api.github.com` for the latest release of `calasdan-sketch/monomem`, then that release's archive for this platform and its `SHA256SUMS` (checked before anything is replaced); an npm install only prints the npm command and calls nothing |
 
 Not Monomem's own calls: `npx monomem` downloads the package from npm, and `sync --git` runs `git`, which pushes where your
-repository's remote points.
+repository's remote points. `sync setup <git address>` runs `git clone` of that address once, then each `monomem sync` runs
+`git fetch` / `git push` to it. With `sync setup --auto on` (off by default) the server runs `monomem sync` every 30 minutes
+(`--every`), so those git calls then happen on a timer; a shared-folder sync makes no network call itself.
 
 **What memory costs your agent.** Monomem itself spends no model tokens, but what it returns lands in your agent's context.
 The SessionStart hook injects up to 1,500 tokens per session (`MONOMEM_RECALL_TOKENS`, of which the project profile is up to
@@ -115,6 +119,8 @@ minutes) and exits. Every retry is bounded:
 - **runner**: a note is marked seen before it is acted on, so a failing note is not retried; each poll reads at most 20
   pages and runs a capped number of commands.
 - **watch**: gives up with an error after 10 failures in a row (a failed wait or a failing `--exec` handler).
+- **device sync timer** (only after `sync setup --auto on`): one `monomem sync` child at a time; a tick is skipped while
+  the last one runs, and each tick re-reads the setting, so `--auto off` stops it without a restart.
 - **setup**: a busy file is retried for a few seconds, a file rewritten under it at most 5 times.
 - **daily backup** (server only): one `VACUUM INTO` copy a day, checked hourly; a failure is recorded, not retried until the
   next hourly check. The copy runs on the server thread, so a very large store pauses serving briefly once a day.

@@ -228,6 +228,11 @@ const backupTimer = autoBackupOn() ? setInterval(backupNow, 3_600_000) : undefin
 backupTimer?.unref();
 if (backupTimer) setTimeout(backupNow, 60_000).unref();
 
+// Device sync on a timer: only after `monomem sync setup --auto on` (off by default; it talks to your git remote).
+void Promise.all([import("./sync/device.js"), import("./self.js")])
+  .then(([d, self]) => d.startSyncTimer(DATA_DIR, () => self.selfCommand([]), (l) => console.error(l)))
+  .catch((e: Error) => console.error(`[monomem] device sync timer not started: ${e.message}`));
+
 let closing = false;
 function shutdown(): void {
   if (closing) return;

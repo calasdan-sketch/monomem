@@ -81,7 +81,10 @@ import {
 } from "./store.js";
 import { parseWriterRef } from "./trust.js";
 import { maybeEmbed } from "./search-service.js";
+import { quarantineWrite } from "./store/quarantine.js";
+import type { LintFinding } from "./lint.js";
 import { contentHash, lf, normTags, type NoteContent } from "./sync-hash.js";
+import { addMarker, applyMarker, machineLabel, markerLines, markerOf, MACHINES_DIR, readHandled, rememberMachine, STORE_ID, writeHandled, type Marker } from "./sync/marks.js";
 import { type Sensitivity, DEFAULT_SENSITIVITY, parseSensitivity, sensitivityVisible, SENSITIVITY_HELP } from "./sensitivity.js";
 
 
@@ -92,6 +95,19 @@ const APPROVAL_TAG_PREFIX = "task.approval:";
 function importTags(fileTags: readonly string[], localTags: readonly string[] = []): string[] {
   const keepLocal = localTags.filter((t) => t.startsWith(APPROVAL_TAG_PREFIX));
   return [...fileTags.filter((t) => !t.startsWith(APPROVAL_TAG_PREFIX)), ...keepLocal];
+}
+
+/** What a sync dispute is held with (shown in `monomem review` / quarantine list). */
+const DISPUTE: LintFinding = { category: "approval", label: "edited on two computers: this is the other version (approve to use it)", field: "body" };
+
+/**
+ * Both computers edited a note: the newer text is live, and the other one waits as a held edit of the note (pinned to its
+ * current version), so a person picks; nothing is overwritten unseen. Returns 1 when a held edit was added.
+ */
+function holdOtherVersion(store: Store, live: NoteRecord, other: { namespace: string; title: string; body: string; tags: string[] }, fromFile: boolean): number {
+  if (store.pendingQuarantineId(other.namespace, other.title, other.body, other.tags) !== null) return 0;
+  quarantineWrite(store, { op: "update", targetId: live.id, ifRev: live.rev, namespace: live.namespace, title: other.title, body: other.body, tags: other.tags, findings: [DISPUTE], importedUnverified: fromFile });
+  return 1;
 }
 
 /** Front-matter keys, in the order export writes them. */
@@ -234,7 +250,7 @@ function claimNames(raw: string): string[] {
 export function renderNoteFile(
   note: NoteRecord,
   identity: { origin: string; id: number },
-  extra: { distrusted?: boolean; foreign?: boolean; files?: Array<{ path: string; action: string }> } = {}
+  extra: { distrusted?: boolean; foreign?: boolean; files?: Array<{ path: string; action: string }>; marker?: Marker | null } = {}
 ): string {
   const fm: Record<(typeof KEYS)[number], unknown> = {
     id: identity.id,
@@ -264,6 +280,8 @@ export function renderNoteFile(
     if (note.obs_type) lines.push(`obs_type: ${JSON.stringify(note.obs_type)}`);
     if (extra.files?.length) lines.push(`files: ${JSON.stringify(extra.files)}`);
   }
+  // A8: the archive marker (tombstone) goes last, so a 1.5 peer's file and ours differ only by these lines.
+  if (extra.marker) lines.push(...markerLines(extra.marker));
   return `---\n${lines.join("\n")}\n---\n${lf(note.body)}\n`;
 }
 
@@ -414,10 +432,12 @@ export function exportMarkdown(
   // A vault is a folder other tools and agents read, outside every read gate: notes touched by a
   // distrusted writer are left out (and their earlier, unedited files pruned) unless asked for,
   // and then each such file is marked `distrusted: true`.
-  // An archived note was forgotten (often by an agent's state_delete): it is not written to the vault,
-  // and its earlier unedited file is pruned like a hidden note's, so "forget" also leaves the folder.
+  // A8: an archived (forgotten) note that was synced before keeps its file, with an archive marker and the same body, so the
+  // forget reaches the other computers and nobody writes the file back (pruning it made an endless remove / re-add loop).
+  // One that was never synced stays out of the folder.
   const trustVisible = opts.includeDistrusted ? everything : store.filterVisible(everything);
-  const notes = (ceiling ? trustVisible.filter((n) => sensitivityVisible(n.sensitivity ?? DEFAULT_SENSITIVITY, ceiling)) : trustVisible).filter((n) => !n.archived_at);
+  const shown = ceiling ? trustVisible.filter((n) => sensitivityVisible(n.sensitivity ?? DEFAULT_SENSITIVITY, ceiling)) : trustVisible;
+  const notes = shown.filter((n) => !n.archived_at || store.syncBase(n.id) !== null);
   // A Set of the visible ids: `notes.includes(n)` per note made this quadratic in the number of hidden notes.
   const visibleIds = new Set<number>(notes.map((n) => n.id));
   // (A note above the export ceiling is hidden the same way: it is not written, and an earlier unedited file of it is pruned.)
@@ -444,15 +464,25 @@ export function exportMarkdown(
     const base = store.syncBase(note.id);
     exported.set(note.id, [base, hash]);
     try {
-      const text = renderNoteFile(note, identity, { distrusted: marked.has(note.id), foreign: identity.origin !== self, files: files.get(note.id) });
       const current = safeRead(dir, path);
+      const curParsed = current === null ? null : parseNoteFile(current);
+      const curMarker = curParsed ? markerOf(curParsed.fm) : null;
+      // Archived here: keep the marker already in the file (whoever wrote it first), else write ours. Live here: keep another
+      // computer's marker while the text is the same (we kept the note live on purpose, or restored it only here); drop it when
+      // the text changed (a real edit wins) or when the marker is ours (we restored it: the restore travels).
+      const marker: Marker | null = note.archived_at
+        ? (curMarker ?? { at: note.archived_at, by: self })
+        : curMarker && curMarker.by !== self && contentHash(fileContent(curParsed!, path, dir)) === hash
+          ? curMarker
+          : null;
+      const text = renderNoteFile(note, identity, { distrusted: marked.has(note.id), foreign: identity.origin !== self, files: files.get(note.id), marker });
       if (current === text) {
         store.setSyncBase(note.id, hash);
         unchanged++;
         continue;
       }
       if (current !== null) {
-        const onDisk = contentHash(fileContent(parseNoteFile(current), path, dir));
+        const onDisk = contentHash(fileContent(curParsed!, path, dir));
         if (onDisk !== base && onDisk !== hash) {
           if (!opts.force) {
             skipped.push({ file: rel, detail: "file was edited since the last sync; import it first (or export with force)" });
@@ -474,9 +504,11 @@ export function exportMarkdown(
   if (opts.prune !== false) {
     for (const p of listNoteFiles(dir)) {
       if (keep.has(p)) continue;
+      let raw: string;
       let parsed: ParsedFile;
       try {
-        parsed = parseNoteFile(readFileSync(p, "utf8"));
+        raw = readFileSync(p, "utf8");
+        parsed = parseNoteFile(raw);
       } catch {
         continue;
       }
@@ -487,6 +519,7 @@ export function exportMarkdown(
       const localId = origin === self ? id : store.syncLookup(origin, id);
       const onDisk = contentHash(fileContent(parsed, p, dir));
       let stale: boolean;
+      let tombstone = false; // A8: a deleted note's file is marked archived, not removed
       if (localId !== null && hiddenIds.has(localId)) {
         // The note is now hidden by the trust policy: its earlier file goes too, unless someone edited it.
         stale = onDisk === parsed.fm.hash || onDisk === store.syncBase(localId);
@@ -497,10 +530,12 @@ export function exportMarkdown(
       } else if (origin === self && store.read(id) === null) { // gate-ok: existence check only (deleted here?)
         // Our own note, deleted here: stale iff nobody edited the file.
         stale = onDisk === parsed.fm.hash;
+        tombstone = true;
       } else if (localId === null && origin !== self && store.syncDeleted(origin, id) !== undefined) {
         // Another machine's note, imported then deleted here: same rule,
         // against what this store last synced for it.
         stale = onDisk === (store.syncDeleted(origin, id) ?? parsed.fm.hash);
+        tombstone = true;
       } else {
         continue; // another machine's file we never imported, or not ours to judge
       }
@@ -510,6 +545,15 @@ export function exportMarkdown(
         continue;
       }
       try {
+        if (tombstone) {
+          // A hard delete here reaches the other computers as an archive (never a delete): same file, plus the marker.
+          if (markerOf(parsed.fm)) continue;
+          const markedText = addMarker(raw, { at: new Date().toISOString(), by: self });
+          if (markedText === null) continue;
+          safeWrite(dir, p, markedText);
+          written++;
+          continue;
+        }
         refuseSymlinks(dir, p);
         assertInsideRoot(dir, p);
         rmSync(p);
@@ -518,6 +562,14 @@ export function exportMarkdown(
         skipped.push({ file: rel, detail: (e as Error).message });
       }
     }
+  }
+  // Device sync: this computer's label, so the others can show where a note came from (one small file per computer).
+  try {
+    const mp = join(dir, MACHINES_DIR, `${self}.txt`);
+    const label = `${machineLabel(store)}\n`;
+    if (safeRead(dir, mp) !== label) safeWrite(dir, mp, label);
+  } catch (e) {
+    skipped.push({ file: join(MACHINES_DIR, `${self}.txt`), detail: (e as Error).message });
   }
   return { dir, notes: notes.length, written, unchanged, removed, skipped };
 }
@@ -545,6 +597,11 @@ export interface ImportResult {
   counts: Record<ImportAction, number>;
   /** Files written by another store that went to quarantine (approve-first, or the linter) instead of going live. */
   foreignHeld: number;
+  /** Notes edited on two computers: the newer text is live, the other waits as a held edit (a person picks). */
+  disputes: number;
+  /** A8 tombstones: notes archived here because another computer forgot them, notes kept live here (with why), and archived
+   * notes brought back because the other computer restored or edited them. */
+  archive: { archived: number; kept: number; restored: number; lines: string[] };
 }
 
 /**
@@ -570,6 +627,26 @@ export async function importMarkdown(
     if (!dry) safeWrite(dir, p, text);
     return relative(dir, p);
   };
+
+  // Labels of the other computers that write this folder (shown on their notes).
+  if (!dry) {
+    let names: string[] = [];
+    try {
+      names = readdirSync(join(dir, MACHINES_DIR));
+    } catch {
+      /* none yet */
+    }
+    for (const nm of names) {
+      const origin = nm.replace(/\.txt$/, "");
+      if (!nm.endsWith(".txt") || !STORE_ID.test(origin) || origin === self) continue;
+      const text = safeRead(dir, join(dir, MACHINES_DIR, nm));
+      if (text !== null) rememberMachine(store, origin, text.slice(0, 200));
+    }
+  }
+  let disputes = 0;
+  const handled = readHandled(store);
+  const handledBefore = JSON.stringify([...handled]);
+  const archive: ImportResult["archive"] = { archived: 0, kept: 0, restored: 0, lines: [] };
 
   for (const file of listNoteFiles(dir)) {
     const rel = relative(dir, file);
@@ -733,58 +810,80 @@ export async function importMarkdown(
         // Deleted in this store after the export.
         if (fileChanged) await attempt(createFrom, "restored", "note was deleted here but the file was edited");
         else push("skipped", { detail: "note was deleted in this store" });
+      } else if (markerOf(fm)) {
+        // Forgotten on another computer before this one ever had it: not brought in.
+        push("skipped", { detail: "archived on another computer; not brought in" });
       } else {
         await attempt(createFrom, "created");
       }
       continue;
     }
 
-    const localHash = contentHash(local);
-    carryPin(local); // metadata, not content: applies whichever side's text wins below
-    if (localHash === fileHash) {
-      remember(local.id, localHash);
-      push("unchanged", { id: local.id });
-      continue;
-    }
-    const localChanged = baseHash === null || localHash !== baseHash;
-    const applyFile = (): NoteRecord | null => {
-      return store.update(
-        local.id,
-        { namespace, title, body, tags: importTags(content.tags, local.tags) },
-        { ifRev: local.rev, ...foreignOpts, ...syncIdentity, ...(typeof fm.origin_writer === "string" && fm.origin_writer.trim() ? { alsoTouchedBy: claimNames(fm.origin_writer) } : {}) }
-      );
-    };
-
-    if (!fileChanged) {
-      push("skipped", { id: local.id, detail: "store has a newer version" });
-      continue;
-    }
-    if (!localChanged) {
-      await attempt(applyFile, "updated");
-      continue;
-    }
-    // Both sides changed: newer wins (front-matter updated_at only; mtime is
-    // rewritten by sync tools), the loser is preserved.
-    const fileTime = typeof fm.updated_at === "string" ? Date.parse(fm.updated_at) || 0 : 0;
-    const localTime = Date.parse(local.updated_at) || 0;
-    const stem = basename(file, ".md");
-    try {
-      if (fileTime > localTime) {
-        const saved = saveConflict(
-          `${stem}.store-rev${local.rev}.md`,
-          renderNoteFile(local, hasIdentity ? { origin: origin!, id: originId! } : { origin: self, id: local.id })
-        );
-        await attempt(applyFile, "conflict", `file was newer and won; store version saved to ${saved}`);
-      } else {
-        const saved = saveConflict(`${stem}.file.md`, readFileSync(file, "utf8"));
-        // The file's version is now preserved and "seen": until the store
-        // exports again (or the file is edited again) the store keeps winning.
-        remember(local.id, fileHash);
-        push("conflict", { id: local.id, detail: `store was newer and won; file version saved to ${saved}` });
+    const wasArchived = !!local.archived_at;
+    const localHash0 = contentHash(local);
+    const mergeLocal = async (): Promise<void> => {
+      const localHash = contentHash(local);
+      carryPin(local); // metadata, not content: applies whichever side's text wins below
+      if (localHash === fileHash) {
+        remember(local.id, localHash);
+        push("unchanged", { id: local.id });
+        return;
       }
-    } catch (e) {
-      if (!(e instanceof ValidationError)) throw e;
-      push("rejected", { id: local.id, detail: `conflict not resolved: ${e.message}` });
+      const localChanged = baseHash === null || localHash !== baseHash;
+      const applyFile = (): NoteRecord | null => {
+        return store.update(
+          local.id,
+          { namespace, title, body, tags: importTags(content.tags, local.tags) },
+          // The edit keeps the time the file says it was written (never earlier than ours): stamping it with the import time
+          // made both computers rewrite the file's updated_at on every sync, one commit each, forever.
+          { ifRev: local.rev, ...(typeof fm.updated_at === "string" ? { writtenAt: fm.updated_at } : {}), ...foreignOpts, ...syncIdentity, ...(typeof fm.origin_writer === "string" && fm.origin_writer.trim() ? { alsoTouchedBy: claimNames(fm.origin_writer) } : {}) }
+        );
+      };
+
+      if (!fileChanged) {
+        push("skipped", { id: local.id, detail: "store has a newer version" });
+        return;
+      }
+      if (!localChanged) {
+        await attempt(applyFile, "updated");
+        return;
+      }
+      // Both sides changed: newer wins (front-matter updated_at only; mtime is
+      // rewritten by sync tools), the loser is preserved.
+      const fileTime = typeof fm.updated_at === "string" ? Date.parse(fm.updated_at) || 0 : 0;
+      const localTime = Date.parse(local.updated_at) || 0;
+      const stem = basename(file, ".md");
+      try {
+        if (fileTime > localTime) {
+          const saved = saveConflict(
+            `${stem}.store-rev${local.rev}.md`,
+            renderNoteFile(local, hasIdentity ? { origin: origin!, id: originId! } : { origin: self, id: local.id })
+          );
+          await attempt(applyFile, "conflict", `file was newer and won; store version saved to ${saved}`);
+          // A dispute, not a silent overwrite: this computer's text waits as a held edit, so a person can pick it back.
+          const after = dry ? null : store.read(local.id); // gate-ok: local operator path, nothing returned to a caller
+          if (after && contentHash(after) === fileHash) disputes += holdOtherVersion(store, after, { namespace: local.namespace, title: local.title, body: local.body, tags: local.tags }, false);
+        } else {
+          const saved = saveConflict(`${stem}.file.md`, readFileSync(file, "utf8"));
+          // The file's version is now preserved and "seen": until the store
+          // exports again (or the file is edited again) the store keeps winning.
+          remember(local.id, fileHash);
+          if (!dry) disputes += holdOtherVersion(store, local, { namespace: local.namespace, title, body, tags: importTags(content.tags, local.tags) }, foreign);
+          push("conflict", { id: local.id, detail: `store was newer and won; file version saved to ${saved}` });
+        }
+      } catch (e) {
+        if (!(e instanceof ValidationError)) throw e;
+        push("rejected", { id: local.id, detail: `conflict not resolved: ${e.message}` });
+      }
+    };
+    await mergeLocal();
+    if (!dry) {
+      try {
+        applyMarker(store, { id: local.id, wasArchived, hashBefore: localHash0, fileHash, marker: markerOf(fm), self, handled, archive, rel });
+      } catch (e) {
+        if (!(e instanceof ValidationError)) throw e;
+        archive.lines.push(`${rel}: archive marker not applied: ${e.message}`);
+      }
     }
   }
 
@@ -799,5 +898,6 @@ export async function importMarkdown(
     rejected: 0,
   } as Record<ImportAction, number>;
   for (const e of entries) counts[e.action]++;
-  return { dir, entries, counts, foreignHeld };
+  if (!dry && JSON.stringify([...handled]) !== handledBefore) writeHandled(store, handled);
+  return { dir, entries, counts, foreignHeld, archive, disputes };
 }

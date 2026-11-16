@@ -99,6 +99,8 @@ export async function showCmd(args: string[]): Promise<void> {
     console.log(`label: ${n.sensitivity ?? "internal"}   tags: ${printable(tags.join(", "), 400) || "none"}   written by: ${printable(n.written_by || "unknown", 80)}   version ${n.rev}`);
     const origin = originText(n.tags);
     if (origin) console.log(`origin: ${origin}`);
+    const pc = (await import("./sync/marks.js")).noteComputer(store, n.id);
+    if (pc) console.log(`from computer: ${printable(pc, 60)} (came by file sync)`);
     console.log(`updated: ${n.updated_at}`);
     console.log("");
     console.log(printableBlock(n.body, 20000));

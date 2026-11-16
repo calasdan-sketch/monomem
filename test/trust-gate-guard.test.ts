@@ -95,7 +95,11 @@ const EXPECTED_SITES: Record<string, string[]> = {
     "the vault export skips hidden notes itself (hiddenIds) unless --include-distrusted",
     "existence check only (deleted here?)",
     "import merge-base lookup: compares hashes, returns nothing to a caller",
+    // conflict hold: re-reads the note sync just wrote to hold this computer's text; nothing goes to a caller
+    "local operator path, nothing returned to a caller",
   ],
+  // tombstone apply: reads the note to compare its hash with the marked file before archiving/restoring it; returns nothing
+  "sync/marks.ts": ["file sync is the local operator's path; nothing is returned to a caller"],
   "extract.ts": ["the capture writer re-reads its own summary note"],
   "facts.ts": ["local CLI, full trust like every command"],
   "health.ts": ["operator CLI, counts redaction markers only; no note content is returned or printed"],
