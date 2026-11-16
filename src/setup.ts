@@ -22,6 +22,7 @@ import { applyOps, getMember, getPath, JsonEditError, opsAreApplied, parseDoc, p
 import { applyTomlOps, findTable, hasServer, tomlOpsApplied } from "./toml-table.js";
 import { applyLegacyEnv, homeDataDir } from "./legacy-env.js";
 import { privateDir } from "./private-dir.js";
+import { subagentMemoryOn } from "./prompt/switches.js";
 import { SELF_CLI, quoteShellArg, selfCommand, selfFacts, selfShellLine, type SelfFacts, type SelfMode } from "./self.js";
 
 // ---- environment (injectable, so tests never touch a real configuration) ---------------------------------------------
@@ -1095,6 +1096,9 @@ export const CAPTURE_HOOKS: ReadonlyArray<{ on: string; event: string; async: bo
   { on: "PreCompact", event: "pre-compact", async: true },
 ];
 
+/** Added for Claude Code only when MONOMEM_SUBAGENT_MEMORY=on is set where setup runs (hookHosts); synchronous: its output is the pack. */
+export const SUBAGENT_START_HOOK: CaptureHook = { on: "SubagentStart", event: "subagent-start", async: false };
+
 /** `monomem hook <event>` as a hook command (same launcher rules as buildHookCommand). */
 export function buildCaptureCommand(e: SetupEnv, opts: Pick<SetupOptions, "command">, event: string, dbPath?: string): string {
   const useNpx = opts.command === "npx" || (opts.command === "auto" && runningFromNpxCache(e.cliPath));
@@ -1147,7 +1151,15 @@ const OLD_CLAUDE_START_MATCHER = "startup|clear";
 export function hookHosts(e: SetupEnv): HookHost[] {
   const muse = detectClients(e).find((t) => t.id === "muse")!.file;
   return [
-    { client: "claude-code", label: "Claude Code hook", agent: "Claude", file: join(claudeDir(e), "settings.json"), start: { on: "SessionStart", matcher: CLAUDE_START_MATCHER }, events: CAPTURE_HOOKS },
+    {
+      client: "claude-code",
+      label: "Claude Code hook",
+      agent: "Claude",
+      file: join(claudeDir(e), "settings.json"),
+      start: { on: "SessionStart", matcher: CLAUDE_START_MATCHER },
+      // Subagent memory (prompt/subagent.ts) is opt-in: its SubagentStart pack is wired only when the person chose it.
+      events: subagentMemoryOn(e.env) ? [...CAPTURE_HOOKS, SUBAGENT_START_HOOK] : CAPTURE_HOOKS,
+    },
     {
       client: "codex",
       label: "Codex CLI hook",
@@ -1292,6 +1304,16 @@ export function planHooks(e: SetupEnv, opts: SetupOptions, dbForHook: string | u
       added++;
     }
     if (added) lines.push(`record what ${host.agent} does in every project (files, commands, errors) into Monomem, stored only on this machine (MONOMEM_CAPTURE=off turns it off)`);
+    // The hook processes read MONOMEM_SUBAGENT_MEMORY from the app's environment: Claude Code passes its settings "env" to them.
+    if (host.events.includes(SUBAGENT_START_HOOK) && !want.upgradeOnly) {
+      const set = doc ? getPath(doc, ["env"]) : undefined;
+      const now = set ? getMember(set, "MONOMEM_SUBAGENT_MEMORY") : undefined;
+      if (!now) {
+        ops.push({ op: "set", path: ["env"], key: "MONOMEM_SUBAGENT_MEMORY", value: "on" });
+        inverse.unshift({ op: "remove", path: ["env"], key: "MONOMEM_SUBAGENT_MEMORY" });
+        lines.push(`give ${host.agent}'s subagents up to 10 lines of memory when they start, and keep one short note of what each found (MONOMEM_SUBAGENT_MEMORY=on in its settings "env")`);
+      }
+    }
     if (rewritten) lines.push(`${CAPTURE_REWRITE} (${rewritten}) from the old onememory-mcp package (or another npx version) with the installed Monomem, same place and settings`);
   }
   if (!ops.length) return { change: null, already: true };

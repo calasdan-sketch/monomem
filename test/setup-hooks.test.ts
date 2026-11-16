@@ -153,4 +153,26 @@ describe("setup --yes preview (final panel, ease B2)", () => {
     assert.doesNotMatch(out.all(), /PostToolUse/, "the preview must not show a capture hook that is never written");
     assert.doesNotMatch(out.all(), /record what/i);
   });
+
+  test("SubagentStart is wired only when MONOMEM_SUBAGENT_MEMORY=on is chosen, with the launcher line and the settings env; undo takes both out", () => {
+    const s = sandbox();
+    writeFileSync(s.settings, USER_HOOKS);
+    const off = JSON.parse(applyOps(USER_HOOKS, planHooks(s.e, opts(), undefined, { recall: true, capture: true }).change!.ops));
+    assert.equal(off.hooks.SubagentStart, undefined, "off by default: no SubagentStart hook");
+    assert.equal(off.env, undefined);
+    const on = { ...s.e, env: { ...s.e.env, MONOMEM_SUBAGENT_MEMORY: "on" } };
+    const r = planHooks(on, opts(), undefined, { recall: true, capture: true });
+    const after = JSON.parse(applyOps(USER_HOOKS, r.change!.ops));
+    const cmd: string = after.hooks.SubagentStart.at(-1).hooks[0].command;
+    assert.equal(cmd, `node "${CLI}" hook subagent-start`, "the same launcher line as every other hook (selfShellLine)");
+    assert.equal(after.hooks.SubagentStart.at(-1).hooks[0].async, undefined, "synchronous: its output is the pack");
+    assert.equal(after.env.MONOMEM_SUBAGENT_MEMORY, "on", "the hook processes see the switch through Claude Code's settings env");
+    assert.match(r.change!.lines.join("\n"), /subagents/);
+    const undone = JSON.parse(applyOps(applyOps(USER_HOOKS, r.change!.ops), r.change!.inverse));
+    assert.equal((undone.hooks.SubagentStart ?? []).length, 0);
+    assert.equal(undone.env?.MONOMEM_SUBAGENT_MEMORY, undefined);
+    // Installed: nothing more to plan.
+    writeFileSync(s.settings, applyOps(USER_HOOKS, r.change!.ops));
+    assert.deepEqual(planHooks(on, opts(), undefined, { recall: true, capture: true }), { change: null, already: true });
+  });
 });

@@ -129,7 +129,9 @@ capture:
 a subagent up to 10 index lines, this project first, leaving out notes the main session was already shown; once per
 subagent type per session. At `SubagentStop` one short note records what the subagent reported and the files it read, linked
 (`derived_from`) to the notes it was given; it is stamped like a session summary when the session read outside content.
-`monomem setup` does not add the `SubagentStart` hook yet: add it to your Claude Code settings by hand, next to the others.
+To turn it on, run `monomem setup --capture` with `MONOMEM_SUBAGENT_MEMORY=on` set in that shell: for Claude Code it adds
+the `SubagentStart` hook and writes `"MONOMEM_SUBAGENT_MEMORY": "on"` into the `env` of `~/.claude/settings.json` (Claude
+Code passes that to its hooks); `monomem setup --undo` takes both out. Without the variable, setup adds neither.
 
 ## Install (Claude Code settings)
 

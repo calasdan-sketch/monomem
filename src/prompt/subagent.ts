@@ -13,10 +13,7 @@ import { CAPTURE_SOURCE, originTags } from "../extract.js";
 
 export const PACK_LINES = 10;
 
-/** MONOMEM_SUBAGENT_MEMORY: "on" turns the SubagentStart pack and the SubagentStop note on. Default off. */
-export function subagentMemoryOn(env: NodeJS.ProcessEnv = process.env): boolean {
-  return /^(on|1|true|yes)$/i.test((env.MONOMEM_SUBAGENT_MEMORY ?? "").trim());
-}
+export { subagentMemoryOn } from "./switches.js";
 
 const one = (s: string, max: number): string => {
   const c = (s || "").replace(/\s+/g, " ").trim();
