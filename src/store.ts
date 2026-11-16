@@ -15,6 +15,7 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, statSync, statfsSync, readdirSync, renameSync, linkSync, existsSync, unlinkSync, copyFileSync, readFileSync } from "node:fs";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { dirname, basename, join, resolve } from "node:path";
+import { privateDir } from "./private-dir.js";
 import { checkSizes, checkNames, audit, auditHead, auditPath, beginKeyRotation, withAuditPath, ADMIN_SCOPE_NEEDED } from "./security.js";
 import { chmodQuiet } from "./config.js";
 import { SECRET_ASSIGN_LABEL } from "./security.js";
@@ -1646,7 +1647,8 @@ export class Store {
     this.busyTimeoutMs = Math.floor(opts.busyTimeoutMs ?? Store.BUSY_TIMEOUT_MS);
     if (dbPath !== ":memory:") {
       try {
-        mkdirSync(dirname(dbPath), { recursive: true, mode: 0o700 });
+        // final4 EASE-B1: a NEW data folder gets the owner-only lock (icacls on Windows); an existing one is left alone.
+        if (!existsSync(dirname(dbPath))) privateDir(dirname(dbPath));
       } catch (e) {
         throw new Error(Store.explainOpenError(e, dbPath));
       }

@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { privateDir, lockdownArgs, wideAccessGroups } from "../src/config.js";
 import { realEnv, saveHistory } from "../src/setup.js";
+import { Store } from "../src/store.js";
 
 const ENV = { USERDOMAIN: "DESK", USERNAME: "dan" } as NodeJS.ProcessEnv;
 
@@ -80,6 +81,19 @@ describe("R1-11 data folder ACL", () => {
       assert.ok(!/BUILTIN\\Users/i.test(out), out);
       assert.ok(!/Everyone/i.test(out), out);
       assert.ok(out.toLowerCase().includes((process.env.USERNAME ?? "?").toLowerCase()), out);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test("win32 only: opening a store creates its data folder locked, not inherited (final4 EASE-B1: setup's db check opens a Store first)", { skip: process.platform !== "win32" }, () => {
+    const base = mkdtempSync(join(tmpdir(), "mm-acl-store-"));
+    try {
+      const d = join(base, "data");
+      const s = new Store(join(d, "state.db"));
+      s.close();
+      const out = execFileSync("icacls", [d], { encoding: "utf8" });
+      assert.deepEqual(wideAccessGroups(out), [], out);
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
