@@ -39,10 +39,11 @@ All environment variables are optional. This table lists **every** `MONOMEM_*` v
 | `MONOMEM_RUNNER_ALLOW` | `data/runner-allow.json` | Runner: the allow-list (JSON) of actions it may run; none = nothing runs |
 | `MONOMEM_RUNNER_SECRET` | unset | Runner and signing helper: the shared secret that signs and verifies command notes. Required to run or sign anything |
 | `MONOMEM_TASK_COMMAND_QUOTA` | `100` | Most queued command tasks per namespace; more are refused |
+| `MONOMEM_AUTO_BACKUP` | on | `off` stops the server's automatic daily backup (`<data>/backups`, 7 daily + 4 weekly kept; see [footprint.md](./footprint.md)). `monomem backup` still works by hand |
 | `MONOMEM_CHANGE_LOG_PURGE_MS` | `3600000` (min `100`) | How often the server prunes the 90-day change log and stale runner heartbeats. Shortened by tests only |
 | `MONOMEM_TARPIT_STEP_MS` | `250` | Authentication failures from one client are delayed by this much more each time ... |
 | `MONOMEM_TARPIT_CAP_MS` | `2000` | ... up to this ceiling (brute-force slow-down) |
-| `MONOMEM_ENABLE_SIGN_PAGE` | unset (off) | `1` serves the runner signing page (`/sign`, `/signer.js`); otherwise both paths 404 |
+| `MONOMEM_ENABLE_SIGN_PAGE` | unset (off) | `1` serves the runner signing page (`/sign`, `/signer.js`); otherwise both paths 404. Works only from a Monomem checkout: the page's files (`docs/sign.html`, `docs/signer.js`) are not in the npm package (the runner ships separately), so an npm install answers 404 even with `1` |
 | `MONOMEM_CONSUMER` | set by `monomem watch` | Not a setting: `monomem watch` puts the consumer name in the environment of the command it runs |
 | `MONOMEM_CHANGE_COUNT` | set by `monomem watch` | Not a setting: the number of changes handed to the command `monomem watch` runs |
 | `MONOMEM_ATTEST_MIN_VERSION` | `1` (at most the current version, `2`) | Oldest attestation version an import believes. `2` once every peer exports with 1.4.1 or later (a version-1 attestation signs fewer fields). **EXPERIMENTAL** (see [trust.md](./trust.md)) |

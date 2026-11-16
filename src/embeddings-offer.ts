@@ -18,10 +18,11 @@ type Fetch = (url: string, init: { signal: AbortSignal }) => Promise<{ ok: boole
  * chose (MONOMEM_EMBEDDINGS or MONOMEM_EMBED_URL set), when probes are off (MONOMEM_NO_SERVER_PROBE=1, the test suite), or on
  * any error.
  */
-export async function localEmbeddingsAvailable(env: NodeJS.ProcessEnv, fetchFn: Fetch = fetch, timeoutMs = 800): Promise<boolean> {
+export async function localEmbeddingsAvailable(env: NodeJS.ProcessEnv, fetchFn?: Fetch, timeoutMs = 800): Promise<boolean> {
   if (env.MONOMEM_NO_SERVER_PROBE === "1" || env.MONOMEM_EMBEDDINGS?.trim() || env.MONOMEM_EMBED_URL?.trim()) return false;
   try {
-    const r = await fetchFn(OLLAMA_TAGS, { signal: AbortSignal.timeout(timeoutMs) });
+    const signal = AbortSignal.timeout(timeoutMs);
+    const r = fetchFn ? await fetchFn(OLLAMA_TAGS, { signal }) : await fetch(OLLAMA_TAGS, { signal });
     if (!r.ok) return false;
     const models = (await r.json()) as { models?: Array<{ name?: unknown; model?: unknown }> };
     return Array.isArray(models.models) && models.models.some((m) => [m.name, m.model].some((n) => typeof n === "string" && (n === MODEL || n.startsWith(MODEL + ":"))));

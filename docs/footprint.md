@@ -5,7 +5,7 @@ Monomem keeps to two places on its own: **its data folder** and **the config fil
 folder (`setup --project`, `export --dir`, `export --out`, `backup --out`, `sync --git`). It never writes a `CLAUDE.md` or
 `AGENTS.md` unless you run `monomem project-rules` (1.5.0) in that repository at a terminal and type yes; then it writes
 only between its own `<!-- monomem:begin v1 -->` and `<!-- monomem:end -->` lines (delete those lines and what is between
-them to remove it). It runs no background service you did not start (`monomem service install` adds one; see below), and every queue it keeps has a size or retry limit.
+them to remove it). It runs no background service you did not start (`monomem service install` adds one; see below), and every queue it keeps has a size or retry limit. A running server makes one backup a day inside the data folder (`backups/`, below).
 
 To take it all out: `monomem uninstall` (configs) or `monomem uninstall --purge` (configs and data, after a final
 backup). Both show the plan first and change nothing until you type `y`; `--dry-run` only shows it.
@@ -19,6 +19,9 @@ folder). `monomem doctor` prints which one, and its size.
 |---|---|---|
 | `state.db`, `state.db-wal`, `state.db-shm` | every note, task, capture event (`MONOMEM_DB_PATH` moves the database elsewhere) | `uninstall --purge` |
 | `state.db.pre-v<N>-backup[-<time>]` | once per schema upgrade: the database as it was before | `backup --prune-premigration` |
+| `backups/<YYYY-MM-DD>/` (`state.db`, `README.txt`) | automatic daily backup (1.6.0) while the server runs (`monomem start`, `open`, `service`): checked a minute after start, then hourly, at most one a day. Keeps the 7 newest days plus the newest of each of the 4 weeks before them, so at most 11 copies of the database. The encryption key is never copied (the server says once where it is and that it needs its own copy). `MONOMEM_AUTO_BACKUP=off` turns it off | older ones by itself; all: delete the folder, or `uninstall --purge` |
+| `state.db.before-restore-<time>` | `backup restore`: the database as it was before the restore (the undo) | by hand |
+| `.last-backup`, `.backup-failed`, `.backup-key-warned` | each backup / a failed automatic backup (cleared by the next good one; `monomem health` shows it) / the one-time key reminder | `uninstall --purge` |
 | `.token`, `tokens.json` | first start (the API token) / by you | `uninstall --purge` |
 | `.key`, `.attest-key`, `.sync-key` | `encrypt enable` / first signed export / first `sync --git --encrypt` (`MONOMEM_KEY_FILE`, `MONOMEM_ATTEST_KEY_FILE`, `MONOMEM_SYNC_KEY_FILE` move them) | `uninstall --purge` (a key moved elsewhere: by hand) |
 | `audit.log`, `audit.log.1..5` | every API write; rotated at 5 MB, 5 kept (`MONOMEM_AUDIT_LOG`, `_MAX_BYTES`, `_KEEP`) | `uninstall --purge` |
@@ -84,7 +87,8 @@ leaves it running. On Windows the task is found by its `monomem-task.xml` in the
 | Runner `--post` (`src/runner-sign.ts`) | `MONOMEM_URL` and `MONOMEM_TOKEN` | your own Monomem server |
 | Dashboard page (`src/dashboard.ts`) | opening the dashboard | the Monomem server that served the page (API calls, and the one-time sign-in code that `monomem open` hands over) |
 | `monomem open` (`src/cli/connect.ts`) | running the command | `http://127.0.0.1:<api port>/health`, to see whether your own server is up |
-| `monomem restore` (`src/cli.ts`) | running the command | `http://127.0.0.1:<api port>/health`, only to print a hint when something answers there (whether the database is in use is judged by its lock) |
+| `monomem backup restore` (`src/cli.ts`) | running the command | `http://127.0.0.1:<api port>/health`, only to print a hint when something answers there (whether the database is in use is judged by its lock) |
+| `monomem setup` (`src/embeddings-offer.ts`) | running the command (not `--no-embeddings`, `--undo`, or with `MONOMEM_EMBEDDINGS` / `MONOMEM_EMBED_URL` already set) | `http://127.0.0.1:11434/api/tags`, to see whether a local Ollama has `nomic-embed-text`; if so, new app entries get `MONOMEM_EMBEDDINGS=auto` (0.8 s timeout) |
 | `monomem doctor` (`src/doctor/server.ts`) | running the command | `http://127.0.0.1:<api port>/health`, to warn when the server running there is older than the CLI (`MONOMEM_NO_SERVER_PROBE=1` skips it) |
 | Encrypted session start (`src/local-server.ts`, `src/recall.ts`) | the store is encrypted and a Monomem server for this store runs on this computer | that server on `127.0.0.1`: `GET /proof` (to check it holds the same main key; the key itself is never sent) and `POST /relevant` (to match note bodies; falls back to titles and tags if nothing answers) |
 
@@ -110,6 +114,8 @@ minutes) and exits. Every retry is bounded:
   pages and runs a capped number of commands.
 - **watch**: gives up with an error after 10 failures in a row (a failed wait or a failing `--exec` handler).
 - **setup**: a busy file is retried for a few seconds, a file rewritten under it at most 5 times.
+- **daily backup** (server only): one `VACUUM INTO` copy a day, checked hourly; a failure is recorded, not retried until the
+  next hourly check. The copy runs on the server thread, so a very large store pauses serving briefly once a day.
 
 `monomem doctor` reports the data folder size (warns over 1 GB), the spool size (warns when anything is waiting, and
 when it is full) and the capture backlog: events no session summary has taken in yet (warns over 10,000).

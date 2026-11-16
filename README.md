@@ -382,8 +382,9 @@ encryption of note bodies. See [SECURITY.md](./SECURITY.md) for what it does
 
 **Nine of these are registered by default:** `state_write`, `state_read`, `state_search`,
 `state_list`, `state_delete`, `catch_up`, `memory_supersede_preview`, `memory_supersede_confirm`,
-`memory_supersede_undo`. Every tool's
-schema is sent to the model on every turn, so the rest are operator tooling you opt into with
+`memory_supersede_undo`. Their schemas are about 21,000 characters (roughly 5,000 tokens; measured with `tools/list`
+on 1.5.0 and counted as characters divided by 4, not with a tokenizer). A client that loads every tool's schema up front
+pays that on each request, so the rest are operator tooling you opt into with
 `MONOMEM_TOOLS=all`, or by naming them: `MONOMEM_TOOLS=memory_index,memory_timeline`. See
 [docs/configuration.md](./docs/configuration.md). The command runner (`task_*`, `runner_status`) is **not
 shipped in the npm package** — build it from the repo.
