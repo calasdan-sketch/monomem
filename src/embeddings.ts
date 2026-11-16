@@ -126,6 +126,34 @@ export async function embed(
   }
 }
 
+/**
+ * Round 4: search queries repeat (an agent re-asks, the hook and the tool ask the same thing), and each embed is an HTTP
+ * round trip (~20 ms local). Up to QUERY_VECTOR_MAX recent query vectors are kept in this process, keyed by endpoint, model
+ * and text; least recently used goes first. Failures are not kept. Each caller gets a copy.
+ */
+const QUERY_VECTOR_MAX = 256;
+const queryVectors = new Map<string, Float32Array>();
+
+export async function embedQuery(text: string, cfg: EmbeddingsConfig = embeddingsConfig()): Promise<Float32Array | null> {
+  const key = JSON.stringify([cfg.url, cfg.model, text]);
+  const hit = queryVectors.get(key);
+  if (hit) {
+    queryVectors.delete(key);
+    queryVectors.set(key, hit); // most recent last
+    return hit.slice();
+  }
+  const vec = await embed(text, cfg);
+  if (!vec) return null;
+  queryVectors.set(key, vec.slice());
+  if (queryVectors.size > QUERY_VECTOR_MAX) queryVectors.delete(queryVectors.keys().next().value!);
+  return vec;
+}
+
+/** Test hook (and nothing else needs it): forget the cached query vectors. */
+export function clearQueryVectors(): void {
+  queryVectors.clear();
+}
+
 // Note text goes to the embeddings endpoint. A remote one is allowed (hosted embedding APIs are a
 // documented choice), but never silently: say once, on stderr, where the text is going.
 const LOOPBACK = /^(?:localhost|127(?:\.\d{1,3}){3}|\[::1\]|::1)$/i;

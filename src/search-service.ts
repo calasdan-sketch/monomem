@@ -11,7 +11,7 @@
 
 import { mayEmbed } from "./sensitivity.js";
 import { Store, NoteRecord, clampInt, queryTooLong, ValidationError } from "./store.js";
-import { embed, embeddingsEnabled, embeddingsConfig, noteEmbeddingText } from "./embeddings.js";
+import { embed, embedQuery, embeddingsEnabled, embeddingsConfig, noteEmbeddingText } from "./embeddings.js";
 import { filterByTimeRange, parseTimePhrase, type TimeRange } from "./time-parse.js";
 import { TIME_ZONE } from "./config.js";
 import { extractKeywords, searchStem } from "./keywords.js";
@@ -733,7 +733,7 @@ async function runSearchInner(
 
   if (mode === "keyword" || !embeddingsEnabled()) return finalize(keyword(win ? clampInt(limit * 3, 60, 1, 200) : fetchK));
 
-  const qv = await embed(query);
+  const qv = await embedQuery(query);
   if (!qv) return finalize(keyword(win ? clampInt(limit * 3, 60, 1, 200) : fetchK)); // endpoint down / not embeddable -> graceful fallback
 
   // Oversample (limit*5, capped at the 200 max) so the hybrid blend has a rich
@@ -823,7 +823,7 @@ async function runSearchExplainedInner(
 
   if (mode === "keyword" || !embeddingsEnabled()) return finalize(keyword(win ? clampInt(limit * 3, 60, 1, 200) : fetchK));
 
-  const qv = await embed(query);
+  const qv = await embedQuery(query);
   if (!qv) return finalize(keyword(win ? clampInt(limit * 3, 60, 1, 200) : fetchK));
 
   const poolLimit = clampInt(limit * 5, 100, 1, 200);
