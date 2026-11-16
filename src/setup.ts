@@ -1416,8 +1416,8 @@ export function lineDiff(before: string, after: string, file: string): string[] 
 // ---- writing: backup + atomic + re-read ----------------------------------------------------------------------------------
 
 export interface WrittenChange {
-  /** Which client this entry configured, so callers can group by vendor. */
-  client: ClientId;
+  /** Which client this entry configured, so callers can group by vendor ("shortcut": the Start menu / Applications entry). */
+  client: ClientId | "shortcut";
   file: string;
   /** Resolved real file (the target of a symlink). */
   real: string;
@@ -1427,6 +1427,8 @@ export interface WrittenChange {
   inverse: Op[];
   label: string;
   format?: "toml";
+  /** A folder setup created around the file (the macOS .app); undo removes it with the file. */
+  createdDir?: string;
 }
 
 const sha = (s: string): string => createHash("sha256").update(s).digest("hex");
@@ -1667,6 +1669,7 @@ export function undoSession(e: SetupEnv, io: SetupIO, s: HistorySession): number
         // Untouched since we wrote it: put the exact original back.
         if (c.createdFile) {
           unlinkSync(c.real);
+          if (c.createdDir) rmSync(c.createdDir, { recursive: true, force: true });
           io.out(`  ${c.file}: removed (setup had created it)`);
         } else if (c.backup && existsSync(c.backup)) {
           const orig = readFileSync(c.backup);
@@ -1714,6 +1717,22 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
     return 1;
   }
   if (opts.undo) return undoLast(e, io);
+  // The standalone download: app settings and hooks must name the folder's permanent home (install.ts), not the folder it
+  // was unpacked in (Downloads, a temp copy of a zip). Everything below plans with the home's paths; the copy is a listed step.
+  let placement: { from: string; to: string } | null = null;
+  let shortcut: import("./install.js").ShortcutPlan | null = null;
+  if (e.mode === "bundle") {
+    const inst = await import("./install.js");
+    const root = inst.bundleRoot(e.cliPath);
+    const home = inst.installDir(e);
+    if (!inst.samePath(root, home, e.platform)) {
+      placement = { from: root, to: home };
+      e = { ...e, execPath: inst.rebase(e.execPath, root, home), cliPath: inst.rebase(e.cliPath, root, home) };
+    }
+    const sp = inst.shortcutPlan(e, home);
+    if (!existsSync(sp.file)) shortcut = sp;
+  }
+  const extra = !!placement || !!shortcut;
   if (e.globalCliPath === undefined && opts.command === "auto" && runningFromNpxCache(e.cliPath)) e = { ...e, globalCliPath: detectGlobalCli(e) ?? null };
 
   // Old-style names (ONEMEMORY_*, CLAUDE_BRIDGE_*) in the shell count as MONOMEM_*, exactly as at run time. A copy, so the
@@ -1730,7 +1749,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   if (!opts.home && runtimeHome(e) !== resolve(join(e.home, ".monomem"))) opts = { ...opts, home: runtimeHome(e) };
   if (!opts.terse) {
     io.out(`Monomem setup (version ${e.version})`);
-    io.out(`  Node ${e.nodeVersion}: OK\n`);
+    io.out(e.mode === "bundle" ? `  Built-in runtime (Node ${e.nodeVersion}): OK\n` : `  Node ${e.nodeVersion}: OK\n`);
   }
   if (legacyHome) io.out(`Your notes are in ${opts.home} (the folder from when Monomem was called OneMemory; there is no ~/.monomem store), so each app entry and hook setup writes gets MONOMEM_HOME=${opts.home} and keeps using them.\n`);
   else if (opts.home) io.out(`MONOMEM_HOME is set (${opts.home}), so each app entry setup writes gets MONOMEM_HOME too and uses that data folder.\n`);
@@ -1792,7 +1811,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
     if (v !== null && v > SCHEMA_VERSION) plan.conflicts.push(`database ${d} is at schema v${v}, which is newer than this version (v${SCHEMA_VERSION}); install the newest monomem`);
   }
 
-  if (plan.changes.length === 0 && plan.conflicts.length === 0) {
+  if (plan.changes.length === 0 && plan.conflicts.length === 0 && !extra) {
     if (plan.already.length === 0) {
         io.out("I found no app to connect on this computer (none of the supported apps is installed), so nothing was changed. That is fine. What to do next:");
         io.out("  1. If you use one of these, name it and I will create its settings file:  monomem connect claude-code   (also: claude-desktop, cursor, codex, gemini, muse, vscode, zed)");
@@ -1859,7 +1878,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
     if (missing.length) io.out(`\nNot installed: start-of-session hook. Add it: monomem setup --hook (without it, ${names(missing)} only ${missing.length === 1 ? "sees" : "see"} your notes when it searches for them).`);
   };
 
-  if (plan.changes.length === 0 && !anyHook && !anyCapture) {
+  if (plan.changes.length === 0 && !anyHook && !anyCapture && !extra) {
     for (const a of plan.already) io.out(`  (already fine) ${a}`);
     for (const w of plan.warnings) io.out(`  (careful) ${w}`);
     io.out(plan.already.length ? "\nNothing to change: Monomem is already connected. To check it, run:  monomem doctor" : "\nNothing was changed.");
@@ -1869,6 +1888,8 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
 
   io.out("What I will do:");
   let n = 1;
+  if (placement) io.out(`  ${n++}. Copy Monomem from ${placement.from} to ${placement.to}, its home on this computer (no admin rights needed), so your apps' settings name a folder that never moves. You can delete the downloaded folder afterwards`);
+  if (shortcut) io.out(`  ${n++}. Add a "Monomem" entry to ${shortcut.where} that opens your notes in the browser (${shortcut.file}). monomem setup --undo and monomem uninstall remove it`);
   for (const c of plan.changes) for (const l of c.lines) io.out(`  ${l.startsWith("note:") ? "   " : `${n++}. ${c.label}: `}${l}`);
   // --yes asks nothing, so the hook it adds is a step like any other (Claude Code only, unless --hook: see the else branch below).
   if (opts.yes && opts.hook !== "no")
@@ -1913,7 +1934,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
     if ((anyHook && !wantHook) || (anyCapture && !wantCapture)) io.out("(The hooks above are only added if you say yes to them, or pass --hook / --capture. With --yes the start-of-session hook for Claude Code is added too; --no-hook leaves it out.)");
     return 0;
   }
-  if (plan.changes.length === 0 && !anyHook && !anyCapture) return 0;
+  if (plan.changes.length === 0 && !anyHook && !anyCapture && !extra) return 0;
 
   if (!opts.yes) {
     if (!io.interactive) {
@@ -1923,7 +1944,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
       );
       return 1;
     }
-    const a = (await io.ask(plan.changes.length ? "Go ahead with the changes above? Type y to continue, anything else cancels: " : "Install the hooks? Type y: ")).trim().toLowerCase();
+    const a = (await io.ask(plan.changes.length || extra ? "Go ahead with the changes above? Type y to continue, anything else cancels: " : "Install the hooks? Type y: ")).trim().toLowerCase();
     if (a !== "y" && a !== "yes") {
       io.out("Cancelled. Nothing was changed.");
       return 0;
@@ -2010,6 +2031,17 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
     return 1;
   }
 
+  // 1b. The standalone download moves into its home before any setting names that home.
+  if (placement) {
+    try {
+      (await import("./install.js")).copyToInstall(placement.from, placement.to);
+      io.out(`Copied Monomem to ${placement.to}.`);
+    } catch (err) {
+      io.err(`Could not copy Monomem to ${placement.to} (${(err as Error).message}), so I changed NO configuration.`);
+      return 1;
+    }
+  }
+
   // 2. Configuration files.
   const written: WrittenChange[] = [];
   // Each hook file: automatic memory (with the start-of-session hook when that was wanted too), else the hook alone.
@@ -2040,9 +2072,20 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
     }
     return 1;
   }
-  if (written.length) {
+  // The Start menu / Applications entry: recorded like a file setup created, so --undo and uninstall remove it.
+  const saved = [...written];
+  if (shortcut) {
+    try {
+      const afterSha = (await import("./install.js")).createShortcut(shortcut, e.platform);
+      saved.push({ client: "shortcut", file: shortcut.file, real: shortcut.file, backup: null, createdFile: true, afterSha, inverse: [], label: `${shortcut.where} entry`, ...(shortcut.createdDir ? { createdDir: shortcut.createdDir } : {}) });
+      io.out(`Added "Monomem" to ${shortcut.where}: ${shortcut.file}`);
+    } catch (err) {
+      io.err(`Could not add the ${shortcut.where} entry (${(err as Error).message}). Everything else is done; open your notes with:  monomem open`);
+    }
+  }
+  if (saved.length) {
     const all = readHistory(e);
-    all.push({ id: stamp(e.now()), at: e.now().toISOString(), version: e.version, changes: written, dbs: dbsBefore, migratedLegacy });
+    all.push({ id: stamp(e.now()), at: e.now().toISOString(), version: e.version, changes: saved, dbs: dbsBefore, migratedLegacy });
     saveHistory(e, all);
   }
   {

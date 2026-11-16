@@ -20,6 +20,74 @@ run on your computer with no limit, so use `connect` for any app that should not
 
 ---
 
+## Download (no Node.js needed)
+
+Each [GitHub release](https://github.com/calasdan-sketch/monomem/releases) carries one archive per computer:
+
+| Computer | File |
+|---|---|
+| Windows (64-bit Intel/AMD) | `monomem-<version>-win-x64.zip` |
+| Mac with Apple silicon (M1 or newer) | `monomem-<version>-darwin-arm64.tar.gz` |
+| Mac with an Intel chip | `monomem-<version>-darwin-x64.tar.gz` |
+| Linux (64-bit Intel/AMD, glibc 2.28 or newer) | `monomem-<version>-linux-x64.tar.gz` |
+
+Not listed: Windows on ARM, Linux on ARM and Alpine (musl). Use npm or Docker there.
+
+Each archive holds one `Monomem` folder: Node.js's own official program (`runtime/node.exe` or `runtime/node`, copied unchanged
+from nodejs.org after its checksum was checked; `runtime/SOURCE.txt` says which build), Monomem's code (`dist/`), these docs
+and a small launcher (`monomem.cmd` on Windows, `monomem` on Mac and Linux). Monomem itself is not code-signed (signing
+costs money we have not spent yet). The only program in the folder is Node's, which is signed by its makers.
+
+**Install**
+
+1. Unpack the archive (on Windows: right-click it, **Extract All**; do not run it from inside the zip).
+2. In a terminal, run setup from the unpacked folder:
+   - Windows: `.\Monomem\monomem.cmd setup`
+   - Mac / Linux: `./Monomem/monomem setup`
+3. Setup shows its plan and asks before it changes anything. Its first two steps:
+   - It copies the folder to its home, so app settings never point into your Downloads folder. No admin rights are needed.
+     Windows: `%LOCALAPPDATA%\Programs\Monomem`. Mac: `~/Applications/Monomem`. Linux: `~/.local/share/monomem`.
+   - It adds a **Monomem** entry that opens your notes in the browser: in the Windows Start menu, in `~/Applications` on a
+     Mac, and in the Linux applications menu. `monomem setup --undo` and `monomem uninstall` remove it.
+4. Then it connects your apps as usual. You can delete the downloaded archive and folder afterwards.
+
+To type `monomem` in any terminal, add the home folder to your PATH (Windows: the folder above; Mac/Linux:
+`export PATH="$HOME/.local/share/monomem:$PATH"` or the Mac folder, in your shell profile). Running `monomem` with no command
+in a terminal shows the help; double-clicking `monomem.cmd` or using the Monomem entry opens your notes.
+
+**Update.** `monomem update` downloads the newest release for your computer, checks its SHA-256 against the release's
+`SHA256SUMS`, swaps it into the same folder (apps that are open keep working), upgrades your database and restarts the
+background service if you set one up. It only ever runs when you type it; nothing updates in the background, and
+`monomem update --check` only asks. Restart your apps afterwards. Offline, it says it could not reach github.com and
+changes nothing.
+
+**What your computer may say (no code signing yet)**
+
+- **Windows.** The zip comes from the internet, so Windows marks it. The program that runs is Node's `node.exe`, which is
+  signed by the OpenJS Foundation, so SmartScreen and Smart App Control normally let it run. If Windows still blocks
+  `monomem.cmd`, right-click the zip, choose **Properties**, tick **Unblock**, click **OK**, and extract again. Do not turn
+  Smart App Control off. Task Manager shows Monomem as "Node.js JavaScript Runtime". We have not yet tested this on a
+  computer with Smart App Control switched on.
+- **Mac.** A browser download gets a "quarantine" mark, and macOS Gatekeeper checks marked programs. Node's `runtime/node`
+  is signed by its makers; the `monomem` launcher is a plain text script and is not signed. If you see "cannot be opened
+  because Apple cannot check it for malicious software" (or "from an unidentified developer"):
+  1. Open **System Settings > Privacy & Security**, scroll down, and click **Open Anyway** next to the Monomem message.
+  2. Or, in Terminal, remove the mark from the unpacked folder once: `xattr -dr com.apple.quarantine ~/Downloads/Monomem`
+  An archive fetched with `curl` gets no quarantine mark at all. We have not yet tested these steps on a Mac.
+- **Linux.** No warning. `chmod +x Monomem/monomem` if your unpacker dropped the executable bit.
+
+**Check the download (recommended)**
+
+1. Download `SHA256SUMS` from the same release, into the same folder as the archive.
+2. Compare:
+   - Windows (PowerShell): `Get-FileHash .\monomem-<version>-win-x64.zip -Algorithm SHA256`, then find that value in `SHA256SUMS`.
+   - Mac: `shasum -a 256 monomem-<version>-darwin-arm64.tar.gz` (or `-darwin-x64`), then find that value in `SHA256SUMS`.
+   - Linux: `sha256sum -c SHA256SUMS --ignore-missing`
+3. The checksum only proves the file matches the release. To check that this project's GitHub build made it, use the
+   GitHub CLI: `gh attestation verify monomem-<version>-<target>.zip --repo calasdan-sketch/monomem` (or the `.tar.gz`).
+
+---
+
 ## Doing it by hand
 
 > **Before the by-hand steps** (Node.js 22.16+ or 24 LTS):

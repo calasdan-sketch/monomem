@@ -7,7 +7,7 @@
 //           stable launcher apps keep pointing at.
 //   sea     a single executable (node:sea): the exe is the program, so nothing is passed before the subcommand.
 import { createRequire } from "node:module";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -56,8 +56,9 @@ export function modeFor(sea: boolean, execPath: string, root: string): SelfMode 
 export function selfFacts(): SelfFacts {
   const sea = isSea();
   const mode = modeFor(sea, process.execPath, packageRoot(sea));
-  // The CLI entry: cli.js beside this file; in a one-file build, the bundle file is the entry.
-  const cliPath = sea ? process.execPath : UNBUNDLED ? join(HERE, "cli.js") : fileURLToPath(import.meta.url);
+  // The CLI entry: cli.js beside this file. In a one-file build, the cli.js beside the bundle when there is one (the
+  // standalone download's small entry that turns on the compile cache), else the bundle file itself.
+  const cliPath = sea ? process.execPath : UNBUNDLED || existsSync(join(HERE, "cli.js")) ? join(HERE, "cli.js") : fileURLToPath(import.meta.url);
   return { mode, execPath: process.execPath, cliPath, platform: process.platform };
 }
 
