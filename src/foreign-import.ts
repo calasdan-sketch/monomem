@@ -25,7 +25,7 @@ import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node
 import { basename, join, relative, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { MODEL_WRITTEN_TAG } from "./reserved-tags.js";
-import { chunkBody, looksLikeCredential, MAX_FILE_BYTES, parseFrontmatter, readHeld, writeHeld } from "./claude-import.js";
+import { chunkBody, looksLikeCredential, replyContextIsClean, MAX_FILE_BYTES, parseFrontmatter, readHeld, writeHeld } from "./claude-import.js";
 import { lintContent } from "./lint.js";
 import { readClaudeCodeChats, sealedChatNote, type ChatStats } from "./chat-import.js";
 import { LIMITS, printable } from "./security.js";
@@ -391,7 +391,7 @@ export async function runForeignImport(e: Pick<SetupEnv, "home" | "env" | "cwd">
   const chatStats: ChatStats = { sessions: 0, tooBig: 0, badLines: 0 };
   try {
     items =
-      from === "claude-mem" ? readClaudeMem(path) : from === "mem0" ? readMem0(path) : from === "mcp-memory" ? readMcpMemory(path, mcpStats) : from === "claude-code-chats" ? readClaudeCodeChats(path, chatStats) : readBasicMemory(path);
+      from === "claude-mem" ? readClaudeMem(path) : from === "mem0" ? readMem0(path) : from === "mcp-memory" ? readMcpMemory(path, mcpStats) : from === "claude-code-chats" ? readClaudeCodeChats(path, chatStats, replyContextIsClean) : readBasicMemory(path);
   } catch (err) {
     io.err(`Could not read ${path}: ${(err as Error).message}`);
     return 1;
@@ -428,7 +428,8 @@ export async function runForeignImport(e: Pick<SetupEnv, "home" | "env" | "cwd">
     for (const [name, g] of groups) io.out(`  ${printable(name, 60).padEnd(30)} ${g.n} item(s): ${g.create} new, ${g.same} already imported, ${g.secrets} skipped (secret)`);
     const t = [...groups.values()].reduce((a, g) => ({ n: a.n + g.n, c: a.c + g.create, s: a.s + g.same, x: a.x + g.secrets }), { n: 0, c: 0, s: 0, x: 0 });
     io.out(`\n${t.n} item(s): ${t.c} new, ${t.s} already imported, ${t.x} skipped because they look like a secret.`);
-    if (t.x) io.out("  Skipped items are not stored and not shown. Take the secret out at the source (or keep it in a password manager) and run again.");
+    if (t.x && from === "claude-code-chats") io.out("  These messages contain a secret and were left out (not stored, not shown). The messages around them are kept.");
+    else if (t.x) io.out("  Skipped items are not stored and not shown. Take the secret out at the source (or keep it in a password manager) and run again.");
     if (heldSkipped) io.out(`  ${heldSkipped} item(s) were held by the memory linter on an earlier run and are not queued again (see \`monomem quarantine\`).`);
     if (opts.dryRun && from === "mcp-memory") previewMcp(io, todo, mcpStats);
     if (from === "claude-code-chats") {

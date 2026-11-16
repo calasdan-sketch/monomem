@@ -42,14 +42,18 @@ export interface ChatNote {
 const clip = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n)}…` : s);
 const oneLine = (s: string): string => s.replace(/\s+/g, " ").trim();
 
-/** One note per non-empty message: its own text, then "(replying to <speaker>: <their text>)". */
-export function chatNotes(messages: readonly ChatMessage[]): ChatNote[] {
+/**
+ * One note per non-empty message: its own text, then "(replying to <speaker>: <their text>)". `contextOk` judges the FULL
+ * replied-to text (not the cut): when it says no (a secret, an injection, ...), the note is stored without the context, so
+ * one bad neighbour neither leaks a cut-off secret head into the next note nor gets that clean note skipped or held.
+ */
+export function chatNotes(messages: readonly ChatMessage[], contextOk: (text: string) => boolean = () => true): ChatNote[] {
   const kept = messages.map((m) => ({ ...m, text: m.text.trim() })).filter((m) => m.text);
   return kept.map((m, i) => {
     const prev = kept[i - 1];
     const firstLine = m.text.split("\n").find((l) => l.trim()) ?? "";
     const title = clip(oneLine(`${m.speaker}: ${firstLine}`), TITLE_CHARS - 1);
-    const body = prev ? `${m.text}\n\n(replying to ${prev.speaker}: ${clip(oneLine(prev.text), REPLY_CONTEXT_CHARS)})` : m.text;
+    const body = prev && contextOk(prev.text) ? `${m.text}\n\n(replying to ${prev.speaker}: ${clip(oneLine(prev.text), REPLY_CONTEXT_CHARS)})` : m.text;
     return { id: m.id, title, body, ...(m.at ? { at: m.at } : {}) };
   });
 }
@@ -122,7 +126,7 @@ export interface ChatStats {
   badLines: number;
 }
 
-export function readClaudeCodeChats(root: string, stats: ChatStats = { sessions: 0, tooBig: 0, badLines: 0 }): Item[] {
+export function readClaudeCodeChats(root: string, stats: ChatStats = { sessions: 0, tooBig: 0, badLines: 0 }, contextOk?: (text: string) => boolean): Item[] {
   const items: Item[] = [];
   for (const project of readdirSync(root, { withFileTypes: true })) {
     if (!project.isDirectory()) continue;
@@ -133,7 +137,7 @@ export function readClaudeCodeChats(root: string, stats: ChatStats = { sessions:
       const session = basename(f.name, ".jsonl");
       const messages = readChatSession(join(dir, f.name), stats);
       const speakerOf = new Map(messages.map((m) => [m.id, m.speaker]));
-      for (const n of chatNotes(messages)) {
+      for (const n of chatNotes(messages, contextOk)) {
         const byModel = speakerOf.get(n.id) === "Claude";
         items.push({
           id: `${session}:${n.id}`,

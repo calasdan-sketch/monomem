@@ -282,6 +282,11 @@ export function looksLikeCredential(text: string): boolean {
   return CREDENTIAL_ASSIGNMENT.test(text) || URL_PASSWORD.test(text) || AUTH_HEADER.test(text) || BEARER_VALUE.test(text) || PASSWORD_WORDS.test(text);
 }
 
+/** Chat import: may a message be carried as reply context in the next note? Only when the whole text has no linter finding and no credential. */
+export function replyContextIsClean(text: string): boolean {
+  return lintContent({ body: text }).length === 0 && !looksLikeCredential(text);
+}
+
 // ---- candidates --------------------------------------------------------------------------------------------------------------
 
 export interface Candidate {
