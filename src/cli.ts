@@ -910,9 +910,15 @@ async function doctor(): Promise<void> {
 
   // An app entry or hook that points at a removed install, or launches another version with npx.
   try {
-    const { appEntryProblems, realEnv } = await import("./setup.js");
+    const { appEntryProblems, connectedApps, realEnv } = await import("./setup.js");
     const { PACKAGE_VERSION } = await import("./config.js");
-    for (const p of appEntryProblems(realEnv(PACKAGE_VERSION, fileURLToPath(import.meta.url)))) warn(p, "run monomem setup");
+    const env = realEnv(PACKAGE_VERSION, fileURLToPath(import.meta.url));
+    for (const p of appEntryProblems(env)) warn(p, "run monomem setup");
+    // The commonest real failure, "my assistant does not see Monomem", must show up here (final3 EASE-SF4).
+    const apps = connectedApps(env);
+    if (apps.connected.length) console.log(`  [info] connected apps: ${apps.connected.join(", ")}`);
+    else if (apps.found.length) warn(`no app is connected to Monomem (found: ${apps.found.join(", ")})`, "monomem setup (or monomem connect <app>)");
+    else console.log("  [info] connected apps: none found on this machine (monomem connect <app> when you install one)");
   } catch {
     /* configs could not be inspected: not a problem with Monomem */
   }

@@ -56,3 +56,22 @@ describe("EASE-SF2: rollback --writer with a typo says Did you mean, like trust 
     }
   });
 });
+
+describe("EASE-SF4: doctor says which apps are connected", () => {
+  test("an installed app with no monomem entry is a warning, not All good", async () => {
+    const { privateDir } = await import("../src/config.js");
+    const { mkdirSync, writeFileSync } = await import("node:fs");
+    const dir = tmp();
+    privateDir(join(dir, "data"));
+    writeFileSync(join(dir, ".claude.json"), JSON.stringify({ mcpServers: {} }));
+    mkdirSync(join(dir, ".claude"), { recursive: true });
+    const env = { MONOMEM_HOME: join(dir, "data"), MONOMEM_DB_PATH: undefined, APPDATA: join(dir, "a"), LOCALAPPDATA: join(dir, "l"), XDG_CONFIG_HOME: join(dir, "c"), CLAUDE_CONFIG_DIR: undefined };
+    const r = run(dir, ["doctor"], env);
+    assert.match(r.stdout, /\[warn\].*no app is connected to Monomem.*Claude Code/, r.stdout);
+    assert.doesNotMatch(r.stdout, /All good/);
+    writeFileSync(join(dir, ".claude.json"), JSON.stringify({ mcpServers: { monomem: { command: "npx", args: ["-y", "monomem", "mcp"] } } }));
+    const r2 = run(dir, ["doctor"], env);
+    assert.match(r2.stdout, /\[info\] connected apps: Claude Code/, r2.stdout);
+    assert.doesNotMatch(r2.stdout, /no app is connected/);
+  });
+});
