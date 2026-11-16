@@ -68,6 +68,16 @@ describe("U-01 writer names", () => {
     assert.doesNotMatch(text, /--yes/);
   });
 
+  test("final4 ease: rollback without --since names the flag and shows an example", async () => {
+    const store = new Store(":memory:");
+    const o = io();
+    const code = await rollbackCli(store, ["--writer", "cursor"], o);
+    const text = o.lines.join("\n");
+    assert.equal(code, 1, text);
+    assert.match(text, /--since is required/);
+    assert.match(text, /monomem rollback --writer cursor --since 2h/);
+  });
+
   test("an empty rollback plan prints no code and no --yes line", async () => {
     const store = new Store(":memory:");
     setProcessWriter("cli");

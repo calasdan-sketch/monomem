@@ -276,6 +276,11 @@ export async function rollbackCli(store: Store, args: string[], io: CliIO, calle
   try {
     const { flags } = parseArgs(args);
     const json = flags.json === true;
+    if (!s(flags.since)?.trim()) {
+      const w = s(flags.writer)?.trim() || "<writer>";
+      io.err(`Error: --since is required: how far back to undo, an ISO time or a duration (30m, 2h, 7d). Example: monomem rollback --writer ${w} --since 2h`);
+      return 1;
+    }
     const how = flags.yes === true || io.interactive ? "" : "Nothing was changed. Run it again at a terminal, or add --yes, to go ahead.";
     const preview = rollbackPreview(store, caller, { writer: s(flags.writer), since: s(flags.since), include_conflicts: flags["include-conflicts"] === true }, how);
     io.out(json ? JSON.stringify(preview, null, 2) : preview.warning);
