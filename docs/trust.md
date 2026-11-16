@@ -332,6 +332,13 @@ confirm the original, and `monomem facts` does not count it as a second writer a
 never refused. The match is word overlap, so a reworded restatement can slip through, and a short generic note is never
 called an echo.
 
+Measured (1.6, `test/echo-precision.test.ts`): on 50 hand-written pairs of developer notes (25 restatements, 25 notes on
+the same topic with new facts), split by topic into a half to look at and a half to report, the current rule (word
+similarity 0.8 or more, at least 6 words) scored, on the reported half: precision 1.00 (5 of 5), recall 0.42 (5 of 12).
+When it says "echo" it was right every time in this set; it misses more than half of the reworded restatements. The
+threshold was not changed (precision was already above 0.9). The looked-at half scored the same (5 of 5 right, 5 of 13
+found). The set is small and written by one person, so read these as a rough guide, not a guarantee.
+
 Limits: it only works when agents fill it in, it looks one hop back, a held write keeps its mark but loses its links, and
 there is no session-start count line for notes built on a distrusted writer.
 
