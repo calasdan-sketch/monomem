@@ -58,7 +58,7 @@ describe("the harness is hermetic", () => {
     // (a throwaway data directory, and the full tool surface so the suite can
     // exercise the operator tools a plain install no longer registers; the flood guard off for bulk tests). Any
     // other MONOMEM_* variable means the developer's shell leaked in.
-    const deliberate = new Set(["MONOMEM_HOME", "MONOMEM_TOOLS", "MONOMEM_FLOOD_WRITES_PER_HOUR", "MONOMEM_SCAN_CACHE_SECONDS", "MONOMEM_NO_SERVER_PROBE"]); // the last: doctor never probes a real server from a test
+    const deliberate = new Set(["MONOMEM_HOME", "MONOMEM_TOOLS", "MONOMEM_FLOOD_WRITES_PER_HOUR", "MONOMEM_SCAN_CACHE_SECONDS", "MONOMEM_NO_SERVER_PROBE", "MONOMEM_RECALL_TIMEOUT_MS"]); // NO_SERVER_PROBE: doctor never probes a real server from a test; RECALL_TIMEOUT: a loaded CI runner must not trip the 5 s session-start cap
     const left = Object.keys(process.env).filter((k) => k.startsWith("MONOMEM_") && !deliberate.has(k));
     assert.deepEqual(left, []);
     assert.equal(process.env.MONOMEM_TOOLS, "all", "the suite runs against the full tool surface");
