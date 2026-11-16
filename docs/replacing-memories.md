@@ -1,10 +1,10 @@
-# Replacing a memory, history and confidence (1.6.0)
+# Replacing a memory, history and confidence
 
 Plain version: when a note is out of date, you can **replace** it with a newer one. Monomem never does that
 quietly. It first shows you exactly what would stop appearing in search, you say yes, and only then does it
 happen. Nothing is deleted, and you can undo it.
 
-**Without the replace step (1.5.0).** When the same writer later restates a fact (the same fact key with another value, or a
+**Without the replace step (since Monomem 1.5.0).** When the same writer later restates a fact (the same fact key with another value, or a
 very similar note) and the two match a search about equally well, the newer note now ranks first in search, the "what is relevant"
 lookup and session start. The older note is still returned right behind it, labelled `restated_by`. This never happens for a
 different writer (both notes are shown with a dispute label instead) or over a note a person confirmed. To retire the old note, replace it.
@@ -211,7 +211,7 @@ undone), Pin, and Distrust writer. A pinned note cannot be replaced from the das
 
 ## Upgrading
 
-The first start on 1.6.0 upgrades the database to schema v15 (columns for confidence and the replaced link, and tables for history and
-one-time codes). As for every schema change, a verified copy of the old database is kept first at `<database>.pre-v18-backup`; the upgrade
+The first start on OneMemory 1.6.0 (the old name, before Monomem 1.0.0) upgraded the database to schema v15 (columns for confidence and the replaced link, and tables for history and
+one-time codes). As for every schema change, a verified copy of the old database is kept first at `<database>.pre-vNN-backup` (NN = the new schema number); the upgrade
 does not run if the copy cannot be made. There is no downgrade path: to go back, stop everything, put that copy back as the database,
 and install the older version. Upgrading from 1.3.x or 1.4.x: [upgrading.md](./upgrading.md).

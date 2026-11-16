@@ -35,7 +35,7 @@ export async function connectCmd(cliPath: string): Promise<void> {
       console.log(JSON.stringify({ mcpServers: { monomem: buildServerEntry(realEnv(PACKAGE_VERSION, cliPath), { command: "auto" }, env) } }, null, 2));
       return;
     }
-    process.argv.splice(2, process.argv.length - 2, "setup", "--only", app, ...(flags["dry-run"] === true ? ["--dry-run"] : []), ...(flags.yes === true ? ["--yes"] : []), "--no-hook", "--no-capture", "--terse", "--no-test-note");
+    process.argv.splice(2, process.argv.length - 2, "setup", "--only", app, ...(flags["dry-run"] === true ? ["--dry-run"] : []), ...(flags.yes === true ? ["--yes"] : []), "--no-hook", "--no-capture", "--terse", "--no-test-note", "--no-embeddings");
     await setupCmd(cliPath);
     if (!process.exitCode && flags["dry-run"] === true) console.log(`\nDry run: run the same command without --dry-run to connect ${app}.`);
     else if (!process.exitCode) console.log(`\nConnected ${app}. This app can read every note, including private ones. To keep it away from private notes: monomem connect ${app} --restricted`);
@@ -222,7 +222,7 @@ export async function setupCmd(cliPath: string): Promise<void> {
   const { runSetup, realEnv, DEFAULT_OPTIONS } = await import("../setup.js");
   const { flags } = parseFlags(process.argv.slice(3), {
     values: ["only", "db", "command"],
-    bools: ["dry-run", "yes", "undo", "hook", "no-hook", "capture", "no-capture", "project", "no-test-note", "no-doctor", "force-empty", "terse"],
+    bools: ["dry-run", "yes", "undo", "hook", "no-hook", "capture", "no-capture", "project", "no-test-note", "no-doctor", "force-empty", "terse", "no-embeddings"],
   });
   const command = str(flags.command) ?? "auto";
   if (!["auto", "node", "npx"].includes(command)) {
@@ -254,5 +254,7 @@ export async function setupCmd(cliPath: string): Promise<void> {
     only: str(flags.only)?.split(",").map((x) => x.trim()).filter(Boolean),
     db: str(flags.db),
     command: command as "auto" | "node" | "npx",
+    // C22: offered only when a local Ollama already has nomic-embed-text; --no-embeddings and --undo skip the probe.
+    embeddings: flags["no-embeddings"] !== true && flags.undo !== true && (await (await import("../embeddings-offer.js")).localEmbeddingsAvailable(process.env)),
   });
 }

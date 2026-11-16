@@ -115,7 +115,8 @@ function shortUsage(): void {
       "  health [--json] [--card [file.svg]]   One grade A-F with the reason: setup, settings, drill, audit chain, held writes (rule: health --help)",
       "",
       "Maintenance",
-      "  backup [--out <dir>]    Copy the database safely, even while the server runs",
+      "  backup [--out <dir>]    Copy the database safely, even while the server runs (the server also makes one a day by itself)",
+      "  backup restore <folder> Put a backup back as your database (the current one is kept, so it can be undone)",
       "  service install|status|uninstall [--print]   Keep the server running in the background after you sign in",
       "  export | import         Move notes in and out (JSON or Markdown)",
       "  quality                 Duplicates, stale notes and flagged notes worth a look",
@@ -161,10 +162,12 @@ function usage(all = false): void {
       "  uninstall [--dry-run] [--yes] [--purge] [--no-backup]",
       "            Take Monomem out of every app setup connected (same as setup --undo, for every setup run).",
       "            --purge also deletes the data folder, after a final backup it names (unless --no-backup).",
-      "  setup [--dry-run] [--yes] [--only claude-code,claude-desktop,cursor,codex,gemini,muse,vscode,zed] [--project] [--hook|--no-hook] [--capture|--no-capture] [--db <file>] [--undo]",
+      "  setup [--dry-run] [--yes] [--only claude-code,claude-desktop,cursor,codex,gemini,muse,vscode,zed] [--project] [--hook|--no-hook] [--capture|--no-capture] [--db <file>] [--no-embeddings] [--undo]",
       "            Connect monomem to Claude Code / Claude Desktop / Cursor for you. Shows the plan and the exact lines it will",
       "            change, saves a backup of each file first, writes only after you type y. An old \"claude-bridge\" entry is offered",
       "            for migration with your data kept. --dry-run only shows; --undo puts back what it changed.",
+      "            When a local Ollama has nomic-embed-text, new entries get MONOMEM_EMBEDDINGS=auto (meaning search while",
+      "            Ollama runs, keyword search when it does not; the hooks never use it). --no-embeddings leaves it out.",
       "            When: first install (npx monomem setup), or moving from claude-bridge.",
       "  reindex   Backfill semantic embeddings for notes missing them.",
       "            When: after enabling embeddings, or after changing the embedding model.",
@@ -222,8 +225,8 @@ function usage(all = false): void {
       "            grouped by source. --since last uses (and advances) a per-consumer marker.",
       "  backup [--out <dir>] [--include-approval-key] [--include-attest-key] | backup --prune-premigration",
       "            Consistent hot copy of the database (works while the server runs)",
-      "            into <dir>/state.db, plus a copy of the encryption key (.key) if",
-      "            at-rest encryption is on. Default dir: ~/monomem-backup-<time>",
+      "            into <dir>/state.db. The encryption key (.key) is NOT copied unless you add --include-key.",
+      "            Default dir: ~/monomem-backup-<time>",
       "            (with MONOMEM_HOME set: monomem-backup-<time> in the folder that holds it).",
       "            WARNING: store the key SEPARATELY from the backup; a backup without",
       "            its key is unreadable, and one stored with it is not encrypted.",
@@ -231,7 +234,8 @@ function usage(all = false): void {
       "            this server's signing identity. --prune-premigration deletes EVERY copy an",
       "            upgrade left next to the database: <db>.pre-v*-backup and the dated copies",
       "            (<db>.pre-v*-backup-YYYYMMDD-HHMMSS) kept from earlier upgrades.",
-      "            When: before upgrades, and on a schedule.",
+      "            When: before upgrades. A running server also backs up once a day into <data>/backups",
+      "            (7 daily + 4 weekly kept; MONOMEM_AUTO_BACKUP=off turns that off).",
       "  runner-status [--namespace ns] [--json]",
       "            Is the PC's command runner listening, and how many approved commands are",
       "            waiting for it (and how many approvals expire soon or already did)?",
@@ -338,9 +342,9 @@ function usage(all = false): void {
       "            Also runs on its own in the expiry sweep and at the end of a captured session.",
       "  archive <id> | restore <id>",
       "            Soft-archive a note, or bring an archived one back (the undo for decay and archive). monomem ls --archived lists them.",
-      "  restore <backup folder | state.db file> [--yes]",
+      "  backup restore <backup folder | state.db file> [--yes]   (was: restore <folder>, which still works for now)",
       "            Put a backup back as your database. Refuses while Monomem or an app is using it; copies the current database aside first",
-      "            (state.db.before-restore-<time>), removes the stale -wal/-shm files and checks the result. Also works with state.db.pre-vNN-backup.",
+      "            (state.db.before-restore-<time>; it prints the command that undoes the restore), removes the stale -wal/-shm files and checks the result. Also works with state.db.pre-vNN-backup.",
       "  add \"text\" [--title T] [--ns work] [--tag a,b] [--private | --sens public|internal|private]",
       "            Save a note from the shell (\"-\" reads a pipe). Same linter, secret refusal and quarantine as any other writer; written as \"cli\".",
       "  show <id> | ls [--ns x] [--limit 20] [--archived] [--include-distrusted] | edit <id> [- | --editor] | forget <id>",
@@ -1982,13 +1986,26 @@ async function deleteCmd(): Promise<void> {
 }
 
 // `monomem archive <id>` / `monomem restore <id>`: the same soft archive and restore as POST /notes/:id/archive|restore.
-// `monomem restore <backup folder | state.db>`: put a backup back as the live database (a number is a note id: that is the other restore).
-async function restoreBackupCmd(): Promise<void> {
+// `monomem backup restore <backup folder | state.db>`: put a backup back as the live database. (1.6.0: moved from
+// `restore <folder>`, where a folder named with digits only was read as a note id; the old form still works, with a notice.)
+async function restoreBackupCmd(args: string[]): Promise<void> {
   const { DB_PATH, API_PORT } = await import("./config.js");
   const { inspectBackup, dbBusy, applyRestore, RestoreError, BUSY_MESSAGE } = await import("./restore.js");
-  const args = process.argv.slice(3);
   const yes = args.includes("--yes");
-  const target = args.find((a) => !a.startsWith("--"))!;
+  const target = args.find((a) => !a.startsWith("--"));
+  if (!target) {
+    const { backupsDir } = await import("./backup-schedule.js");
+    const { readdirSync } = await import("node:fs");
+    let auto: string[] = [];
+    try {
+      auto = readdirSync(backupsDir(DB_PATH)).filter((n) => /^\d{4}-\d{2}-\d{2}$/.test(n)).sort().reverse();
+    } catch {
+      /* no automatic backups yet */
+    }
+    console.error("Usage: monomem backup restore <backup folder | state.db file> [--yes]");
+    if (auto.length) console.error(`Automatic backups (newest first) in ${backupsDir(DB_PATH)}:\n${auto.map((n) => "  " + n).join("\n")}`);
+    process.exit(2);
+  }
   try {
     const plan = inspectBackup(target);
     console.log(`Backup: ${plan.source}`);
@@ -2022,7 +2039,7 @@ async function restoreBackupCmd(): Promise<void> {
     }
     const r = applyRestore(plan, DB_PATH);
     console.log(`Restored ${plan.notes} note(s).`);
-    if (r.keptCurrentAt) console.log(`Your previous database is kept at ${r.keptCurrentAt}. To go back: monomem restore "${r.keptCurrentAt}" --yes`);
+    if (r.keptCurrentAt) console.log(`Your previous database is kept at ${r.keptCurrentAt}.\nTo undo this restore: monomem backup restore "${r.keptCurrentAt}" --yes`);
     console.log("Start Monomem again, then run: monomem doctor");
   } catch (e) {
     if (e instanceof RestoreError) {
@@ -2466,7 +2483,8 @@ async function main(): Promise<void> {
       await changes();
       break;
     case "backup":
-      await backupCmd();
+      if (process.argv[3] === "restore") await restoreBackupCmd(process.argv.slice(4));
+      else await backupCmd();
       break;
     case "runner-status":
       await runnerStatusCmd();
@@ -2556,7 +2574,8 @@ async function main(): Promise<void> {
     case "archive":
     case "restore":
       if (cmd === "restore" && process.argv[3] && !/^\d+$/.test(process.argv[3])) {
-        await restoreBackupCmd();
+        console.error("Note: putting a backup back is now  monomem backup restore <folder>  (restore <id> is for notes). This form still works for now.");
+        await restoreBackupCmd(process.argv.slice(3));
         break;
       }
       if (cmd === "forget" && process.stdin.isTTY && !process.argv.includes("--yes")) {
@@ -2619,9 +2638,6 @@ async function main(): Promise<void> {
       break;
     case "label":
       await labelCmd();
-      break;
-    case "token":
-      await (await import("./cli/trust.js")).tokenCmd();
       break;
     case "connect":
       await (await import("./cli/connect.js")).connectCmd(SELF_CLI);

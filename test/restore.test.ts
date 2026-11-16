@@ -152,3 +152,24 @@ test("restore refuses while another process holds an idle Store open, with the f
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a restore and its undo in the same second keep two copies (the second never overwrites the first)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "om-restore-"));
+  try {
+    const live = join(dir, "state.db");
+    const s = new Store(live);
+    s.create({ title: "one", body: "x" });
+    backupStore(s, live, join(dir, "bk"));
+    s.create({ title: "two", body: "y" });
+    s.close();
+    const now = new Date("2026-11-16T10:00:00Z");
+    const first = applyRestore(inspectBackup(join(dir, "bk")), live, now);
+    const undo = applyRestore(inspectBackup(first.keptCurrentAt!), live, now);
+    assert.notEqual(undo.keptCurrentAt, first.keptCurrentAt);
+    const back = new Store(live);
+    assert.equal(back.list({}).total, 2, "the undo brought back both notes");
+    back.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

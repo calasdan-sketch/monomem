@@ -18,6 +18,18 @@ To give one app its own key and a limit on what it can see, use `monomem connect
 [Give an app limited access](./docs/give-an-app-limited-access.md). Apps wired by hand below (the usual `monomem mcp` way)
 run on your computer with no limit, so use `connect` for any app that should not see `private` notes.
 
+## Upgrading
+
+1. Global install: `npm i -g monomem@latest`. (With `npx`, the next `npx monomem@latest ...` fetches it.)
+2. Then everyone: **`monomem setup` again.** If setup ran through `npx`, your apps' entries and hooks name the exact version
+   they were set up with (`monomem@1.5.0`); they keep launching that old copy after the upgrade, and once the newer one has
+   upgraded the database the old hook returns nothing at session start, without an error. Running setup again points them at
+   the new version (it shows the change and asks first).
+3. `monomem doctor`: it warns `... launches monomem X, this is Y` (and says to run `monomem setup`) while an app entry or hook still
+   names the old version.
+
+What changes per release, and how to go back: [docs/upgrading.md](./docs/upgrading.md).
+
 ---
 
 ## Download (no Node.js needed)

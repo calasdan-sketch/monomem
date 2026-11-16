@@ -33,6 +33,7 @@ import { openStoreOrExit, SERVER_BUSY_TIMEOUT_MS } from "./db-problem.js";
 import { abortAllWaiters } from "./change-wait.js";
 import { pruneStaleHeartbeats } from "./liveness.js";
 import { rotateLogIfNeeded } from "./security.js";
+import { runDailyBackup, autoBackupOn } from "./backup-schedule.js";
 import { appendFileSync } from "node:fs";
 import type { Server } from "node:http";
 import { dirname, join, resolve } from "node:path";
@@ -210,11 +211,26 @@ const purgeTimer = setInterval(purgeNow, purgeEveryMs);
 purgeTimer.unref();
 setTimeout(purgeNow, Math.min(30_000, purgeEveryMs)).unref();
 
+// Automatic daily backup (backup-schedule.ts): checked a minute after start, then hourly; at most one copy a day,
+// 7 daily + 4 weekly kept in <data>/backups. MONOMEM_AUTO_BACKUP=off turns it off.
+// ponytail: VACUUM INTO runs on this thread, so a very large store pauses serving for the copy (once a day); move it to a
+// worker if that ever shows up.
+const backupNow = (): void => {
+  const r = runDailyBackup(store, DB_PATH);
+  if (r.error) console.error(`[monomem] automatic backup failed: ${r.error} (monomem health shows it; monomem backup makes one by hand)`);
+  else if (r.made) console.error(`[monomem] automatic backup made in ${r.dir}${r.removed.length ? ` (${r.removed.length} older removed)` : ""}`);
+  if (r.keyWarning) console.error(`[monomem] ${r.keyWarning}`);
+};
+const backupTimer = autoBackupOn() ? setInterval(backupNow, 3_600_000) : undefined;
+backupTimer?.unref();
+if (backupTimer) setTimeout(backupNow, 60_000).unref();
+
 let closing = false;
 function shutdown(): void {
   if (closing) return;
   closing = true;
   clearInterval(purgeTimer);
+  clearInterval(backupTimer);
   // Live waits (memory_since / GET /changes?wait=) end NOW and answer with
   // timedOut:true, so a restart drains in milliseconds instead of resetting
   // sockets at the 3s safety net.

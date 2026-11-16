@@ -346,7 +346,9 @@ describe("U-15 the first run looks right", () => {
   test("memory tidiness is 100 on an empty store (no backup to miss yet)", () => {
     const counts = { duplicate: 0, stale_twin: 0, quarantined: 0, lint: 0, pii: 0 } as any;
     assert.equal(computeHealth({ counts, tokensWithoutCeiling: 0, backupAgeDays: null, noteCount: 0 }).score, 100);
-    assert.equal(computeHealth({ counts, tokensWithoutCeiling: 0, backupAgeDays: null, noteCount: 1 }).score, 90);
+    // 1.6.0: no backup yet costs nothing on any store (the server backs up daily); an old one still does.
+    assert.equal(computeHealth({ counts, tokensWithoutCeiling: 0, backupAgeDays: null, noteCount: 1 }).score, 100);
+    assert.equal(computeHealth({ counts, tokensWithoutCeiling: 0, backupAgeDays: 31, noteCount: 1 }).score, 90);
   });
 
   test("the first note added after setup on a new store is #1", async () => {

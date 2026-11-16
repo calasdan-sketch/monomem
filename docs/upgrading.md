@@ -1,5 +1,18 @@
 # Upgrading
 
+## Every upgrade (read this first)
+
+1. Global install: `npm i -g monomem@latest`.
+2. Then everyone: **run `monomem setup` again.** When setup ran through `npx`, each app entry and hook names the exact version
+   it was set up with (`npx -y monomem@1.5.0 ...`). Those keep launching the old copy after you upgrade. Once the new version
+   has upgraded the database, an old hook cannot open it and session start comes back **empty, without an error**. Setup again
+   re-points every entry and hook at this version (it shows the change and asks first; `monomem setup --undo` reverses it).
+3. `monomem doctor`: it warns `... launches monomem X, this is Y` (with "run monomem setup") while anything still names the old
+   version.
+
+Since 1.6.0 the server also makes a backup every day by itself (`<data>/backups`, see [footprint.md](./footprint.md)), and a
+backup goes back with `monomem backup restore <folder>` (it was `monomem restore <folder>`, which still works for now).
+
 ## Monomem 1.4.0 and 1.5.0 (database schema v19 to v22)
 
 Applies to Monomem 1.3.x (and to a development build that already made the store v20 or v21). A fresh install needs none of this.

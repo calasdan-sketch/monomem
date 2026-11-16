@@ -21,6 +21,7 @@ import { createRequire } from "node:module";
 import { applyOps, getMember, getPath, JsonEditError, opsAreApplied, parseDoc, parseJsonc, type Op } from "./jsonc-edit.js";
 import { applyTomlOps, findTable, hasServer, tomlOpsApplied } from "./toml-table.js";
 import { applyLegacyEnv, homeDataDir } from "./legacy-env.js";
+import { EMBEDDINGS_OFFER_ENV, embeddingsOfferLine } from "./embeddings-offer.js";
 import { privateDir } from "./private-dir.js";
 import { subagentMemoryOn } from "./prompt/switches.js";
 import { SELF_CLI, quoteShellArg, selfCommand, selfFacts, selfShellLine, type SelfFacts, type SelfMode } from "./self.js";
@@ -108,6 +109,8 @@ export interface SetupOptions {
   forceEmpty: boolean;
   /** Remove an old (`onememory` / `claude-bridge`) entry that sits beside a `monomem` one. Only ever set after a typed yes. */
   removeOld?: boolean;
+  /** A local Ollama with nomic-embed-text was found (embeddings-offer.ts): new app entries get MONOMEM_EMBEDDINGS=auto. */
+  embeddings?: boolean;
 }
 
 export const DEFAULT_OPTIONS: SetupOptions = { dryRun: false, yes: false, undo: false, hook: "ask", project: false, noTestNote: false, noDoctor: false, command: "auto", forceEmpty: false };
@@ -841,7 +844,7 @@ function planToml(e: SetupEnv, opts: SetupOptions, target: ClientTarget, text: s
       warnings: [],
     };
   }
-  const entry = buildServerEntry(e, opts, { MONOMEM_CLIENT: target.id, ...(opts.db ? { MONOMEM_DB_PATH: opts.db } : {}), ...(opts.home ? { MONOMEM_HOME: opts.home } : {}) });
+  const entry = buildServerEntry(e, opts, { MONOMEM_CLIENT: target.id, ...(opts.db ? { MONOMEM_DB_PATH: opts.db } : {}), ...(opts.home ? { MONOMEM_HOME: opts.home } : {}), ...(opts.embeddings ? EMBEDDINGS_OFFER_ENV : {}) });
   if (opts.db) shared.dbs.add(opts.db);
   const ops: Op[] = [{ op: "set", path: ["mcp_servers"], key: "monomem", value: entry }];
   const lines = [`add the "monomem" memory server${opts.db ? ` (database ${opts.db})` : ""}`];
@@ -1020,6 +1023,7 @@ export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, 
     const env: Record<string, string> = { MONOMEM_CLIENT: appLabel(target.id) };
     if (opts.db) env.MONOMEM_DB_PATH = opts.db;
     if (opts.home) env.MONOMEM_HOME = opts.home;
+    if (opts.embeddings) Object.assign(env, EMBEDDINGS_OFFER_ENV);
     let entry: ServerEntry;
     if (opts.httpEntry) {
       // Only apps whose web-connection format is documented are written here; the others get a paste-in snippet from `connect`.
@@ -1753,6 +1757,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   }
   if (legacyHome) io.out(`Your notes are in ${opts.home} (the folder from when Monomem was called OneMemory; there is no ~/.monomem store), so each app entry and hook setup writes gets MONOMEM_HOME=${opts.home} and keeps using them.\n`);
   else if (opts.home) io.out(`MONOMEM_HOME is set (${opts.home}), so each app entry setup writes gets MONOMEM_HOME too and uses that data folder.\n`);
+  if (opts.embeddings && !opts.httpEntry) io.out(embeddingsOfferLine + "\n");
   if (opts.only) {
     const bad = opts.only.filter((x) => !(CLIENT_IDS as readonly string[]).includes(x));
     if (bad.length) {

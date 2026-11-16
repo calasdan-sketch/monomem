@@ -118,8 +118,8 @@ describe("B2: personal-data suggestions", () => {
 
 describe("B3: health and digest", () => {
   test("every category is capped and the score never goes below 0", () => {
-    const counts = { duplicate: 100, stale_twin: 100, quarantined: 100, lint: 100, decay: 0, pii: 100, contradiction: 0 };
-    const h = computeHealth({ counts, tokensWithoutCeiling: 50, backupAgeDays: null });
+    const counts = { duplicate: 100, stale_twin: 100, quarantined: 100, lint: 100, decay: 0, pii: 100, contradiction: 0, empty: 0, restated: 0 };
+    const h = computeHealth({ counts, tokensWithoutCeiling: 50, backupAgeDays: 45 }); // 1.6.0: an old backup costs points, none yet does not
     for (const d of h.deductions) assert.ok(d.points <= d.cap, d.category);
     assert.equal(h.score, 100 - (15 + 10 + 15 + 15 + 15 + 15 + 10));
     assert.equal(computeHealth({ counts: { ...counts, duplicate: 0, stale_twin: 0, quarantined: 0, lint: 0, pii: 0 }, tokensWithoutCeiling: 0, backupAgeDays: 1 }).score, 100);

