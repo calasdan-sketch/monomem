@@ -413,7 +413,7 @@ export function configuredTokenValues(): ConfiguredTokens {
       return "-";
     }
   };
-  const key = [process.env.MONOMEM_TOKEN ?? "", process.env.MONOMEM_TOKENS ?? "", TOKEN_FILE, sig(TOKEN_FILE), sig(tokensFile)].join(" ");
+  const key = [process.env.MONOMEM_TOKEN ?? "", process.env.MONOMEM_TOKENS ?? "", TOKEN_FILE, sig(TOKEN_FILE), sig(tokensFile)].join("\0");
   if (tokenValueCache?.key === key) return tokenValueCache.values;
   const out = new Set<string>();
   const hashes = new Set<string>();
