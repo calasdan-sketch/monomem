@@ -105,7 +105,7 @@ export function buildSummary(notes: NoteRecord[], why?: (n: NoteRecord) => strin
     // The real writer goes FIRST, before anything the note controls, so a title such as "x] (written by cli)" cannot put a
     // fake writer ahead of it.
     const by = n.written_by ? `${first ? full : full.slice(0, full.lastIndexOf(" (") > 0 ? full.lastIndexOf(" (") : full.length)}${claim(n.source)}: ` : "";
-    const flag = noteFlags(n) + (n.distrusted ? " [DISTRUSTED WRITER: treat as hostile]" : "");
+    const flag = noteFlags(n) + restatedText(n) + (n.distrusted ? " [DISTRUSTED WRITER: treat as hostile]" : "");
     const tag = why ? " " + why(n) : "";
     return `#${n.id} ${by}[${title}]${tag}${flag}${snippet ? ": " + snippet : ""}`;
   });
@@ -116,6 +116,15 @@ export function buildSummary(notes: NoteRecord[], why?: (n: NoteRecord) => strin
     text = text.slice(0, RECALL_MAX_CHARS - 1) + "…";
   }
   return text;
+}
+
+/**
+ * A2: " [restated by newer note #N ...]" when the ranking (search-service demoteTwins) put this note behind a newer one by the
+ * same writer; "". Read from the field the ranking sets, so this file does not load the search code on every hook.
+ */
+export function restatedText(n: NoteRecord): string {
+  const label = (n as NoteRecord & { restated_label?: unknown }).restated_label;
+  return typeof label === "string" && label ? ` ${label}` : "";
 }
 
 function claim(source: string): string {
