@@ -88,8 +88,10 @@ describe("1: multi-process create() never throws SQLITE_BUSY", () => {
     const dir = mkdtempSync(join(tmpdir(), "om-starve-"));
     const path = join(dir, "s.db");
     const s = new Store(path, { busyTimeoutMs: 1000 });
+    let hog: ReturnType<typeof spawn> | undefined;
+    let exited: Promise<unknown> = Promise.resolve();
     try {
-      const hog = spawn(process.execPath, ["--no-warnings", "-e", `
+      hog = spawn(process.execPath, ["--no-warnings", "-e", `
         const { DatabaseSync } = require("node:sqlite");
         const db = new DatabaseSync(process.argv[1]); db.exec("PRAGMA busy_timeout = 5000; CREATE TABLE IF NOT EXISTS hog (x)");
         const end = Date.now() + 1600; let first = true;
@@ -100,15 +102,24 @@ describe("1: multi-process create() never throws SQLITE_BUSY", () => {
           db.exec("COMMIT");
         }
         db.close();`, path], { stdio: ["ignore", "pipe", "inherit"] });
-      const exited = new Promise((r) => hog.on("close", r));
-      await new Promise<void>((r) => hog.stdout.once("data", () => r()));
+      const child = hog;
+      exited = new Promise((r) => child.on("close", r));
+      // If the child dies before it holds the lock, say so (instead of waiting forever or failing in cleanup).
+      await new Promise<void>((resolve, reject) => {
+        child.stdout!.once("data", () => resolve());
+        child.once("close", (code) => reject(new Error(`the lock-holding child exited (${code}) before it held the lock`)));
+      });
       const t = Date.now();
       s.create({ title: "victim", body: "waits behind the hog" });
       assert.ok(Date.now() - t > 1000, "the create really waited past its busy timeout");
       await exited;
     } finally {
+      // Windows cannot delete a database another process still has open: stop the child first, so a real failure
+      // above is reported instead of an EPERM from this cleanup (seen on CI).
+      if (hog && hog.exitCode === null) hog.kill();
+      await exited;
       s.close();
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
     }
   });
 
