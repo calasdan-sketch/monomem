@@ -18,7 +18,8 @@ import { decryptIfEncrypted, noteAad } from "../crypto.js";
 
 /**
  * Above this many notes the index is not built: search stays title and tags. Measured at the cap (bench --scale 100k,
- * 2026-11-15, batched build): 4.0-4.9 s and +152-154 MB process RSS; 10k: 0.5 s and +22 MB.
+ * 2026-11-15, batched build): 4.0-5.5 s and +152-154 MB RSS inside the warm bench process; 10k: 0.5 s and +22 MB.
+ * A freshly started server grows more: +233-240 MB at 100k (about 305 MB total), +59 MB at 10k.
  */
 export const BODY_INDEX_MAX_NOTES = 100_000;
 const TABLE = "notes_fts_mem";
@@ -92,7 +93,11 @@ export class BodyIndex {
       return "notes_fts";
     }
     const tooLarge = (): string => this.fallBack(`the in-memory body index is not built above ${this.maxNotes.toLocaleString("en-US")} notes`);
-    if (this.tooLarge) return tooLarge();
+    if (this.tooLarge) {
+      // A teardown inside a caller's transaction that then rolled back left the table and triggers in place: drop them now.
+      if (this.attached && !this.s.db.isTransaction) this.teardown();
+      return tooLarge();
+    }
     // The cap holds after the build too: this process's own writes (triggers) and other processes' (catch-up) add notes.
     if (this.ready && this.noteCount() > this.maxNotes) {
       this.tooLarge = true;

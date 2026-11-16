@@ -466,6 +466,32 @@ describe("final3: the size cap holds after the build, and a refused build lets g
       }
     }));
 
+  test("final4 N-2: a cap teardown inside a transaction that rolls back is done again by the next search outside it", () =>
+    withDirs((_pd, ed) => {
+      ensureKey(ed);
+      const s = new Store(join(ed, "state.db"), { bodyIndexMaxNotes: 3 });
+      try {
+        for (const w of ["one", "two"]) s.create({ title: `t ${w}`, body: `a ${w} plover`, tags: [] });
+        assert.equal(ids(s, "plover").length, 2);
+        assert.equal(tempTriggers(s), 3);
+        assert.throws(() =>
+          s.transaction(() => {
+            for (const w of ["three", "four"]) s.create({ title: `t ${w}`, body: `a ${w} plover`, tags: [] });
+            assert.deepEqual(ids(s, "plover"), [], "over the cap inside the transaction");
+            throw new Error("boom");
+          })
+        );
+        assert.equal(tempTriggers(s), 3, "the rollback brought the triggers back");
+        assert.deepEqual(ids(s, "plover"), []);
+        assert.equal(s.bodyIndexInfo().state, "too large");
+        assert.equal(tempTriggers(s), 0, "the next search outside the transaction lets go of the triggers");
+        const attached = s.db.prepare("PRAGMA database_list").all() as Array<{ name: string }>;
+        assert.ok(!attached.some((d) => d.name === "bodyidx"), JSON.stringify(attached));
+      } finally {
+        s.close();
+      }
+    }));
+
   test("the build covers every note when ids are far apart (it runs in id ranges)", () =>
     withDirs((_pd, ed) => {
       const s = encStore(ed);
