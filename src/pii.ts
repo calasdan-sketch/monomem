@@ -53,7 +53,23 @@ export const MAX_SCAN = 16384;
 const MAX_HITS = 50;
 const EMAIL = /\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,7}\.[A-Za-z]{2,24}\b/g;
 const PHONE = /(?<![\d-])(?:\+?1[\s.-]?)?(?:\([2-9]\d{2}\)|[2-9]\d{2})[\s.-]?[2-9]\d{2}[\s.-]?\d{4}(?![\d-])/g;
-const CARD = /(?<!\d)(?:\d[ -]?){13,19}(?!\d)/g;
+// A card number is written as one run of digits or in the printed groups (4-4-4-4, 4-6-5 Amex, 4-4-4-4-3), never as the tail
+// of a decimal ("0.7730349485110593"), a version, a negative number or part of a longer token. 1.5.0 matched any 13-19 digits
+// that passed Luhn and flagged 200 of 3,075 real notes on ordinary floats.
+const CARD = /(?<![\w.,/:+=-])(?:\d{13,19}|\d{4}([ -])\d{4}\1\d{4}\1\d{4}(?:\1\d{3})?|\d{4}([ -])\d{6}\2\d{5})(?![\w-]|[.,]\d)/g;
+// A run of digits with no grouping is a card only when a card word comes just before it (an id, a timestamp or a hash is not).
+const CARD_WORD = /\b(?:card|visa|master ?card|amex|american express|discover|credit|debit|cc|pan)\b[^\n\d]{0,30}$/i;
+
+/** Issuer prefix and length (Visa 13/16/19, Mastercard 16, Amex 15, Diners/JCB 14-19, Discover/UnionPay 16-19). */
+export function cardShapeOk(d: string): boolean {
+  const n = d.length;
+  if (d[0] === "4") return n === 13 || n === 16 || n === 19;
+  if (/^(?:5[1-5]|2[2-7])/.test(d)) return n === 16;
+  if (/^3[47]/.test(d)) return n === 15;
+  if (/^3[0689]/.test(d)) return n >= 14 && n <= 19;
+  if (/^6/.test(d)) return n >= 16 && n <= 19;
+  return false;
+}
 const SSN = /(?<![\d-])\d{3}-\d{2}-\d{4}(?![\d-])/g;
 const SIN = /(?<![\d-])\d{3}[ -]\d{3}[ -]\d{3}(?![\d-])/g;
 // Letters, digits and single spaces only (the two alternatives cannot overlap), so there is nothing to backtrack over.
@@ -94,7 +110,10 @@ export function findPii(input: string, budgetMs = 400): PiiHit[] {
   });
   for (const s of secretAssignments(text, 10)) add("secret", s.index, text.slice(s.index, s.index + s.length), `${s.label}: ******`);
   each(CARD, (m) => {
-    if (free(m.index, m.index + m[0].length) && luhn(m[0].replace(/[ -]/g, ""))) add("card", m.index, m[0]);
+    const d = m[0].replace(/[ -]/g, "");
+    const grouped = d.length !== m[0].length;
+    if (!free(m.index, m.index + m[0].length) || !cardShapeOk(d) || !luhn(d)) return;
+    if (grouped || CARD_WORD.test(text.slice(Math.max(0, m.index - 60), m.index))) add("card", m.index, m[0]);
   });
   each(IBAN, (m) => {
     // The match can run into following capitals; try shorter endings at word boundaries.
