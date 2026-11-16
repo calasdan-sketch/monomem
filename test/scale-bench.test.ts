@@ -2,7 +2,7 @@
 // without at-rest encryption. Small N here; the 10k run is in docs/BENCHMARK.md.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseScale, runScale } from "../src/bench/scale.js";
+import { parseScale, renderScale, runScale } from "../src/bench/scale.js";
 
 test("parseScale reads 10k, 1k and plain numbers, rejects junk", () => {
   assert.equal(parseScale("10k"), 10000);
@@ -15,7 +15,7 @@ test("runScale reports plain and encrypted timings, seals bodies, and only gates
   const r = await runScale({ notes: 120, iterations: 3, writes: 3 });
   assert.equal(r.notes, 120);
   for (const mode of [r.plain, r.encrypted]) {
-    for (const k of ["sessionStart", "openAndSessionStart", "search", "write"] as const) {
+    for (const k of ["sessionStart", "openAndSessionStart", "search", "searchRealistic", "write"] as const) {
       assert.ok(mode[k].p50 > 0 && mode[k].p95 >= mode[k].p50, `${k}: ${JSON.stringify(mode[k])}`);
     }
   }
@@ -28,6 +28,10 @@ test("runScale reports plain and encrypted timings, seals bodies, and only gates
   assert.ok(r.encrypted.bodyIndex.buildMs > 0);
   assert.equal(typeof r.encrypted.bodyIndex.rssMb, "number");
   assert.equal(r.plain.bodyIndex, undefined);
+  // final3 PERF-S1: the common-word mix matches most notes; the realistic mix uses words found in under 5% of them.
+  const text = renderScale(r);
+  assert.match(text, /keyword search, 2 common words/);
+  assert.match(text, /keyword search, 2 realistic words/);
 });
 
 test("word() never returns undefined, even when the first draw is near 1 and the second near 0", async () => {

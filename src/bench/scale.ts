@@ -23,8 +23,13 @@ export interface ModeTimings {
   sessionStart: Timing;
   /** A fresh Store + injectContext + close: closer to a hook process, minus Node start-up. */
   openAndSessionStart: Timing;
-  /** runSearch keyword, 2-word query, one namespace, limit 10. */
+  /**
+   * runSearch keyword, 2 words drawn from the Zipf vocabulary, one namespace, limit 10. Most draws are common words that
+   * match most notes, so this is the costly case: keyword search cost grows with the number of matching notes.
+   */
   search: Timing;
+  /** The same, with 2 words each found in under 5% of the notes (most words in real notes; stop words are dropped). */
+  searchRealistic: Timing;
   /** store.create with default options (similarity edges, linter) on the full store. */
   write: Timing;
   buildMs: number;
@@ -104,16 +109,16 @@ async function runMode(notes: number, encrypted: boolean, o: { iterations: numbe
     const r = rng(42);
     const t0 = performance.now();
     let store = new Store(db, { auditLog });
+    const df = new Map<string, number>(); // notes each word appears in (the corpus is generated here, so it is counted here)
     try {
       // ponytail: bulk build skips similarity edges (as the retrieval bench does) so 10k builds in seconds; the timed writes
       // below keep edges on, so write cost is the real one.
       for (let done = 0; done < notes; done += 1000) {
         store.transaction(() => {
           for (let i = done; i < Math.min(notes, done + 1000); i++) {
-            store.create(
-              { namespace: NAMESPACES[i % NAMESPACES.length], title: words(r, 3 + Math.floor(r() * 5)), body: body(r), tags: [word(r)] },
-              { skipEdges: true, lint: "none" }
-            );
+            const note = { namespace: NAMESPACES[i % NAMESPACES.length], title: words(r, 3 + Math.floor(r() * 5)), body: body(r), tags: [word(r)] };
+            store.create(note, { skipEdges: true, lint: "none" });
+            for (const w of new Set(`${note.title} ${note.body} ${note.tags[0]}`.split(/[^a-z]+/))) if (w) df.set(w, (df.get(w) ?? 0) + 1);
           }
         });
       }
@@ -148,9 +153,12 @@ async function runMode(notes: number, encrypted: boolean, o: { iterations: numbe
       const bodyIndex = idx.state === "ready" ? { buildMs: idx.buildMs, notes: idx.notes, rssMb: Math.round((process.memoryUsage().rss - rss0) / 1e5) / 10 } : undefined;
       const q = rng(7);
       const search = await timed(o.iterations * 5, () => runSearch(store, `${word(q)} ${word(q)}`, { mode: "keyword", namespace: ns, limit: 10 }));
+      const rare = [...df].filter(([, n]) => n < notes * 0.05).map(([w]) => w).sort();
+      const pick = (): string => rare[Math.floor(q() * rare.length)] ?? word(q);
+      const searchRealistic = await timed(o.iterations * 5, () => runSearch(store, `${pick()} ${pick()}`, { mode: "keyword", namespace: ns, limit: 10 }));
       const w = rng(9);
       const write = await timed(o.writes, () => store.create({ namespace: ns, title: words(w, 5), body: body(w) }));
-      return { sessionStart: timing(session), openAndSessionStart: timing(open), search: timing(search), write: timing(write), buildMs, ...dbFacts(store, db), ...(bodyIndex ? { bodyIndex } : {}) };
+      return { sessionStart: timing(session), openAndSessionStart: timing(open), search: timing(search), searchRealistic: timing(searchRealistic), write: timing(write), buildMs, ...dbFacts(store, db), ...(bodyIndex ? { bodyIndex } : {}) };
     } finally {
       store.close();
     }
@@ -192,17 +200,19 @@ export function renderScale(r: ScaleReport): string {
     `Synthetic store: ${r.notes} notes in ${NAMESPACES.length} namespaces, temp folder, ${r.node}. ms, p50 / p95.`,
     `${"".padEnd(34)}${"plain".padEnd(18)}encrypted`,
   ];
-  const row = (name: string, k: "sessionStart" | "openAndSessionStart" | "search" | "write"): void => {
+  const row = (name: string, k: "sessionStart" | "openAndSessionStart" | "search" | "searchRealistic" | "write"): void => {
     lines.push(`${name.padEnd(34)}${f(r.plain[k])} ${f(r.encrypted[k])}`);
   };
   row("session start (injectContext)", "sessionStart");
   row("open store + session start", "openAndSessionStart");
-  row("keyword search, 2 words", "search");
+  row("keyword search, 2 common words", "search");
+  row("keyword search, 2 realistic words", "searchRealistic");
   row("write (create, edges on)", "write");
   lines.push(`build: plain ${(r.plain.buildMs / 1000).toFixed(1)} s, encrypted ${(r.encrypted.buildMs / 1000).toFixed(1)} s; ` +
     `DB ${r.plain.dbMb} MB / ${r.encrypted.dbMb} MB`);
   const bi = r.encrypted.bodyIndex;
   if (bi) lines.push(`encrypted body search index (in memory, C-06): ${bi.notes} notes in ${(bi.buildMs / 1000).toFixed(2)} s, RSS +${bi.rssMb} MB`);
+  lines.push("(common: drawn from a small Zipf vocabulary, most match most notes; realistic: each word in under 5% of notes. Keyword search cost grows with the notes that match, not the store size.)");
   if (r.gate) {
     lines.push(`release gate: ${r.notes}-note encrypted session start p50 ${r.gate.encryptedSessionStartP50.toFixed(1)} ms ` +
       `< ${r.gate.thresholdMs} ms: ${r.gate.pass ? "PASS" : "FAIL"}`);
