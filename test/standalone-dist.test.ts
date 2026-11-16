@@ -173,6 +173,83 @@ describe("setup from the unpacked download", () => {
   });
 });
 
+describe("setup puts the launcher folder on PATH (asked, recorded, undone exactly)", () => {
+  /** A scratch bundle setup; the Windows user PATH is a fake (never the real registry or PATH). */
+  const sandbox = (platform: NodeJS.Platform, env: NodeJS.ProcessEnv = {}) => {
+    const root = scratch();
+    const home = join(root, "home");
+    const dl = fakeBundle(join(root, "Downloads", "Monomem"), "1.7.0", platform);
+    put(join(home, ".claude.json"), "{}\n");
+    const reg = { v: "C:\Tools;%USERPROFILE%\bin", read(): string { return this.v; }, write(x: string): void { this.v = x; } };
+    const e: SetupEnv = {
+      home,
+      platform,
+      env: { HOME: home, MONOMEM_HOME: join(root, "data"), APPDATA: join(root, "Roaming"), LOCALAPPDATA: join(root, "Local"), ...env },
+      cwd: root,
+      nodeVersion: "26.13.1",
+      execPath: join(dl, "runtime", platform === "win32" ? "node.exe" : "node"),
+      cliPath: join(dl, "dist", "src", "cli.js"),
+      mode: "bundle",
+      version: "1.7.0",
+      now: () => new Date("2026-11-16T12:00:00Z"),
+      userPath: reg,
+    };
+    const inst = installDir(e);
+    // The menu entry already exists, so only the PATH step is new (no PowerShell .lnk in a test).
+    put(shortcutPlan(e, inst).file, "entry");
+    return { root, home, e, reg, inst };
+  };
+  const o = { ...DEFAULT_OPTIONS, noDoctor: true, noTestNote: true, hook: "no" as const, capture: "no" as const };
+
+  test("Linux, bash: the step is listed, a y adds one marked line to ~/.bashrc, undo removes exactly that line", async () => {
+    const s = sandbox("linux", { SHELL: "/bin/bash", PATH: "/usr/bin:/bin" });
+    const rc = join(s.home, ".bashrc");
+    put(rc, "alias ll='ls -l'\n");
+    const dry = makeIO();
+    assert.equal(await runSetup(s.e, dry, { ...o, dryRun: true }), 0);
+    assert.ok(dry.all().includes(`Add ${s.inst} to ${rc}`), dry.all());
+    assert.equal(readFileSync(rc, "utf8"), "alias ll='ls -l'\n", "a dry run changes nothing");
+    assert.equal(await runSetup(s.e, makeIO(["y"]), o), 0);
+    const after = readFileSync(rc, "utf8");
+    assert.ok(after.startsWith("alias ll='ls -l'\n"));
+    const quoted = s.inst.replace(/(["\\$`])/g, "\\$1"); // as written inside "..." (only matters on a Windows test host)
+    assert.ok(after.includes(`export PATH="${quoted}:$PATH" # added by monomem setup`), after);
+    assert.equal(readHistory(s.e).at(-1)!.path?.file, rc);
+    // the person adds a line of their own afterwards: undo takes out only ours
+    writeFileSync(rc, after + "export EDITOR=vim\n");
+    assert.equal(await runSetup(s.e, makeIO(), { ...o, undo: true }), 0);
+    assert.equal(readFileSync(rc, "utf8"), "alias ll='ls -l'\nexport EDITOR=vim\n");
+  });
+
+  test("Windows: the user PATH (injected) gets the folder appended; undo removes exactly that entry and keeps later edits", async () => {
+    const s = sandbox("win32", { Path: "C:\Windows" });
+    assert.equal(await runSetup(s.e, makeIO(["y"]), o), 0);
+    assert.equal(s.reg.v, `C:\Tools;%USERPROFILE%\bin;${s.inst}`);
+    assert.equal(readHistory(s.e).at(-1)!.path?.kind, "registry");
+    s.reg.v += ";D:\Later";
+    assert.equal(await runSetup(s.e, makeIO(), { ...o, undo: true }), 0);
+    assert.equal(s.reg.v, "C:\Tools;%USERPROFILE%\bin;D:\Later");
+  });
+
+  test("--yes alone does not change PATH (it says how); --path adds it; already on PATH: not offered", async () => {
+    const s = sandbox("win32", { Path: "C:\Windows" });
+    const io = makeIO();
+    assert.equal(await runSetup(s.e, io, { ...o, yes: true }), 0);
+    assert.equal(s.reg.v, "C:\Tools;%USERPROFILE%\bin");
+    assert.match(io.all(), /--path/);
+    assert.equal(await runSetup(s.e, makeIO(), { ...o, yes: true, path: "yes" }), 0);
+    assert.ok(s.reg.v.endsWith(`;${s.inst}`));
+    const again = makeIO();
+    assert.equal(await runSetup(s.e, again, { ...o, dryRun: true }), 0);
+    assert.doesNotMatch(again.all(), /user PATH/);
+    const t = sandbox("linux", { SHELL: "/bin/zsh" });
+    t.e.env.PATH = `/usr/bin:${t.inst}`;
+    const io2 = makeIO();
+    assert.equal(await runSetup(t.e, io2, { ...o, dryRun: true }), 0);
+    assert.doesNotMatch(io2.all(), /\.zshrc/);
+  });
+});
+
 describe("rename-aside swap", () => {
   test("moves every entry in and the old ones aside", () => {
     const root = fakeBundle(scratch(), "1.6.0");

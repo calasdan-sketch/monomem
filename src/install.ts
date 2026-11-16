@@ -137,3 +137,100 @@ export function createShortcut(p: ShortcutPlan, platform: NodeJS.Platform): stri
   return createHash("sha256").update(readFileSync(p.file, "utf8")).digest("hex");
 }
 
+
+// ---- the launcher folder on the user's PATH ---------------------------------------------------------------------------------
+// setup (bundle mode) offers to put the install folder (monomem.cmd / monomem live at its root) on PATH, so `monomem` works in
+// a new terminal. Windows: the per-user Path value in HKCU\Environment, read and written raw (REG_EXPAND_SZ kept, no setx and so
+// no 1024-character cut), then WM_SETTINGCHANGE so new windows see it. macOS / Linux: one marked line in the shell's rc file.
+// Undo takes out exactly what was added and leaves every other entry, including ones added since.
+
+/** The Windows per-user Path value. Injected in tests: they never touch the real registry or PATH. */
+export interface UserPathIO {
+  read(): string;
+  write(value: string): void;
+}
+
+export interface PathEntry {
+  kind: "registry" | "rc";
+  dir: string;
+  /** Where, in plain words. */
+  where: string;
+  /** rc: the file and the exact line added. */
+  file?: string;
+  line?: string;
+}
+
+const RC_MARK = "# added by monomem setup";
+/** Escaped for the inside of a double-quoted shell (and fish) string. */
+const inDq = (s: string): string => s.replace(/(["\\$`])/g, "\\$1");
+const expandWin = (p: string, env: NodeJS.ProcessEnv): string => p.replace(/%([^%]+)%/g, (m, k: string) => env[k] ?? env[k.toUpperCase()] ?? m);
+
+/** The PATH step for `dir`, or null when it is already there (this shell's PATH, the user Path value, or the rc line). */
+export function pathPlan(e: PlaceEnv, dir: string, reg?: UserPathIO): PathEntry | null {
+  const win = e.platform === "win32";
+  const has = (v: string | undefined): boolean =>
+    (v ?? "").split(win ? ";" : ":").some((p) => p.trim() !== "" && samePath(win ? expandWin(p.trim(), e.env) : p.trim(), dir, e.platform));
+  if (has(e.env.PATH ?? e.env.Path)) return null;
+  if (win) {
+    if (!reg || has(reg.read())) return null;
+    return { kind: "registry", dir, where: "your user PATH (HKCU\Environment)" };
+  }
+  const shell = (e.env.SHELL ?? "").split("/").pop();
+  const file =
+    shell === "zsh" ? join(e.home, ".zshrc")
+    : shell === "bash" ? join(e.home, e.platform === "darwin" ? ".bash_profile" : ".bashrc")
+    : shell === "fish" ? join(e.home, ".config", "fish", "config.fish")
+    : join(e.home, ".profile");
+  const line = shell === "fish" ? `set -gx PATH "${inDq(dir)}" $PATH ${RC_MARK}` : `export PATH="${inDq(dir)}:$PATH" ${RC_MARK}`;
+  if (existsSync(file) && readFileSync(file, "utf8").split(/\r?\n/).includes(line)) return null;
+  return { kind: "rc", dir, where: file, file, line };
+}
+
+export function addToPath(p: PathEntry, reg?: UserPathIO): void {
+  if (p.kind === "registry") {
+    if (!reg) throw new Error("no access to the user PATH");
+    const cur = reg.read().replace(/;+$/, "");
+    reg.write(cur ? `${cur};${p.dir}` : p.dir);
+    return;
+  }
+  const cur = existsSync(p.file!) ? readFileSync(p.file!, "utf8") : "";
+  mkdirSync(dirname(p.file!), { recursive: true });
+  writeFileSync(p.file!, `${cur}${cur && !cur.endsWith("\n") ? "\n" : ""}${p.line}\n`);
+}
+
+/** Take out exactly the entry `addToPath` added (the last one equal to it). False when it is not there any more. */
+export function removeFromPath(p: PathEntry, reg?: UserPathIO): boolean {
+  if (p.kind === "registry") {
+    if (!reg) throw new Error("no access to the user PATH");
+    const parts = reg.read().split(";");
+    const i = parts.map((x) => x.trim().toLowerCase()).lastIndexOf(p.dir.toLowerCase());
+    if (i < 0) return false;
+    parts.splice(i, 1);
+    reg.write(parts.join(";"));
+    return true;
+  }
+  if (!existsSync(p.file!)) return false;
+  const lines = readFileSync(p.file!, "utf8").split("\n");
+  const i = lines.map((l) => l.replace(/\r$/, "")).lastIndexOf(p.line!);
+  if (i < 0) return false;
+  lines.splice(i, 1);
+  writeFileSync(p.file!, lines.join("\n"));
+  return true;
+}
+
+const PS_READ =
+  "[Console]::OutputEncoding=[Text.Encoding]::UTF8;$k=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment');" +
+  "if($k){[Console]::Out.Write($k.GetValue('Path','',[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames))}";
+const PS_WRITE =
+  "$k=[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment');$t=[Microsoft.Win32.RegistryValueKind]::ExpandString;" +
+  "if($k.GetValueNames() -contains 'Path' -and $k.GetValueKind('Path') -eq [Microsoft.Win32.RegistryValueKind]::String){$t=[Microsoft.Win32.RegistryValueKind]::String};" +
+  "$k.SetValue('Path',$env:MM_PATH,$t);$k.Close();" +
+  "Add-Type -Namespace MM -Name W -MemberDefinition '[DllImport(\"user32.dll\",CharSet=CharSet.Unicode)] public static extern IntPtr SendMessageTimeout(IntPtr h,uint m,UIntPtr w,string l,uint f,uint t,out UIntPtr r);';" +
+  "$r=[UIntPtr]::Zero;[void][MM.W]::SendMessageTimeout([IntPtr]0xffff,0x1A,[UIntPtr]::Zero,'Environment',2,5000,[ref]$r)";
+
+/** The real per-user Path value (Windows only). Values travel in an environment variable, never inside the script text. */
+export function windowsUserPath(): UserPathIO {
+  const ps = (script: string, env: NodeJS.ProcessEnv = {}): string =>
+    execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { env: { ...process.env, ...env }, encoding: "utf8", windowsHide: true, timeout: 30_000, stdio: ["ignore", "pipe", "pipe"] });
+  return { read: () => ps(PS_READ), write: (v) => void ps(PS_WRITE, { MM_PATH: v }) };
+}

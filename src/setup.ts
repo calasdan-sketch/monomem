@@ -23,6 +23,7 @@ import { applyTomlOps, findTable, hasServer, tomlOpsApplied } from "./toml-table
 import { applyLegacyEnv, homeDataDir } from "./legacy-env.js";
 import { EMBEDDINGS_OFFER_ENV, embeddingsOfferLine } from "./embeddings-offer.js";
 import { privateDir } from "./private-dir.js";
+import { addToPath, pathPlan, removeFromPath, windowsUserPath, type PathEntry } from "./install.js";
 import { subagentMemoryOn } from "./prompt/switches.js";
 import { SELF_CLI, quoteShellArg, selfCommand, selfFacts, selfShellLine, type SelfFacts, type SelfMode } from "./self.js";
 
@@ -47,6 +48,8 @@ export interface SetupEnv {
    * undefined = not looked up yet, null = looked up and not found.
    */
   globalCliPath?: string | null;
+  /** The Windows per-user Path value (install.ts). Tests inject a fake; unset = the real one, read only in bundle mode. */
+  userPath?: import("./install.js").UserPathIO;
 }
 
 /** Expand Windows 8.3 short names (PROGRA~1) and symlinks to the real long path; keep the input if that is impossible. */
@@ -111,6 +114,8 @@ export interface SetupOptions {
   removeOld?: boolean;
   /** A local Ollama with nomic-embed-text was found (embeddings-offer.ts): new app entries get MONOMEM_EMBEDDINGS=auto. */
   embeddings?: boolean;
+  /** Bundle mode: put the install folder on PATH. "ask" (default: part of the plan you say y to; --yes leaves it out), "yes" (--path), "no" (--no-path). */
+  path?: "ask" | "yes" | "no";
 }
 
 export const DEFAULT_OPTIONS: SetupOptions = { dryRun: false, yes: false, undo: false, hook: "ask", project: false, noTestNote: false, noDoctor: false, command: "auto", forceEmpty: false };
@@ -1574,6 +1579,8 @@ export interface HistorySession {
   dbs?: Array<{ path: string; before: number | null }>;
   /** An old claude-bridge entry was replaced in this session. */
   migratedLegacy?: boolean;
+  /** The PATH entry this session added (install.ts): undo removes exactly it. */
+  path?: PathEntry;
 }
 
 /** The data folder: MONOMEM_HOME, else ~/.monomem. */
@@ -1662,6 +1669,7 @@ export async function undoLast(e: SetupEnv, io: SetupIO): Promise<number> {
 /** Put back every file one setup session changed (newest change first). Returns how many could not be undone. */
 export function undoSession(e: SetupEnv, io: SetupIO, s: HistorySession): number {
   let failed = 0;
+  if (s.path) failed += undoPath(e, io, s.path); // added last, so taken out first
   for (const c of [...s.changes].reverse()) {
     try {
       const current = existsSync(c.real) ? readFileSync(c.real, "utf8") : null;
@@ -1702,6 +1710,17 @@ export function undoSession(e: SetupEnv, io: SetupIO, s: HistorySession): number
   return failed;
 }
 
+function undoPath(e: SetupEnv, io: SetupIO, p: PathEntry): number {
+  try {
+    const removed = removeFromPath(p, p.kind === "registry" ? (e.userPath ?? windowsUserPath()) : undefined);
+    io.out(removed ? `  ${p.where}: took out ${p.dir} (setup had added it)` : `  ${p.where}: ${p.dir} is not there any more, nothing to do`);
+    return 0;
+  } catch (err) {
+    io.err(`  ${p.where}: could not take out ${p.dir} (${(err as Error).message}). Remove it by hand.`);
+    return 1;
+  }
+}
+
 // ---- the command --------------------------------------------------------------------------------------------------------------
 
 function describeSchema(v: number | null, current: number): string {
@@ -1725,6 +1744,8 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   // was unpacked in (Downloads, a temp copy of a zip). Everything below plans with the home's paths; the copy is a listed step.
   let placement: { from: string; to: string } | null = null;
   let shortcut: import("./install.js").ShortcutPlan | null = null;
+  let pathStep: PathEntry | null = null;
+  let pathSkipped: PathEntry | null = null;
   if (e.mode === "bundle") {
     const inst = await import("./install.js");
     const root = inst.bundleRoot(e.cliPath);
@@ -1735,8 +1756,15 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
     }
     const sp = inst.shortcutPlan(e, home);
     if (!existsSync(sp.file)) shortcut = sp;
+    // PATH: asked as a step of the plan, or --path; --yes alone leaves it out (it changes every terminal, not one app).
+    const pathWanted = opts.path === "yes" || (opts.path !== "no" && !opts.yes);
+    pathStep = opts.path === "no" ? null : pathPlan(e, home, e.platform === "win32" ? (e.userPath ?? windowsUserPath()) : undefined);
+    if (pathStep && !pathWanted) {
+      pathSkipped = pathStep;
+      pathStep = null;
+    }
   }
-  const extra = !!placement || !!shortcut;
+  const extra = !!placement || !!shortcut || !!pathStep;
   if (e.globalCliPath === undefined && opts.command === "auto" && runningFromNpxCache(e.cliPath)) e = { ...e, globalCliPath: detectGlobalCli(e) ?? null };
 
   // Old-style names (ONEMEMORY_*, CLAUDE_BRIDGE_*) in the shell count as MONOMEM_*, exactly as at run time. A copy, so the
@@ -1894,6 +1922,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   io.out("What I will do:");
   let n = 1;
   if (placement) io.out(`  ${n++}. Copy Monomem from ${placement.from} to ${placement.to}, its home on this computer (no admin rights needed), so your apps' settings name a folder that never moves. You can delete the downloaded folder afterwards`);
+  if (pathStep) io.out(`  ${n++}. Add ${pathStep.dir} to ${pathStep.where}${pathStep.line ? `: the line  ${pathStep.line}` : ""}, so \`monomem\` works in any new terminal. monomem setup --undo takes out exactly that entry (--no-path leaves it out)`);
   if (shortcut) io.out(`  ${n++}. Add a "Monomem" entry to ${shortcut.where} that opens your notes in the browser (${shortcut.file}). monomem setup --undo and monomem uninstall remove it`);
   for (const c of plan.changes) for (const l of c.lines) io.out(`  ${l.startsWith("note:") ? "   " : `${n++}. ${c.label}: `}${l}`);
   // --yes asks nothing, so the hook it adds is a step like any other (Claude Code only, unless --hook: see the else branch below).
@@ -2088,9 +2117,19 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
       io.err(`Could not add the ${shortcut.where} entry (${(err as Error).message}). Everything else is done; open your notes with:  monomem open`);
     }
   }
-  if (saved.length) {
+  let pathAdded: PathEntry | undefined;
+  if (pathStep) {
+    try {
+      addToPath(pathStep, pathStep.kind === "registry" ? (e.userPath ?? windowsUserPath()) : undefined);
+      pathAdded = pathStep;
+      io.out(`Added ${pathStep.dir} to ${pathStep.where}. Open a new terminal to use \`monomem\` there.`);
+    } catch (err) {
+      io.err(`Could not add ${pathStep.dir} to ${pathStep.where} (${(err as Error).message}). Everything else is done.`);
+    }
+  } else if (pathSkipped) io.out(`Not added to PATH (--yes leaves it out). To add ${pathSkipped.dir}: monomem setup --yes --path`);
+  if (saved.length || pathAdded) {
     const all = readHistory(e);
-    all.push({ id: stamp(e.now()), at: e.now().toISOString(), version: e.version, changes: saved, dbs: dbsBefore, migratedLegacy });
+    all.push({ id: stamp(e.now()), at: e.now().toISOString(), version: e.version, changes: saved, dbs: dbsBefore, migratedLegacy, ...(pathAdded ? { path: pathAdded } : {}) });
     saveHistory(e, all);
   }
   {

@@ -35,7 +35,7 @@ export async function connectCmd(cliPath: string): Promise<void> {
       console.log(JSON.stringify({ mcpServers: { monomem: buildServerEntry(realEnv(PACKAGE_VERSION, cliPath), { command: "auto" }, env) } }, null, 2));
       return;
     }
-    process.argv.splice(2, process.argv.length - 2, "setup", "--only", app, ...(flags["dry-run"] === true ? ["--dry-run"] : []), ...(flags.yes === true ? ["--yes"] : []), "--no-hook", "--no-capture", "--terse", "--no-test-note", "--no-embeddings");
+    process.argv.splice(2, process.argv.length - 2, "setup", "--only", app, ...(flags["dry-run"] === true ? ["--dry-run"] : []), ...(flags.yes === true ? ["--yes"] : []), "--no-hook", "--no-capture", "--no-path", "--terse", "--no-test-note", "--no-embeddings");
     await setupCmd(cliPath);
     if (!process.exitCode && flags["dry-run"] === true) console.log(`\nDry run: run the same command without --dry-run to connect ${app}.`);
     else if (!process.exitCode) console.log(`\nConnected ${app}. This app can read every note, including private ones. To keep it away from private notes: monomem connect ${app} --restricted`);
@@ -222,7 +222,7 @@ export async function setupCmd(cliPath: string): Promise<void> {
   const { runSetup, realEnv, DEFAULT_OPTIONS } = await import("../setup.js");
   const { flags } = parseFlags(process.argv.slice(3), {
     values: ["only", "db", "command"],
-    bools: ["dry-run", "yes", "undo", "hook", "no-hook", "capture", "no-capture", "project", "no-test-note", "no-doctor", "force-empty", "terse", "no-embeddings"],
+    bools: ["dry-run", "yes", "undo", "hook", "no-hook", "capture", "no-capture", "project", "no-test-note", "no-doctor", "force-empty", "terse", "no-embeddings", "path", "no-path"],
   });
   const command = str(flags.command) ?? "auto";
   if (!["auto", "node", "npx"].includes(command)) {
@@ -231,6 +231,10 @@ export async function setupCmd(cliPath: string): Promise<void> {
   }
   if (flags.hook === true && flags["no-hook"] === true) {
     console.error("Choose one of --hook and --no-hook");
+    process.exit(1);
+  }
+  if (flags.path === true && flags["no-path"] === true) {
+    console.error("Choose one of --path and --no-path");
     process.exit(1);
   }
   if (flags.capture === true && flags["no-capture"] === true) {
@@ -246,6 +250,7 @@ export async function setupCmd(cliPath: string): Promise<void> {
     undo: flags.undo === true,
     hook: flags.hook === true ? "yes" : flags["no-hook"] === true ? "no" : "ask",
     capture: flags.capture === true ? "yes" : flags["no-capture"] === true ? "no" : "ask",
+    path: flags.path === true ? "yes" : flags["no-path"] === true ? "no" : "ask",
     project: flags.project === true,
     noTestNote: flags["no-test-note"] === true,
     noDoctor: flags["no-doctor"] === true,

@@ -63,8 +63,11 @@ costs money we have not spent yet). The only program in the folder is Node's, wh
      Mac, and in the Linux applications menu. `monomem setup --undo` and `monomem uninstall` remove it.
 4. Then it connects your apps as usual. You can delete the downloaded archive and folder afterwards.
 
-To type `monomem` in any terminal, add the home folder to your PATH (Windows: the folder above; Mac/Linux:
-`export PATH="$HOME/.local/share/monomem:$PATH"` or the Mac folder, in your shell profile). Running `monomem` with no command
+To type `monomem` in any terminal, setup offers to add the home folder to your PATH, as one more step in the list you say
+yes to: on Windows your per-user PATH (the `Path` value under `HKCU\Environment`, appended, nothing else changed; open a new
+terminal afterwards), on Mac/Linux one line marked `# added by monomem setup` in your shell's startup file (`~/.zshrc`,
+`~/.bashrc`, `~/.bash_profile` on a Mac, fish's `config.fish`, else `~/.profile`). `monomem setup --undo` and
+`monomem uninstall` take out exactly that entry. `--yes` alone leaves PATH alone (add `--path`); `--no-path` skips it. Running `monomem` with no command
 in a terminal shows the help; double-clicking `monomem.cmd` or using the Monomem entry opens your notes.
 
 **Update.** `monomem update` downloads the newest release for your computer, checks its SHA-256 against the release's

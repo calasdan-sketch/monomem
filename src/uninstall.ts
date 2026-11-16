@@ -174,7 +174,10 @@ export async function runUninstall(e: SetupEnv, io: SetupIO, opts: UninstallOpti
   io.out("Monomem uninstall\n");
   io.out("What I will do:");
   let n = 1;
-  for (const s of sessions) for (const c of [...s.changes].reverse()) io.out(`  ${n++}. ${c.label}: ${c.file}: ${describe(c)}`);
+  for (const s of sessions) {
+    if (s.path) io.out(`  ${n++}. ${s.path.where}: take out ${s.path.dir} (setup added it)`);
+    for (const c of [...s.changes].reverse()) io.out(`  ${n++}. ${c.label}: ${c.file}: ${describe(c)}`);
+  }
   if (!sessions.length) io.out("  (setup has not changed any app's configuration on this computer, or it was already undone)");
   const refusal = opts.purge ? purgeRefusal(dir, e.home) : "";
   if (refusal) {

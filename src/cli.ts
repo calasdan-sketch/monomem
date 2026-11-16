@@ -162,7 +162,7 @@ function usage(all = false): void {
       "  uninstall [--dry-run] [--yes] [--purge] [--no-backup]",
       "            Take Monomem out of every app setup connected (same as setup --undo, for every setup run).",
       "            --purge also deletes the data folder, after a final backup it names (unless --no-backup).",
-      "  setup [--dry-run] [--yes] [--only claude-code,claude-desktop,cursor,codex,gemini,muse,vscode,zed] [--project] [--hook|--no-hook] [--capture|--no-capture] [--db <file>] [--no-embeddings] [--undo]",
+      "  setup [--dry-run] [--yes] [--only claude-code,claude-desktop,cursor,codex,gemini,muse,vscode,zed] [--project] [--hook|--no-hook] [--capture|--no-capture] [--path|--no-path] [--db <file>] [--no-embeddings] [--undo]",
       "            Connect monomem to Claude Code / Claude Desktop / Cursor for you. Shows the plan and the exact lines it will",
       "            change, saves a backup of each file first, writes only after you type y. An old \"claude-bridge\" entry is offered",
       "            for migration with your data kept. --dry-run only shows; --undo puts back what it changed.",
