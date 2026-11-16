@@ -20,6 +20,14 @@ import { putTask, writeHandoff } from "../src/tasks.js";
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "src");
 const as = <T>(label: string, fn: () => T): T => actorStore.run({ label, authed: true }, fn);
 const read = (f: string): string => readFileSync(join(SRC, f), "utf8");
+/**
+ * Large files were split into folders (Phase 0: src/mcp/, src/api/, src/doctor/ ...). Their reviewed call sites are still
+ * listed under the original file name, so a move between them is not a new site; a new one still fails.
+ */
+const SPLIT_FROM: Array<[string, string]> = [["mcp/", "mcp-server-core.ts"], ["api/", "api.ts"], ["doctor/", "cli.ts"], ["cli/", "cli.ts"]];
+const group = (f: string): string => SPLIT_FROM.find(([dir]) => f.startsWith(dir))?.[1] ?? f;
+/** A split file and its folder, as one text (the route and tool scans below). */
+const readGroup = (main: string): string => [main, ...srcFiles().filter((f) => group(f) === main && f !== main)].map(read).join("\n");
 
 /**
  * The gate itself: store.ts and the modules split out of it (src/store/**) may read notes and query the gated tables
@@ -182,7 +190,7 @@ describe("B: one gate for reading a note", () => {
       for (const [n, line] of rawSites(read(f))) {
         const i = line.indexOf(GATE_OK);
         if (i < 0) unmarked.push(`${f}:${n}  ${line.trim().slice(0, 100)}`);
-        else (seen[f] ??= []).push(line.slice(i + GATE_OK.length).trim());
+        else (seen[group(f)] ??= []).push(line.slice(i + GATE_OK.length).trim());
       }
     }
     assert.deepEqual(unmarked, [], "raw read without a `// gate-ok: <reason>` marker: route it through store.readVisible / filterVisible (or the SQL predicate), or mark it and list it in EXPECTED_SITES");
@@ -199,9 +207,9 @@ describe("B: one gate for reading a note", () => {
       const t = read(f);
       const code = t.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
       const tables = new Set([...code.matchAll(GATED_SQL_RE)].map((m) => m[1]));
-      if (tables.size) sql[f] = [...tables].sort();
+      if (tables.size) sql[group(f)] = [...new Set([...(sql[group(f)] ?? []), ...tables])].sort();
       const n = t.split("\n").filter((l) => /includeDistrusted: ?true/.test(l) && !/\? \{ includeDistrusted: true \} : \{\}/.test(l) && !/^\s*\/\//.test(l)).length;
-      if (n) optIn[f] = n;
+      if (n) optIn[group(f)] = (optIn[group(f)] ?? 0) + n;
     }
     assert.deepEqual(sql, SQL_ALLOWED, "SQL on a gated table belongs in store.ts / src/store/, behind the gate: route it through the Store, or review it and list it in SQL_ALLOWED");
     assert.deepEqual(optIn, INTERNAL_OPT_IN, "an unconditional includeDistrusted: true was added or removed: review it, then update INTERNAL_OPT_IN");
@@ -215,7 +223,7 @@ describe("B: one gate for reading a note", () => {
   });
 
   test("every HTTP GET route and every MCP tool is classified", () => {
-    const api = read("api.ts");
+    const api = readGroup("api.ts");
     const routes = new Set<string>();
     for (const m of api.matchAll(/req\.method === "GET" && \(?path === "([^"]+)"/g)) routes.add(m[1]);
     if (/req\.method === "GET" && idMatch/.test(api)) routes.add("/notes/:id");
@@ -228,7 +236,7 @@ describe("B: one gate for reading a note", () => {
     const NO_NOTE_CONTENT = ["/health", "/proof", "/status", "/ready", "/", "/dashboard.js", "/favicon.ico", "(sign pages)", "/runner/status", "/trust", "/access", "/whoami", "/audit", "/insights", "/tokens"];
     assert.deepEqual([...routes].sort(), [...NOTE_ROUTES, ...NO_NOTE_CONTENT].sort(), "a GET route was added: add it to NOTE_ROUTES (and to the canary test below) or NO_NOTE_CONTENT");
 
-    const mcp = read("mcp-server-core.ts");
+    const mcp = readGroup("mcp-server-core.ts");
     const tools = new Set<string>([...mcp.matchAll(/server\.registerTool\(\s*"([a-z_]+)"/g)].map((m) => m[1]));
     const NOTE_TOOLS = ["state_read", "state_search", "state_relevant", "state_list", "memory_stats", "memory_receipt", "memory_why", "memory_consolidation_candidates", "memory_since", "task_get", "task_list", "catch_up", "memory_ack", "memory_history", "memory_index", "memory_timeline", "memory_get", "session_list"];
     const OTHER_TOOLS = ["state_write", "state_delete", "memory_consolidate", "memory_rebuild_edges", "task_put", "task_claim", "task_approve", "session_handoff", "memory_quarantine", "runner_status", "trust_policy", "memory_supersede_preview", "memory_supersede_confirm", "memory_supersede_undo", "memory_restore_version", "memory_history_purge", "memory_rollback", "memory_confirm", "memory_flag"];
@@ -369,7 +377,7 @@ describe("B: the canary never reaches a non-admin reader through any classified 
 
 describe("docs name every MCP tool", () => {
   test("SKILL.md frontmatter and docs/architecture.md list every registered tool", () => {
-    const mcp = read("mcp-server-core.ts");
+    const mcp = readGroup("mcp-server-core.ts");
     const tools = [...mcp.matchAll(/server\.registerTool\(\s*"([a-z_]+)"/g)].map((m) => m[1]);
     assert.ok(tools.length >= 20);
     const root = join(SRC, "..");

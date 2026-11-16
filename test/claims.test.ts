@@ -19,7 +19,7 @@
 import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -28,6 +28,8 @@ import { DEFAULT_TOOLS } from "../src/mcp-server-core.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
+/** mcp-server-core.ts and the tool files split out of it (src/mcp/), as one text. */
+const readMcp = (): string => [read("src/mcp-server-core.ts"), ...readdirSync(join(ROOT, "src", "mcp")).filter((f) => f.endsWith(".ts")).sort().map((f) => read(`src/mcp/${f}`))].join("\n");
 const pkg = JSON.parse(read("package.json")) as { engines: { node: string }; version: string };
 
 /** Files a user actually reads, and which have each carried a false claim. */
@@ -57,7 +59,7 @@ describe("the Node floor is stated identically everywhere", () => {
 });
 
 describe("tool-surface claims match the registered tools", () => {
-  const core = read("src/mcp-server-core.ts");
+  const core = readMcp();
   const registered = [...core.matchAll(/server\.registerTool\(\s*"([a-z_]+)"/g)].map((m) => m[1]);
 
   test("the docs' tool count is the real tool count", () => {
@@ -100,7 +102,7 @@ describe("shipped skills only promise tools the reader can actually call", () =>
   // A skill that instructs a non-default tool must say so, or an agent loads it
   // on a plain install and calls a tool that does not exist.
   const skills = ["SKILL.md", "skills/monomem-mem/SKILL.md"];
-  const core = read("src/mcp-server-core.ts");
+  const core = readMcp();
   const registered = new Set([...core.matchAll(/server\.registerTool\(\s*"([a-z_]+)"/g)].map((m) => m[1]));
 
   for (const f of skills) {
