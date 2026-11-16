@@ -261,7 +261,8 @@ describe("sync --git: encrypted", { skip }, () => {
     // and not in git history either
     const all = g(w.a.repo, "log", "-p", "--all");
     assert.ok(!all.includes("SECRETWORD") && !all.includes(key.toString("base64")));
-    assert.match(readdirSync(join(w.a.repo, "monomem-enc"))[0], /^[0-9a-f]{32}\.enc$/);
+    // Sealed notes (.enc) and this computer's sealed label (.mach, device sync): both opaque names.
+    for (const f of readdirSync(join(w.a.repo, "monomem-enc"))) assert.match(f, /^[0-9a-f]{32}\.(enc|mach)$/);
   });
   test("the key stays out of the repository: a key file inside it is refused", async () => {
     const w = world();

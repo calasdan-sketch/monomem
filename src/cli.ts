@@ -264,6 +264,9 @@ function usage(all = false): void {
       "            Make a random access token for an app and save it in tokens.json (shown once; restart a running server after).",
       "            list shows labels and scopes only. Commands that lower protection (token add, trust undistrust/attester-add/",
       "            attester-unrevoke, quarantine approve/keep-history, unpin, approve-first off, resume) need a real terminal and a typed yes.",
+      "  sync setup <private git address | shared folder> [--auto on|off] [--every min] [--name label]  |  sync",
+      "            Use Monomem on your other computers: set up once, then `monomem sync` (or --auto on: every 30 min while the",
+      "            server runs). Files are always sealed; copy the key (.sync-key) to the other computer yourself. docs/file-sync.md",
       "  sync --git <repo-folder> [--remote name] [--encrypt] [--key-file f] [--dry-run] [--no-push] [--yes]",
       "            Keep your notes in step across your own computers through a PRIVATE git repository you own: fetch, merge,",
       "            three-way merge into the database, write back, commit, push. No Monomem server. --encrypt seals every",
@@ -2276,12 +2279,14 @@ async function supersedeCmd(kind: "supersede" | "history" | "pin" | "unpin" | "r
 
 // `monomem sync --git <repo>`: see sync-git.ts.
 async function syncCmd(): Promise<void> {
+  // Device sync (src/sync/device.ts): `sync setup <address|folder>` once, then a bare `sync`.
+  if (process.argv[3] === "setup" || process.argv.length === 3) return void (process.exitCode = await (await import("./sync/device.js")).syncCli(process.argv.slice(3)));
   const { flags } = parseFlags(process.argv.slice(3), {
     values: ["git", "remote", "key-file"],
     bools: ["encrypt", "dry-run", "no-push", "yes"],
   });
   if (!str(flags.git)) {
-    console.error("Usage: monomem sync --git <repo-folder> [--remote name] [--encrypt] [--key-file f] [--dry-run] [--no-push] [--yes]");
+    console.error("Usage: monomem sync setup <private git address | shared folder>   (then: monomem sync)\n       monomem sync --git <repo-folder> [--remote name] [--encrypt] [--key-file f] [--dry-run] [--no-push] [--yes]");
     process.exit(1);
   }
   const { DB_PATH, DATA_DIR } = await import("./config.js");

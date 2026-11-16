@@ -38,7 +38,7 @@ export interface GitSyncOptions {
   now?: () => Date;
 }
 
-class SyncStop extends Error {}
+export class SyncStop extends Error {}
 
 const URL_USERINFO = /(\b[a-z][a-z0-9+.-]{0,20}:\/\/)[^\s/@'"]{1,200}@/gi;
 
@@ -48,7 +48,7 @@ export function scrubUrls(text: string): string {
 }
 
 /** A remote address with a password or token inside it would be saved in .git/config and echoed by git errors. */
-function addressHasSecret(url: string): boolean {
+export function addressHasSecret(url: string): boolean {
   const m = /^([a-z][a-z0-9+.-]{0,20}):\/\/([^\s/@]{1,200})@/i.exec(url.trim());
   if (!m) return false;
   return /^(https?|ftps?)$/i.test(m[1]) || m[2].includes(":");
@@ -82,7 +82,7 @@ export function syncKeyPath(opts: Pick<GitSyncOptions, "keyFile" | "dataDir" | "
   return existsSync(rest) ? rest : join(opts.dataDir, ".sync-key");
 }
 
-function readKey(p: string): Buffer | null {
+export function readKey(p: string): Buffer | null {
   if (!existsSync(p)) return null;
   const raw = readFileSync(p);
   if (raw.length !== KEY_BYTES) throw new SyncStop(`the key file ${p} is ${raw.length} bytes; it must be ${KEY_BYTES}. Restore it from your other computer.`);
@@ -118,7 +118,7 @@ export function containedIn(flavour: PathFlavour, dir: string, file: string, ign
 
 /** Real path of `p`: links resolved with the OS's own routine (on Windows that also expands 8.3 short names such as RUNNER~1).
  * A path that does not exist yet is resolved through its nearest existing parent, so both sides are always in the same form. */
-function realPath(p: string): string {
+export function realPath(p: string): string {
   const abs = resolve(p);
   const tail: string[] = [];
   let cur = abs;
@@ -281,6 +281,8 @@ export async function runGitSync(io: GitSyncIO, o: GitSyncOptions): Promise<numb
     io.out(`Git sync of ${o.dbPath}`);
     io.out(`  repository : ${repo}  (branch ${branch}, remote ${remote ?? "none: committing locally only"})`);
     io.out(`  files      : ${vaultName}/ ${o.encrypt ? "(sealed: names and text are encrypted; key stays in " + keyFile + ")" : "(PLAIN TEXT Markdown: use a private repository, or add --encrypt)"}`);
+    // At-rest encryption covers the database only: a plain sync writes readable files. Say so where it matters.
+    if (!o.encrypt && existsSync(keyPath(o.dataDir))) io.err("  warning: your database is encrypted at rest, but these sync files are PLAIN TEXT. Add --encrypt (or use monomem sync setup, which always seals them).");
     if (!remote || o.noPush) io.out(`  push       : no (${!remote ? "no remote" : "--no-push"})`);
 
     if (!o.encrypt && !o.yes && !o.dryRun) {
@@ -294,7 +296,7 @@ export async function runGitSync(io: GitSyncIO, o: GitSyncOptions): Promise<numb
     }
 
     const { Store, SCHEMA_VERSION } = await import("./store.js");
-    const { importMarkdown, exportMarkdown } = await import("./sync.js");
+    const { importMarkdown } = await import("./sync.js");
 
     if (o.dryRun) {
       // Look only. Nothing is created: no data folder, no database, no upgrade of an old database.
@@ -357,60 +359,7 @@ export async function runGitSync(io: GitSyncIO, o: GitSyncOptions): Promise<numb
         }
       }
       // 2. Seal/unseal, merge into the database, write back.
-      if (o.encrypt) {
-        const sealedHere = existsSync(vault) ? readdirSync(vault).filter((f) => f.endsWith(".enc")) : [];
-        if (!key) {
-          if (sealedHere.length > 0) throw new SyncStop(`This repository already holds sealed notes, but there is no key at ${keyFile}. Copy the key file from the computer that created it (never through the repository), then run sync again.`);
-          key = createKey(keyFile!);
-          io.out(`  Created a new key at ${keyFile}. Copy that file to your other computers (NOT into the repository) before syncing there; without it the sealed notes cannot be read.`);
-        }
-      }
-      if (o.encrypt) mkdirSync(o.dataDir, { recursive: true, mode: 0o700 });
-      const work = o.encrypt ? mkdtempSync(join(o.dataDir, ".sync-work-")) : vault;
-      try {
-        mkdirSync(work, { recursive: true });
-        let before = new Map<string, string>();
-        const versions = new Map<string, number>();
-        const seenPath = seenFile(o.dataDir, top);
-        const seen = o.encrypt ? readSeen(seenPath) : new Map<string, number>();
-        if (o.encrypt) before = decryptInto(vault, work, key!, { seen, versions, seenPath });
-        const store = new Store(o.dbPath);
-        try {
-          const imp = await importMarkdown(store, work, {});
-          const c = imp.counts;
-          // exportMarkdown applies MONOMEM_EXPORT_MAX_SENSITIVITY itself. With no ceiling set, labelled notes (private ones above
-          // all) go into the repository: say so once per run.
-          if (!(process.env.MONOMEM_EXPORT_MAX_SENSITIVITY ?? "").trim() && store.hasPrivateNotes()) {
-            io.err("  warning: some notes are labelled private and MONOMEM_EXPORT_MAX_SENSITIVITY is not set, so they will be pushed. Set it to internal (or public) to keep them out.");
-          }
-          const exp = exportMarkdown(store, work, {});
-          io.out(`  merged: ${c.created} new, ${c.updated} updated, ${c.unchanged} unchanged, ${c.conflict} conflict(s), ${c.rejected} rejected; wrote ${exp.written} file(s), removed ${exp.removed}.`);
-          if (c.conflict > 0) {
-            const keep = join(o.dataDir, "sync-conflicts", now().toISOString().replace(/[:.]/g, "-"));
-            if (existsSync(join(work, ".conflicts"))) {
-              mkdirSync(keep, { recursive: true, mode: 0o700 });
-              copyTree(join(work, ".conflicts"), keep);
-              io.out(`  ${c.conflict} note(s) were edited on two computers; the losing text is saved in ${keep}`);
-            }
-          }
-          const ar = imp.archive;
-          const n = (k: number, one: string): string => `${k} ${one}${k === 1 ? "" : "s"}`;
-          if (ar.archived) io.out(`  archived ${n(ar.archived, "note")} forgotten on another computer (kept, not deleted).`);
-          if (ar.restored) io.out(`  brought back ${n(ar.restored, "archived note")} (restored or edited on another computer).`);
-          if (ar.kept) io.out(`  kept ${n(ar.kept, "note")} live here that another computer archived:`);
-          for (const l of ar.lines) io.out(`    ${l}`);
-          if (imp.foreignHeld > 0) io.out(`  ${imp.foreignHeld} note(s) from other machines held for review (monomem quarantine list).`);
-          if (c.rejected > 0) io.err(`  ${c.rejected} file(s) were rejected (see \`monomem import --dir\` for details).`);
-        } finally {
-          store.close();
-        }
-        if (o.encrypt) {
-          writeSealed(vault, work, key!, before, versions, seen);
-          writeSeen(seenPath, seen);
-        }
-      } finally {
-        if (o.encrypt) rmSync(work, { recursive: true, force: true });
-      }
+      key = await mergeVault(io, { vault, encrypt: o.encrypt, key, keyFile, dataDir: o.dataDir, dbPath: o.dbPath, seenFor: top, now });
       // 3. Commit and push.
       mustGit(repo, ["add", "-A", "--", vaultName], o.env, "staging");
       const staged = git(repo, ["diff", "--cached", "--name-only", "--", vaultName], o.env).out;
@@ -444,13 +393,117 @@ export async function runGitSync(io: GitSyncIO, o: GitSyncOptions): Promise<numb
   }
 }
 
-/** Decrypt every sealed file into `work`; returns relative path -> text as found. Any bad file stops everything. */
-function decryptInto(vault: string, work: string, key: Buffer, check?: { seen: Map<string, number>; versions: Map<string, number>; seenPath: string }): Map<string, string> {
+interface VaultRun {
+  vault: string;
+  encrypt: boolean;
+  key: Buffer | null;
+  keyFile: string | null;
+  dataDir: string;
+  dbPath: string;
+  /** What the replay record (F1) is kept per: the repository's or the shared folder's real path. */
+  seenFor: string;
+  now: () => Date;
+  /** "repository" or "folder", for messages. */
+  where?: string;
+}
+
+/** Step 2 of a sync (git or shared folder): unseal, three-way merge into the database, write back, seal. Returns the key. */
+export async function mergeVault(io: GitSyncIO, v: VaultRun): Promise<Buffer | null> {
+  const where = v.where ?? "repository";
+  let key = v.key;
+  if (v.encrypt && !key) {
+    const sealedHere = existsSync(v.vault) ? readdirSync(v.vault).filter((f) => f.endsWith(".enc")) : [];
+    if (sealedHere.length > 0) throw new SyncStop(`This ${where} already holds sealed notes, but there is no key at ${v.keyFile}. Copy the key file from the computer that created it (never through the ${where}), then run sync again.`);
+    key = createKey(v.keyFile!);
+    io.out(`  Created a new key at ${v.keyFile}. Copy that file to your other computers (NOT into the ${where}) before syncing there; without it the sealed notes cannot be read.`);
+  }
+  const { Store } = await import("./store.js");
+  const { importMarkdown, exportMarkdown } = await import("./sync.js");
+  if (v.encrypt) mkdirSync(v.dataDir, { recursive: true, mode: 0o700 });
+  const work = v.encrypt ? mkdtempSync(join(v.dataDir, ".sync-work-")) : v.vault;
+  try {
+    mkdirSync(work, { recursive: true });
+    let before = new Map<string, string>();
+    const versions = new Map<string, number>();
+    const seenPath = seenFile(v.dataDir, v.seenFor);
+    const seen = v.encrypt ? readSeen(seenPath) : new Map<string, number>();
+    const odd: string[] = [];
+    if (v.encrypt) before = decryptInto(v.vault, work, key!, { seen, versions, seenPath, odd });
+    for (const f of odd) io.err(`  skipped ${f}: not a file Monomem wrote (a sync tool's conflict copy?). Nothing in it was read.`);
+    const store = new Store(v.dbPath);
+    try {
+      const imp = await importMarkdown(store, work, {});
+      const c = imp.counts;
+      // exportMarkdown applies MONOMEM_EXPORT_MAX_SENSITIVITY itself. With no ceiling set, labelled notes (private ones above
+      // all) leave this computer: say so once per run.
+      if (!(process.env.MONOMEM_EXPORT_MAX_SENSITIVITY ?? "").trim() && store.hasPrivateNotes()) {
+        io.err("  warning: some notes are labelled private and MONOMEM_EXPORT_MAX_SENSITIVITY is not set, so they will be pushed. Set it to internal (or public) to keep them out.");
+      }
+      const exp = exportMarkdown(store, work, {});
+      io.out(`  merged: ${c.created} new, ${c.updated} updated, ${c.unchanged} unchanged, ${c.conflict} conflict(s), ${c.rejected} rejected; wrote ${exp.written} file(s), removed ${exp.removed}.`);
+      if (c.conflict > 0) {
+        const keep = join(v.dataDir, "sync-conflicts", v.now().toISOString().replace(/[:.]/g, "-"));
+        if (existsSync(join(work, ".conflicts"))) {
+          mkdirSync(keep, { recursive: true, mode: 0o700 });
+          copyTree(join(work, ".conflicts"), keep);
+          io.out(`  ${c.conflict} note(s) were edited on two computers; the losing text is saved in ${keep}`);
+        }
+      }
+      if (imp.disputes > 0) io.out(`  ${imp.disputes} of them: the newer text is live and the other one is held for you to pick (monomem review).`);
+      const ar = imp.archive;
+      const n = (k: number, one: string): string => `${k} ${one}${k === 1 ? "" : "s"}`;
+      if (ar.archived) io.out(`  archived ${n(ar.archived, "note")} forgotten on another computer (kept, not deleted).`);
+      if (ar.restored) io.out(`  brought back ${n(ar.restored, "archived note")} (restored or edited on another computer).`);
+      if (ar.kept) io.out(`  kept ${n(ar.kept, "note")} live here that another computer archived:`);
+      for (const l of ar.lines) io.out(`    ${l}`);
+      if (imp.foreignHeld > 0) io.out(`  ${imp.foreignHeld} note(s) from other machines held for review (monomem quarantine list).`);
+      if (c.rejected > 0) io.err(`  ${c.rejected} file(s) were rejected (see \`monomem import --dir\` for details).`);
+    } finally {
+      store.close();
+    }
+    if (v.encrypt) {
+      writeSealed(v.vault, work, key!, before, versions, seen);
+      writeSeen(seenPath, seen);
+    }
+  } finally {
+    if (v.encrypt) rmSync(work, { recursive: true, force: true });
+  }
+  return key;
+}
+
+/** A sealed note file is named by blobName: 32 hex + .enc. Anything else (a sync tool's conflict copy) is skipped, unread. */
+const BLOB_NAME = /^[0-9a-f]{32}\.enc$/;
+/** A sealed computer label: `.machines/<store id>.txt` in the work folder, `<keyed hash>.mach` in the vault. A 1.5 peer
+ * reads only `.enc` files, so it ignores (and never removes) these. */
+const MACHINE_REL = /^\.machines\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.txt$/i;
+const machineBlob = (rel: string, key: Buffer): string => createHmac("sha256", key).update("monomem-git-sync-machine|" + rel).digest("hex").slice(0, 32) + ".mach";
+
+/** Decrypt every sealed file into `work`; returns relative path -> text as found. Any bad note file stops everything. */
+function decryptInto(vault: string, work: string, key: Buffer, check?: { seen: Map<string, number>; versions: Map<string, number>; seenPath: string; odd?: string[] }): Map<string, string> {
   const seen = new Map<string, string>();
   if (!existsSync(vault)) return seen;
   for (const de of readdirSync(vault, { withFileTypes: true })) {
     const f = de.name;
-    if (!f.endsWith(".enc") || !de.isFile()) continue; // links and folders are never followed
+    if (!de.isFile()) continue; // links and folders are never followed
+    if (f.endsWith(".mach")) {
+      // A computer label is cosmetic: one that does not open is skipped, never a reason to stop.
+      try {
+        const j = JSON.parse(decrypt(readFileSync(join(vault, f), "utf8").trim(), key, `git-sync-machine|${f}`)) as { p?: unknown; t?: unknown };
+        if (typeof j.p === "string" && MACHINE_REL.test(j.p) && typeof j.t === "string" && machineBlob(j.p, key) === f) {
+          mkdirSync(join(work, ".machines"), { recursive: true });
+          writeFileSync(join(work, ...j.p.split("/")), j.t.slice(0, 200));
+          seen.set(j.p, j.t.slice(0, 200));
+        }
+      } catch {
+        check?.odd?.push(f);
+      }
+      continue;
+    }
+    if (!f.endsWith(".enc")) continue;
+    if (!BLOB_NAME.test(f)) {
+      check?.odd?.push(f);
+      continue;
+    }
     let opened: { rel: string; text: string; v: number };
     try {
       opened = openFile(f, readFileSync(join(vault, f), "utf8"), key);
@@ -490,7 +543,19 @@ function writeSealed(vault: string, work: string, key: Buffer, before: Map<strin
     writeFileSync(join(vault, name), sealFile(rel, text, key, had + 1));
     seen.set(name, had + 1); // F1: a removed file keeps its high-water mark, so it can't be replayed back either
   }
-  for (const rel of before.keys()) if (!now.has(rel)) rmSync(join(vault, blobName(rel, key)), { force: true });
+  let labels: string[] = [];
+  try {
+    labels = readdirSync(join(work, ".machines")).map((f) => `.machines/${f}`).filter((r) => MACHINE_REL.test(r));
+  } catch {
+    /* none */
+  }
+  for (const rel of labels) {
+    const text = readFileSync(join(work, ...rel.split("/")), "utf8").slice(0, 200);
+    const name = machineBlob(rel, key);
+    if (before.get(rel) === text && existsSync(join(vault, name))) continue;
+    writeFileSync(join(vault, name), encrypt(JSON.stringify({ p: rel, t: text }), key, `git-sync-machine|${name}`) + "\n");
+  }
+  for (const rel of before.keys()) if (!now.has(rel) && !MACHINE_REL.test(rel)) rmSync(join(vault, blobName(rel, key)), { force: true });
 }
 
 function copyTree(from: string, to: string): void {

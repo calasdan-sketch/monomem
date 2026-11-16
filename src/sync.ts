@@ -81,6 +81,8 @@ import {
 } from "./store.js";
 import { parseWriterRef } from "./trust.js";
 import { maybeEmbed } from "./search-service.js";
+import { quarantineWrite } from "./store/quarantine.js";
+import type { LintFinding } from "./lint.js";
 import { contentHash, lf, normTags, type NoteContent } from "./sync-hash.js";
 import { addMarker, applyMarker, machineLabel, markerLines, markerOf, MACHINES_DIR, readHandled, rememberMachine, STORE_ID, writeHandled, type Marker } from "./sync/marks.js";
 import { type Sensitivity, DEFAULT_SENSITIVITY, parseSensitivity, sensitivityVisible, SENSITIVITY_HELP } from "./sensitivity.js";
@@ -93,6 +95,19 @@ const APPROVAL_TAG_PREFIX = "task.approval:";
 function importTags(fileTags: readonly string[], localTags: readonly string[] = []): string[] {
   const keepLocal = localTags.filter((t) => t.startsWith(APPROVAL_TAG_PREFIX));
   return [...fileTags.filter((t) => !t.startsWith(APPROVAL_TAG_PREFIX)), ...keepLocal];
+}
+
+/** What a sync dispute is held with (shown in `monomem review` / quarantine list). */
+const DISPUTE: LintFinding = { category: "approval", label: "edited on two computers: this is the other version (approve to use it)", field: "body" };
+
+/**
+ * Both computers edited a note: the newer text is live, and the other one waits as a held edit of the note (pinned to its
+ * current version), so a person picks; nothing is overwritten unseen. Returns 1 when a held edit was added.
+ */
+function holdOtherVersion(store: Store, live: NoteRecord, other: { namespace: string; title: string; body: string; tags: string[] }, fromFile: boolean): number {
+  if (store.pendingQuarantineId(other.namespace, other.title, other.body, other.tags) !== null) return 0;
+  quarantineWrite(store, { op: "update", targetId: live.id, ifRev: live.rev, namespace: live.namespace, title: other.title, body: other.body, tags: other.tags, findings: [DISPUTE], importedUnverified: fromFile });
+  return 1;
 }
 
 /** Front-matter keys, in the order export writes them. */
@@ -582,6 +597,8 @@ export interface ImportResult {
   counts: Record<ImportAction, number>;
   /** Files written by another store that went to quarantine (approve-first, or the linter) instead of going live. */
   foreignHeld: number;
+  /** Notes edited on two computers: the newer text is live, the other waits as a held edit (a person picks). */
+  disputes: number;
   /** A8 tombstones: notes archived here because another computer forgot them, notes kept live here (with why), and archived
    * notes brought back because the other computer restored or edited them. */
   archive: { archived: number; kept: number; restored: number; lines: string[] };
@@ -626,6 +643,7 @@ export async function importMarkdown(
       if (text !== null) rememberMachine(store, origin, text.slice(0, 200));
     }
   }
+  let disputes = 0;
   const handled = readHandled(store);
   const handledBefore = JSON.stringify([...handled]);
   const archive: ImportResult["archive"] = { archived: 0, kept: 0, restored: 0, lines: [] };
@@ -842,11 +860,15 @@ export async function importMarkdown(
             renderNoteFile(local, hasIdentity ? { origin: origin!, id: originId! } : { origin: self, id: local.id })
           );
           await attempt(applyFile, "conflict", `file was newer and won; store version saved to ${saved}`);
+          // A dispute, not a silent overwrite: this computer's text waits as a held edit, so a person can pick it back.
+          const after = dry ? null : store.read(local.id); // gate-ok: local operator path, nothing returned to a caller
+          if (after && contentHash(after) === fileHash) disputes += holdOtherVersion(store, after, { namespace: local.namespace, title: local.title, body: local.body, tags: local.tags }, false);
         } else {
           const saved = saveConflict(`${stem}.file.md`, readFileSync(file, "utf8"));
           // The file's version is now preserved and "seen": until the store
           // exports again (or the file is edited again) the store keeps winning.
           remember(local.id, fileHash);
+          if (!dry) disputes += holdOtherVersion(store, local, { namespace: local.namespace, title, body, tags: importTags(content.tags, local.tags) }, foreign);
           push("conflict", { id: local.id, detail: `store was newer and won; file version saved to ${saved}` });
         }
       } catch (e) {
@@ -877,5 +899,5 @@ export async function importMarkdown(
   } as Record<ImportAction, number>;
   for (const e of entries) counts[e.action]++;
   if (!dry && JSON.stringify([...handled]) !== handledBefore) writeHandled(store, handled);
-  return { dir, entries, counts, foreignHeld, archive };
+  return { dir, entries, counts, foreignHeld, archive, disputes };
 }

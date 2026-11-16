@@ -16,6 +16,7 @@ import { hardenTokensFile } from "./tokens-admin.js";
 import { listenErrorMessage } from "./http-common.js";
 import {
   DB_PATH,
+  DATA_DIR,
   API_PORT,
   MCP_HTTP_PORT,
   BIND_HOST,
@@ -209,6 +210,11 @@ const purgeNow = (): void => {
 const purgeTimer = setInterval(purgeNow, purgeEveryMs);
 purgeTimer.unref();
 setTimeout(purgeNow, Math.min(30_000, purgeEveryMs)).unref();
+
+// Device sync on a timer: only after `monomem sync setup --auto on` (off by default; it talks to your git remote).
+void Promise.all([import("./sync/device.js"), import("./self.js")])
+  .then(([d, self]) => d.startSyncTimer(DATA_DIR, () => self.selfCommand([]), (l) => console.error(l)))
+  .catch((e: Error) => console.error(`[monomem] device sync timer not started: ${e.message}`));
 
 let closing = false;
 function shutdown(): void {

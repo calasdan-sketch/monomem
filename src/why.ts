@@ -4,6 +4,7 @@
 import { isWriterMarker } from "./actor.js";
 import { accessLogDays, ENCRYPT_ACTOR, type NoteRecord, type Store } from "./store.js";
 import { printable, printableWords } from "./security.js";
+import { noteComputer } from "./sync/marks.js";
 import { localTime, timeLegend, whyText } from "./receipts.js";
 
 export interface WhyEvent {
@@ -37,6 +38,8 @@ export interface Why {
   pinned: boolean;
   approve_first_namespace: boolean;
   created_by: { writer: string; kind: string };
+  /** Came by file sync: the label of the computer it was first written on (as that computer names itself). */
+  from_computer?: string;
   timeline: WhyEvent[];
   /** 1.5.0 (R1-18): every confirm of this note, counted or not, oldest first. */
   confirmations: WhyConfirmation[];
@@ -80,9 +83,10 @@ export function noteWhy(store: Store, note: NoteRecord, opts: { namespaces?: str
   const tl: WhyEvent[] = [];
   const claimed = !!note.imported_unverified || !!note.imported_written_by;
   const creator = note.created_by || note.written_by;
+  const fromComputer = noteComputer(store, id); // device sync: the computer the note was first written on
   tl.push({
     at: note.created_at,
-    what: `created by ${claimed ? `${p(creator || "unknown")} (${writerKind(creator, true)})` : who(creator)}${note.imported_created_by ? `; the import file claimed ${p(note.imported_created_by)}` : ""}`,
+    what: `created by ${claimed ? `${p(creator || "unknown")} (${writerKind(creator, true)})` : who(creator)}${note.imported_created_by ? `; the import file claimed ${p(note.imported_created_by)}` : ""}${fromComputer ? `; first written on computer ${p(fromComputer)} (came by file sync)` : ""}`,
   });
 
   const hist = store.historyOf(id).reverse(); // oldest first
@@ -158,6 +162,7 @@ export function noteWhy(store: Store, note: NoteRecord, opts: { namespaces?: str
     pinned: !!note.pinned,
     approve_first_namespace: store.isApproveFirst(note.namespace),
     created_by: { writer: creator, kind: writerKind(creator, claimed) },
+    ...(fromComputer ? { from_computer: fromComputer } : {}),
     timeline: tl,
     confirmations,
     shown_to: { total: shown.length, recent: shown.slice(0, SHOWN_LIMIT), retention_days: accessLogDays() },
