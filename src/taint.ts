@@ -152,10 +152,10 @@ export function expiredCountLine(n: number, days: number): string {
 }
 
 /** The text labels for a note's 1.4.0 flags, each with a leading space ("" when none). */
-export function noteFlags(n: { unconfirmed_label?: string; expired_label?: string; built_on_distrusted_label?: string; flagged_label?: string; code_changed_label?: string }): string {
+export function noteFlags(n: { unconfirmed_label?: string; expired_label?: string; built_on_distrusted_label?: string; flagged_label?: string; code_changed_label?: string; echo_label?: string }): string {
   // flagged_label names the flaggers only; the reason (agent text) is never part of a label. code_changed_label (R2-03) names
   // repository paths, already through printable().
-  return [n.unconfirmed_label, n.expired_label, n.built_on_distrusted_label, n.flagged_label, n.code_changed_label].filter(Boolean).map((l) => ` ${l}`).join("");
+  return [n.unconfirmed_label, n.expired_label, n.built_on_distrusted_label, n.flagged_label, n.code_changed_label, n.echo_label].filter(Boolean).map((l) => ` ${l}`).join("");
 }
 
 /**

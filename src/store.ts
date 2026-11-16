@@ -793,6 +793,9 @@ export interface NoteRecord {
   /** 1.4.0 (1d): one of those notes was written or touched by a distrusted writer (one hop); with its label. */
   built_on_distrusted?: true;
   built_on_distrusted_label?: string;
+  /** r2-innovation #1: this note restates note #echo_of, which the writer's session was shown (not a second source). */
+  echo_of?: number;
+  echo_label?: string;
   /** 1.5.0 (R2-02): "this looks wrong" flags by other writers on this version (store/flags.ts); with its label. */
   flagged?: NoteFlag[];
   flagged_label?: string;
@@ -950,6 +953,11 @@ function annotateRetention(row: NoteRow, rec: NoteRecord): NoteRecord {
     out.confirmed_by = row.confirmed_by ?? "";
     out.confirmed_kind = row.confirmed_kind ?? "";
     out.confirmed_rev = Number(row.confirmed_rev ?? 0);
+  }
+  const echo = out.tags.find((t) => t.startsWith(taintOps.ECHO_TAG_PREFIX));
+  if (echo && /^\d{1,15}$/.test(echo.slice(taintOps.ECHO_TAG_PREFIX.length))) {
+    out.echo_of = Number(echo.slice(taintOps.ECHO_TAG_PREFIX.length));
+    out.echo_label = `[echo of #${out.echo_of}: restates a note this writer was shown; not a second source]`;
   }
   // 1.4.0: tainted, not grandfathered (=== null: a narrow projection without the column is never flagged), no confirm for this rev.
   if (row.grandfathered_at === null && isTainted(out.tags) && !(row.confirmed_kind && Number(row.confirmed_rev) === Number(row.rev))) {
@@ -2478,7 +2486,11 @@ export class Store {
     // 1.4.0 taint, before the hold so a held write keeps it. Internal writes for someone else (writtenBy: an approval, a
     // sync) and restores carry only what their own tags or `outside` say.
     // ponytail: a held create (quarantine) keeps the inherited taint but not the links themselves; carry them in the hold if asked.
-    const derived = this.derivedIds(input.derived_from);
+    const asked = this.derivedIds(input.derived_from);
+    // r2-innovation #1 (echo guard, store/taint.ts): restating a note this session was shown links to it and is labelled.
+    const echo = opts.bulkImport || opts.writtenBy !== undefined ? null : taintOps.echoOf(this, input.title ?? "", input.body ?? "");
+    const derived = echo !== null && !asked.includes(echo) ? [...asked, echo] : asked;
+    if (echo !== null) input = { ...input, tags: [...(input.tags ?? []).filter((t) => !t.startsWith(taintOps.ECHO_TAG_PREFIX)), `${taintOps.ECHO_TAG_PREFIX}${echo}`] };
     // R2-03: the git calls run here, before the write lock; a path outside the repository is refused before anything is stored.
     // ponytail: a held create (quarantine) does not keep its anchors; carry them in the hold if asked.
     const anchors = codeAnchorOps.prepareAnchors(opts.files);

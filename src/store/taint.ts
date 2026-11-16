@@ -8,6 +8,7 @@ import { taintWindowHours } from "../config.js";
 import { ValidationError } from "../errors.js";
 import { MAX_DERIVED_FROM, ORIGIN_DECLARED, ORIGIN_PREFIX, ORIGIN_VIA_MEMORY, isOutsideTool, isTainted, sameFolder, sessionTaintExempt, toolTag } from "../taint.js";
 import { SESSION_IDLE_MS, parseTags, tagsToStorage } from "./rows.js";
+import { cosineOfFreq, termFreq, tokenize } from "../text-sim.js";
 
 /**
  * The `obs.origin:*` tags a write gets: `outside: true` (declared), the connection's own (ActorRef.taint: a reads_outside
@@ -197,4 +198,54 @@ export function retroTaint(s: Store, cwd: string, atIso: string, tool: string): 
   });
   s.audit({ op: "retro-taint", detail: `${marks.length} note(s) marked ${tag}` });
   return marks.length;
+}
+
+// ---- r2-innovation #1: the echo guard ------------------------------------------------------------------------------
+// A note that restates a note THIS session was shown is not new evidence. "Shown" = what Monomem recorded giving the writer:
+// the session-start receipts of an open session launched in the writer's folder (local writers only, matched like the hook
+// window), plus the unconfirmed notes this connection read (ActorRef.taintedReads). The echo is linked to the original
+// (derived_from), so it inherits that note's unconfirmed / distrusted status and its writer cannot confirm the original;
+// it carries obs.echo_of:<id> so every reader sees the label. Label only: an echo is never refused.
+
+export const ECHO_TAG_PREFIX = "obs.echo_of:";
+/** Similarity (TF cosine over title + body) at or above which a write restates a shown note. */
+export const ECHO_MIN_SIMILARITY = 0.8;
+/** Fewer content tokens than this and a write is too short to call an echo (short generic notes match everything). */
+export const ECHO_MIN_TOKENS = 6;
+/** Most shown notes compared per write. */
+const ECHO_MAX_CANDIDATES = 60;
+
+/** The id of the shown note this text restates, or null. Reads only. */
+export function echoOf(s: Store, title: string, body: string): number | null {
+  const words = tokenize(`${title}\n${body}`);
+  if (words.length < ECHO_MIN_TOKENS) return null;
+  const ids = shownToThisSession(s);
+  if (!ids.length) return null;
+  const mine = termFreq(words);
+  let best: { id: number; sim: number } | null = null;
+  for (const id of ids) {
+    const n = s.readVisible(id, { hideArchived: true });
+    if (!n) continue;
+    const sim = cosineOfFreq(mine, termFreq(tokenize(`${n.title}\n${n.body}`)));
+    if (sim >= ECHO_MIN_SIMILARITY && (!best || sim > best.sim)) best = { id, sim };
+  }
+  return best?.id ?? null;
+}
+
+function shownToThisSession(s: Store): number[] {
+  const actor = actorStore.getStore();
+  const out = new Set<number>();
+  const h = taintWindowHours();
+  const cutoff = Date.now() - (h > 0 ? h : 12) * 3_600_000;
+  for (const [id, at] of actor?.taintedReads ?? []) if (at >= cutoff) out.add(id);
+  if (actor?.authed !== true && actor?.cwd) {
+    const sessions = s.activeSessions().filter((x) => sameFolder(x.cwd, actor.cwd as string)).map((x) => x.id);
+    if (sessions.length && s.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_receipts'").get()) {
+      const rows = s.db
+        .prepare(`SELECT note_id FROM memory_receipts WHERE session_id IN (${sessions.map(() => "?").join(",")}) ORDER BY rank LIMIT ?`)
+        .all(...sessions, ECHO_MAX_CANDIDATES) as Array<{ note_id: number }>;
+      for (const r of rows) out.add(Number(r.note_id));
+    }
+  }
+  return [...out].slice(0, ECHO_MAX_CANDIDATES);
 }

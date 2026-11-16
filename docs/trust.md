@@ -310,6 +310,17 @@ itself. Links are only ever added: an update adds new ones, and `[]` or leaving 
   listed and searchable.
 - A writer that built a note from the target cannot confirm the target.
 
+### Echoes
+
+A new note that restates a note its writer was just shown is an **echo**, not new evidence. "Shown" means what Monomem
+recorded giving that writer: the unconfirmed notes that connection read, and what session start showed an open session in
+the same folder (local apps only). When the new title and body match one of those closely (and are not too short to tell),
+the note gets `obs.echo_of:<id>`, the label `[echo of #<id>: restates a note this writer was shown; not a second source]`,
+and a `derived_from` link to the original. So it keeps the original's unconfirmed or distrusted status, its writer cannot
+confirm the original, and `monomem facts` does not count it as a second writer agreeing. It is a label only: an echo is
+never refused. The match is word overlap, so a reworded restatement can slip through, and a short generic note is never
+called an echo.
+
 Limits: it only works when agents fill it in, it looks one hop back, a held write keeps its mark but loses its links, and
 there is no session-start count line for notes built on a distrusted writer.
 
