@@ -105,6 +105,9 @@ const EXPECTED_SITES: Record<string, string[]> = {
   "rollback.ts": [
     "operator rollback (admin), confined to the caller's namespaces by rollbackCandidates",
     "re-embed what the operator just restored; nothing is returned",
+    "operator rollback side effects (admin), confined to the caller's namespaces by the query",
+    "operator rollback side effects (admin), confined to the caller's namespaces by the query",
+    "operator rollback side effects, the planned task re-read under the write lock",
     "operator rollback, only the writer name is used",
   ],
   "tasks.ts": [
@@ -163,6 +166,9 @@ const SQL_ALLOWED: Record<string, string[]> = {
   "health.ts": ["_meta"],
   // restore.ts counts (and checks for encryption) the BACKUP FILE it is about to put in place, before any store opens it.
   "restore.ts": ["_meta", "notes"],
+  // rollback.ts (admin-only writer rollback): finds the writer's open flags and its still-live replacements by id, confined to the
+  // caller's namespaces in the query; clears those flags in the confirm transaction. Ids only; every note is re-read via Store.
+  "rollback.ts": ["note_flags", "notes"],
   // why.ts is a local shell command (the operator owns the database file): held-write and confirmation history for one id.
   "why.ts": ["confirmations", "quarantine"],
 };

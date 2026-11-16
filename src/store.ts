@@ -4170,13 +4170,15 @@ export class Store {
     const nsRow = this.db.prepare("SELECT namespace FROM notes WHERE id = ?").get(id) as { namespace: string } | undefined;
     if (nsRow) refuseAgentInApproveFirst(this, nsRow.namespace, "bringing back a replaced note");
     const now = new Date().toISOString();
-    this.beginWrite();
+    // Inside a caller's transaction (a writer rollback undoes many replacements in one) the rows ride on it.
+    const nested = this.db.isTransaction;
+    if (!nested) this.beginWrite();
     try {
       const row = this.db.prepare("SELECT namespace, superseded_by FROM notes WHERE id = ? AND superseded_by IS NOT NULL").get(id) as
         | { namespace: string; superseded_by: number }
         | undefined;
       if (!row || this.idHidden(id)) {
-        this.rollbackTx();
+        if (!nested) this.rollbackTx();
         return null;
       }
       this.db
@@ -4185,8 +4187,9 @@ export class Store {
       this.db
         .prepare("INSERT INTO supersede_log (at, actor, action, namespace, old_id, new_id, flags) VALUES (?, ?, 'undo', ?, ?, ?, '')")
         .run(now, actor, row.namespace, id, row.superseded_by);
-      this.commitTx();
+      if (!nested) this.commitTx();
     } catch (e) {
+      if (nested) throw e;
       try {
         this.rollbackTx();
       } catch {

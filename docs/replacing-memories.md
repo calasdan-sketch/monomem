@@ -139,6 +139,13 @@ every `stdio:<app>`, as in distrust rules. For each note:
   and always skipped. Nothing is guessed;
 - a replaced (superseded) or archived note is listed and skipped.
 
+A restored version gets its own author back in `written_by` (who restored it is in the change log and the history reason).
+The same plan also undoes what the writer did **to** other notes since then, while it is still in force:
+
+- a **replacement** it confirmed: the replaced note is brought back (the replacement is left as it is);
+- a **flag** it raised: cleared;
+- a **task claim** it holds: the lease is released and the task goes back to the status it had before the claim.
+
 It is two steps, like a replacement: the preview writes nothing and lists exactly what would happen, plus a one-time code (it works
 once, for `MONOMEM_SUPERSEDE_TTL_SECONDS`, default 10 minutes, and only for the caller it was made for). The confirm plans again
 under the write lock and refuses if anything differs from the preview; it applies everything in one transaction, or nothing. The

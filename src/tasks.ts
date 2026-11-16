@@ -37,6 +37,7 @@ import {
   TAG_CKEY,
   TAG_LEASE,
   TAG_APPROVAL,
+  TAG_CLAIM,
   APPROVAL_RE,
   stateOf,
   parseBody,
@@ -296,6 +297,7 @@ function tagsFromState(base: readonly string[], s: TaskState): string[] {
     ...(s.lease ? [`${TAG_LEASE}${s.lease.expMs}:${s.lease.owner}`] : []),
     ...(s.ckey ? [`${TAG_CKEY}${s.ckey}`] : []),
     ...(s.approval ? [`${TAG_APPROVAL}${s.approval}`] : []),
+    ...(s.lease && s.claim ? [`${TAG_CLAIM}${s.claim.atMs}:${s.claim.prev}:${s.claim.by}`] : []),
   ];
 }
 
@@ -648,6 +650,7 @@ export function putTask(
     lease: null,
     ckey: key ? ckeyTag(namespace, key) : null,
     approval: null,
+    claim: null,
   };
   if (cmd && !target) throw new ValidationError("a command needs a `target`: the runner name that may execute it");
   if (cmd && st !== undefined && st !== "queued") {
@@ -855,6 +858,9 @@ export function claimTask(
         );
       }
       heartbeat = Boolean(live);
+      const by = currentWriter();
+      // A heartbeat by the same writer keeps the first claim's time and status, so a rollback puts back what was there before.
+      next.claim = heartbeat && cur.claim && cur.claim.by === by ? cur.claim : by ? { atMs: now, prev: cur.status, by } : null;
       next.lease = { owner, expMs: now + ttl * 1000 };
       next.owner = owner;
       if (next.status === "idea" || next.status === "planned") next.status = "running";

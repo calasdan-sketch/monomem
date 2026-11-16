@@ -23,6 +23,8 @@ export const TAG_BLOCKED = `${T}blocked_by:`;
 export const TAG_CKEY = `${T}ckey:`;
 export const TAG_LEASE = `${T}lease:`;
 export const TAG_APPROVAL = `${T}approval:`;
+/** Who took the live lease (the server-stamped writer, not the free-text owner), when, and the status before: `<ms>:<status>:<writer>`. Lets a rollback release it. */
+export const TAG_CLAIM = `${T}claim:`;
 
 export interface TaskCommand {
   action: string;
@@ -49,6 +51,13 @@ export interface TaskState {
   lease: { owner: string; expMs: number } | null;
   ckey: string | null;
   approval: string | null; // "<nonce>.<mac>"
+  /** Kept only while a lease is held (tagsFromState drops it with the lease). */
+  claim: { atMs: number; prev: TaskStatus; by: string } | null;
+}
+
+export function parseClaim(tag: string): TaskState["claim"] {
+  const m = /^(\d{1,16}):([a-z]+):(.+)$/.exec(tag);
+  return m && (TASK_STATUSES as readonly string[]).includes(m[2]) ? { atMs: Number(m[1]), prev: m[2] as TaskStatus, by: m[3] } : null;
 }
 
 export function parseLease(tag: string): { owner: string; expMs: number } | null {
@@ -76,6 +85,7 @@ export function stateOf(n: NoteRecord): TaskState {
     lease: lease ? parseLease(lease) : null,
     ckey: tag(TAG_CKEY) ?? null,
     approval: tag(TAG_APPROVAL) ?? null,
+    claim: parseClaim(tag(TAG_CLAIM) ?? ""),
   };
 }
 
