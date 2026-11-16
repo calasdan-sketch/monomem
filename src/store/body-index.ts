@@ -16,7 +16,10 @@
 import type { Store } from "../store.js";
 import { decryptIfEncrypted, noteAad } from "../crypto.js";
 
-/** Above this many notes the index is not built (about 7 s and 240 MB at 100k): search stays title and tags. */
+/**
+ * Above this many notes the index is not built: search stays title and tags. Measured at the cap (bench --scale 100k,
+ * 2026-11-15, batched build): 4.0-4.9 s and +152-154 MB process RSS; 10k: 0.5 s and +22 MB.
+ */
 export const BODY_INDEX_MAX_NOTES = 100_000;
 const TABLE = "notes_fts_mem";
 const BUILD_BATCH = 1000;
