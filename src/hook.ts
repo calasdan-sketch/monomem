@@ -181,7 +181,7 @@ export async function captureHook(
 
 /**
  * UserPromptSubmit: the prompt step (prompt/step.ts): titles of notes other writers saved since this session's previous
- * prompt, and (MONOMEM_PROMPT_RECALL=on) retired-note and known-fix notices and the top 3 notes for the prompt, inside the
+ * prompt, and (MONOMEM_PROMPT_RECALL=on, or the dashboard switch when unset) retired-note and known-fix notices and the top 3 notes for the prompt, inside the
  * same untrusted-data banner as session start, with Monomem's own cost line after it. Uses the store the capture step
  * already opened when there is one (one open per prompt). Same short lock wait as capture; a busy or missing database, an
  * unresolvable namespace, a bad sensitivity cap or any error prints nothing.
@@ -189,7 +189,7 @@ export async function captureHook(
 async function newNotesHook(payload: Record<string, unknown>, env: NodeJS.ProcessEnv, opts: HookOptions, open?: import("./store.js").Store): Promise<string> {
   try {
     const sid = typeof payload.session_id === "string" ? payload.session_id.slice(0, 200) : "";
-    const { DB_PATH } = await import("./config.js");
+    const { DB_PATH, DATA_DIR } = await import("./config.js");
     const dbPath = opts.dbPath ?? DB_PATH;
     if (!sid || (!open && !existsSync(dbPath))) return "";
     const { resolveRecallNamespace, buildHookOutput, newBlockNonce, untrustedBanner, untrustedReminder } = await import("./recall.js");
@@ -213,7 +213,7 @@ async function newNotesHook(payload: Record<string, unknown>, env: NodeJS.Proces
           ...(res.kind === "resolved" ? { namespace: res.namespace } : {}),
           ...(self ? { notWrittenBy: self, client: self } : {}),
           ...(selfWriter ? { self: selfWriter } : {}),
-          recall: promptRecallOn(env),
+          recall: promptRecallOn(env, opts.dataDir ?? DATA_DIR),
         });
       const r = cap ? actorStore.run({ label: "", maxSensitivity: cap, canDeclassify: false }, run) : run();
       if (!r.text) return "";

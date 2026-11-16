@@ -30,10 +30,8 @@ const PER_WRITER = 2;
 const MAX_NOTICES = 3;
 const HIDDEN = [NEVER_SHOW_TAG, CHAT_TAG, TASK_TAG, HANDOFF_TAG];
 
-/** MONOMEM_PROMPT_RECALL: "on" turns steps 2-4 on. Default off (see the header). */
-export function promptRecallOn(env: NodeJS.ProcessEnv = process.env): boolean {
-  return /^(on|1|true|yes)$/i.test((env.MONOMEM_PROMPT_RECALL ?? "").trim());
-}
+/** MONOMEM_PROMPT_RECALL, or the dashboard's Settings switch when that is unset: steps 2-4 on. Default off (see the header). */
+export { promptRecallOn } from "./switches.js";
 
 export interface PromptStepOpts {
   namespace?: string;

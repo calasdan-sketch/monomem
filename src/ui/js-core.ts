@@ -23,8 +23,9 @@ function hue(s){ s = String(s); if(hueOf[s] !== undefined) return hueOf[s];
   var used = {}; for(var k in hueOf) used[hueOf[k]] = 1;
   for(var j = 0; j < HUES.length; j++){ var c = HUES[(h + j) % HUES.length]; if(!used[c]){ return (hueOf[s] = c); } }
   return (hueOf[s] = HUES[h % HUES.length]); }
-// Display only: the stored labels stay "primary" / "cli".
-function shownWriter(w){ return w === "primary" ? "you (main key)" : w === "cli" ? "terminal" : String(w || "unknown"); }
+// Display only: the stored labels stay "primary" / "cli". "token:<name>" is an app key whose name looked like one of
+// Monomem's own markers (a key named "cli" is stored as token:cli): it reads as that app key, never as the terminal.
+function shownWriter(w){ w = String(w || ""); return w === "primary" ? "you (main key)" : w === "cli" ? "terminal" : /^token:./.test(w) ? 'app key "' + w.slice(6) + '"' : (w || "unknown"); }
 function chip(label){ return "<span class='chip' style='--h:"+hue(label)+"'>"+esc(shownWriter(label))+"</span>"; }
 function byLine(w){ return w ? " &middot; by "+chip(w) : ""; }
 function when(s){ return esc(String(s||"").slice(0,16).replace("T"," ")); }

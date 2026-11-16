@@ -13,12 +13,12 @@
 // their own backups, undo history and checks apply unchanged.
 import { randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { readBody } from "../http-common.js";
 import { sendJson } from "./shared.js";
 import type { ApiCtx, ApiReq } from "./context.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { DATA_DIR, DB_PATH, PACKAGE_VERSION } from "../config.js";
+import { DB_PATH, PACKAGE_VERSION } from "../config.js";
 import { selfCommand } from "../self.js";
 import { needsYou } from "../ui/needs-you.js";
 import { readUiSettings, updateUiSettings, readBackupStatus, writeBackupStatus } from "../ui/settings.js";
@@ -115,7 +115,7 @@ export async function uiRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
   // GET /ui/state -> what the page needs to choose Welcome or Notes. No secrets.
   if (req.method === "GET" && path === "/ui/state") {
     const s = readUiSettings();
-    sendJson(res, 200, { version: PACKAGE_VERSION, welcome_done: s.welcome_done, settings: s, local, person: hasPerson(c, req), backup: readBackupStatus() });
+    sendJson(res, 200, { version: PACKAGE_VERSION, welcome_done: s.welcome_done, settings: s, local, person: hasPerson(c, req), backup: readBackupStatus(dirname(DB_PATH)) });
     return true;
   }
   // GET /ui/needs-you -> { count, items }: held, unconfirmed, conflicts, failed backup.
@@ -217,14 +217,14 @@ export async function uiRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
   if (req.method === "POST" && path === "/ui/backup") {
     if (needLocal()) return true;
     const at = new Date().toISOString();
-    const dir = join(DATA_DIR, "backups", at.replace(/[:.]/g, "-"));
+    const dir = join(dirname(DB_PATH), "backups", at.replace(/[:.]/g, "-"));
     try {
       const { backupStore } = await import("../backup.js");
       const b = backupStore(store, DB_PATH, dir);
-      writeBackupStatus({ ok: true, at, dir });
+      writeBackupStatus({ ok: true, at, dir }, dirname(DB_PATH));
       sendJson(res, 200, { ok: true, at, dir, notes: b.notes, key_left_out: b.keyLeftOut });
     } catch (e) {
-      writeBackupStatus({ ok: false, at, error: (e as Error).message });
+      writeBackupStatus({ ok: false, at, error: (e as Error).message }, dirname(DB_PATH));
       sendJson(res, 500, { ok: false, error: "The backup failed: " + (e as Error).message });
     }
     return true;

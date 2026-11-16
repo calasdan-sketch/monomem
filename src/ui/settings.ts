@@ -2,14 +2,15 @@
 // Nothing here is a secret. Unknown keys are dropped and every value is checked on read, so a hand-edited file cannot
 // switch anything on by accident.
 //   welcome_done      the Welcome screen was finished (the dashboard opens on Notes after that)
-//   prompt_recall     "on" | "off": notes added at each prompt (the session lane reads this when MONOMEM_PROMPT_RECALL is unset)
-//   daily_backups     "on" | "off": automatic daily copies (the backup lane reads this)
+//   prompt_recall     "on" | "off": notes added at each prompt (prompt/switches.ts; MONOMEM_PROMPT_RECALL wins when set)
+//   daily_backups     "on" | "off": automatic daily copies (backup-schedule.ts; MONOMEM_AUTO_BACKUP wins when set)
 //   declined_apps     app ids the person answered "Not this one" for (never offered again unless they ask)
 // Also <data dir>/backup-status.json: the last automatic or manual backup ({ ok, at, dir?, error? }); a failed one counts
 // toward "Needs you".
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR } from "../config.js";
+import { uiSwitch } from "../prompt/switches.js";
 
 export type OnOff = "on" | "off";
 export interface UiSettings {
@@ -64,9 +65,9 @@ export function updateUiSettings(patch: Record<string, unknown>, dir: string = D
   return next;
 }
 
-/** The setting a hook reads: true only when the person switched it on here. */
+/** A switch as the hooks and the backup timer read it: the saved value, else its default (prompt_recall off, daily_backups on). */
 export function uiSettingOn(key: "prompt_recall" | "daily_backups", dir: string = DATA_DIR): boolean {
-  return readUiSettings(dir)[key] === "on";
+  return (uiSwitch(dir, key) ?? UI_DEFAULTS[key]) === "on"; // the same reader the hooks use (prompt/switches.ts)
 }
 
 export interface BackupStatus {

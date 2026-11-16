@@ -17,7 +17,7 @@ import { embeddingsConfig } from "./embeddings.js";
 import { acceptLegacyHeartbeats } from "./liveness.js";
 import { scanPii } from "./pii.js";
 import { qualityReport } from "./quality.js";
-import { backupFailure, backupsDir } from "./backup-schedule.js";
+import { backupFailure, backupsDir, dailyBackupsOn } from "./backup-schedule.js";
 import { backupAgeDays } from "./digest.js";
 
 /** info: a fact worth showing that never lowers the grade. */
@@ -429,7 +429,8 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
     if (failed) add("backup", "Backups", "warn", `the automatic daily backup failed on ${failed.at.slice(0, 16).replace("T", " ")}: ${printable(failed.error, 200)}. Free some disk space or fix the folder ${backupsDir(dbPath)}, or run monomem backup by hand`);
     else {
       const age = backupAgeDays(dirname(dbPath));
-      add("backup", "Backups", "info", age === null ? `none yet: while the server runs it makes one a day in ${backupsDir(dbPath)} (7 daily + 4 weekly kept)` : `last backup ${age < 1 ? "today" : plural(Math.floor(age), "day") + " ago"}; the server keeps 7 daily + 4 weekly in ${backupsDir(dbPath)}`);
+      if (!dailyBackupsOn(process.env, o.dataDir ?? DATA_DIR)) add("backup", "Backups", "info", `automatic daily backups are off (the dashboard's Settings or MONOMEM_AUTO_BACKUP); ${age === null ? "no backup yet" : `last backup ${age < 1 ? "today" : plural(Math.floor(age), "day") + " ago"}`}. Run monomem backup by hand, or switch them back on`);
+      else add("backup", "Backups", "info", age === null ? `none yet: while the server runs it makes one a day in ${backupsDir(dbPath)} (7 daily + 4 weekly kept)` : `last backup ${age < 1 ? "today" : plural(Math.floor(age), "day") + " ago"}; the server keeps 7 daily + 4 weekly in ${backupsDir(dbPath)}`);
     }
   }
 

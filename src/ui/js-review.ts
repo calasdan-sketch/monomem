@@ -96,7 +96,7 @@ function qQuarantine(id, action){
 }
 
 // ---- Tidy up (Settings): GET /quality. Every button asks first or can be undone. ----
-var TYPE_WORDS = { duplicate:"duplicate", stale_twin:"older copy", quarantined:"held", lint:"looks risky", decay:"about to be forgotten", pii:"private details", contradiction:"disagreement" };
+var TYPE_WORDS = { duplicate:"duplicate", stale_twin:"older copy", quarantined:"held", lint:"looks risky", decay:"about to be forgotten", pii:"private details", contradiction:"disagreement", empty:"no text", restated:"said again" };
 function typeLabel(t){ return TYPE_WORDS[t] || String(t).replace(/_/g, " "); }
 function qPrivate(id){ setLabel(id, "private"); }
 function loadQuality(){
@@ -106,7 +106,10 @@ function loadQuality(){
     $("count").textContent = Object.keys(c).filter(function(k){ return c[k]; }).map(function(k){ return c[k] + " " + typeLabel(k); }).join(", ");
     var rows = (j.issues || []).map(function(i){
       var a = Number(i.ids[0]), b = Number(i.ids[1]), q = Number(i.quarantine_id), btn;
-      if(i.type === "duplicate" || i.type === "stale_twin" || i.type === "contradiction"){ btn = "<button class='primary' onclick='qReplace("+a+","+b+")'>Replace #"+a+" with #"+b+"</button>"; }
+      // A duplicate group keeps keep_id and replaces every other copy in it (ids holds the whole group).
+      var keepId = i.type === "duplicate" && i.keep_id != null ? Number(i.keep_id) : b;
+      var olds = i.type === "duplicate" ? (i.ids || []).map(Number).filter(function(x){ return x !== keepId; }) : [a];
+      if(i.type === "duplicate" || i.type === "stale_twin" || i.type === "contradiction" || i.type === "restated"){ btn = "<button class='primary' onclick='qReplace(["+olds.join(",")+"],"+keepId+")'>Replace "+olds.map(function(x){ return "#"+x; }).join(", ")+" with #"+keepId+"</button>"; }
       else if(i.type === "pii"){ btn = "<button class='primary' onclick='qPrivate("+a+")'>Make #"+a+" private</button>"; }
       else if(i.type === "quarantined"){ btn = "<button class='primary' onclick='loadHeld()'>Open Held</button>"; }
       else { btn = "<button onclick='archiveNote("+a+")'>Archive #"+a+"</button>"; }
@@ -121,12 +124,13 @@ function loadQuality(){
     $("list").innerHTML = crow + rows || empty("Nothing to tidy", "Duplicates, older copies and private details will be listed here.");
   }).catch(failList);
 }
-function qReplace(oldId, newId){
-  api("/supersede/preview", { method:"POST", body: JSON.stringify({ old_ids: [oldId], new_id: newId, gui: true }) }).then(function(p){
+function qReplace(oldIds, newId){
+  oldIds = [].concat(oldIds);
+  api("/supersede/preview", { method:"POST", body: JSON.stringify({ old_ids: oldIds, new_id: newId, gui: true }) }).then(function(p){
     ask(p.warning, "Replace", function(){
       var body = { token: p.token };
       if(p.requires_acknowledgement){ body.acknowledge_risk = true; }
-      api("/supersede/confirm", { method:"POST", body: JSON.stringify(body) }).then(function(){ refreshView(); toast("Replaced.", function(){ undoReplace(oldId); }); }).catch(fail);
+      api("/supersede/confirm", { method:"POST", body: JSON.stringify(body) }).then(function(){ refreshView(); toast("Replaced.", function(){ oldIds.forEach(function(x){ undoReplace(x); }); }); }).catch(fail);
     }, diffHtml(p.diff));
   }).catch(fail);
 }

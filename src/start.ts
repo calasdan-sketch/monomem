@@ -16,6 +16,7 @@ import { hardenTokensFile } from "./tokens-admin.js";
 import { listenErrorMessage } from "./http-common.js";
 import {
   DB_PATH,
+  DATA_DIR,
   API_PORT,
   MCP_HTTP_PORT,
   BIND_HOST,
@@ -33,7 +34,7 @@ import { openStoreOrExit, SERVER_BUSY_TIMEOUT_MS } from "./db-problem.js";
 import { abortAllWaiters } from "./change-wait.js";
 import { pruneStaleHeartbeats } from "./liveness.js";
 import { rotateLogIfNeeded } from "./security.js";
-import { runDailyBackup, autoBackupOn } from "./backup-schedule.js";
+import { maybeDailyBackup, autoBackupOn } from "./backup-schedule.js";
 import { appendFileSync } from "node:fs";
 import type { Server } from "node:http";
 import { dirname, join, resolve } from "node:path";
@@ -212,11 +213,13 @@ purgeTimer.unref();
 setTimeout(purgeNow, Math.min(30_000, purgeEveryMs)).unref();
 
 // Automatic daily backup (backup-schedule.ts): checked a minute after start, then hourly; at most one copy a day,
-// 7 daily + 4 weekly kept in <data>/backups. MONOMEM_AUTO_BACKUP=off turns it off.
+// 7 daily + 4 weekly kept in <data>/backups. The dashboard's Settings switch is read on every tick; MONOMEM_AUTO_BACKUP=off
+// (read once, here) stops the timer and wins over the switch.
 // ponytail: VACUUM INTO runs on this thread, so a very large store pauses serving for the copy (once a day); move it to a
 // worker if that ever shows up.
 const backupNow = (): void => {
-  const r = runDailyBackup(store, DB_PATH);
+  const r = maybeDailyBackup(store, DB_PATH, { dataDir: DATA_DIR });
+  if (!r) return;
   if (r.error) console.error(`[monomem] automatic backup failed: ${r.error} (monomem health shows it; monomem backup makes one by hand)`);
   else if (r.made) console.error(`[monomem] automatic backup made in ${r.dir}${r.removed.length ? ` (${r.removed.length} older removed)` : ""}`);
   if (r.keyWarning) console.error(`[monomem] ${r.keyWarning}`);

@@ -12,6 +12,7 @@ import type { ContextSignals } from "./context-inject.js";
 import { actorStore } from "./actor.js";
 import { noteFlags } from "./taint.js";
 import { recallCeilingFromEnv, SENSITIVITY_HELP } from "./sensitivity.js";
+import { dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 import { UNTRUSTED_BANNER, describeWriter } from "./security.js";
 import {
@@ -349,6 +350,11 @@ async function fetchRecentNotes(opts: RecallOptions): Promise<RecallData> {
       const self = opts.selfWriter ?? hookSelfWriter();
       const over = self ? overwriteLines(store, self, new Date(Date.now() - OVERWRITE_LOOKBACK_MS).toISOString(), namespace) : "";
       if (over) board = [board, over].filter(Boolean).join("\n\n");
+      // One short line when something only the person can settle waits (the dashboard's "Needs you" count).
+      // conflicts:false: the conflict scan reads every note, too slow for a hook.
+      const { needsYouLine } = await import("./ui/needs-you.js");
+      const need = needsYouLine(store, { ...(ns ? { namespaces: ns } : {}), dataDir: dirname(dbFile) });
+      if (need) board = [need, board].filter(Boolean).join("\n\n");
     } catch (e) {
       // The board is a bonus: never let it cost the recent-notes recall.
       console.error("monomem recall: task board skipped: " + (e as Error).message);

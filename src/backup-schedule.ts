@@ -3,25 +3,39 @@
 // 7 newest days plus the newest backup of each of the 4 weeks before them. Nothing outside that folder is touched.
 //
 // The encryption key is never copied (a backup next to its key opens everything): the first backup of an encrypted store
-// returns a one-time warning that the key needs its own copy. A failed backup is written to <data>/.backup-failed, which
-// `monomem health` and the "Needs you" count read; the next good backup removes it.
-// Turn it off with MONOMEM_AUTO_BACKUP=off (docs/configuration.md); disk use is in docs/footprint.md.
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+// returns a one-time warning that the key needs its own copy. Every attempt is recorded in <data>/backup-status.json
+// (ui/settings.ts, the same file the dashboard's "Back up now" writes): `monomem health`, the "Needs you" count and Settings
+// all read that one file, and the next good backup clears a failure.
+// Turn it off in the dashboard's Settings, or with MONOMEM_AUTO_BACKUP=off, which wins when set (docs/configuration.md);
+// disk use is in docs/footprint.md.
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Store } from "./store.js";
 import { backupStore } from "./backup.js";
 import { keyPath } from "./crypto.js";
+import { readBackupStatus, writeBackupStatus } from "./ui/settings.js";
+import { uiSwitch } from "./prompt/switches.js";
 
 export const KEEP_DAILY = 7;
 export const KEEP_WEEKLY = 4;
 const DAY_MS = 86_400_000;
 const NAME = /^\d{4}-\d{2}-\d{2}$/;
-const FAILED = ".backup-failed";
 const KEY_WARNED = ".backup-key-warned";
 
 export const backupsDir = (dbPath: string): string => join(dirname(dbPath), "backups");
 
 export const autoBackupOn = (env: NodeJS.ProcessEnv = process.env): boolean => !/^(?:off|0|false|no)$/i.test((env.MONOMEM_AUTO_BACKUP ?? "").trim());
+
+/** Daily backups on? MONOMEM_AUTO_BACKUP wins when set; unset, the dashboard's Settings switch (default on). */
+export function dailyBackupsOn(env: NodeJS.ProcessEnv, dataDir: string): boolean {
+  if ((env.MONOMEM_AUTO_BACKUP ?? "").trim()) return autoBackupOn(env);
+  return uiSwitch(dataDir, "daily_backups") !== "off";
+}
+
+/** The server timer's call: null when daily backups are off (checked every time, so the Settings switch applies at once). */
+export function maybeDailyBackup(store: Store, dbPath: string, o: { env?: NodeJS.ProcessEnv; dataDir: string; now?: Date }): DailyBackupResult | null {
+  return dailyBackupsOn(o.env ?? process.env, o.dataDir) ? runDailyBackup(store, dbPath, o.now) : null;
+}
 
 /** Which dated backups to keep: the KEEP_DAILY newest, then the newest one in each older week (Monday start), up to KEEP_WEEKLY weeks. */
 export function keepSet(names: readonly string[]): Set<string> {
@@ -48,14 +62,10 @@ export interface DailyBackupResult {
   error?: string;
 }
 
-/** The last failed automatic backup, or null when the last attempt worked (or none was made). */
+/** The last backup (daily or "Back up now") when it failed, or null when it worked (or none was made). One file: backup-status.json. */
 export function backupFailure(dbPath: string): { at: string; error: string } | null {
-  try {
-    const f = JSON.parse(readFileSync(join(dirname(dbPath), FAILED), "utf8")) as { at?: unknown; error?: unknown };
-    return typeof f.at === "string" && typeof f.error === "string" ? { at: f.at, error: f.error } : null;
-  } catch {
-    return null;
-  }
+  const s = readBackupStatus(dirname(dbPath));
+  return s && !s.ok ? { at: s.at, error: s.error ?? "unknown error" } : null;
 }
 
 /** Make today's backup if there is none yet, then rotate. Never throws: a failure is recorded and returned. */
@@ -71,16 +81,16 @@ export function runDailyBackup(store: Store, dbPath: string, now = new Date()): 
   } catch (e) {
     const error = (e as Error).message;
     try {
-      writeFileSync(join(data, FAILED), JSON.stringify({ at: now.toISOString(), error }) + "\n", { mode: 0o600 });
+      writeBackupStatus({ ok: false, at: now.toISOString(), error }, data);
     } catch {
       /* the data folder itself is not writable: health reports that on its own */
     }
     return { made: false, removed: [], error };
   }
   try {
-    unlinkSync(join(data, FAILED));
+    writeBackupStatus({ ok: true, at: now.toISOString(), dir }, data);
   } catch {
-    /* there was no failure */
+    /* as above */
   }
   let keyWarning: string | undefined;
   const kp = keyPath(data);
