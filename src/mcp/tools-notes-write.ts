@@ -3,17 +3,18 @@
 
 import { SENSITIVITY_LEVELS } from "../sensitivity.js";
 import { z } from "zod";
-import { QuarantinedError } from "../store.js";
+import { QuarantinedError, StaleWriteError } from "../store.js";
+import { currentWriter } from "../actor.js";
 import type { LintFinding } from "../lint.js";
 import { assertPlainWriteTags, assertReviewedTag } from "../reserved-tags.js";
-import { prepareNoteUpdate } from "../note-update.js";
+import { prepareNoteUpdate, overwriteNotice, staleDetail } from "../note-update.js";
 import { withFacts, COMMON_FACT_KEYS } from "../facts.js";
 import { scopeAllows, printableWords } from "../security.js";
 import { checkFilesInput } from "../code-anchor.js";
 import { maybeEmbed } from "../search-service.js";
 import { canRead } from "../namespace.js";
 import { RECEIPT_CHECK } from "../store/write-receipt.js";
-import { zInt, zTags, zFacts, noBody, untrustedResult, quarantinedResult, withConflicts, withWarnings, errorResult, errorFor } from "./shared.js";
+import { zInt, zTags, zFacts, noBody, untrustedResult, untrustedError, quarantinedResult, withConflicts, withWarnings, errorResult, errorFor } from "./shared.js";
 import type { McpCtx } from "./context.js";
 
 export function registerNotesWriteTools(c: McpCtx): void {
@@ -153,10 +154,12 @@ export function registerNotesWriteTools(c: McpCtx): void {
           if (!result) return errorResult(`no note with id ${id}`);
           const { unchanged, ...updated } = result;
           const receipt = withReceipt(); // before any await: the write is synchronous, the next one is not ours
+          // r2-improvement #3: replacing another writer's text without if_rev is said out loud (that writer sees it in catch_up).
+          const overwrite = !unchanged && if_rev === undefined ? overwriteNotice(check.target, updated, currentWriter()) : null;
           if (!unchanged) await maybeEmbed(store, updated);
           // A partial update echoes back the merged note, which can include a
           // pre-existing body planted by someone else -- wrap it as untrusted.
-          return untrustedResult(withConflicts(withWarnings({ note: noBody(updated), ...(unchanged ? { unchanged: true } : {}), ...receipt }, warnings), store, updated, facts));
+          return untrustedResult(withConflicts(withWarnings({ note: noBody(updated), ...(unchanged ? { unchanged: true } : {}), ...(overwrite ?? {}), ...receipt }, warnings), store, updated, facts));
         }
         let titleGenerated = false;
         if (!title || !title.trim()) {
@@ -185,6 +188,10 @@ export function registerNotesWriteTools(c: McpCtx): void {
       } catch (e) {
         const receipt = withReceipt(store.refusedWriteReceipt(e, id));
         if (e instanceof QuarantinedError) return quarantinedResult(e, receipt);
+        if (e instanceof StaleWriteError && id !== undefined && if_rev !== undefined) {
+          const d = staleDetail(store, id, if_rev);
+          if (d) return untrustedError(d.message, { stale: d.stale, ...receipt });
+        }
         return errorFor(e, receipt);
       }
     }

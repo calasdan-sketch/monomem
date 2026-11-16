@@ -281,6 +281,11 @@ export function errorResult(message: string, extra?: Record<string, unknown>) {
   };
 }
 
+/** An error whose reply carries note text (a stale write's diff): the untrusted banner goes first, as on every read. */
+export function untrustedError(message: string, extra: Record<string, unknown>) {
+  return { content: [{ type: "text" as const, text: UNTRUSTED_BANNER + JSON.stringify({ error: message, ...extra }) }], isError: true };
+}
+
 // Map a thrown error to a tool result. Mirrors the REST layer's policy: a
 // caller-input problem (ValidationError) is echoed back, but any unexpected
 // fault (e.g. a raw node:sqlite error) is logged server-side and returned as a

@@ -27,6 +27,7 @@ import { RESERVED_TAG_PREFIX } from "./reserved-tags.js";
 import { runnerNotice } from "./liveness.js";
 import { currentWriter } from "./actor.js";
 import { heldFromSessionStart } from "./taint.js";
+import { overwritesOf, type Overwrite } from "./store/overwrites.js";
 import {
   TASK_STATUSES,
   TASK_TAG,
@@ -1244,6 +1245,8 @@ export interface CatchUpOpts {
 }
 
 export const CATCH_UP_SHOWN_CHANGES = 30;
+/** How far back catch_up looks for overwrites of your notes when there is no earlier catch-up to start from. */
+const OVERWRITE_LOOKBACK_MS = 7 * 86_400_000;
 
 export interface CatchUp {
   changes?: {
@@ -1264,6 +1267,9 @@ export interface CatchUp {
   handoffs: Handoff[];
   /** One line, present only when approved commands are waiting and the runner looks offline (see liveness.ts). */
   runner_notice?: string;
+  /** r2-improvement #3: your notes whose text another writer replaced since your last catch-up (7 days without one). */
+  overwritten?: Overwrite[];
+  overwritten_hint?: string;
 }
 
 /**
@@ -1314,6 +1320,12 @@ export function catchUp(store: Store, opts: CatchUpOpts = {}): CatchUp {
   // common case costs one cheap probe, not a heartbeat read and a classifier pass.
   const notice = runnerNotice(store, opts.namespaces);
   if (notice) out.runner_notice = notice;
+  const since = out.changes?.since && !out.changes.markerReset ? out.changes.since : new Date(Date.now() - OVERWRITE_LOOKBACK_MS).toISOString();
+  const over = overwritesOf(store, currentWriter(), since, opts.namespaces);
+  if (over.length) {
+    out.overwritten = over;
+    out.overwritten_hint = "Another writer replaced text you wrote. Read the note (state_read) and its history if the change looks wrong, and tell the user.";
+  }
   return out;
 }
 
