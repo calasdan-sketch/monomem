@@ -399,7 +399,7 @@ describe("9: scan normalization drops Default_Ignorable code points and folds lo
   });
 });
 
-describe("5: a taken port is a friendly exit 1, not a crash", () => {
+describe("5: a taken port is a friendly message, not a crash; one busy port does not stop the other (r2-improvement #5)", () => {
   const START = fileURLToPath(new URL("../src/start.js", import.meta.url));
   const listenOn = (port = 0) =>
     new Promise<Server>((resolve) => {
@@ -413,25 +413,56 @@ describe("5: a taken port is a friendly exit 1, not a crash", () => {
     await new Promise((r) => s.close(r));
     return p;
   }
+  test("both ports in use -> each message names its port and variable, exit 1", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "om-port-"));
+    const a = await listenOn();
+    const b = await listenOn();
+    try {
+      const env = { ...process.env, MONOMEM_HOME: dir, MONOMEM_PORT: String(portOf(a)), MONOMEM_MCP_PORT: String(portOf(b)) };
+      const r = spawnSync(process.execPath, ["--no-warnings", START], { env, encoding: "utf8", timeout: 15_000 });
+      assert.equal(r.status, 1, r.stderr);
+      for (const [p, v] of [[portOf(a), "MONOMEM_PORT"], [portOf(b), "MONOMEM_MCP_PORT"]] as const) {
+        assert.match(r.stderr, new RegExp(`port ${p} is already in use`));
+        assert.match(r.stderr, new RegExp(v + "="));
+      }
+      assert.doesNotMatch(r.stderr, /Unhandled 'error' event/);
+    } finally {
+      a.close();
+      b.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
   for (const which of ["MONOMEM_PORT", "MONOMEM_MCP_PORT"] as const) {
-    test(`${which} in use -> message names the port and ${which}, exit 1`, async () => {
+    test(`only ${which} in use -> says what failed, the other transport keeps answering /health`, async () => {
       const dir = mkdtempSync(join(tmpdir(), "om-port-"));
       const busy = await listenOn();
+      const ports = { MONOMEM_PORT: String(await freePort()), MONOMEM_MCP_PORT: String(await freePort()), [which]: String(portOf(busy)) };
+      const other = which === "MONOMEM_PORT" ? ports.MONOMEM_MCP_PORT : ports.MONOMEM_PORT;
+      const child = spawn(process.execPath, ["--no-warnings", START], { env: { ...process.env, MONOMEM_HOME: dir, ...ports }, stdio: ["ignore", "ignore", "pipe"] });
+      let err = "";
       try {
-        const env = {
-          ...process.env,
-          MONOMEM_HOME: dir,
-          MONOMEM_PORT: String(await freePort()),
-          MONOMEM_MCP_PORT: String(await freePort()),
-          [which]: String(portOf(busy)),
-        };
-        const r = spawnSync(process.execPath, ["--no-warnings", START], { env, encoding: "utf8", timeout: 15_000 });
-        assert.equal(r.status, 1, r.stderr);
-        assert.match(r.stderr, new RegExp(`port ${portOf(busy)} is already in use`));
-        assert.match(r.stderr, new RegExp(which + "="));
-        assert.doesNotMatch(r.stderr, /Unhandled 'error' event/);
+        await new Promise<void>((resolve, reject) => {
+          const t = setTimeout(() => reject(new Error(`no "started without" line: ${err}`)), 15_000);
+          child.stderr!.on("data", (d) => {
+            err += String(d);
+            if (/started without/.test(err)) {
+              clearTimeout(t);
+              resolve();
+            }
+          });
+          child.on("exit", (code) => reject(new Error(`exited ${code}: ${err}`)));
+        });
+        assert.match(err, new RegExp(`port ${portOf(busy)} is already in use`));
+        let ok = false;
+        for (let i = 0; i < 50 && !ok; i++) {
+          ok = await fetch(`http://127.0.0.1:${other}/health`).then((r) => r.ok, () => false);
+          if (!ok) await new Promise((r) => setTimeout(r, 100));
+        }
+        assert.ok(ok, `the other transport answers /health: ${err}`);
       } finally {
+        child.kill();
         busy.close();
+        await new Promise((r) => setTimeout(r, 200));
         rmSync(dir, { recursive: true, force: true });
       }
     });
