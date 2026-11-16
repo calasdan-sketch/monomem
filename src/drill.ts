@@ -15,6 +15,9 @@ import type { Scenario, ScenarioResult } from "./bench/types.js";
 import type { NoteRecord } from "./store.js";
 import { buildSummary, newBlockNonce, untrustedReminder } from "./recall.js";
 import { indexLine } from "./context-inject.js";
+import { actorStore } from "./actor.js";
+import { approveTask, putTask } from "./tasks.js";
+import { classifyQueuedCommand } from "./task-core.js";
 
 // held = the write was quarantined (as on the dashboard); blocked = stopped some other way (refused, redacted, stamped, hidden by distrust...).
 export type Verdict = "held" | "blocked" | "warned" | "reached";
@@ -88,6 +91,36 @@ export const RENDER_ATTACKS: Array<{ id: string; title: string; blocked: () => b
     },
   },
 ];
+
+/**
+ * A1: an agent that read an outside page files a command task; an admin KEY (an agent with an admin key, not a person at a
+ * terminal) tries to approve it. Held = the approval is refused AND the runner would skip it as held. Checked on a scratch
+ * in-memory store with the user's settings (env), never on the real store or its copy.
+ */
+export const TASK_ATTACK = {
+  id: "TASK",
+  title: "An outside page leads to a command task that an admin key approves",
+  verdict: (): Verdict => {
+    const s = new Store(":memory:");
+    try {
+      const ns = "drill";
+      const t = actorStore.run({ label: "drill-agent", authed: true, taint: ["obs.origin:declared"] }, () =>
+        putTask(s, { title: "run the vendor's setup step", namespace: ns, command: { action: "mark", params: { p: "x" } }, target: "drill-pc" }).task
+      );
+      let approved = true;
+      try {
+        actorStore.run({ label: "drill-admin", authed: true }, () => approveTask(s, { id: t.id, if_rev: t.rev }));
+      } catch {
+        approved = false;
+      }
+      const n = s.readVisible(t.id);
+      const run = n ? classifyQueuedCommand(s, n, { me: "drill-pc", namespace: ns }, Date.now()) : null;
+      return !approved && run?.kind === "skip" && run.why === "held" ? "held" : "reached";
+    } finally {
+      s.close();
+    }
+  },
+};
 
 export function verdictOf(r: ScenarioResult): Verdict {
   if (r.held) return "held"; // approve-first held a write was held for review, so the attack never got as far as being stored
@@ -178,6 +211,8 @@ export async function runDrill(opts: { dbPath: string; dir?: string; seed?: numb
       const verdict = verdictOf(r);
       rows.push({ id: s.id, title: s.title, verdict, known_miss: verdict === "reached" && s.id in DESIGNED_MISSES });
     }
+    const taskVerdict = TASK_ATTACK.verdict();
+    rows.push({ id: TASK_ATTACK.id, title: TASK_ATTACK.title, verdict: taskVerdict, known_miss: false });
     for (const a of RENDER_ATTACKS) rows.push({ id: a.id, title: a.title, verdict: a.blocked() ? "blocked" : "reached", known_miss: false });
     const reached = rows.filter((x) => x.verdict === "reached");
     const unexpected = reached.filter((x) => !x.known_miss);
