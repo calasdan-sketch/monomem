@@ -80,25 +80,34 @@ describe("1: multi-process create() never throws SQLITE_BUSY", () => {
   }
 
   // CI run 43931988177 (Windows, Node 26, a slow runner): 2 of the 8x15 creates failed with "database is locked" after
-  // the 20 s busy timeout while the other writers kept committing. SQLite's busy handler is not fair, so one writer can
-  // keep losing the lock to the others. Slow commits are emulated here (each transaction holds the lock 100 ms) with a
-  // 1.5 s wait: a fair share is ~0.5 s, the unlucky writer waited past 1.5 s and threw. A wait now fails only when
-  // nobody commits for the whole wait (store/write-lock.ts).
-  test("slow commits: a waiting writer does not fail while others keep committing", async () => {
+  // the 20 s busy timeout while the other writers kept committing. SQLite's busy handler is not fair: a writer that
+  // commits and begins again at once wins the lock over a sleeping waiter. Made deterministic here: a child process
+  // re-takes the lock right after every commit for 1.6 s, while this store's wait is 1 s. Before, the create threw after
+  // ~1 s; now a wait fails only when nobody commits for the whole wait (store/write-lock.ts), so it gets in afterwards.
+  test("a waiting writer does not fail while another writer keeps committing", async () => {
     const dir = mkdtempSync(join(tmpdir(), "om-starve-"));
+    const path = join(dir, "s.db");
+    const s = new Store(path, { busyTimeoutMs: 1000 });
     try {
-      const path = join(dir, "s.db");
-      new Store(path).close();
-      const script = `const { Store } = await import(${JSON.stringify("file://" + STORE_JS)});
-        const s = new Store(process.argv[1], { busyTimeoutMs: 1500 }); const commit = s.commitTx.bind(s);
-        s.commitTx = (...a) => { const t = Date.now(); while (Date.now() - t < 100); return commit(...a); };
-        let e = 0;
-        for (let i = 0; i < 8; i++) { try { s.create({ title: "c" + process.pid + "-" + i, body: "slow " + i }); } catch (x) { e++; console.error(x.message); } }
-        console.log(e); s.close();`;
-      const res = await runProcs(6, script, path, { MONOMEM_HOME: dir });
-      const errors = res.reduce((a, r) => a + (Number(r.out.trim()) || 0) + (r.code ? 1 : 0), 0);
-      assert.equal(errors, 0, res.map((r) => r.err).join("\n").slice(0, 400));
+      const hog = spawn(process.execPath, ["--no-warnings", "-e", `
+        const { DatabaseSync } = require("node:sqlite");
+        const db = new DatabaseSync(process.argv[1]); db.exec("PRAGMA busy_timeout = 5000; CREATE TABLE IF NOT EXISTS hog (x)");
+        const end = Date.now() + 1600; let first = true;
+        while (Date.now() < end) {
+          db.exec("BEGIN IMMEDIATE"); db.exec("INSERT INTO hog VALUES (1)");
+          if (first) { process.stdout.write("held"); first = false; }
+          const t = Date.now(); while (Date.now() - t < 100);
+          db.exec("COMMIT");
+        }
+        db.close();`, path], { stdio: ["ignore", "pipe", "inherit"] });
+      const exited = new Promise((r) => hog.on("close", r));
+      await new Promise<void>((r) => hog.stdout.once("data", () => r()));
+      const t = Date.now();
+      s.create({ title: "victim", body: "waits behind the hog" });
+      assert.ok(Date.now() - t > 1000, "the create really waited past its busy timeout");
+      await exited;
     } finally {
+      s.close();
       rmSync(dir, { recursive: true, force: true });
     }
   });
