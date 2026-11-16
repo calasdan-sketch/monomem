@@ -21,7 +21,7 @@ const COMMANDS = [
   "consolidate", "rebuild-edges", "relevant", "search", "token", "changes", "backup", "runner-status", "watch", "export", "import", "trust",
   "quarantine", "approve-first", "access", "flood", "resume", "decay", "archive", "restore", "delete", "quality", "conflicts", "facts", "fact",
   "encrypt", "meter", "receipts", "why", "never-show", "supersede", "history", "pin", "unpin", "rollback", "bench", "drill", "health", "audit", "verify-receipt",
-  "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet", "confirm", "review", "taint", "config", "service", "stale", "project-rules",
+  "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet", "confirm", "review", "taint", "config", "service", "stale", "project-rules", "update",
   "help", "--help", "-h", "--version", "-v", "version",
 ];
 
@@ -82,7 +82,8 @@ function shortUsage(): void {
       "  open                    Open my notes in the browser (starts Monomem if needed)",
       "  doctor                  Check Node, the database, the token and the setup",
       "  import --claude         Bring in what Claude Code already remembers (add --dry-run to look first)",
-      "  start                   Run the dashboard, REST API and MCP-over-HTTP (the default)",
+      "  start                   Run the dashboard, REST API and MCP-over-HTTP",
+      "  update [--check]        Get the newest version (the standalone download; npm installs print the npm command)",
       "  mcp                     Run the MCP server over stdio (what your apps launch)",
       "",
       "Daily",
@@ -133,7 +134,7 @@ function usage(all = false): void {
     [
       "monomem <command>",
       "",
-      "  start     Start the API + dashboard AND MCP-over-HTTP (default).",
+      "  start     Start the API + dashboard AND MCP-over-HTTP.",
       "            When: always-on. Local by default (127.0.0.1); to reach it from a phone or claude.ai,",
       "            put your own authenticated tunnel in front of it (see INFRA.md).",
       "  mcp       Start the MCP server over stdio.",
@@ -146,6 +147,11 @@ function usage(all = false): void {
       "  connect <app> [--restricted] [--max public|internal|private] [--name label] [--print] [--dry-run] [--yes]",
       "            Connect one app (claude-code, cursor, codex ...). --restricted (or --max) gives it its own key and a limit, so",
       "            it cannot see private notes; --name sets that key's label; --print only prints the settings to paste in.",
+      "  update [--check]",
+      "            The standalone download: download the newest release from github.com, check its SHA-256, swap it into the",
+      "            same folder, upgrade the database and restart the background service. Only when you run it; --check only asks.",
+      "            An npm install prints the npm command instead.",
+      "  (no command)  In a terminal: this help. Started from the Start menu, Explorer, Finder or a launcher: open.",
       "  open [--print]",
       "            Open my notes in the browser with a one-time sign-in code (starts Monomem if needed).",
       "  service install|status|uninstall [--print]",
@@ -2354,7 +2360,9 @@ function helpFor(cmd: string): string | null {
 }
 
 async function main(): Promise<void> {
-  const cmd = process.argv[2] || "start";
+  // No command: a terminal gets the help; a launch with no terminal (Start menu, Explorer, Finder) opens the dashboard
+  // (the Welcome screen hooks in there, in openCmd).
+  const cmd = process.argv[2] || (await import("./install.js")).defaultCommand(!!process.stdin.isTTY, !!process.stdout.isTTY);
   // --ns is short for --namespace (as in ls) for these commands, each of which parses its own flags.
   if (["relevant", "search", "export", "quality", "conflicts", "facts", "digest", "pii", "decay"].includes(cmd)) {
     process.argv = process.argv.map((a, i) => (i < 3 ? a : a === "--ns" ? "--namespace" : a.startsWith("--ns=") ? "--namespace=" + a.slice(5) : a));
@@ -2401,7 +2409,7 @@ async function main(): Promise<void> {
   // The capture hooks (`hook`) never move or create data folders: they run on every tool call and must stay quick and quiet.
   // doctor on a machine with no data folder (never set up, or after uninstall --purge) says so and creates nothing.
   if (cmd === "doctor" && (await (await import("./doctor/index.js")).notSetUp())) return;
-  if (!dry && !["help", "--help", "-h", "init", "bench", "demo", "snippet", "setup", "uninstall", "hook"].includes(cmd)) {
+  if (!dry && !["help", "--help", "-h", "init", "bench", "demo", "snippet", "setup", "uninstall", "hook", "update"].includes(cmd)) {
     (await import("./config.js")).prepareDataDir();
     printable = (await import("./security.js")).printable;
   }
@@ -2641,6 +2649,9 @@ async function main(): Promise<void> {
     }
     case "open":
       await (await import("./cli/connect.js")).openCmd(SELF_CLI);
+      break;
+    case "update":
+      process.exitCode = await (await import("./update.js")).updateCmd(process.argv.slice(3));
       break;
     case "supersede":
       await supersedeCmd("supersede");
