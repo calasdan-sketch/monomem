@@ -160,8 +160,8 @@ upgrading from 1.3.x takes one step (docs/upgrading.md).
   every note, so ranking is the plain store's: encrypted recall is now identical to plain on LongMemEval-S (97.2 / 85.7 R@5 /
   Rall@5) and LoCoMo-10 by session. LoCoMo-10 by turn differs slightly (67.6 / 58.2 / 76.9 vs 67.4 / 58.4 / 76.3 R@5 / Rall@5 /
   R@10) because chat notes get a fixed sealed title on an encrypted store. Kept current for this process's writes by connection-only triggers, and for other
-  processes' writes from the change log. The REST and MCP servers build it just after start-up (0.6-0.8 s and about 30 MB
-  of memory per 10,000 notes, measured at 10,000 notes; memory does not grow in a straight line, so for 100,000 notes see
+  processes' writes from the change log. The REST and MCP servers build it just after start-up (about 0.5 s and 22 MB
+  of memory at 10,000 notes, 4-5 s and about 155 MB at 100,000 notes; the build runs in batches of 1,000 notes; see
   the body-index line in docs/BENCHMARK.md); the hooks never build it, so session start stays fast. On an encrypted store session start
   matches titles and tags itself and, when a Monomem server for the same store runs on this computer, asks that server
   (127.0.0.1 only, at most 0.3 s) which notes' bodies match; with no server, or a slow one, it stays on titles and tags.
