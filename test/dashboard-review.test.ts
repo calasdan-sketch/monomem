@@ -73,7 +73,7 @@ describe("dashboard Review = monomem review", () => {
       p.ctx.loadReview();
       for (let i = 0; i < 20 && !p.el("list").innerHTML; i++) await settle();
       const html = p.el("list").innerHTML as string;
-      assert.match(p.el("count").textContent, /^2 notes wait \(the same list as monomem review\)/);
+      assert.match(p.el("count").textContent, /^2 notes wait/);
       assert.match(html, /aria-label='confirm note #\d+' onclick='reviewConfirm\(\d+\)'>Confirm: I checked it</);
       assert.match(html, /we deploy with pnpm now/);
       assert.match(html, /Acme pricing &lt;b&gt;/, "titles are escaped");

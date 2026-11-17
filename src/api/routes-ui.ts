@@ -277,10 +277,21 @@ export async function uiRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
   // address is shown without any password inside it.
   if (req.method === "GET" && path === "/ui/sync") {
     if (needLocal()) return true;
-    const { readSyncConfig } = await import("../sync/device.js");
+    const { readSyncConfig, readSyncStatus, syncProblem } = await import("../sync/device.js");
     const { scrubUrls } = await import("../sync-git.js");
     const cfg = readSyncConfig(dirname(DB_PATH));
-    sendJson(res, 200, cfg ? { set: true, kind: cfg.kind, where: scrubUrls(cfg.target), auto: cfg.auto, every_minutes: cfg.everyMinutes } : { set: false });
+    // problem: a failed or late sync (the same check as Needs you), with the last error, so Settings can say what went wrong.
+    const p = cfg ? syncProblem(dirname(DB_PATH)) : null;
+    const err = p?.kind === "failed" ? readSyncStatus(dirname(DB_PATH))?.error : undefined;
+    const problem = p ? { kind: p.kind, at: p.at, ...(err ? { error: scrubUrls(err) } : {}) } : undefined;
+    sendJson(res, 200, cfg ? { set: true, kind: cfg.kind, where: scrubUrls(cfg.target), auto: cfg.auto, every_minutes: cfg.everyMinutes, ...(problem ? { problem } : {}) } : { set: false });
+    return true;
+  }
+  // POST /ui/sync/now -> `monomem sync` (the address sync setup saved); it records its result for Needs you and Settings.
+  if (req.method === "POST" && path === "/ui/sync/now") {
+    if (needLocal()) return true;
+    const out = await runner(["sync"], 600_000);
+    sendJson(res, 200, { ok: out.code === 0, ...out });
     return true;
   }
   // POST /ui/sync/setup { target, name? } -> `monomem sync setup <target> [--name <name>]` (its own checks apply: an address

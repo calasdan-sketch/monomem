@@ -73,7 +73,7 @@ export function needsYou(store: Store, opts: { namespaces?: string[]; conflicts?
   const b = readBackupStatus(opts.dataDir ?? dirname(DB_PATH)); // backup-status.json sits next to the database (backup-schedule.ts)
   if (b && !b.ok) items.push({ kind: "backup", count: 1, view: "settings", text: `The last backup failed (${b.at.slice(0, 16).replace("T", " ")}).` });
   const sync = syncProblem(opts.dataDir ?? DATA_DIR);
-  if (sync?.kind === "failed") items.push({ kind: "sync", count: 1, view: "settings", text: `The last sync with your other computers failed (${sync.at.slice(0, 16).replace("T", " ")}). Run monomem sync to see why.` });
+  if (sync?.kind === "failed") items.push({ kind: "sync", count: 1, view: "settings", text: `The last sync with your other computers failed (${sync.at.slice(0, 16).replace("T", " ")}). Settings says why and what to do.` });
   const dir = opts.dataDir ?? DATA_DIR;
   const apps = appsNeedingYou(dir, readUiSettings(dir).declined_apps);
   const names = (a: { label: string }[]): string => (a.length > 2 ? `${a[0].label}, ${a[1].label} and ${a.length - 2} more` : a.map((x) => x.label).join(" and "));

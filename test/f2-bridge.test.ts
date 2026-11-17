@@ -319,7 +319,7 @@ describe("I: the dashboard's Bring in memories", () => {
     const js = SETTINGS_JS;
     assert.match(js, /Bring in memories/);
     assert.match(js, /ask\("Copy/);
-    assert.match(js, /held until you confirm/);
+    assert.match(js, /unconfirmed \(from outside\) until you confirm/);
   });
 });
 

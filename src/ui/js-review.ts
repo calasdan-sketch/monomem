@@ -6,7 +6,10 @@ function reviewRow(x, why, buttons){
     "<div class='meta'>"+chip(x.writer || "")+" &middot; "+esc(x.namespace)+" &middot; #"+Number(x.id)+"</div>"+
     "<p class='t-callout' style='margin:8px 0 0'>"+why+"</p>"+acts(buttons)+"</article>";
 }
-function whyWords(w){ return esc(String(w || "").replace(/^unconfirmed: /, "").replace(/^expired: /, "")); }
+// The reason as the store words it, in plain words: "(declared)" is the app saying so; "this version" is the current text.
+function whyWords(w){
+  return esc(String(w || "").replace(/^unconfirmed: /, "").replace(/^expired: /, "").replace(/\\(declared\\)/g, "(the app said so)")
+    .replace(/, nobody confirmed this version/g, "; nobody has confirmed it yet")); }
 function loadReview(){
   setView("review");
   var ns = String($("ns").value || "").trim();
@@ -16,7 +19,7 @@ function loadReview(){
   ]).then(function(rs){
     var j = rs[0], cf = (rs[1].conflict_groups || []).filter(function(g){ return g.tier === "fact"; });
     CFG = cf; CFACT = {};
-    $("count").textContent = plural(j.count, "note waits", "notes wait") + " (the same list as monomem review)" + (cf.length ? "; " + plural(cf.length, "fact has", "facts have") + " two answers" : "");
+    $("count").textContent = plural(j.count, "note waits", "notes wait") + (cf.length ? "; " + plural(cf.length, "fact has", "facts have") + " two answers" : "");
     var out = [];
     if(j.held_writes){ out.push("<div class='banner'><span>"+plural(j.held_writes, "write is", "writes are")+" held for your decision.</span><button onclick='loadHeld()'>Open Held</button></div>"); }
     if(j.notes.length){

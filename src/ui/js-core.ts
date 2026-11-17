@@ -17,11 +17,13 @@ function $(id){ return document.getElementById(id); }
 function plural(n, one, many){ return Number(n) + " " + (Number(n) === 1 ? one : many); }
 // Where Monomem's own launcher lives on this computer (setup makes a Start menu entry, ~/Applications/Monomem.app or a
 // .desktop file). The page is only ever opened on the same computer, so the browser's platform names it.
-function whereEntry(){
+function platformOf(){
   var n = (typeof navigator !== "undefined" && navigator) || {};
   var p = String((n.userAgentData && n.userAgentData.platform) || n.platform || "") + " " + String(n.userAgent || "");
-  return /mac/i.test(p) ? "your Applications folder" : /win/i.test(p) ? "its Start menu entry" : /linux|x11|cros|bsd/i.test(p) ? "your app launcher" : "its Start menu entry";
+  return /mac/i.test(p) ? "mac" : /win/i.test(p) ? "win" : /linux|x11|cros|bsd/i.test(p) ? "linux" : "";
 }
+function whereEntry(){ return { mac:"your Applications folder", linux:"your app launcher" }[platformOf()] || "its Start menu entry"; }
+function osName(){ return { mac:"macOS", win:"Windows", linux:"Linux" }[platformOf()] || "your computer"; }
 
 // A small coloured chip per writer: a stable hash of the label picks the hue (never red: red means danger here).
 var HUES = [30,195,96,261,162,327,63,228,129,294], hueOf = {};
@@ -96,14 +98,18 @@ var OPENER = {};
 function openSheet(id){ var d = $(id); OPENER[id] = document.activeElement; try { if(!d.open){ d.showModal(); } } catch(e){ d.open = true; } }
 function closeSheet(id){ var d = $(id); try { d.close(); } catch(e){ d.open = false; } var o = OPENER[id]; if(o && o.focus){ try { o.focus(); } catch(e){} } }
 // A confirm sheet: a title, escaped or server-built HTML, and one button. Used where a step cannot be undone.
-function ask(text, okLabel, fn, extraHtml){
-  $("cf_h").textContent = okLabel;
-  $("cf_body").innerHTML = "<p>"+esc(text)+"</p>" + (extraHtml || "");
-  var ok = $("cf_ok"); ok.textContent = okLabel;
-  ok.className = /delete|remove/i.test(okLabel) ? "destructive fill" : "primary";
+// o (optional): { title, cls, close }: an information sheet gets its own title, a "Close" and a secondary button, and
+// focus starts on Close; a destructive step passes cls "destructive fill".
+function ask(text, okLabel, fn, extraHtml, o){
+  o = o || {};
+  $("cf_h").textContent = o.title || okLabel;
+  $("cf_body").innerHTML = (text ? "<p>"+esc(text)+"</p>" : "") + (extraHtml || "");
+  var ok = $("cf_ok"), no = $("cf_no"); ok.textContent = okLabel;
+  if(no){ no.textContent = o.close ? "Close" : "Cancel"; }
+  ok.className = o.cls !== undefined ? o.cls : /delete|remove/i.test(okLabel) ? "destructive fill" : "primary";
   ok.onclick = function(){ closeSheet("confirmsheet"); fn(); };
   openSheet("confirmsheet");
-  try { ok.focus(); } catch(e){}
+  try { (o.close && no ? no : ok).focus(); } catch(e){}
 }
 
 // ---- toast with Undo (u undoes the last one) ----
@@ -135,7 +141,7 @@ function api(path, opts){
 var VIEW = "list", IS_ADMIN = false, BACK = null;
 var VIEWS = {
   list:["Notes","What your apps know. Newest first; pinned notes on top."],
-  review:["Review","Notes that wait for you: from outside content and not confirmed, flagged by an app, about code that changed, or two answers to one fact. The same list as monomem review."],
+  review:["Review","Notes that wait for you: from outside content and not confirmed, flagged by an app, about code that changed, or two answers to one fact."],
   held:["Held","Writes kept out of memory until you approve or reject them: ones that looked like a secret or an injected instruction, and ones to a project where you approve first."],
   changes:["Activity","What changed, what each app did, open tasks and the last handoff."],
   sessions:["Sessions","App sessions Monomem recorded, each with its timeline."],
@@ -173,14 +179,17 @@ function setNeeds(j){
   try { if(navigator.setAppBadge){ if(NEEDS.count){ navigator.setAppBadge(NEEDS.count); } else { navigator.clearAppBadge(); } } } catch(e){}
   showNeeds();
 }
-// One calm banner on Notes only: what waits, and one button (named for where it goes) to the first place that settles it.
+// One calm banner on Notes only: what waits, and one button (named for where it goes) to the place with the most items
+// (ties: the first listed). Each line says where it is settled.
 // Not a filled button: New note is the one filled button on Notes.
 function showNeeds(){
   var b = $("needs"), items = NEEDS.items || [];
   if(!b){ return; }
   b.hidden = !(VIEW === "list" && items.length);
   if(b.hidden){ return; }
-  var go = { held:["loadHeld()", "Open Held"], review:["loadReview()", "Open Review"], settings:["openSettings()", "Open Settings"] }[items[0].view] || ["loadReview()", "Open Review"];
+  var per = {}, top = items[0].view;
+  items.forEach(function(i){ per[i.view] = (per[i.view] || 0) + Number(i.count || 0); if(per[i.view] > (per[top] || 0)){ top = i.view; } });
+  var go = { held:["loadHeld()", "Open Held"], review:["loadReview()", "Open Review"], settings:["openSettings()", "Open Settings"] }[top] || ["loadReview()", "Open Review"];
   b.innerHTML = "<div><b>" + (NEEDS.count === 1 ? "1 thing needs you" : Number(NEEDS.count) + " things need you") + "</b><ul class='t-callout'>" +
     items.map(function(i){ return "<li>"+esc(i.text)+"</li>"; }).join("") + "</ul></div><button onclick='"+go[0]+"'>"+go[1]+"</button>";
 }

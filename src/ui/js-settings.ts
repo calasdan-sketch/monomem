@@ -13,7 +13,7 @@ function autoSwitches(s){
   s = s || {};
   return onOffSwitch("sw_backups", "Back up my notes every day", "A copy of your notes in your Monomem folder each day. Your encryption key is never copied.", s.daily_backups !== "off", "setSetting(&quot;daily_backups&quot;,this.checked)")+
     onOffSwitch("sw_recall", "Add matching notes to each prompt", "At each prompt, up to 3 notes that match it are added for your app. Off by default.", s.prompt_recall === "on", "setSetting(&quot;prompt_recall&quot;,this.checked)")+
-    onOffSwitch("sw_claude", "Bring in Claude Code's memory as it changes", "While Monomem runs, files Claude Code changed are copied in every 10 minutes, held until you confirm them. Off by default.", s.claude_refresh === "on", "setSetting(&quot;claude_refresh&quot;,this.checked)")+
+    onOffSwitch("sw_claude", "Bring in Claude Code's memory as it changes", "While Monomem runs, files Claude Code changed are copied in every 10 minutes, unconfirmed (from outside) until you confirm them. Off by default.", s.claude_refresh === "on", "setSetting(&quot;claude_refresh&quot;,this.checked)")+
     "<div class='switch'><span><span>Start Monomem with my computer</span><span class='help' style='display:block'>Keeps this page and backups available. Your apps start Monomem themselves either way.</span></span>"+
     "<span class='row'><button onclick='setService(true)'>Turn on</button><button class='plain' onclick='setService(false)'>Turn off</button></span></div>";
 }
@@ -69,8 +69,22 @@ function syncSection(){
 function loadSync(){
   api("/ui/sync").then(function(j){
     var el = $("sync_now"); if(!el){ return; }
-    el.textContent = j.set ? "Set up on this computer (" + (j.kind === "git" ? "git: " : "folder: ") + j.where + "). " + (j.auto ? "Syncs by itself every " + j.every_minutes + " minutes." : "Run monomem sync to sync.") : "Not set up on this computer yet.";
+    var line = j.set ? "Set up on this computer (" + (j.kind === "git" ? "git: " : "folder: ") + esc(j.where) + "). " : "Not set up on this computer yet.";
+    var p = j.problem;
+    // A failed or late sync: what happened, when, and what to do, with a button (Needs you sends the person here).
+    el.innerHTML = !p ? line + (j.set ? (j.auto ? "Syncs by itself every " + Number(j.every_minutes) + " minutes." : "Press Sync now when you switch computers.") + " <button class='plain' onclick='syncNow()'>Sync now</button>" : "")
+      : line + "<span class='err'>" + (p.kind === "failed" ? "The last sync failed " + esc(ago(p.at)) + (p.error ? ": " + esc(String(p.error).replace(/[.\\s]+$/, "")) : "") + "."
+        : "Automatic sync is on, but the last one was " + esc(ago(p.at)) + ".") + "</span> " +
+        (p.kind === "failed" ? "Check that this computer can reach the shared folder or the git address, then press Sync now."
+          : "It only runs while Monomem is running: turn on Start Monomem with my computer above, or press Sync now.") +
+        " <button onclick='syncNow()'>Sync now</button>";
   }).catch(function(e){ var el = $("sync_now"); if(el){ el.textContent = localMissing(e) ? "To set this up from here, open Monomem from " + whereEntry() + ", or run monomem open on this computer." : ""; } });
+}
+function syncNow(){
+  toast("Syncing...");
+  return api("/ui/sync/now", { method:"POST" }).then(function(r){
+    showOut("sync_out", r); toast(r.ok ? "Synced." : "The sync did not finish; see the details."); loadSync(); loadNeeds();
+  }).catch(function(e){ say(e.message, true); });
 }
 function syncSetup(){
   var t = ($("sync_target").value || "").trim(), n = ($("sync_name").value || "").trim();
@@ -93,7 +107,7 @@ function appRow(a, welcome){
   var right = a.connected ? "<span class='lbl ok'>Connected</span>"
     : a.declined && !welcome ? "<span class='muted t-foot'>Skipped</span> <button class='plain' onclick='connectApp(&quot;"+id+"&quot;)'>Connect</button>"
     : "<span class='row'><button onclick='connectApp(&quot;"+id+"&quot;)'>Connect</button><button class='plain' onclick='declineApp(&quot;"+id+"&quot;)'>Not this one</button></span>";
-  return "<div class='app'><div><b>"+esc(a.label)+"</b>"+(a.new && !a.connected ? " <span class='lbl'>New</span>" : "")+(a.connected ? "<div class='help'>"+esc(restartHint(a.id))+"</div>" : "")+"</div>"+right+"</div>";
+  return "<div class='app'><div><b>"+esc(a.label)+"</b>"+(a.new && !a.connected ? " <span class='lbl'>New<span class='sr'>: installed after Monomem was set up</span></span>" : "")+(a.connected ? "<div class='help'>"+esc(restartHint(a.id))+"</div>" : "")+"</div>"+right+"</div>";
 }
 function restartHint(id){
   return { "claude-code":"Quit Claude Code (type /exit) and start it again.", "cursor":"In Cursor, open Settings, then MCP, and switch Monomem on.", "claude-desktop":"Quit Claude Desktop from the tray or menu bar, then open it again." }[id] || "Quit the app and open it again.";
@@ -142,7 +156,7 @@ function doUpdate(){
 }
 function waitUpdate(n){
   var out = $("upd_out");
-  if(n >= 180){ if(out){ out.innerHTML += "<p class='help'>Still restarting. Reload this page in a moment (a service set to start with Windows can take up to 5 minutes).</p>"; } return; }
+  if(n >= 180){ if(out){ out.innerHTML += "<p class='help'>Still restarting. Reload this page in a moment (when Monomem is set to start with " + osName() + ", it can take up to 5 minutes).</p>"; } return; }
   setTimeout(function(){
     fetch("/health").then(function(r){ return r.json(); }).then(function(h){
       if(h.version && h.version !== STATE.version){ location.reload(); return; }
@@ -199,7 +213,7 @@ function showWelcome(n){
     w.innerHTML = wcard(0, "Welcome to Monomem", "<p>Monomem gives your AI apps one shared memory. Connect the apps you use:</p><div id='wl_apps'><p class='muted'>Looking for apps...</p></div>"+
       "<p class='help'>Monomem adds one entry to each app's settings and keeps a copy of every file it changes. Changed your mind? Settings, then Undo the last connect, puts it back.</p>"+
       "<p style='margin-top:16px'><b>Bring in memories</b> from other tools on this computer (optional):</p><div id='wl_mem'><p class='muted'>Looking...</p></div>"+
-      "<p class='help'>Each note comes in held: your apps do not get it at session start until you confirm it. A Notion export or a mem0 file: <code>monomem import --from notion --path &lt;export.zip&gt;</code> (or <code>--from mem0</code>).</p>",
+      "<p class='help'>Each note comes in unconfirmed (from outside): your apps do not get it at session start until you confirm it in Review. A Notion export or a mem0 file: <code>monomem import --from notion --path &lt;export.zip&gt;</code> (or <code>--from mem0</code>).</p>",
       "<button class='plain' onclick='finishWelcome()'>Skip</button><button class='primary' onclick='showWelcome(1)'>Next</button>");
     loadApps2("wl_apps", true);
     loadMemSources();
@@ -230,7 +244,7 @@ function loadMemSources(){
   }).catch(function(e){ var box = $("wl_mem"); if(box){ box.innerHTML = "<p class='muted'>" + (localMissing(e) ? "To look for them, open Monomem from " + whereEntry() + ", or run monomem open on this computer." : esc(e.message)) + "</p>"; } });
 }
 function bringIn(id, label){
-  ask("Copy " + label + " into Monomem? Nothing leaves this computer. Anything that looks like a secret is skipped, and every note is held until you confirm it (the Review tab).", "Bring in", function(){
+  ask("Copy " + label + " into Monomem? Nothing leaves this computer. Anything that looks like a secret is skipped, and every note stays unconfirmed (from outside) until you confirm it in Review.", "Bring in", function(){
     toast("Bringing in...");
     api("/ui/import", { method:"POST", body: JSON.stringify({ id: id }) }).then(function(r){ showOut("wl_out", r); toast(r.ok ? "Done. The notes wait in Review." : "That did not finish; see the details."); loadMemSources(); loadNeeds(); })
       .catch(function(e){ say(e.message, true); });
