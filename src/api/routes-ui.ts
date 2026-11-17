@@ -97,6 +97,11 @@ async function jsonBody(req: IncomingMessage): Promise<Record<string, unknown> |
   }
 }
 
+/** Where setup put Monomem's launcher on this computer (install.ts): the words for "open Monomem from ...". */
+export function launcherWhere(platform: NodeJS.Platform = process.platform): string {
+  return platform === "darwin" ? "your Applications folder" : platform === "win32" ? "its Start menu entry" : "your app launcher";
+}
+
 export async function uiRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
   const { store } = c;
   const { req, res, path, principal, nsCtx } = r;
@@ -108,7 +113,7 @@ export async function uiRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
   const local = hasLocal(req);
   const needLocal = (): boolean => {
     if (local) return false;
-    sendJson(res, 403, { error: "This changes things on your computer. Open Monomem from its Start menu entry, or run  monomem open  on this computer, then try again.", local_required: true });
+    sendJson(res, 403, { error: `This changes things on your computer. Open Monomem from ${launcherWhere()}, or run  monomem open  on this computer, then try again.`, local_required: true });
     return true;
   };
 
@@ -163,7 +168,7 @@ export async function uiRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
   // GET /ui/apps -> the apps setup finds on this computer, and which already use Monomem.
   if (req.method === "GET" && path === "/ui/apps") {
     if (needLocal()) return true;
-    const { detectClients, connectedApps, realEnv } = await import("../setup.js");
+    const { detectClients, connectedApps, realEnv, readHistory } = await import("../setup.js");
     const e = realEnv(PACKAGE_VERSION);
     const connected = new Set(connectedApps(e).connected);
     const declined = new Set(readUiSettings().declined_apps);
@@ -171,7 +176,8 @@ export async function uiRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
     const apps = detectClients(e)
       .filter((a) => a.present && a.id !== "project" && !seen.has(a.label) && seen.add(a.label))
       .map((a) => ({ id: a.id, label: a.label, connected: connected.has(a.label), declined: declined.has(a.id) }));
-    sendJson(res, 200, { apps });
+    // can_undo: Settings shows "Undo the last connect" only when setup has a change left to put back.
+    sendJson(res, 200, { apps, can_undo: readHistory(e).some((h) => !h.undone) });
     return true;
   }
   // POST /ui/apps/connect { id } -> `monomem setup --only <id> --yes` (its backup and undo history apply).
