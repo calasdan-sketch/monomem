@@ -173,9 +173,12 @@ const SQL_ALLOWED: Record<string, string[]> = {
   "bench/monomem-adapter.ts": ["_meta"],
   // bench/scale.ts counts sealed bodies (body_enc IS NOT NULL, a COUNT only) in the synthetic temp-folder store it just built.
   "bench/scale.ts": ["notes"],
-  // context-inject.ts reads notes.writer_cwd (a folder, no note content) for ids already in the session-start pool, which
-  // came through the store's filters: C18 project-first ranking. The column is not on NoteRecord ("never exported").
-  "context-inject.ts": ["notes"],
+  // claims.ts (claim checks, review code): ids of live notes that carry claims, confined to the caller's namespaces in the
+  // query; every note is re-read through Store.readVisible before anything is shown. Ids only.
+  "claims.ts": ["notes"],
+  // git-trail.ts (branch scope + commit trail): note ids, folders, sessions and times only (writer_cwd, session_id,
+  // archived_at), for ids that came through the store's filters or to list a session's note ids; titles are read via Store.
+  "git-trail.ts": ["notes"],
   // drill.ts forgets the copied key-id marker (_meta attest_key_id) in its own temp-folder COPY of the database, as the bench adapter does.
   "drill.ts": ["_meta"],
   // health.ts keeps its own "audit lines seen" marker in _meta (health_audit_seen); it reads no trust setting.

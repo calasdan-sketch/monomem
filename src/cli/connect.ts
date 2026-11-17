@@ -219,7 +219,7 @@ export async function setupCmd(cliPath: string): Promise<void> {
   const { runSetup, realEnv, DEFAULT_OPTIONS } = await import("../setup.js");
   const { flags } = parseFlags(process.argv.slice(3), {
     values: ["only", "db", "command"],
-    bools: ["dry-run", "yes", "undo", "hook", "no-hook", "capture", "no-capture", "project", "no-test-note", "no-doctor", "force-empty", "terse", "no-embeddings", "path", "no-path", "taint-gate"],
+    bools: ["dry-run", "yes", "undo", "hook", "no-hook", "capture", "no-capture", "project", "no-test-note", "no-doctor", "force-empty", "terse", "no-embeddings", "path", "no-path", "action-guard"],
   });
   const command = str(flags.command) ?? "auto";
   if (!["auto", "node", "npx"].includes(command)) {
@@ -253,7 +253,7 @@ export async function setupCmd(cliPath: string): Promise<void> {
     noDoctor: flags["no-doctor"] === true,
     forceEmpty: flags["force-empty"] === true,
     terse: flags.terse === true,
-    taintGate: flags["taint-gate"] === true,
+    actionGuard: flags["action-guard"] === true,
     only: str(flags.only)?.split(",").map((x) => x.trim()).filter(Boolean),
     db: str(flags.db),
     command: command as "auto" | "node" | "npx",

@@ -1,4 +1,4 @@
-// `monomem settings known-hosts [add <host> | remove <host>]`: the known-hosts list (known-hosts.ts) the taint gate uses.
+// `monomem settings known-hosts [add <host> | remove <host>]`: the known-hosts list (known-hosts.ts) the action guard uses.
 // Adding a host loosens the gate, so it needs a person at a terminal and a typed yes; removing one tightens it and does not.
 import { requireOperator } from "../operator-gate.js";
 import { knownHosts, normHost, saveKnownHosts } from "../known-hosts.js";
@@ -10,7 +10,7 @@ export async function knownHostsCmd(args: string[]): Promise<void> {
   const [verb, raw, ...extra] = args;
   const show = (list: readonly string[]): void => {
     console.log(`known hosts (${list.length}): ${list.join(", ") || "(none)"}`);
-    console.log("The taint gate asks before a web request to any other host once a session has read outside content.");
+    console.log("The action guard asks before a web request to any other host once a session has read outside content.");
   };
   if (verb === undefined) return show(knownHosts(DATA_DIR));
   const host = normHost(raw ?? "");

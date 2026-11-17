@@ -22,7 +22,7 @@ folder). `monomem check --setup` prints which one, and its size.
 | `backups/<YYYY-MM-DD>/` (`state.db`, `README.txt`) | automatic daily backup (1.6.0) while the server runs (`monomem start`, `open`, `service`): checked a minute after start, then hourly, at most one a day. Keeps the 7 newest days plus the newest of each of the 4 weeks before them, so at most 11 copies of the database. The encryption key is never copied (the server says once where it is and that it needs its own copy). The dashboard's Settings switch or `MONOMEM_AUTO_BACKUP=off` (wins when set) turns it off | older ones by itself; all: delete the folder, or `uninstall --purge` |
 | `state.db.before-restore-<time>` | `backup restore`: the database as it was before the restore (the undo) | by hand |
 | `.last-backup`, `backup-status.json`, `.backup-key-warned` | each backup / how the last automatic or dashboard backup went (a failure shows in `monomem check`, the dashboard's Needs you and at session start, until the next good one) / the one-time key reminder | `uninstall --purge` |
-| `known-hosts.json` | `monomem settings known-hosts add/remove`: the hosts the opt-in taint gate trusts (no file = the defaults: github.com, registry.npmjs.org, localhost); no secrets | `uninstall --purge` |
+| `known-hosts.json` | `monomem settings known-hosts add/remove`: the hosts the opt-in action guard trusts (no file = the defaults: github.com, registry.npmjs.org, localhost); no secrets | `uninstall --purge` |
 | `ui-settings.json` | the dashboard's Welcome and Settings (prompt-time recall and daily backups switches, apps you said no to); no secrets | `uninstall --purge` |
 | `.token`, `tokens.json` | first start (the API token) / by you | `uninstall --purge` |
 | `.key`, `.attest-key`, `.sync-key` | `encrypt enable` / first signed export / first `sync --git --encrypt` (`MONOMEM_KEY_FILE`, `MONOMEM_ATTEST_KEY_FILE`, `MONOMEM_SYNC_KEY_FILE` move them) | `uninstall --purge` (a key moved elsewhere: by hand) |
@@ -60,8 +60,8 @@ Your notes are not in the program folder; deleting it does not touch them.
 `~/.codex/config.toml` and `~/.codex/hooks.json`, `~/.gemini/settings.json`, `~/.config/muse/settings.json`, VS Code's
 user `mcp.json`, Zed's `settings.json`, and `./.mcp.json` only with `--project`. Before each change it saves
 `<file>.monomem-backup-<time>` beside the file; `setup --undo` and `uninstall` save `...-before-undo` when the file had
-changed since. `setup --taint-gate` (opt-in) adds one more `PreToolUse` entry to `~/.claude/settings.json`
-([taint-gate.md](./taint-gate.md)), recorded the same way.
+changed since. `setup --action-guard` (opt-in) adds one more `PreToolUse` entry to `~/.claude/settings.json`
+([action-guard.md](./action-guard.md)), recorded the same way.
 
 `monomem uninstall` replays every recorded setup in reverse: a file setup created is deleted, a file nobody touched
 since is put back byte for byte from its backup, and a file the app changed since keeps those changes and loses only the

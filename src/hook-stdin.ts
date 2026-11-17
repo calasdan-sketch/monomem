@@ -1,4 +1,4 @@
-// The hook processes' stdin reader and payload parser, in a module with no imports, so the PreToolUse taint gate can
+// The hook processes' stdin reader and payload parser, in a module with no imports, so the PreToolUse action guard can
 // read its payload without loading hook.ts (capture, crypto) on every tool call. hook.ts re-exports both.
 /** stdin is read up to this much; the rest is ignored (a hook payload past 1 MiB is a tool output we only keep 4 KB of). */
 export const STDIN_MAX = 1024 * 1024;

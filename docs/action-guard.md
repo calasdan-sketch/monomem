@@ -1,8 +1,8 @@
-# Taint gate: ask before a risky action once a session read outside content (opt-in)
+# Action guard: ask before a risky action once a session read outside content (opt-in)
 
 Text from outside (a web page, another MCP server's answer) can carry instructions written by someone else. The usual
 payoff for such an instruction is an action: push code, publish a package, send your data to a server, or read a key.
-The taint gate is a Claude Code hook that notices when the session has read outside content and then **asks you** before
+The action guard is a Claude Code hook that notices when the session has read outside content and then **asks you** before
 those actions. You answer in Claude Code's normal permission prompt.
 
 **It is a speed bump, not a sandbox.** Read "What it does not do" below before you rely on it.
@@ -10,13 +10,13 @@ those actions. You answer in Claude Code's normal permission prompt.
 ## Turn it on and off
 
 ```
-monomem setup --taint-gate            # shows the exact change to ~/.claude/settings.json and asks y/N
-monomem setup --taint-gate --dry-run  # only shows it
+monomem setup --action-guard            # shows the exact change to ~/.claude/settings.json and asks y/N
+monomem setup --action-guard --dry-run  # only shows it
 monomem setup --undo                  # takes it out again (when it was the last setup change)
 ```
 
 It adds one `PreToolUse` entry (matcher `Bash|PowerShell|Read|Grep|Write|Edit|MultiEdit|NotebookEdit|WebFetch`) that runs
-`monomem hook taint-gate`. Plain `monomem setup` never adds it. `monomem uninstall` removes it with the other Monomem
+`monomem hook action-guard`. Plain `monomem setup` never adds it. `monomem uninstall` removes it with the other Monomem
 hooks. Restart Claude Code after the change.
 
 It needs Monomem's automatic memory hooks (`monomem setup --capture`): those are what record that a session read outside

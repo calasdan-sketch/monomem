@@ -1,5 +1,5 @@
-// PLAN I taint gate + D known hosts + D rules-file watch: the PreToolUse gate asks (never denies) before a listed action once
-// the session read outside content; the known-hosts list; the one-line AGENTS.md / CLAUDE.md change notice; setup --taint-gate.
+// PLAN I action guard + D known hosts + D rules-file watch: the PreToolUse gate asks (never denies) before a listed action once
+// the session read outside content; the known-hosts list; the one-line AGENTS.md / CLAUDE.md change notice; setup --action-guard.
 import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
 import { test, describe, afterEach } from "node:test";
 import assert from "node:assert/strict";
@@ -10,13 +10,13 @@ import { PROJECT_ROOT } from "../src/self.js";
 import { join } from "node:path";
 import { Store } from "../src/store.js";
 import { normalizeHookInput, recordEvent } from "../src/capture.js";
-import { gatedAction, taintGateHook, commandHosts, GATE_MATCHER } from "../src/taint-gate.js";
+import { gatedAction, actionGuardHook, commandHosts, GATE_MATCHER } from "../src/action-guard.js";
 import { DEFAULT_KNOWN_HOSTS, isKnownHost, knownHosts, normHost, saveKnownHosts } from "../src/known-hosts.js";
 import { rulesWatchLine, recordRulesFile } from "../src/rules-watch.js";
 import { runHook, withContextLine } from "../src/hook.js";
 import { FENCE_BEGIN, FENCE_END } from "../src/project-rules.js";
 import { DEFAULT_OPTIONS, readHistory, undoLast, type SetupEnv, type SetupIO } from "../src/setup.js";
-import { planTaintGate, runTaintGateSetup } from "../src/taint-gate-setup.js";
+import { planActionGuard, runActionGuardSetup } from "../src/action-guard-setup.js";
 
 const roots: string[] = [];
 const tmp = (): string => {
@@ -125,10 +125,10 @@ function dbWithSessions(): { dbPath: string; dataDir: string } {
   return { dbPath, dataDir };
 }
 
-describe("taintGateHook: asks only after outside content", () => {
+describe("actionGuardHook: asks only after outside content", () => {
   test("a listed action after a web read gets one PreToolUse ask with a plain reason", async () => {
     const o = dbWithSessions();
-    const out = JSON.parse(await taintGateHook(bash("git push"), o));
+    const out = JSON.parse(await actionGuardHook(bash("git push"), o));
     assert.equal(out.hookSpecificOutput.hookEventName, "PreToolUse");
     assert.equal(out.hookSpecificOutput.permissionDecision, "ask");
     assert.match(out.hookSpecificOutput.permissionDecisionReason, /read outside content \(WebFetch\).*push code \(git push\).*speed bump, not a sandbox/);
@@ -136,20 +136,20 @@ describe("taintGateHook: asks only after outside content", () => {
 
   test("no ask: a clean session, an unlisted action, the window off, no database, no session id", async () => {
     const o = dbWithSessions();
-    assert.equal(await taintGateHook(bash("git push", "s2"), o), "", "the session read nothing from outside");
-    assert.equal(await taintGateHook(bash("npm test"), o), "", "not a listed action");
-    assert.equal(await taintGateHook(bash("curl https://github.com/x"), o), "", "known host");
+    assert.equal(await actionGuardHook(bash("git push", "s2"), o), "", "the session read nothing from outside");
+    assert.equal(await actionGuardHook(bash("npm test"), o), "", "not a listed action");
+    assert.equal(await actionGuardHook(bash("curl https://github.com/x"), o), "", "known host");
     process.env.MONOMEM_TAINT_WINDOW_HOURS = "0";
-    assert.equal(await taintGateHook(bash("git push"), o), "", "MONOMEM_TAINT_WINDOW_HOURS=0 turns the window off");
+    assert.equal(await actionGuardHook(bash("git push"), o), "", "MONOMEM_TAINT_WINDOW_HOURS=0 turns the window off");
     delete process.env.MONOMEM_TAINT_WINDOW_HOURS;
-    assert.equal(await taintGateHook(bash("git push"), { ...o, dbPath: join(o.dataDir, "missing.db") }), "");
-    assert.equal(await taintGateHook({ tool_name: "Bash", tool_input: { command: "git push" } }, o), "");
+    assert.equal(await actionGuardHook(bash("git push"), { ...o, dbPath: join(o.dataDir, "missing.db") }), "");
+    assert.equal(await actionGuardHook({ tool_name: "Bash", tool_input: { command: "git push" } }, o), "");
   });
 
-  test("runHook dispatches taint-gate and fails open on garbage", async () => {
+  test("runHook dispatches action-guard and fails open on garbage", async () => {
     const o = dbWithSessions();
-    assert.match(await runHook("taint-gate", JSON.stringify(bash("git push")), { dbPath: o.dbPath, dataDir: o.dataDir }), /"permissionDecision":"ask"/);
-    assert.equal(await runHook("taint-gate", "not json", { dbPath: o.dbPath, dataDir: o.dataDir }), "");
+    assert.match(await runHook("action-guard", JSON.stringify(bash("git push")), { dbPath: o.dbPath, dataDir: o.dataDir }), /"permissionDecision":"ask"/);
+    assert.equal(await runHook("action-guard", "not json", { dbPath: o.dbPath, dataDir: o.dataDir }), "");
   });
 });
 
@@ -184,7 +184,7 @@ describe("rules-file watch", () => {
   });
 });
 
-describe("setup --taint-gate", () => {
+describe("setup --action-guard", () => {
   const CLI = "/opt/monomem/dist/src/cli.js";
   function sandbox(): { e: SetupEnv; settings: string } {
     const root = tmp();
@@ -198,27 +198,27 @@ describe("setup --taint-gate", () => {
     const l: string[] = [];
     return { interactive, out: (x) => void l.push(x), err: (x) => void l.push(x), ask: async () => answers.shift() ?? "", all: () => l.join("\n") };
   };
-  const opts = { ...DEFAULT_OPTIONS, noDoctor: true, noTestNote: true, taintGate: true };
+  const opts = { ...DEFAULT_OPTIONS, noDoctor: true, noTestNote: true, actionGuard: true };
 
   test("asks first, adds one PreToolUse entry, is idempotent, and setup --undo takes it out", async () => {
     const s = sandbox();
     const before = readFileSync(s.settings, "utf8");
     const no = io(["n"]);
-    assert.equal(await runTaintGateSetup(s.e, no, opts), 0);
+    assert.equal(await runActionGuardSetup(s.e, no, opts), 0);
     assert.match(no.all(), /Cancelled/);
     assert.equal(readFileSync(s.settings, "utf8"), before, "a no changes nothing");
-    assert.equal(await runTaintGateSetup(s.e, io(), { ...opts, dryRun: true }), 0);
+    assert.equal(await runActionGuardSetup(s.e, io(), { ...opts, dryRun: true }), 0);
     assert.equal(readFileSync(s.settings, "utf8"), before, "dry run changes nothing");
-    assert.equal(await runTaintGateSetup(s.e, io([], false), opts), 1, "no terminal and no --yes: refuse");
+    assert.equal(await runActionGuardSetup(s.e, io([], false), opts), 1, "no terminal and no --yes: refuse");
 
-    assert.equal(await runTaintGateSetup(s.e, io(["y"]), opts), 0);
+    assert.equal(await runActionGuardSetup(s.e, io(["y"]), opts), 0);
     const after = JSON.parse(readFileSync(s.settings, "utf8"));
     assert.equal(after.theme, "dark");
     const gate = after.hooks.PreToolUse.at(-1);
     assert.equal(gate.matcher, GATE_MATCHER);
-    assert.match(gate.hooks[0].command, /cli\.js" hook taint-gate$/);
+    assert.match(gate.hooks[0].command, /cli\.js" hook action-guard$/);
     assert.equal(gate.hooks[0].async, undefined, "synchronous: its answer is the decision");
-    assert.equal(planTaintGate(s.e, opts).change, null, "already there");
+    assert.equal(planActionGuard(s.e, opts).change, null, "already there");
     assert.equal(readHistory(s.e).length, 1);
 
     assert.equal(await undoLast(s.e, io()), 0);
@@ -228,9 +228,9 @@ describe("setup --taint-gate", () => {
   test("says so when the capture hooks it needs are missing", async () => {
     const s = sandbox();
     writeFileSync(s.settings, "{}");
-    assert.equal(planTaintGate(s.e, opts).captureMissing, true);
+    assert.equal(planActionGuard(s.e, opts).captureMissing, true);
     const out = io();
-    await runTaintGateSetup(s.e, out, { ...opts, dryRun: true });
+    await runActionGuardSetup(s.e, out, { ...opts, dryRun: true });
     assert.match(out.all(), /monomem setup --capture/);
   });
 });

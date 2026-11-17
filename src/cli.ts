@@ -211,9 +211,9 @@ async function hookCmd(): Promise<void> {
     const args = process.argv.slice(4);
     const i = args.indexOf("--db");
     const opts = i >= 0 && args[i + 1] ? { dbPath: args[i + 1] } : {};
-    // The taint gate runs before every listed tool call: it skips hook.ts (capture, crypto) to stay quick.
+    // The action guard runs before every listed tool call: it skips hook.ts (capture, crypto) to stay quick.
     const io = await import("./hook-stdin.js");
-    if (event === "taint-gate") out = await (await import("./taint-gate.js")).taintGateHook(io.parsePayload(await io.readStdin()), opts);
+    if (event === "action-guard") out = await (await import("./action-guard.js")).actionGuardHook(io.parsePayload(await io.readStdin()), opts);
     else out = await (await import("./hook.js")).runHook(event, await io.readStdin(), opts);
   } catch (e) {
     console.error(`monomem hook: ${(e as Error).message}`);

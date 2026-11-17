@@ -252,6 +252,8 @@ describe("runSearch with timeRange", () => {
       },
       touch: (_id: number) => {},
       touchMany: (_ids: number[]) => {},
+      getMeta: (_k: string) => undefined, // passage pooling off (src/store/passages.ts)
+      sealsWrites: () => false,
     };
     const r = parse("yesterday");
     await runSearch(stub as unknown as Store, "budget", {
@@ -274,6 +276,8 @@ describe("runSearch with timeRange", () => {
       },
       touch: (_id: number) => {},
       touchMany: (_ids: number[]) => {},
+      getMeta: (_k: string) => undefined, // passage pooling off (src/store/passages.ts)
+      sealsWrites: () => false,
     };
     const r = parse("today");
     const out = await runSearch(stub as unknown as Store, "   ", {
@@ -293,6 +297,8 @@ describe("runSearch with timeRange", () => {
       },
       touch: (_id: number) => {},
       touchMany: (_ids: number[]) => {},
+      getMeta: (_k: string) => undefined, // passage pooling off (src/store/passages.ts)
+      sealsWrites: () => false,
     };
     await runSearch(stub as unknown as Store, "budget", { mode: "keyword" });
     assert.ok(!("startISO" in seen[0]) && !("endISO" in seen[0]));

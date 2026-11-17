@@ -1,4 +1,4 @@
-// `monomem hook taint-gate`: Claude Code's PreToolUse hook (opt-in: `monomem setup --taint-gate`). Once this session has read
+// `monomem hook action-guard`: Claude Code's PreToolUse hook (opt-in: `monomem setup --action-guard`). Once this session has read
 // outside content (a web page, another MCP server: sessions.outside_at, written by the capture hooks), it ASKS the person before
 // a short list of high-impact actions:
 //   - git push; npm / pnpm / yarn publish
@@ -116,7 +116,7 @@ export interface GateOptions {
 }
 
 /** The hook's stdout: one PreToolUse "ask" object, or "" (no opinion). Never throws. */
-export async function taintGateHook(payload: Record<string, unknown>, opts: GateOptions = {}): Promise<string> {
+export async function actionGuardHook(payload: Record<string, unknown>, opts: GateOptions = {}): Promise<string> {
   try {
     const sessionId = typeof payload.session_id === "string" ? payload.session_id.slice(0, 200) : "";
     if (!sessionId) return "";
@@ -137,7 +137,7 @@ export async function taintGateHook(payload: Record<string, unknown>, opts: Gate
       "Text from outside can carry hidden instructions: allow this only if you asked for it. (A speed bump, not a sandbox: monomem settings known-hosts lists the hosts it trusts.)";
     return JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: reason } });
   } catch (e) {
-    process.stderr.write(`monomem hook taint-gate: ${(e as Error).message}\n`);
+    process.stderr.write(`monomem hook action-guard: ${(e as Error).message}\n`);
     return "";
   }
 }

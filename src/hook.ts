@@ -10,7 +10,7 @@
 // session-start also prints the start-of-session context (recall.ts / context-inject.ts), exactly like `monomem recall`.
 // user-prompt prints one title line per note other writers saved since the previous prompt (nothing when there are none).
 // file-context (PreToolUse on Read) prints what memory knows about the file about to be read (file-context.ts); advisory only.
-// taint-gate (PreToolUse, opt-in) asks the person before a listed action once the session read outside content (taint-gate.ts).
+// action-guard (PreToolUse, opt-in) asks the person before a listed action once the session read outside content (action-guard.ts).
 // session-start also adds one line when AGENTS.md / CLAUDE.md changed since the last session (rules-watch.ts).
 import { existsSync } from "node:fs";
 import { dirname } from "node:path";
@@ -265,10 +265,10 @@ export async function runHook(eventArg: string, stdinText: string, opts: HookOpt
       return "";
     }
   }
-  // PreToolUse taint gate (opt-in, taint-gate.ts): "ask" before a listed action once the session read outside content.
-  if (eventArg === "taint-gate") {
+  // PreToolUse action guard (opt-in, action-guard.ts): "ask" before a listed action once the session read outside content.
+  if (eventArg === "action-guard") {
     try {
-      return await (await import("./taint-gate.js")).taintGateHook(parsePayload(stdinText), opts);
+      return await (await import("./action-guard.js")).actionGuardHook(parsePayload(stdinText), opts);
     } catch {
       return "";
     }
@@ -301,7 +301,7 @@ export async function runHook(eventArg: string, stdinText: string, opts: HookOpt
   }
   const event = (HOOK_EVENTS as readonly string[]).includes(eventArg) ? (eventArg as HookEvent) : null;
   if (!event) {
-    process.stderr.write(`monomem hook: unknown event "${eventArg}" (one of ${[...HOOK_EVENTS, "file-context", "subagent-start", "taint-gate", "cursor-session-start"].join(", ")}); ignored\n`);
+    process.stderr.write(`monomem hook: unknown event "${eventArg}" (one of ${[...HOOK_EVENTS, "file-context", "subagent-start", "action-guard", "cursor-session-start"].join(", ")}); ignored\n`);
     return "";
   }
   const raw = parsePayload(stdinText);

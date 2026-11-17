@@ -1,5 +1,5 @@
-// Known hosts (PLAN D, destination allowlist): the one list of hosts this person expects data to go to. The taint gate
-// (taint-gate.ts) asks before a curl / wget / fetch / WebFetch to a host NOT on it once the session has read outside content;
+// Known hosts (PLAN D, destination allowlist): the one list of hosts this person expects data to go to. The action guard
+// (action-guard.ts) asks before a curl / wget / fetch / WebFetch to a host NOT on it once the session has read outside content;
 // other checks of where Monomem sends things read the same list (knownHosts + isKnownHost), so there is one list to keep.
 //
 // Stored as <data dir>/known-hosts.json ({"hosts": [...]}), not in the database: the gate runs on every tool call and must not
