@@ -8,6 +8,8 @@ import { taintWindowHours } from "../config.js";
 import { ValidationError } from "../errors.js";
 import { CONFIRM_MODES, DEFAULT_CONFIRM_DAYS, MAX_CONFIRM_DAYS, ORIGIN_PREFIX, ORIGIN_TOOL_PREFIX, ORIGIN_VIA_MEMORY, isTainted, promotionRefusal, sourceKey, type ConfirmMode } from "../taint.js";
 import { NOTE_COLUMNS, nameIsSql } from "../trust.js";
+import { onProbation } from "./probation.js";
+import { factsNeedEvidence } from "./evidence.js";
 import { CONFIRM_RANK, dueBase, needsHumanConfirm, parseTags, rankSql, type DueRow } from "./rows.js";
 
 export function unconfirmedCount(s: Store, namespaces?: string[]): number {
@@ -284,6 +286,13 @@ export function confirmRefusal(s: Store, n: NoteRecord, w: string, human: boolea
     .get(n.id, w, w);
   if (derived) return { code: "derived", message: `Not counted: ${who} wrote a note built from this one, so it can't confirm it.` };
   if (admin) return null;
+  // PLAN D: a writer on probation is not a second source yet (store/probation.ts).
+  if (onProbation(s, w)) {
+    return { code: "new_writer", message: `Not counted: ${who} is a new writer, not a second source yet. A person (monomem confirm ${n.id}) or an agent with a track record must confirm; a person can end its probation with monomem trust confirm-writer.` };
+  }
+  if (factsNeedEvidence(s) && n.tags.some((t) => t.startsWith("fact:")) && !n.evidence?.length) {
+    return { code: "no_evidence", message: `Not counted: this note states facts and cites no observed evidence (facts-need-evidence is on). A person must confirm it, or the writer saves it again with evidence.` };
+  }
   if (!key) return { code: "no_source", message: "Not counted: an agent's confirm must name the source it checked the note against (source)." };
   // Bounded like "already": after the expiry period an earlier confirm's source may be named again.
   const used = s.db.prepare("SELECT source_key FROM confirmations WHERE note_id = ? AND note_rev = ? AND reason = '' AND at > ?").all(n.id, n.rev, since) as Array<{ source_key: string }>;

@@ -83,6 +83,10 @@ export function encryptionSurfaces(s: Store, o: { dataDir: string; dbPath: strin
     counted("captured titles and tags", capturedFixed, capturedWords, key ? "sealed here = a fixed title and no word tags; older captured notes keep their words" : "no key: captured titles and tags use the words of the session"),
     never("captured file paths and folders", n("SELECT COUNT(*) AS c FROM note_files") + n("SELECT COUNT(*) AS c FROM sessions WHERE cwd <> ''"), "never encrypted: a secret in a file or folder name stays readable"),
     never("code anchors", n("SELECT COUNT(*) AS c FROM code_anchors"), "files a note was written about (memory_save files): repository path, file path and git ids, never encrypted"),
+    // 1.6 (PLAN D): memory_save evidence (store/evidence.ts); its side table exists only once a note was saved with evidence.
+    ...(s.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'note_evidence'").get()
+      ? [counted("observed evidence", n("SELECT COUNT(*) AS c FROM note_evidence WHERE items LIKE 'v3:%'"), n("SELECT COUNT(*) AS c FROM note_evidence WHERE items NOT LIKE 'v3:%'"), "what a writer said it observed (memory_save evidence): sealed when saved with a key")]
+      : []),
     never("search index", notes, plainBodies ? `every title and tag, and the bodies of the ${plainBodies} plain notes; sealed bodies are not indexed on disk` : "every title and tag; sealed bodies are not indexed on disk"),
     {
       surface: "body search index",

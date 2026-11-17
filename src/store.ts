@@ -119,6 +119,8 @@ import * as surfaceOps from "./store/surfaces.js";
 import * as clientKeyOps from "./store/client-keys.js";
 import * as flagOps from "./store/flags.js";
 import * as codeAnchorOps from "./store/code-anchors.js";
+import * as probationOps from "./store/probation.js";
+import * as evidenceOps from "./store/evidence.js";
 import type { CodeChange, CodeChangedItem } from "./store/code-anchors.js";
 export type { CodeChange, CodeChangedItem };
 import type { FlaggedItem, NoteFlag } from "./store/flags.js";
@@ -803,6 +805,13 @@ export interface NoteRecord {
   /** 1.5.0 (R2-03): files this note is about that changed in git since it was written (store/code-anchors.ts); with its label. */
   code_changed?: CodeChange[];
   code_changed_label?: string;
+  /** 1.6 (PLAN D): the writer is on probation (store/probation.ts): not a second source yet; with its label. */
+  new_writer?: true;
+  new_writer_label?: string;
+  /** 1.6 (PLAN D): what the writer said it observed for this version (store/evidence.ts); [] = inferred; with its label. */
+  basis?: "observed" | "inferred";
+  evidence?: evidenceOps.EvidenceItem[];
+  evidence_label?: string;
 }
 
 /** The re-confirmation expiry settings (_meta; Store.confirmSettings). `set_at`: when the mode was last changed. */
@@ -2472,6 +2481,8 @@ export class Store {
       clientKey?: string;
       /** R2-03: files the note is about, as the request named them (checkFilesInput); anchored in the writer's git repository. */
       files?: string[];
+      /** 1.6: what the writer observed (checkEvidenceInput); [] = inferred. */
+      evidence?: evidenceOps.EvidenceItem[];
     } & LintOpts = {}
   ): NoteRecord {
     if (!opts.bulkImport) this.floodGate(opts.lint ?? "full");
@@ -2581,6 +2592,7 @@ export class Store {
       // Key state is read INSIDE the write transaction (see writeKey): the
       // row is inserted with an empty body, then sealed against its own id.
       const encrypting = this.writeKey() !== null;
+      if (!opts.bulkImport && opts.writtenBy === undefined) probationOps.noteWriterSeen(this, writer, now);
       const result = this.db
         .prepare(
           `INSERT INTO notes (namespace, title, body, tags, source, written_by, created_by, imported_written_by,
@@ -2624,6 +2636,7 @@ export class Store {
       if (opts.clientKey !== undefined) clientKeyOps.recordClientKey(this, id, writer, opts.clientKey, now);
       this.addLinks(id, derived, writer, now);
       codeAnchorOps.setAnchors(this, id, anchors, now);
+      evidenceOps.setEvidence(this, id, startRev, opts.evidence, now);
       this.stampCliTerminal(id, writer);
       // An archived (restored-as-forgotten) note stays out of the edge graph.
       if (!archivedAt) this.noteWritten(namespace, id, { rev: startRev, title: input.title, body });
@@ -2902,7 +2915,7 @@ export class Store {
       r.access_count += p.n;
       if (!r.last_accessed || p.at > r.last_accessed) r.last_accessed = p.at;
     }
-    return codeAnchorOps.annotateCodeChanged(this, row, flagOps.annotateFlags(this, row, this.annotateConfirmRules(row, annotateRetention(row, r))));
+    return evidenceOps.annotateEvidence(this, row, probationOps.annotateProbation(this, row, codeAnchorOps.annotateCodeChanged(this, row, flagOps.annotateFlags(this, row, this.annotateConfirmRules(row, annotateRetention(row, r))))));
   }
 
   /**

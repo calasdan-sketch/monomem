@@ -14,6 +14,7 @@ import { checkFilesInput } from "../code-anchor.js";
 import { maybeEmbed } from "../search-service.js";
 import { canRead } from "../namespace.js";
 import { RECEIPT_CHECK } from "../store/write-receipt.js";
+import { checkEvidenceInput } from "../store/evidence.js";
 import { zInt, zTags, zFacts, noBody, untrustedResult, untrustedError, quarantinedResult, withConflicts, withWarnings, errorResult, errorFor } from "./shared.js";
 import type { McpCtx } from "./context.js";
 
@@ -114,7 +115,10 @@ export function registerNotesWriteTools(c: McpCtx): void {
           .describe("When creating: the files in this git repository the note is about (at most 20, e.g. [\"src/auth.ts\"], tracked by git). When one of them changes in a later commit, reads label the note `[code changed since this was written: ...]` until a person checks it."),
       },
     },
-    async ({ id, namespace, title: givenTitle, body, tags: plainTags, facts, source, if_rev, forget_after, confidence, sensitivity, outside, derived_from, client_key, files }) => {
+    async (args, extra) => {
+      const { id, namespace, title: givenTitle, body, tags: plainTags, facts, source, if_rev, forget_after, confidence, sensitivity, outside, derived_from, client_key, files } = args;
+      // 1.6 (PLAN D): memory_save passes `evidence` beside the 1.5 schema (tools-v16.ts); state_write itself never offers it.
+      const evidenceIn = (extra as { monomemEvidence?: unknown } | undefined)?.monomemEvidence;
       const warnings: LintFinding[] = [];
       let title = givenTitle;
       let tags = plainTags;
@@ -132,6 +136,8 @@ export function registerNotesWriteTools(c: McpCtx): void {
           assertReviewedTag(tags, undefined, false);
         }
         if (id !== undefined && client_key !== undefined) return errorResult("client_key applies to creating a note; use if_rev to guard an update");
+        if (id !== undefined && evidenceIn !== undefined) return errorResult("evidence applies to creating a note: save a new note with what you observed, or replace the old one");
+        const evidence = checkEvidenceInput(evidenceIn);
         if (id !== undefined && files !== undefined) return errorResult("files applies to creating a note; a person refreshes an existing note's files with monomem review keep <id>");
         const anchorFiles = checkFilesInput(files);
         if (id !== undefined) {
@@ -176,7 +182,7 @@ export function registerNotesWriteTools(c: McpCtx): void {
             ? { namespace: ownNs, title, body, tags, source, forget_after, sensitivity, outside, derived_from, ...(typeof confidence === "number" ? { confidence } : {}) }
             : { namespace, title, body, tags, source, forget_after, sensitivity, outside, derived_from, ...(typeof confidence === "number" ? { confidence } : {}) },
           client_key,
-          { lintWarnings: warnings, ...(anchorFiles ? { files: anchorFiles } : {}) }
+          { lintWarnings: warnings, ...(anchorFiles ? { files: anchorFiles } : {}), ...(evidence ? { evidence } : {}) }
         );
         const receipt = withReceipt();
         // R2-04: a retry with a known key wrote nothing; the reply is the note the first write made.
