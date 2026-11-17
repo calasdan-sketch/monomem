@@ -128,3 +128,31 @@ test("ease LOW: the 'Why shown' legend only when a reason other than recent show
     s.close();
   }
 });
+
+test("ease N10: activity --writes names a keyless local app (stdio:claude-code), not 'you'", async () => {
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { setProcessWriter } = await import("../src/actor.js");
+  const { readAudit, renderAudit } = await import("../src/audit-view.js");
+  const dir = mkdtempSync(join(tmpdir(), "om-f4-n10-"));
+  const prior = process.env.MONOMEM_AUDIT_LOG;
+  process.env.MONOMEM_AUDIT_LOG = join(dir, "audit.log");
+  try {
+    const s = new Store(join(dir, "state.db"));
+    setProcessWriter("stdio:claude-code");
+    s.create({ title: "from the app", body: "saved over MCP" });
+    setProcessWriter("cli");
+    s.create({ title: "from the person", body: "saved with monomem add" });
+    s.close();
+    const text = renderAudit(readAudit({ op: "create" }, Date.now(), join(dir, "audit.log")).entries);
+    const lines = text.split("\n");
+    assert.equal(lines.length, 2, text);
+    assert.match(lines.find((l) => l.includes("#1"))!, /by claude-code \(local app, no key\)/);
+    assert.match(lines.find((l) => l.includes("#2"))!, /by you \(command line\) or the server/);
+  } finally {
+    if (prior === undefined) delete process.env.MONOMEM_AUDIT_LOG;
+    else process.env.MONOMEM_AUDIT_LOG = prior;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
