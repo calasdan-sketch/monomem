@@ -396,6 +396,11 @@ not read edges, but a smaller file caches better. The time for a whole `monomem 
 657-760 ms in the performance seat's before table) was not re-measured. Encrypted search was faster only because it searched less
 text (before C-06; next section has the re-run). 1,000 notes for comparison: session start 5.3 / 8.8 ms plain / encrypted p50.
 
+**Prompt hook, whole process (1.6, added to the 10k gate).** The bench now also runs `monomem hook user-prompt` 9 times as a
+new process on the full store (Node start-up included, `MONOMEM_PROMPT_RECALL=on`, so the prompt step runs too). The release
+gate needs its encrypted p50 under 250 ms as well. One run, 16 Nov 2026, Node 24, other work on the PC: 189.7 / 257.6 ms plain,
+194.9 / 214.0 ms encrypted (p50 / p95): PASS.
+
 **Speed at 100,000 notes (`monomem bench --scale 100k`), 2026-11-15.** The same synthetic store at 100,000 notes, measured by
 three review seats on the development PC while other agents loaded it (so read the ranges, not one figure). 100,000 notes is
 the design ceiling: above it the in-memory body index is not built.

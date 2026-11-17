@@ -10,6 +10,7 @@ import { findConflicts, groupConflicts } from "../conflicts.js";
 import { readBackupStatus } from "./settings.js";
 import { DB_PATH } from "../config.js";
 import { dirname } from "node:path";
+import { currentCeiling } from "../actor.js";
 
 export type NeedKind = "held" | "unconfirmed" | "conflicts" | "backup";
 export interface NeedItem {
@@ -26,10 +27,33 @@ export interface NeedsYou {
 }
 
 const HELD_CAP = 500;
+
+/** Last fact-dispute count per store, with the change stamp it was counted at. */
+const disputeCache = new WeakMap<Store, { key: string; count: number }>();
+
+/**
+ * Fact-tier disputes, grouped as the Review list shows them. The dashboard asks after nearly every click, so this reads
+ * only the notes that carry a fact: tag (the fact tier looks at nothing else), never every note: on an encrypted store
+ * reading every note decrypts every body (~0.3-0.9 s at 10k notes, on the server's one thread). The count is reused while
+ * nothing in the database changed (the same stamp as the unconfirmed count: this connection's writes, another process's
+ * commit, the caller's sensitivity ceiling).
+ * ponytail: liveFactNotesIn keeps the newest 5000 fact-tagged notes; past that the badge can undercount the Review list.
+ */
+function factDisputes(store: Store, namespaces?: string[]): number {
+  const t = (store.db.prepare("SELECT total_changes() AS t").get() as { t: number }).t - store.bookkeepingChanges;
+  const dv = (store.db.prepare("PRAGMA data_version").get() as { data_version: number }).data_version;
+  const key = JSON.stringify([namespaces ?? null, t, dv, currentCeiling() ?? null]);
+  const hit = disputeCache.get(store);
+  if (hit?.key === key) return hit.count;
+  const notes = store.liveFactNotesIn(undefined, { includeNeverShow: true });
+  const count = groupConflicts(findConflicts(store, { notes, ...(namespaces ? { namespaces } : {}) }).filter((c) => c.tier === "fact")).length;
+  disputeCache.set(store, { key, count });
+  return count;
+}
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 
 /**
- * `conflicts: false` skips the conflict scan (it reads every note), for callers on a tight time budget such as a hook.
+ * `conflicts: false` skips the fact-dispute count (it reads every fact-tagged note), for callers on a tight time budget such as a hook.
  * `dataDir` is where backup-status.json lives: the database's folder (tests pass their own).
  */
 export function needsYou(store: Store, opts: { namespaces?: string[]; conflicts?: boolean; dataDir?: string } = {}): NeedsYou {
@@ -39,8 +63,8 @@ export function needsYou(store: Store, opts: { namespaces?: string[]; conflicts?
   const unconfirmed = store.unconfirmedCount(opts.namespaces);
   if (unconfirmed) items.push({ kind: "unconfirmed", count: unconfirmed, view: "review", text: `${plural(unconfirmed, "note", "notes")} from outside content ${unconfirmed === 1 ? "waits" : "wait"} for you to confirm ${unconfirmed === 1 ? "it" : "them"}.` });
   if (opts.conflicts !== false) {
-    const groups = groupConflicts(findConflicts(store, opts.namespaces ? { namespaces: opts.namespaces } : {}).filter((c) => c.tier === "fact"));
-    if (groups.length) items.push({ kind: "conflicts", count: groups.length, view: "review", text: `${plural(groups.length, "fact has", "facts have")} two different answers from different writers.` });
+    const disputed = factDisputes(store, opts.namespaces);
+    if (disputed) items.push({ kind: "conflicts", count: disputed, view: "review", text: `${plural(disputed, "fact has", "facts have")} two different answers from different writers.` });
   }
   const b = readBackupStatus(opts.dataDir ?? dirname(DB_PATH)); // backup-status.json sits next to the database (backup-schedule.ts)
   if (b && !b.ok) items.push({ kind: "backup", count: 1, view: "settings", text: `The last backup failed (${b.at.slice(0, 16).replace("T", " ")}).` });
