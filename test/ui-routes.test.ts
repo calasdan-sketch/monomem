@@ -208,7 +208,7 @@ describe("the local sign-in gate", () => {
 describe("Welcome and Settings state", () => {
   test("settings: checked values only; welcome_done flips the page from Welcome to Notes; the hook-side reader sees the switch", () => {
     const dir = mkdtempSync(join(tmpdir(), "mm-ui-"));
-    assert.deepEqual(readUiSettings(dir), { welcome_done: false, prompt_recall: "off", daily_backups: "on", declined_apps: [] });
+    assert.deepEqual(readUiSettings(dir), { welcome_done: false, prompt_recall: "off", daily_backups: "on", claude_refresh: "off", declined_apps: [] });
     assert.throws(() => updateUiSettings({ prompt_recall: "yes please" }, dir), /Unknown setting or value/);
     assert.throws(() => updateUiSettings({ token: "x" }, dir), /Unknown setting/);
     updateUiSettings({ welcome_done: true, prompt_recall: "on", declined_apps: ["zed"] }, dir);
