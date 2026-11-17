@@ -228,8 +228,8 @@ reads anything and no judge grades anything: each conversation is written into a
 question is searched, and the returned sessions (or turns) are compared with the dataset's own gold evidence.
 
 ```
-monomem bench --longmemeval [--data file] [--limit N] [--mode keyword|hybrid] [--granularity session|turn] [--encrypted] [--split a|b] [--json]
-monomem bench --locomo      [--data file] [--limit N] [--mode keyword|hybrid] [--granularity turn|session] [--encrypted] [--split a|b] [--json]
+monomem bench --longmemeval [--data file] [--limit N] [--mode keyword|hybrid] [--granularity session|turn] [--encrypted] [--split a|b] [--passages] [--json]
+monomem bench --locomo      [--data file] [--limit N] [--mode keyword|hybrid] [--granularity turn|session] [--encrypted] [--split a|b] [--passages] [--json]
 ```
 
 - **Data.** LongMemEval-S, cleaned release ([`xiaowu0162/longmemeval-cleaned`](https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned),
@@ -503,6 +503,62 @@ least one other memory system publishes such figures on MemoryAgentBench subsets
 Measured once by the developer when the chat layout landed; the review panel could not re-run it (no embedding service was
 allowed in its sandbox). LongMemEval-S hybrid was not re-run on 1.5.0: its latest figure is the 2026-11-09 one below
 (98.5 / 99.4), from before the 1.5.0 keyword ranking changes.
+
+### Passage pooling (opt-in), measured 2026-11-17
+
+**Result: it stays off by default.** The rule set before measuring was: switch it on for everyone only if the held-out
+halves of both datasets gain at least 0.5 point and size and speed are acceptable. They do not. On held-out half **b**,
+LongMemEval-S strict `Rall@5` went **down 1.2** (any-hit `R@5` unchanged), LoCoMo-10 `R@5` went up 0.4 (by turn) and 0.8 (by
+session) with `Rall@5` down 0.1-0.2, the database grows by about 37 %, and keyword search with common words is about 12 times
+slower at 10,000 notes. You can still switch it on (`monomem settings set passage_pooling on`); the numbers below are what
+to expect.
+
+**What it does.** Each note body is also cut into passages: its lines (a line over 600 characters is cut into pieces of
+about 600), 3 lines per passage, a new passage every 2 lines; a body of 3 lines or fewer is one passage. A passage is scored
+by bm25 times the rarity-weighted share of the query's keywords it holds (the weighting the any-keyword search uses on whole
+notes), and a note's passage score is its best passage (max pooling). Keyword search then blends the usual whole-note
+ranking and this passage ranking: both min-max scaled within the search, 0.5 / 0.5 (the hybrid search's blend). The
+`relevant` search is not changed. The passages are kept in one extra table, `passages_fts` (contentless FTS5: the word index
+only, no second copy of the text), created when the setting is switched on and dropped when it is switched off; no schema
+version change, so older versions open the database as before and ignore the table. It is kept up to date from the change
+log before each pooled search. Not on an encrypted store: an index of sealed bodies on disk would put their words on disk,
+so the setting is refused there and search stays whole-note.
+
+**With it off, nothing changes.** On all six half runs below (LongMemEval-S, LoCoMo-10 by turn and by session, halves a and
+b), the `--json` reports of this code with the setting off and of the code before it (6d5445b) are identical except the
+timing fields (search and indexing times, date).
+
+**How it was chosen (half a only).** `monomem bench ... --split a --passages`, keyword-only, 2026-11-17, development PC
+(other agents running). Two other designs were tried on half a and dropped there: fusing the two rankings by rank
+(equal-weight RRF, k = 60) lost about 4 points `R@5` on LoCoMo-10 sessions (92.0 to 87.6-88.1; rank-only scores are so
+close that the access boost reorders them), and ranking by passages alone lost 2.1 `Rall@5` on LongMemEval-S (84.4 to 82.3)
+and 0.6-0.8 on LoCoMo by turn. The 3-line window, stride 2 and 600 characters come from the round-2 retrieval probe and were
+not tuned; the 0.5 / 0.5 blend was set once. Soft-max pooling was not tried. Half a, setting off / on:
+
+| Half a (tuning) | R@5 | **Rall@5** | R@10 | Rall@10 | nDCG@10 | MRR | search p50 / p95 |
+|---|---|---|---|---|---|---|---|
+| LongMemEval-S session (231) | 97.0 / 97.8 | **84.4 / 85.3** | 99.1 / 99.1 | 91.8 / 91.8 | 91.1 / 91.9 | 92.1 / 93.2 | 4.9 / 9.7 to 16.2 / 49.3 ms |
+| LoCoMo-10 turn | 70.2 / 70.3 | **61.3 / 61.4** | 79.4 / 80.2 | 69.1 / 70.2 | 55.2 / 55.1 | 51.6 / 51.0 | 4.2 / 8.1 to 9.3 / 17.4 ms |
+| LoCoMo-10 session | 92.0 / 93.4 | **83.6 / 84.4** | 96.9 / 97.9 | 90.4 / 91.2 | 82.4 / 84.4 | 80.4 / 82.7 | 1.8 / 3.1 to 6.2 / 9.6 ms |
+
+**Held-out half b, run once with the design above** (no change after it):
+
+| Half b (held out) | R@5 | **Rall@5** | R@10 | Rall@10 | nDCG@10 | MRR | search p50 / p95 |
+|---|---|---|---|---|---|---|---|
+| LongMemEval-S session (239) | 97.5 / 97.5 | **87.4 / 86.2** | 98.7 / 98.7 | 92.5 / 93.3 | 91.2 / 91.2 | 91.9 / 92.2 | 5.9 / 14.0 to 12.8 / 40.2 ms |
+| LoCoMo-10 turn | 64.6 / 65.0 | **55.4 / 55.2** | 73.2 / 73.8 | 62.4 / 62.9 | 50.6 / 49.8 | 48.4 / 46.9 | 3.8 / 6.6 to 8.1 / 13.6 ms |
+| LoCoMo-10 session | 89.8 / 90.6 | **81.3 / 81.2** | 95.0 / 94.6 | 87.5 / 87.5 | 79.5 / 81.2 | 77.8 / 80.3 | 1.9 / 2.9 to 5.7 / 8.6 ms |
+
+Half a gained on every dataset; half b mostly did not, so most of the half-a gain did not carry over. Half b of
+LongMemEval-S has 239 questions, so 1.2 points is about 3 questions: small, but in the wrong direction on the headline
+strict number.
+
+**Size and speed at 10,000 notes** (`monomem bench --scale 10k --passages`, one run, 2026-11-17, plain store; the setting is
+switched on after the usual timings, the passage index built, and the same searches timed again): 76,433 passages built in
+0.41 s; database 30.2 to 41.4 MB (**+37 %**, the round-1 estimate was +38 %). Keyword search, 2 common words, p50 / p95:
+11.0 / 16.3 ms off, **136.6 / 246.8 ms** on (the passage query scores every passage holding a common word); 2 realistic words
+(each in under 5 % of notes): 1.4 / 7.2 ms off, 1.2 / 86.0 ms on. The synthetic notes have no line breaks, so they are cut by
+characters; real chat-shaped notes are cut by lines.
 
 ### Results, 2026-11-09 (expert round 4)
 

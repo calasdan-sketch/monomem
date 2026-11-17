@@ -32,6 +32,7 @@ Pick by what you want to do. Everything here is also linked from the main [READM
 | what the safety scan catches | [memory-linter.md](./memory-linter.md) |
 | what changed while I was away | [change-feed.md](./change-feed.md) |
 | what is measured, and what is not | [BENCHMARK.md](./BENCHMARK.md) |
+| whether to switch on passage pooling (off by default) | [BENCHMARK.md](./BENCHMARK.md#passage-pooling-opt-in-measured-2026-11-17) |
 | what it costs in tokens and disk | [footprint.md](./footprint.md) |
 | what it does not protect against | [SECURITY.md](../SECURITY.md) |
 

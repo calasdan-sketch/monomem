@@ -136,12 +136,14 @@ recorded switch time, so turning `enforce` on that way would hide old notes at o
 monomem settings                            # show them (same as: monomem settings get)
 monomem settings set confirm-mode label     # off | label | enforce
 monomem settings set confirm-days 30        # 1 to 3650
+monomem settings set passage_pooling on     # on | off (off by default)
 ```
 
 | Setting | Default | Meaning |
 |---|---|---|
 | `confirm-mode` | `label` | Re-confirmation expiry. `off`: no note expires. `label`: a note nobody changed or confirmed in `confirm-days` is labelled `[expired - ...]` on reads and search, nothing else. `enforce`: also kept out of session start and ranked slightly lower. Changing the mode restarts every note's clock from that moment. See [search.md](./search.md#re-confirmation-expiry) |
 | `confirm-days` | `30` | The re-confirmation period in days |
+| `passage_pooling` | `off` | `on`: keyword search also ranks long notes by their best passage (`monomem settings set passage_pooling on`). Builds a passage index in the database (about +37 % file size at 10,000 notes) and makes searches with common words slower. Not available on an encrypted store. Measured gain is small and not on every dataset: see [BENCHMARK.md](./BENCHMARK.md#passage-pooling-opt-in-measured-2026-11-17) |
 
 Lowering protection (a lower mode, or more days while expiry is on) asks you to type yes in a terminal. Raising it works
 from a script. Each change is written to the audit log.
