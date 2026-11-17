@@ -48,7 +48,7 @@ describe("1-2: a missing key file", () => {
     const dir = sealedWithoutKey();
     const kp = keyPath(dir);
     const show = run(dir, ["show", "1"]);
-    assert.ok((show.stdout + show.stderr).trim().startsWith(`the key file ${kp} is missing`), show.stdout + show.stderr);
+    assert.ok((show.stdout + show.stderr).trim().startsWith(`Error: The key file ${kp} is missing`), show.stdout + show.stderr);
     const doc = run(dir, ["doctor"]);
     assert.notEqual(doc.status, 0);
     assert.ok(doc.stdout.includes(`Fix: Restore the key file ${kp} from your backup`), doc.stdout);
