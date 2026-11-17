@@ -12,7 +12,12 @@ for (const k of Object.keys(process.env)) {
   if (k === "MONOMEM_TEST_TIME_SCALE") continue;
   if (k.startsWith("MONOMEM_") || k.startsWith("ONEMEMORY_") || k.startsWith("CLAUDE_BRIDGE_")) delete process.env[k];
 }
-const home = mkdtempSync(join(tmpdir(), "monomem-test-home-"));
+// Each test process gets its own temp root. Test files run in parallel processes, and a shared os.tmpdir() let one
+// file count another's monomem-drill-* copies (r2-fixsec drill flake) and collected folders tests forgot to remove.
+// os.tmpdir() reads these variables on every call; child processes inherit them. Removed on exit with the rest.
+const tmpRoot = mkdtempSync(join(tmpdir(), "monomem-test-tmp-"));
+process.env.TMPDIR = process.env.TMP = process.env.TEMP = tmpRoot;
+const home = mkdtempSync(join(tmpRoot, "monomem-test-home-"));
 process.env.MONOMEM_HOME = home;
 // setup finds app configs through these (Claude Desktop under APPDATA, its Microsoft Store build under LOCALAPPDATA),
 // and many tests spawn with { ...process.env, HOME: tmp }: without this they read, and could edit, the real files.
@@ -37,7 +42,7 @@ process.env.MONOMEM_RECALL_TIMEOUT_MS = "30000";
 process.env.MONOMEM_SCAN_CACHE_SECONDS = "0"; // the dashboard scans are cached for a minute in real use; tests want fresh answers
 process.on("exit", () => {
   try {
-    rmSync(home, { recursive: true, force: true });
+    rmSync(tmpRoot, { recursive: true, force: true });
   } catch {
     /* best effort */
   }
