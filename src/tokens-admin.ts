@@ -6,9 +6,9 @@
 import { randomBytes } from "node:crypto";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { API_PORT, BIND_HOST, DATA_DIR, MCP_HTTP_PORT, MIN_TOKEN_LENGTH, resolveTokens, sha256Hex, tokenId, type Scope } from "./config.js";
+import { API_PORT, BIND_HOST, DATA_DIR, MCP_HTTP_PORT, MIN_TOKEN_LENGTH, resolveTokens, sha256Hex, tokenId, type Scope, type TokenEntry } from "./config.js";
 import { audit } from "./security.js";
-import { DEFAULT_SENSITIVITY, SENSITIVITY_HELP, parseSensitivity, type Sensitivity } from "./sensitivity.js";
+import { DEFAULT_SENSITIVITY, SENSITIVITY_HELP, parseSensitivity, sensitivityRank, type Sensitivity } from "./sensitivity.js";
 
 export class TokenAdminError extends Error {}
 
@@ -56,7 +56,12 @@ function readRaw(): RawEntry[] {
  * dashboard doing the same, or one change is lost. A lock directory (like the audit-log rotation uses) serialises them.
  */
 function withLock<T>(fn: () => T): T {
-  const lock = tokensPath() + ".lock";
+  return withFileLock(tokensPath(), fn);
+}
+
+/** The same lock for another file in the data folder (oauth.json uses it; take oauth.json's lock before tokens.json's). */
+export function withFileLock<T>(file: string, fn: () => T): T {
+  const lock = file + ".lock";
   try {
     mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
   } catch (e) {
@@ -245,6 +250,55 @@ export function plainKeyCount(): number {
   } catch {
     return 0;
   }
+}
+
+/**
+ * OAuth (src/oauth): put the key of one grant into tokens.json, replacing the entry with the same label, or remove it
+ * (entry null). Only the key's hash is written. Returns false when `mustExist` is set and the entry is gone (the person
+ * removed the app with `monomem keys remove` or the dashboard), so a refresh cannot bring a removed app back.
+ * Returns the key as the servers will see it (null when removed or refused). The key only works on /mcp (audience),
+ * and a namespace or a stricter ceiling someone set on the entry by hand survives the refresh.
+ */
+export function setOAuthKey(label: string, entry: { token_sha256: string; scope: "read" | "write"; expires_at: string } | null, mustExist = false): TokenEntry | null {
+  return withLock(() => {
+    const entries = readRaw();
+    const i = entries.findIndex((e) => e?.label === label);
+    if (mustExist && i < 0) return null;
+    if (!entry) {
+      if (i >= 0) writeRaw(entries.filter((_, j) => j !== i), { keepBackup: false });
+      return null;
+    }
+    const old = entries[i];
+    const oldCeiling = parseSensitivity(old?.max_sensitivity);
+    const ceiling = oldCeiling && sensitivityRank(oldCeiling) < sensitivityRank(DEFAULT_SENSITIVITY) ? oldCeiling : DEFAULT_SENSITIVITY;
+    const ns = typeof old?.namespace === "string" && old.namespace.trim() ? old.namespace.trim() : undefined;
+    const key: TokenEntry = { token_sha256: entry.token_sha256, scope: entry.scope, label, ...(ns ? { namespace: ns } : {}), max_sensitivity: ceiling, reads_outside: true, expires_at: entry.expires_at, audience: "mcp" };
+    const row: RawEntry = { ...key, created_at: old?.created_at ?? new Date().toISOString() };
+    writeRaw(i < 0 ? [...entries, row] : entries.map((e, j) => (j === i ? row : e)));
+    return key;
+  });
+}
+
+/** The OAuth keys in tokens.json (label and expiry only), for sweeping dead ones. */
+export function oauthKeyRows(): Array<{ label: string; expires_at: string | undefined }> {
+  try {
+    return readRaw()
+      .filter((e) => typeof e?.label === "string" && e.label.startsWith("oauth:"))
+      .map((e) => ({ label: e.label, expires_at: typeof e.expires_at === "string" ? e.expires_at : undefined }));
+  } catch {
+    return [];
+  }
+}
+
+/** Labels already used by any key (tokens.json, MONOMEM_TOKENS, the main key), lower case. */
+export function takenLabels(): Set<string> {
+  let file: RawEntry[] = [];
+  try {
+    file = readRaw();
+  } catch {
+    /* a broken file: resolveTokens reports it */
+  }
+  return new Set([...file.map((e) => String(e?.label ?? "").toLowerCase()), ...resolveTokens().map((t) => (t.label ?? "").toLowerCase()), "primary"]);
 }
 
 export function removeApp(label: string, by = "cli"): boolean {
