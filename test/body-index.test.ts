@@ -437,7 +437,7 @@ describe("final3: the size cap holds after the build, and a refused build lets g
         for (const w of ["one", "two"]) s.create({ title: `t ${w}`, body: `a ${w} heron`, tags: [] });
         assert.equal(ids(s, "heron").length, 2);
         assert.equal(s.bodyIndexInfo().state, "ready");
-        assert.equal(tempTriggers(s), 3);
+        assert.equal(tempTriggers(s), 4, "three write triggers and the catch-up (redo) trigger");
         for (const w of ["three", "four"]) s.create({ title: `t ${w}`, body: `a ${w} heron`, tags: [] });
         assert.deepEqual(ids(s, "heron"), []);
         assert.equal(s.bodyIndexInfo().state, "too large");
@@ -473,7 +473,7 @@ describe("final3: the size cap holds after the build, and a refused build lets g
       try {
         for (const w of ["one", "two"]) s.create({ title: `t ${w}`, body: `a ${w} plover`, tags: [] });
         assert.equal(ids(s, "plover").length, 2);
-        assert.equal(tempTriggers(s), 3);
+        assert.equal(tempTriggers(s), 4, "three write triggers and the catch-up (redo) trigger");
         assert.throws(() =>
           s.transaction(() => {
             for (const w of ["three", "four"]) s.create({ title: `t ${w}`, body: `a ${w} plover`, tags: [] });
@@ -481,7 +481,7 @@ describe("final3: the size cap holds after the build, and a refused build lets g
             throw new Error("boom");
           })
         );
-        assert.equal(tempTriggers(s), 3, "the rollback brought the triggers back");
+        assert.equal(tempTriggers(s), 4, "the rollback brought the triggers back");
         assert.deepEqual(ids(s, "plover"), []);
         assert.equal(s.bodyIndexInfo().state, "too large");
         assert.equal(tempTriggers(s), 0, "the next search outside the transaction lets go of the triggers");
