@@ -9,11 +9,11 @@
 tokens). A client that loads every tool's schema up front pays this on each request, so the other tools are operator
 tooling you switch on yourself:
 
-- `MONOMEM_TOOLS=all` over stdio: 13 tools, 8,308 characters (about 2,080 tokens). `memory_held`, `memory_rollback`
+- `MONOMEM_TOOLS=all` over stdio: 13 tools, 8,576 characters (about 2,140 tokens). `memory_held`, `memory_rollback`
   and `memory_trust` stay hidden on a local connection unless you set `MONOMEM_STDIO_ADMIN_TOOLS=1`, because a local
   connection has no app key and nobody deliberately gave the agent those powers.
-- With an admin app key over HTTP, or with `MONOMEM_STDIO_ADMIN_TOOLS=1`: all 16 tools, 10,879 characters (about
-  2,720 tokens). The 37 tools of 1.5 were 64,501 characters.
+- With an admin app key over HTTP, or with `MONOMEM_STDIO_ADMIN_TOOLS=1`: all 16 tools, 11,207 characters (about
+  2,800 tokens). The 37 tools of 1.5 were 64,501 characters.
 - Or name only the ones you want: `MONOMEM_TOOLS=memory_sessions,memory_held`.
 
 These sizes are measured over stdio and checked by a test, so this page fails the build if they drift. See
