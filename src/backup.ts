@@ -130,7 +130,7 @@ function finishBackup(b: { dir: string; db: string; dropPart: () => void }, dbPa
       "Monomem backup",
       `made: ${new Date().toISOString()}`,
       "",
-      "state.db  a complete copy of the database (restore: stop the server, put it at <data dir>/state.db,",
+      "state.db  a complete copy of the database (restore: stop the server with monomem stop, put it at <data dir>/state.db,",
       "          delete any state.db-wal / state.db-shm beside it, start the server).",
       key
         ? ".key      the at-rest encryption key (copied because --include-key was given). Without it the encrypted note bodies\n" +

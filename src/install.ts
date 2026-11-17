@@ -10,15 +10,6 @@ import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFi
 import { dirname, join, relative, resolve } from "node:path";
 import { swapIn } from "./update.js";
 
-/**
- * `monomem` with no command: in a terminal (stdin and stdout both a TTY) the help; launched with no terminal (the Start
- * menu entry, Explorer via monomem.cmd's double-click check, Finder, a desktop launcher) the dashboard. The Welcome screen
- * for a first run hooks in at `open`.
- */
-export function defaultCommand(stdinTTY: boolean, stdoutTTY: boolean): "help" | "open" {
-  return stdinTTY && stdoutTTY ? "help" : "open";
-}
-
 export interface PlaceEnv {
   platform: NodeJS.Platform;
   home: string;

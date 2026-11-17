@@ -10,7 +10,7 @@ import { actorStore, setProcessWriter } from "./actor.js";
 import type { RestatedNote } from "./search-service.js";
 import { type Sensitivity, mayEmbed, DEFAULT_SENSITIVITY, SENSITIVITY_HELP, SENSITIVITY_LEVELS, parseSensitivity } from "./sensitivity.js";
 // monomem CLI: one command to run, check, or wire up the bridge.
-//   monomem start     start the API + dashboard AND MCP-over-HTTP (no command: help in a terminal, the dashboard otherwise)
+//   monomem start     start the API + dashboard AND MCP-over-HTTP (no command: help)
 //   monomem mcp       start the MCP server over stdio (for Claude Code/Cursor/...)
 //   monomem doctor    check Node, database, and token
 //   monomem init      print the config snippet to wire it into your agent
@@ -22,7 +22,7 @@ const COMMANDS = [
   "consolidate", "rebuild-edges", "relevant", "search", "token", "changes", "backup", "runner-status", "watch", "export", "import", "trust",
   "quarantine", "approve-first", "access", "flood", "resume", "decay", "archive", "restore", "delete", "quality", "conflicts", "facts", "fact",
   "encrypt", "meter", "receipts", "why", "never-show", "supersede", "history", "pin", "unpin", "rollback", "bench", "drill", "health", "audit", "verify-receipt",
-  "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet", "confirm", "review", "taint", "config", "service", "stale", "project-rules", "update",
+  "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet", "confirm", "review", "taint", "config", "service", "stale", "project-rules", "update", "stop",
   "help", "--help", "-h", "--version", "-v", "version",
   "check", "activity", "tidy", "keys", "settings", "replace",
 ];
@@ -2020,9 +2020,9 @@ async function main(): Promise<void> {
       if (note) console.error(note);
     }
   }
-  // No command: a terminal gets the help; a launch with no terminal (Start menu, Explorer, Finder) opens the dashboard
-  // (the Welcome screen hooks in there, in openCmd).
-  const cmd = process.argv[2] || (await import("./install.js")).defaultCommand(!!process.stdin.isTTY, !!process.stdout.isTTY);
+  // No command: the help, terminal or not (an agent, a pipe, cron). The launchers (Start menu, Explorer via monomem.cmd,
+  // Finder, .desktop) pass `open` themselves; the Welcome screen hooks in there, in openCmd.
+  const cmd = process.argv[2] || "help";
   // --ns is short for --namespace (as in ls) for these commands, each of which parses its own flags.
   if (["relevant", "search", "export", "quality", "conflicts", "facts", "digest", "pii", "decay"].includes(cmd)) {
     process.argv = process.argv.map((a, i) => (i < 3 ? a : a === "--ns" ? "--namespace" : a.startsWith("--ns=") ? "--namespace=" + a.slice(5) : a));
@@ -2308,6 +2308,9 @@ async function main(): Promise<void> {
     }
     case "open":
       await (await import("./cli/connect.js")).openCmd(SELF_CLI);
+      break;
+    case "stop":
+      await (await import("./cli/stop.js")).stopCmd();
       break;
     case "update":
       process.exitCode = await (await import("./update.js")).updateCmd(process.argv.slice(3));

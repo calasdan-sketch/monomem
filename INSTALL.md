@@ -68,7 +68,8 @@ yes to: on Windows your per-user PATH (the `Path` value under `HKCU\Environment`
 terminal afterwards), on Mac/Linux one line marked `# added by monomem setup` in your shell's startup file (`~/.zshrc`,
 `~/.bashrc`, `~/.bash_profile` on a Mac, fish's `config.fish`, else `~/.profile`). `monomem setup --undo` and
 `monomem uninstall` take out exactly that entry. `--yes` alone leaves PATH alone (add `--path`); `--no-path` skips it. Running `monomem` with no command
-in a terminal shows the help; double-clicking `monomem.cmd` or using the Monomem entry opens your notes.
+shows the help; double-clicking `monomem.cmd` or using the Monomem entry opens your notes (it starts Monomem in
+the background, with no window: `monomem stop` ends it).
 
 **Update.** `monomem update` downloads the newest release for your computer, checks its SHA-256 against the release's
 `SHA256SUMS`, swaps it into the same folder (apps that are open keep working), upgrades your database and restarts the

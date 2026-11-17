@@ -123,6 +123,8 @@ export async function openCmd(cliPath: string): Promise<void> {
     const self = selfCommand(["start", "--log"], { ...selfFacts(), cliPath });
     const child = spawn(self.command, self.args, { detached: true, stdio: "ignore", windowsHide: true }); // no terminal: output goes to server.log
     child.unref();
+    const { DB_PATH } = await import("../config.js");
+    if (child.pid) (await import("./stop.js")).recordServerPid(DB_PATH, child.pid, API_PORT); // for `monomem stop`
     for (let i = 0; i < 40 && !(await up()); i++) await new Promise((r) => setTimeout(r, 250));
     if (!(await up())) {
       console.error(`Monomem did not start. Run  monomem check --setup  to see why, or start it yourself with  monomem start  and look at what it prints.`);
