@@ -4,16 +4,16 @@
 
 **Seven tools are shown by default:** `memory_save`, `memory_search`, `memory_read`, `memory_list`,
 `memory_archive`, `memory_replace` and `memory_catch_up`. Over a local (stdio) connection, which is what
-`monomem setup` connects, their schemas are 5,678 characters in `tools/list`: about 1,420 tokens, estimated at
+`monomem setup` connects, their schemas are 6,160 characters in `tools/list`: about 1,540 tokens, estimated at
 4 characters a token, not counted with a tokenizer. The nine default tools of 1.5 were 21,114 characters (about 5,280
 tokens). A client that loads every tool's schema up front pays this on each request, so the other tools are operator
 tooling you switch on yourself:
 
-- `MONOMEM_TOOLS=all` over stdio: 13 tools, 8,576 characters (about 2,140 tokens). `memory_held`, `memory_rollback`
+- `MONOMEM_TOOLS=all` over stdio: 13 tools, 9,058 characters (about 2,260 tokens). `memory_held`, `memory_rollback`
   and `memory_trust` stay hidden on a local connection unless you set `MONOMEM_STDIO_ADMIN_TOOLS=1`, because a local
   connection has no app key and nobody deliberately gave the agent those powers.
-- With an admin app key over HTTP, or with `MONOMEM_STDIO_ADMIN_TOOLS=1`: all 16 tools, 11,207 characters (about
-  2,800 tokens). The 37 tools of 1.5 were 64,501 characters.
+- With an admin app key over HTTP, or with `MONOMEM_STDIO_ADMIN_TOOLS=1`: all 16 tools, 11,689 characters (about
+  2,920 tokens). The 37 tools of 1.5 were 64,501 characters.
 - Or name only the ones you want: `MONOMEM_TOOLS=memory_sessions,memory_held`.
 
 These sizes are measured over stdio and checked by a test, so this page fails the build if they drift. See

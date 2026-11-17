@@ -42,9 +42,9 @@ schema v22), so going back to 1.5.0 needs no restore.
   with its own window.
 - **New tool and command names, and a much smaller tool list.** The 37 MCP tools of 1.5 are now 16 `memory_*` tools, and
   7 of them are shown by default (`memory_save`, `memory_search`, `memory_read`, `memory_list`, `memory_archive`,
-  `memory_replace`, `memory_catch_up`). Measured over a local stdio connection, the default 7 cost 5,678 characters of
-  tool descriptions (about 1,420 tokens; 1.5's 9 default tools were 21,114). `MONOMEM_TOOLS=all` over stdio is 13 tools,
-  8,576 characters; with an admin app key over HTTP (or `MONOMEM_STDIO_ADMIN_TOOLS=1`) all 16 tools are 11,207 characters
+  `memory_replace`, `memory_catch_up`). Measured over a local stdio connection, the default 7 cost 6,160 characters of
+  tool descriptions (about 1,540 tokens; 1.5's 9 default tools were 21,114). `MONOMEM_TOOLS=all` over stdio is 13 tools,
+  9,058 characters; with an admin app key over HTTP (or `MONOMEM_STDIO_ADMIN_TOOLS=1`) all 16 tools are 11,689 characters
   (1.5's 37 tools were 64,501). A test pins these numbers. The short `monomem help` lists about 30 commands, with new
   names: `check` (was `health`), `check --setup` (was `doctor`), `check --attacks` (was `drill`), `review held` (was
   `quarantine`), `review duplicates`, `review conflicts`, `review code`, `activity` (was `changes`), `tidy <job>` (was

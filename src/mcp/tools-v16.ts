@@ -67,6 +67,11 @@ function specs(nsActive: boolean): Spec[] {
           .array(z.object({ kind: z.enum(["test", "file", "command", "url", "output"]), ref: z.string() }))
           .optional()
           .describe("What you saw (a.ts:12, a test, a URL). [] = your inference."),
+        claims: z
+          .array(z.union([z.string(), z.object({ file: z.string(), contains: z.string().optional(), dependency: z.string().optional(), exists: z.literal(true).optional(), lines: z.string().optional() })]))
+          .optional()
+          .describe('New note: checks on repo files, e.g. {file,contains:"text"} or "a.ts:10-20".'),
+        derived_from: z.array(num()).optional().describe("Ids of the notes this one was built from."),
         detail,
       },
     },
@@ -320,6 +325,8 @@ export function registerV16Tools(c: McpCtx): void {
         if (!old) return errorResult(`${s.name} action "${action}" is not available on this connection`);
         const oldArgs: Record<string, unknown> = {};
         for (const [k, v] of Object.entries(rest)) if (v !== undefined) oldArgs[s.renames?.[k] ?? k] = v;
+        // `evidence` rides on the request context (below), never as a state_write argument it would report as ignored.
+        if (oldName === "state_write") delete oldArgs.evidence;
         if (PASS_ACTION.has(s.name)) oldArgs.action = action;
         if (oldName === "memory_supersede_undo" && oldArgs.id === undefined && Array.isArray(oldArgs.old_ids) && oldArgs.old_ids.length === 1) oldArgs.id = oldArgs.old_ids[0];
         if (oldName === "memory_supersede_undo" || oldName === "memory_supersede_confirm") delete oldArgs.old_ids;
