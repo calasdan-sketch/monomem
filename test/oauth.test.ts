@@ -13,9 +13,17 @@ import type { AddressInfo } from "node:net";
 import { Store } from "../src/store.js";
 import { createMcpHttpServer } from "../src/mcp-http.js";
 import { DATA_DIR, resolveTokens, type TokenEntry } from "../src/config.js";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { listApps, removeApp } from "../src/tokens-admin.js";
-import { clock, newPairCode, readState, setEnabled } from "../src/oauth/state.js";
-import { resetOAuthMemory } from "../src/oauth/routes.js";
+import { clock, newPairCode, readState, setEnabled, usePairCode, allowRedirectOrigin, PAIR_MAX_FAILS } from "../src/oauth/state.js";
+import { resetOAuthMemory, grantsForList } from "../src/oauth/routes.js";
+import { createApiServer } from "../src/api.js";
+import { auditPath, authenticateEntry } from "../src/security.js";
+import type { IncomingMessage } from "node:http";
+
+/** The `op` of every audit line so far. */
+const auditOps = (): string[] =>
+  existsSync(auditPath()) ? readFileSync(auditPath(), "utf8").split("\n").filter(Boolean).map((l) => (JSON.parse(l) as { op: string }).op) : [];
 
 const ADMIN = "a".repeat(64);
 const CLAUDE_CB = "https://claude.ai/api/mcp/auth_callback";
@@ -31,6 +39,8 @@ describe("OAuth front door", () => {
   let server: ReturnType<typeof createMcpHttpServer>;
   let base: string;
   let tokens: TokenEntry[];
+  let api: ReturnType<typeof createApiServer>;
+  let apiBase: string;
 
   before(async () => {
     store = new Store(":memory:");
@@ -38,9 +48,13 @@ describe("OAuth front door", () => {
     server = createMcpHttpServer(store, tokens);
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    api = createApiServer(store, tokens);
+    await new Promise<void>((r) => api.listen(0, "127.0.0.1", r));
+    apiBase = `http://127.0.0.1:${(api.address() as AddressInfo).port}`;
   });
   after(async () => {
     await new Promise<void>((r) => server.close(() => r()));
+    await new Promise<void>((r) => api.close(() => r()));
     store.close();
   });
   beforeEach(() => {
@@ -204,17 +218,28 @@ describe("OAuth front door", () => {
     assert.equal(bad.status, 400);
   });
 
-  test("no pairing code, no grant; a wrong code fails and five wrong codes burn the code", async () => {
+  test("no pairing code, no grant; five wrong codes end that consent request but do not burn the owner's code (S3)", async () => {
     on();
     const client_id = await register();
     const page = await consentPage(authorizeUrl(client_id, pkce().challenge));
     assert.equal((await consent(page, { scope: "read" })).status, 400);
     const code = newPairCode();
     for (let i = 0; i < 5; i++) assert.equal((await consent(page, { pair_code: "WRONG-CODE", scope: "read" })).status, 400);
+    assert.equal((await consent(page, { pair_code: code, scope: "read" })).status, 400, "that consent request is over");
     const page2 = await consentPage(authorizeUrl(client_id, pkce().challenge));
     const r = await consent(page2, { pair_code: code, scope: "read" });
-    assert.equal(r.status, 400, "the burned code no longer works");
-    assert.equal(readState().pair, undefined);
+    assert.equal(r.status, 302, "an outsider's wrong guesses did not lock the owner out");
+  });
+
+  test("the pairing code burns only after PAIR_MAX_FAILS wrong codes in total, and the burn is audited (S3, L6)", () => {
+    on();
+    newPairCode();
+    for (let i = 0; i < PAIR_MAX_FAILS - 1; i++) assert.equal(usePairCode("WRONG"), false);
+    assert.ok(readState().pair, "still alive one short of the limit");
+    assert.equal(usePairCode("WRONG"), false);
+    assert.equal(readState().pair, undefined, "burned");
+    assert.ok(PAIR_MAX_FAILS >= 500, "high enough that one caller cannot reach it within the 10-minute life under the rate limit");
+    assert.ok(auditOps().includes("oauth.pair.burn"));
   });
 
   test("CSRF: the consent POST needs the matching cookie and refuses a cross-site Origin", async () => {
@@ -253,6 +278,8 @@ describe("OAuth front door", () => {
     assert.notEqual(b1.refresh_token, t.refresh);
     assert.equal((await mcpList(b1.access_token)).status, 200);
     assert.equal((await mcpList(t.access)).status, 401, "the old access token stops working");
+    const t0 = Date.now();
+    clock.now = () => t0 + 11_000; // past the retry grace window
     const reuse = await token({ grant_type: "refresh_token", refresh_token: t.refresh, client_id: t.client_id });
     assert.equal(reuse.status, 400);
     assert.equal(((await reuse.json()) as { error: string }).error, "invalid_grant");
@@ -334,5 +361,139 @@ describe("OAuth front door", () => {
       const log = readFileSync(auditPath(), "utf8");
       for (const s of secrets) assert.ok(!log.includes(s), "a secret is in the audit log");
     }
+  });
+
+  // ---- r3 OAuth security review (.panel-160/r3-oauth-security.md) ----
+
+  test("S1: an unknown https redirect host is refused at registration unless allowed at a terminal; then the page warns", async () => {
+    on();
+    const bad = await fetch(`${base}/register`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ client_name: "Claude", redirect_uris: ["https://attacker.example/cb"] }) });
+    assert.equal(bad.status, 400);
+    assert.equal(((await bad.json()) as { error: string }).error, "invalid_redirect_uri");
+    allowRedirectOrigin("https://attacker.example");
+    const r = await fetch(`${base}/register`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ client_name: "Claude", redirect_uris: ["https://attacker.example/cb"] }) });
+    assert.equal(r.status, 201);
+    const cid = ((await r.json()) as { client_id: string }).client_id;
+    const { html } = await consentPage(authorizeUrl(cid, pkce().challenge, { redirect_uri: "https://attacker.example/cb" }));
+    assert.match(html, /NOT claude\.ai or chatgpt\.com/);
+    assert.match(html, /https:\/\/attacker\.example/, "the full origin is shown");
+    const known = await consentPage(authorizeUrl(await register(), pkce().challenge));
+    assert.doesNotMatch(known.html, /NOT claude\.ai/);
+    assert.match(known.html, /https:\/\/claude\.ai/);
+    assert.ok(auditOps().includes("oauth.allow-redirect"));
+  });
+
+  test("S1: a client registered for a host that is no longer allowed cannot start a sign-in", async () => {
+    on();
+    allowRedirectOrigin("https://attacker.example");
+    const cid = await register(["https://attacker.example/cb"]);
+    allowRedirectOrigin("https://attacker.example", true);
+    const r = await fetch(authorizeUrl(cid, pkce().challenge, { redirect_uri: "https://attacker.example/cb" }), { redirect: "manual" });
+    assert.equal(r.status, 400);
+    assert.equal(r.headers.get("location"), null);
+  });
+
+  test("S2: oauth off revokes every grant and its key; on again does not bring them back (L6 audited)", async () => {
+    on();
+    const t = await exchange();
+    setEnabled(false);
+    assert.equal(readState().grants.length, 0);
+    assert.equal(resolveTokens().some((e) => e.label.startsWith("oauth:")), false, "the key is gone from tokens.json");
+    on();
+    const r = await token({ grant_type: "refresh_token", refresh_token: t.refresh, client_id: t.client_id });
+    assert.equal(r.status, 400);
+    const ops = auditOps();
+    assert.ok(ops.includes("oauth.off") && ops.includes("oauth.on"));
+  });
+
+  test("L2: a parallel refresh retry with the same token does not kill the grant", async () => {
+    on();
+    const t = await exchange();
+    const [a, b] = await Promise.all([1, 2].map(() => token({ grant_type: "refresh_token", refresh_token: t.refresh, client_id: t.client_id })));
+    assert.deepEqual([a.status, b.status].sort(), [200, 400]);
+    const ok = a.status === 200 ? a : b;
+    assert.equal(readState().grants.length, 1, "the grant survives");
+    assert.equal((await mcpList(((await ok.json()) as { access_token: string }).access_token)).status, 200);
+  });
+
+  test("L3: a refresh keeps a namespace and a stricter ceiling set by hand", async () => {
+    on();
+    const t = await exchange();
+    const f = join(DATA_DIR, "tokens.json");
+    const rows = JSON.parse(readFileSync(f, "utf8")) as Array<Record<string, unknown>>;
+    writeFileSync(f, JSON.stringify(rows.map((r) => (String(r.label).startsWith("oauth:") ? { ...r, namespace: "work", max_sensitivity: "public" } : r))));
+    assert.equal((await token({ grant_type: "refresh_token", refresh_token: t.refresh, client_id: t.client_id })).status, 200);
+    const row = (JSON.parse(readFileSync(f, "utf8")) as Array<Record<string, unknown>>).find((r) => String(r.label).startsWith("oauth:"))!;
+    assert.equal(row.namespace, "work");
+    assert.equal(row.max_sensitivity, "public");
+    const live = tokens.find((e) => e.label === row.label);
+    assert.equal(live?.max_sensitivity, "public", "the live key too");
+    assert.equal(live?.namespace, "work");
+  });
+
+  test("L4: control and bidi characters are stripped from the client name", async () => {
+    on();
+    const [RLO, ESC, ZWSP] = [0x202e, 0x1b, 0x200b].map((c) => String.fromCharCode(c));
+    const cid = await register([CLAUDE_CB], `Cl${RLO}ia.edualc${ESC}[31mRED${ZWSP}`);
+    const { html } = await consentPage(authorizeUrl(cid, pkce().challenge));
+    for (const ch of [RLO, ESC, ZWSP]) assert.ok(!html.includes(ch));
+    assert.ok(readState().clients.every((c) => !/[\p{Cc}\p{Cf}]/u.test(c.client_name)));
+    assert.ok(grantsForList().every((g) => !/[\p{Cc}\p{Cf}]/u.test(g.client_name)));
+  });
+
+  test("L5: replaying a used code revokes the tokens issued from it (audited)", async () => {
+    on();
+    const c = await getCode();
+    const first = await token({ grant_type: "authorization_code", code: c.code, code_verifier: c.verifier, client_id: c.client_id, redirect_uri: CLAUDE_CB });
+    const b = (await first.json()) as { access_token: string };
+    const replay = await token({ grant_type: "authorization_code", code: c.code, code_verifier: c.verifier, client_id: c.client_id, redirect_uri: CLAUDE_CB });
+    assert.equal(replay.status, 400);
+    assert.equal((await mcpList(b.access_token)).status, 401);
+    assert.equal(readState().grants.length, 0);
+    assert.ok(auditOps().includes("oauth.code-replay"));
+  });
+
+  test("L6: registrations are audited", async () => {
+    on();
+    await register();
+    assert.ok(auditOps().includes("oauth.register"));
+  });
+
+  test("L7: dead grants, their keys and unused clients are swept on /register and /token", async () => {
+    on();
+    await exchange();
+    const t0 = Date.now();
+    clock.now = () => t0 + 31 * 24 * 3600_000; // the refresh token has expired, the client is weeks old
+    await fetch(`${base}/register`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ client_name: "x", redirect_uris: [CLAUDE_CB] }) });
+    assert.equal(readState().grants.length, 0);
+    assert.equal(listApps().some((a) => a.label.startsWith("oauth:")), false);
+    assert.equal(readState().clients.length, 1, "only the new client is left");
+    clock.now = () => Date.now();
+    await exchange();
+    removeApp(listApps().find((a) => a.label.startsWith("oauth:"))!.label);
+    await token({ grant_type: "refresh_token", refresh_token: "unrelated", client_id: "x" });
+    assert.equal(readState().grants.length, 0, "a grant whose key the person removed is swept");
+  });
+
+  test("L8: redirect_uri at /token is required only when it was sent to /authorize", async () => {
+    on();
+    const cid = await register();
+    const { verifier, challenge } = pkce();
+    const url = `${base}/authorize?` + form({ response_type: "code", client_id: cid, code_challenge: challenge, code_challenge_method: "S256", state: "s" });
+    const r = await consent(await consentPage(url), { pair_code: newPairCode(), scope: "read" });
+    const code = new URL(r.headers.get("location")!).searchParams.get("code")!;
+    assert.equal((await token({ grant_type: "authorization_code", code, code_verifier: verifier, client_id: cid })).status, 200);
+    const c = await getCode();
+    assert.equal((await token({ grant_type: "authorization_code", code: c.code, code_verifier: c.verifier, client_id: c.client_id })).status, 400, "sent to /authorize, so required");
+  });
+
+  test("L1: an OAuth key works only on /mcp, not on the REST port", async () => {
+    on();
+    const t = await exchange("write");
+    assert.equal((await mcpList(t.access)).status, 200);
+    assert.equal((await fetch(`${apiBase}/notes`, { headers: { Authorization: `Bearer ${t.access}` } })).status, 401);
+    const req = { headers: { authorization: `Bearer ${t.access}` } } as unknown as IncomingMessage;
+    assert.equal(authenticateEntry(req, tokens), null);
+    assert.ok(authenticateEntry(req, tokens, "mcp"));
   });
 });

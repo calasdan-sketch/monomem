@@ -93,7 +93,7 @@ export function createMcpHttpServer(
       return;
     }
 
-    const principal = authenticateEntry(req, tokens);
+    const principal = authenticateEntry(req, tokens, "mcp");
     if (!principal) {
       const ckey = clientKey(req);
       const proceed = await tarpit.failed(ckey);

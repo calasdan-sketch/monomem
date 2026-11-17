@@ -7,14 +7,20 @@ import { createHash, randomInt, timingSafeEqual } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR, isLoopback } from "../config.js";
-import { withFileLock } from "../tokens-admin.js";
+import { withFileLock, setOAuthKey } from "../tokens-admin.js";
+import { audit } from "../security.js";
 
 /** Tests move time forward without waiting. */
 export const clock = { now: (): number => Date.now() };
 
 export const PAIR_TTL_MS = 10 * 60_000;
-/** Wrong pairing codes before the code is burned (a new one needs `monomem oauth pair` again). */
-export const PAIR_MAX_FAILS = 5;
+/**
+ * Wrong pairing codes, in total, before the code is burned (a new one needs `monomem oauth pair` again). Each consent
+ * request also ends after 5 wrong codes (routes.ts), and the consent page is rate-limited (60 per minute per address), so
+ * one caller cannot reach this within the code's 10 minutes: an outsider guessing cannot lock the owner out. Guessing stays
+ * hopeless: 1000 tries against 31^10 codes is about 1 in 10^12.
+ */
+export const PAIR_MAX_FAILS = 1000;
 /** A client nobody approved within a day is dropped (claude.ai registers a new client on every fresh connection). */
 export const CLIENT_UNUSED_TTL_MS = 24 * 3600_000;
 export const MAX_CLIENTS = 50;
@@ -43,6 +49,8 @@ export interface OAuthState {
   /** Public https URL people reach the MCP port at (the OAuth issuer); the MCP resource is issuer + "/mcp". */
   issuer?: string;
   pair?: { sha256: string; exp: number; fails: number };
+  /** https origins a person allowed as redirect targets besides claude.ai, chatgpt.com and loopback. */
+  extra_redirect_origins?: string[];
   clients: OAuthClient[];
   grants: OAuthGrant[];
 }
@@ -67,7 +75,7 @@ export function readState(): OAuthState {
   let state = EMPTY();
   try {
     const raw = JSON.parse(readFileSync(f, "utf8")) as Partial<OAuthState>;
-    state = { enabled: raw.enabled === true, issuer: typeof raw.issuer === "string" ? raw.issuer : undefined, pair: raw.pair, clients: Array.isArray(raw.clients) ? raw.clients : [], grants: Array.isArray(raw.grants) ? raw.grants : [] };
+    state = { enabled: raw.enabled === true, issuer: typeof raw.issuer === "string" ? raw.issuer : undefined, pair: raw.pair, extra_redirect_origins: Array.isArray(raw.extra_redirect_origins) ? raw.extra_redirect_origins.filter((o): o is string => typeof o === "string") : [], clients: Array.isArray(raw.clients) ? raw.clients : [], grants: Array.isArray(raw.grants) ? raw.grants : [] };
   } catch {
     console.error(`[monomem] ${f} is not valid JSON, so OAuth stays off. Run: monomem oauth off, then monomem oauth on <url>`);
   }
@@ -116,14 +124,50 @@ export function normalizeIssuer(raw: string): string {
   return u.origin;
 }
 
+/**
+ * Switch OAuth on or off. Off ends every grant at once: its refresh token and its key (tokens.json) are removed, so
+ * turning OAuth on again later brings no old connection back. Both are audited.
+ */
 export function setEnabled(on: boolean, issuer?: string): OAuthState {
-  return updateState((s) => {
+  const out = updateState((s) => {
     const next: OAuthState = { ...s, enabled: on, ...(issuer !== undefined ? { issuer: normalizeIssuer(issuer) } : {}) };
     if (on && !next.issuer) throw new Error("Give the public https address first: monomem oauth on https://<your address>");
-    if (!on) delete next.pair;
-    return { next, result: next };
+    if (on) return { next, result: { state: next, ended: 0 } };
+    delete next.pair;
+    for (const g of s.grants) setOAuthKey(g.label, null);
+    return { next: { ...next, grants: [] }, result: { state: { ...next, grants: [] }, ended: s.grants.length } };
   });
+  audit({ op: on ? "oauth.on" : "oauth.off", label: "cli", kind: "oauth", detail: on ? out.state.issuer : `${out.ended} connected app(s) ended` });
+  return out.state;
 }
+
+/** claude.ai and ChatGPT send people back to these hosts; loopback (this computer) is also known. */
+export const KNOWN_REDIRECT_HOSTS = ["claude.ai", "chatgpt.com"];
+
+/**
+ * Let apps register a redirect to one more https origin (a person runs `monomem oauth allow-redirect <origin>` at a
+ * terminal). Without it, registration refuses every host but claude.ai, chatgpt.com and this computer, so an attacker
+ * cannot get a consent link that sends the approved code to their own site. `remove` takes it off the list again.
+ */
+export function allowRedirectOrigin(raw: string, remove = false): string {
+  let origin: string;
+  try {
+    const u = new URL(raw.trim());
+    if (u.protocol !== "https:") throw new Error("not https");
+    origin = u.origin;
+  } catch {
+    throw new Error(`"${raw}" is not an https address. Give it like https://app.example.com`);
+  }
+  updateState((s) => {
+    const list = (s.extra_redirect_origins ?? []).filter((o) => o !== origin);
+    return { next: { ...s, extra_redirect_origins: remove ? list : [...list, origin] }, result: undefined };
+  });
+  audit({ op: "oauth.allow-redirect", label: "cli", kind: "oauth", detail: `${remove ? "removed" : "added"} ${origin}` });
+  return origin;
+}
+
+/** An app chooses its own name: drop control and invisible/bidi characters so it cannot fake text on the page or terminal. */
+export const cleanClientName = (s: string): string => s.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, "").replace(/\s+/g, " ").trim();
 
 const PAIR_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // no 0/O, 1/I/L
 const normPair = (s: string): string => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
@@ -152,6 +196,7 @@ export function usePairCode(given: string): boolean {
     const fails = p.fails + 1;
     if (fails >= PAIR_MAX_FAILS) {
       const { pair: _burned, ...rest } = s;
+      audit({ op: "oauth.pair.burn", label: "(consent page)", kind: "oauth", detail: `${fails} wrong codes; make a new one with monomem oauth pair` });
       return { next: rest, result: false };
     }
     return { next: { ...s, pair: { ...p, fails } }, result: false };

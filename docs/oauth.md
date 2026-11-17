@@ -4,7 +4,8 @@
 with `monomem connect <app>` and never touch the internet. Read this page only if you want claude.ai on the web, the
 Claude mobile app, or ChatGPT to read and write your Monomem notes.
 
-This feature has not had its own outside security review yet. Treat it as a preview.
+This feature has had one dedicated security review (round 3), and its findings are fixed. It has not had an outside
+review. Treat it as a preview.
 
 ## What it does
 
@@ -14,6 +15,10 @@ dashboard port, and it adds no outside sign-in service.
 
 - **You approve every app with a pairing code.** The browser shows a Monomem page asking whether to connect the app.
   Allow works only with a code that `monomem oauth pair` prints in a terminal on your computer. No code, no access.
+- **It only sends people back to claude.ai, chatgpt.com or this computer.** An app that asks to return anywhere else is
+  refused at registration. Otherwise someone could send you a real Monomem consent link that hands the approval to
+  their own site. To allow one more site, run `monomem oauth allow-redirect https://<site>` at a terminal. The consent
+  page then warns in red that the address is not claude.ai or chatgpt.com, and shows the full address.
 - **Each approved app becomes an ordinary key.** It shows up in `monomem keys` and in the dashboard as
   `oauth:<app name>`, and `monomem keys remove "oauth:<app name>"` (or Remove in the dashboard) ends it.
 - **You pick read, or read and write. Never more.** An OAuth app can never delete notes, manage keys or approve held
@@ -23,7 +28,10 @@ dashboard port, and it adds no outside sign-in service.
 - **Keys are short-lived and stored as hashes.** The key works for one hour. The app renews it with a refresh
   token, which works once and is replaced each time. If an old refresh token is used again, Monomem assumes it was
   copied and ends that app's access. tokens.json and oauth.json hold only SHA-256 hashes, never the keys themselves.
-- **Every new grant, and every grant that ends, is written to the audit log** (the app's name, scope and reason only, never a key).
+- **The key works only on the MCP port.** It is refused on the REST API and the dashboard (`audience: "mcp"`).
+- **Written to the audit log:** OAuth on and off, every registration, every new grant, every grant that ends and why,
+  every wrong pairing code, a burned pairing code, a reused authorization code, and `allow-redirect` changes. Only app
+  names, addresses, scopes and reasons are written, never a key or a code.
 
 ## You need HTTPS that reaches this computer
 
@@ -40,8 +48,14 @@ Anyone on the internet can then reach the MCP port. Without a valid key they get
 down and rate-limited. The OAuth pages are reachable too, and they are guarded by the pairing code.
 
 Rate limits count per caller address. Through a tunnel every caller arrives from `127.0.0.1`, so all callers share one
-count, and a stranger hammering `/token` could slow down your own apps' renewals. Behind Cloudflare, set
-`MONOMEM_TRUST_CLOUDFLARE=1` so each caller is counted on its own address ([configuration.md](./configuration.md)).
+count. Behind Cloudflare, set `MONOMEM_TRUST_CLOUDFLARE=1` so each caller is counted on its own address
+([configuration.md](./configuration.md)). **Tailscale Funnel sends no header Monomem can trust**, so behind Funnel the
+counts stay shared, and a stranger can get in your way. These are nuisances, not ways in:
+- 10 registrations per 10 minutes: a stranger registering in a loop can stop claude.ai or ChatGPT from registering.
+- 60 consent-page requests per minute, and at most 200 open consent pages: a stranger can push your open page out
+  (start again from the app), or slow your renewals by hammering `/token`.
+- Wrong pairing codes: each consent page allows 5, and the code itself is only burned after 1000 wrong codes in total,
+  more than one caller can send within its 10 minutes under the limits above.
 
 ## Turn it on
 
@@ -56,9 +70,10 @@ count, and a stranger hammering `/token` could slow down your own apps' renewals
    `chatgpt.com`). Run `monomem oauth pair` in a terminal on your computer, type the code, choose read or read and write,
    and press Allow.
 
-`monomem oauth list` shows the connected apps. `monomem oauth off` switches the OAuth pages off (they answer "not
-found"); apps already connected stop within an hour, when their key expires and cannot be renewed. To end one at once:
-`monomem keys remove "oauth:<name>"`.
+`monomem oauth list` shows the connected apps. To end one: `monomem keys remove "oauth:<name>"`.
+`monomem oauth off` switches the OAuth pages off (they answer "not found") and ends every connected app at once: their
+keys are removed, and a running server notices within seconds. Switching OAuth on again does not bring them back; each
+app has to be approved again.
 
 ## Details
 
@@ -66,19 +81,28 @@ found"); apps already connected stop within an hour, when their key expires and 
 |---|---|---|
 | `GET /.well-known/oauth-protected-resource` and `.../oauth-protected-resource/mcp` | RFC 9728 | `resource` = `<your url>/mcp`, `authorization_servers` = `[<your url>]` |
 | `GET /.well-known/oauth-authorization-server` | RFC 8414 | PKCE `S256` only, client auth `none`, `iss` in responses (RFC 9207) |
-| `POST /register` | RFC 7591 | https redirect addresses, or http to `localhost` / `127.0.0.1`. At most 50 apps; one nobody approved within a day is dropped. 10 per 10 minutes per address |
+| `POST /register` | RFC 7591 | Redirect addresses on claude.ai, chatgpt.com, http to `localhost` / `127.0.0.1`, or an origin added with `allow-redirect`. App names lose control and invisible characters. At most 50 apps; one nobody approved within a day is dropped. 10 per 10 minutes per address |
 | `GET`/`POST /authorize` | OAuth 2.1 | Consent page. Unknown app or unregistered redirect address: an error page, never a redirect. Redirect addresses must match exactly (a `localhost` one with any port, RFC 8252). The form needs its cookie and same-origin; 60 per minute per address |
-| `POST /token` | OAuth 2.1 | Form-encoded. Codes work once, for 60 seconds, only with the matching PKCE verifier and redirect address. 30 per minute per address |
+| `POST /token` | OAuth 2.1 | Form-encoded. Codes work once, for 60 seconds, only with the matching PKCE verifier (and redirect address, when one was sent to `/authorize`). A code used twice ends the grant it made. A refresh token sent again within 10 seconds of its renewal (a retry) is refused without ending the grant; later, the grant ends. 30 per minute per address |
 | `POST /revoke` | RFC 7009 | Always `200` |
 | `401` on `/mcp` | RFC 6750 | Adds `WWW-Authenticate: Bearer resource_metadata="..."` while OAuth is on |
 
-- The key in tokens.json has `expires_at`, `reads_outside: true` and `max_sensitivity: "internal"`. The key also works on
-  the REST port (on loopback only, unless you exposed that too); the same scope and ceiling apply there.
-- Pairing codes: 10 characters, 10 minutes, one use. Five wrong codes burn it; make a new one.
+- The key in tokens.json has `expires_at`, `audience: "mcp"`, `reads_outside: true` and `max_sensitivity: "internal"`.
+  If you edit the entry by hand to add a `namespace` or a stricter ceiling (`public`), renewals keep it.
+- Pairing codes: 10 characters, 10 minutes, one use. A consent page ends after 5 wrong codes; the code is burned after
+  1000 wrong codes in total (then make a new one).
+- Dead things are cleaned up on every registration and token request: grants whose refresh token expired or whose key
+  you removed, expired `oauth:` keys no grant owns, and apps nobody approved within a day.
 - Authorization codes and open consent pages live in the server's memory: restarting the server cancels a sign-in
   in progress. Connected apps are not affected.
 - State: `<data dir>/oauth.json` (switch, public address, apps, refresh-token hashes). Delete it, and remove the
   `oauth:` keys, to remove every trace.
+
+## What the safeguards do not cover
+
+- The `yes` that `oauth on` and `allow-redirect` ask for, and the terminal check on `oauth pair`, stop an agent that runs
+  commands in a shell. They do not stop a program running as you that writes `oauth.json` or `tokens.json` directly. That
+  is the same as for every other Monomem key: anything that can write your data folder can give itself access.
 
 ## Not built (yet)
 

@@ -21,8 +21,11 @@ export interface ConsentView {
   requestId: string;
   csrf: string;
   clientName: string;
-  redirectHost: string;
+  /** Full origin the browser goes back to (scheme, host, port). */
+  redirectOrigin: string;
   loopback: boolean;
+  /** Not claude.ai, chatgpt.com or this computer: a person allowed it with `monomem oauth allow-redirect`. */
+  unknownHost: boolean;
   scope: "read" | "write";
   error?: string;
 }
@@ -35,7 +38,11 @@ export function consentHtml(v: ConsentView): string {
       (v.error ? `<p class="warn" role="alert">${esc(v.error)}</p>` : "") +
       `<div class="box"><p>An app calling itself <strong>${esc(v.clientName)}</strong> asks for access. ` +
       `(The app chose that name; Monomem cannot check it.)</p>` +
-      `<p>After you allow it, your browser goes back to <strong>${esc(v.redirectHost)}</strong>.</p>` +
+      `<p>After you allow it, your browser goes back to <strong>${esc(v.redirectOrigin)}</strong>.</p>` +
+      (v.unknownHost
+        ? `<p class="warn" role="alert"><strong>This address is NOT claude.ai or chatgpt.com.</strong> Someone allowed it with monomem oauth allow-redirect. ` +
+          `If you did not start this connection yourself from that site just now, press Deny: anyone who sent you this link would get access to your notes.</p>`
+        : "") +
       (v.loopback ? `<p class="warn">That address sends the answer only to a program on this computer. Allow it only if you started the connection here yourself.</p>` : "") +
       `</div>` +
       `<form method="post" action="/authorize">` +

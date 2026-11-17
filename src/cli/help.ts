@@ -103,7 +103,7 @@ export function usage(all = false): void {
       "            Open my notes in the browser with a one-time sign-in code (starts Monomem in the background if needed).",
       "  stop",
       "            Stop the background server that open started for this store (a terminal's monomem start: press Ctrl+C).",
-      "  oauth on <https url>|off|pair|list",
+      "  oauth on <https url>|off|pair|list|allow-redirect <https origin>",
       "            Off by default. Let claude.ai or ChatGPT connect over the internet: each approved app becomes a read or",
       "            write key (monomem keys remove ends it). Needs https to this computer; read docs/oauth.md first.",
       "  service install|status|uninstall [--print]",

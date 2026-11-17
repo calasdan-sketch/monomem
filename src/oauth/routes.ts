@@ -15,9 +15,8 @@ import { randomBytes, createHash, timingSafeEqual } from "node:crypto";
 import { readBody, PayloadTooLargeError } from "../http-common.js";
 import { RateLimiter, AuthTarpit, clientKey, audit } from "../security.js";
 import { isLoopback, type TokenEntry } from "../config.js";
-import { DEFAULT_SENSITIVITY } from "../sensitivity.js";
-import { setOAuthKey, takenLabels } from "../tokens-admin.js";
-import { clock, readState, updateState, usePairCode, sha256, CLIENT_UNUSED_TTL_MS, MAX_CLIENTS, type OAuthClient, type OAuthGrant, type OAuthState } from "./state.js";
+import { setOAuthKey, takenLabels, oauthKeyRows } from "../tokens-admin.js";
+import { clock, readState, updateState, usePairCode, sha256, cleanClientName, CLIENT_UNUSED_TTL_MS, MAX_CLIENTS, KNOWN_REDIRECT_HOSTS, type OAuthClient, type OAuthGrant, type OAuthState } from "./state.js";
 import { consentHtml, errorHtml } from "./consent.js";
 
 export const ACCESS_TTL_S = 3600;
@@ -25,14 +24,20 @@ const REFRESH_TTL_MS = 30 * 24 * 3600_000;
 const CODE_TTL_MS = 60_000;
 const REQUEST_TTL_MS = 10 * 60_000;
 const MAX_PENDING = 200;
+/** Wrong pairing codes one consent request may try before it ends (the code itself survives: state.ts PAIR_MAX_FAILS). */
+const REQUEST_MAX_FAILS = 5;
+/** A refresh token used again within this long after its rotation is a client retry, not a stolen copy (no revoke). */
+const REFRESH_GRACE_MS = 10_000;
+/** How long a used authorization code is remembered, so a replay can revoke what it issued. */
+const USED_CODE_TTL_MS = 10 * 60_000;
 const CSRF_COOKIE = "mm_oauth_csrf";
 
 const PRM_PATHS = ["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"];
 const AS_PATH = "/.well-known/oauth-authorization-server";
 const ROUTES = new Set([...PRM_PATHS, AS_PATH, "/register", "/authorize", "/token", "/revoke"]);
 
-interface Pending { client_id: string; redirect_uri: string; challenge: string; state: string | null; scope: "read" | "write"; csrf: string; exp: number; fails: number }
-interface Code { client_id: string; redirect_uri: string; challenge: string; scope: "read" | "write"; exp: number }
+interface Pending { client_id: string; redirect_uri: string; redirect_sent: boolean; challenge: string; state: string | null; scope: "read" | "write"; csrf: string; exp: number; fails: number }
+interface Code { client_id: string; redirect_uri: string; redirect_sent: boolean; challenge: string; scope: "read" | "write"; exp: number }
 
 const freshLimits = () => ({
   token: new RateLimiter(30, 60_000),
@@ -43,11 +48,13 @@ const freshLimits = () => ({
 let limits = freshLimits();
 const pending = new Map<string, Pending>(); // request id -> consent request waiting for the person
 const codes = new Map<string, Code>(); // sha256(code) -> authorization code (memory only, 60 s, single use)
+const usedCodes = new Map<string, { label: string; exp: number }>(); // sha256(code) -> the grant it issued (replay = revoke)
 
 /** Tests: forget codes, consent requests and rate-limit counters. */
 export function resetOAuthMemory(): void {
   pending.clear();
   codes.clear();
+  usedCodes.clear();
   limits = freshLimits();
 }
 
@@ -83,13 +90,22 @@ function redirect(res: ServerResponse, to: string, params: Record<string, string
 
 const loopbackHost = (h: string): boolean => h === "localhost" || isLoopback(h.replace(/^\[|\]$/g, ""));
 
-/** Registration: https, or http to this computer (RFC 8252). No fragment, no user name. */
-function redirectAllowed(raw: unknown): boolean {
+/** A known destination: claude.ai, chatgpt.com (https) or this computer. */
+function knownRedirect(u: URL): boolean {
+  return loopbackHost(u.hostname) || (u.protocol === "https:" && KNOWN_REDIRECT_HOSTS.includes(u.hostname));
+}
+
+/**
+ * Registration (and every sign-in): https, or http to this computer (RFC 8252). No fragment, no user name. Only to a
+ * known host, or an https origin a person allowed with `monomem oauth allow-redirect` (consent phishing guard).
+ */
+function redirectAllowed(raw: unknown, st: OAuthState): boolean {
   if (typeof raw !== "string" || raw.length > 512) return false;
   try {
     const u = new URL(raw);
     if (u.hash || u.username || u.password) return false;
-    return u.protocol === "https:" || (u.protocol === "http:" && loopbackHost(u.hostname));
+    if (!(u.protocol === "https:" || (u.protocol === "http:" && loopbackHost(u.hostname)))) return false;
+    return knownRedirect(u) || (u.protocol === "https:" && (st.extra_redirect_origins ?? []).includes(u.origin));
   } catch {
     return false;
   }
@@ -162,9 +178,9 @@ function mintAccess(tokens: TokenEntry[], label: string, scope: "read" | "write"
   const access = randomBytes(32).toString("hex");
   const refresh = randomBytes(32).toString("hex");
   const expires_at = new Date(clock.now() + ACCESS_TTL_S * 1000).toISOString();
-  const token_sha256 = sha256(access);
-  if (!setOAuthKey(label, { token_sha256, scope, expires_at }, mustExist)) return null;
-  setLive(tokens, label, { token_sha256, scope, label, max_sensitivity: DEFAULT_SENSITIVITY, reads_outside: true, expires_at });
+  const key = setOAuthKey(label, { token_sha256: sha256(access), scope, expires_at }, mustExist);
+  if (!key) return null;
+  setLive(tokens, label, key); // as written: a hand-set namespace or stricter ceiling stays
   return { access, refresh };
 }
 
@@ -177,6 +193,34 @@ function dropGrant(s: OAuthState, g: OAuthGrant, tokens: TokenEntry[], why: stri
   setLive(tokens, g.label, null);
   audit({ op: "oauth.revoke", label: g.label, kind: "token", detail: why });
   return { ...s, grants: s.grants.filter((x) => x !== g) };
+}
+
+/**
+ * Drop what is dead (inside updateState): grants whose refresh token expired, grants whose key the person removed,
+ * expired oauth: keys no grant owns, and clients nobody approved within a day. Runs on /register and /token.
+ */
+function sweep(s: OAuthState, tokens: TokenEntry[]): OAuthState {
+  const now = clock.now();
+  const rows = oauthKeyRows();
+  const hasKey = new Set(rows.map((r) => r.label));
+  let next = s;
+  for (const g of s.grants) {
+    if (now > g.refresh_exp) next = dropGrant(next, g, tokens, "refresh token expired");
+    else if (!hasKey.has(g.label)) {
+      audit({ op: "oauth.revoke", label: g.label, kind: "token", detail: "key removed by the person" });
+      next = { ...next, grants: next.grants.filter((x) => x !== g) };
+    }
+  }
+  const owned = new Set(next.grants.map((g) => g.label));
+  for (const r of rows) {
+    if (!owned.has(r.label) && r.expires_at !== undefined && !(Date.parse(r.expires_at) > now)) {
+      setOAuthKey(r.label, null);
+      setLive(tokens, r.label, null);
+    }
+  }
+  const used = new Set(next.grants.map((g) => g.client_id));
+  const clients = next.clients.filter((c) => used.has(c.client_id) || now - c.created_at < CLIENT_UNUSED_TTL_MS);
+  return clients.length === next.clients.length && next === s ? s : { ...next, clients };
 }
 
 async function form(req: IncomingMessage): Promise<URLSearchParams> {
@@ -200,7 +244,7 @@ export async function handleOAuth(req: IncomingMessage, res: ServerResponse, url
     if (PRM_PATHS.includes(url.pathname) || url.pathname === AS_PATH) {
       if (req.method !== "GET") json(res, 405, { error: "method not allowed" });
       else json(res, 200, metadata(issuer, url.pathname));
-    } else if (url.pathname === "/register" && req.method === "POST") await register(req, res);
+    } else if (url.pathname === "/register" && req.method === "POST") await register(req, res, tokens);
     else if (url.pathname === "/authorize" && req.method === "GET") authorizeGet(req, res, url, st);
     else if (url.pathname === "/authorize" && req.method === "POST") await authorizePost(req, res, st);
     else if (url.pathname === "/token" && req.method === "POST") await token(req, res, tokens, issuer);
@@ -216,7 +260,7 @@ export async function handleOAuth(req: IncomingMessage, res: ServerResponse, url
   return true;
 }
 
-async function register(req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function register(req: IncomingMessage, res: ServerResponse, tokens: TokenEntry[]): Promise<void> {
   if (!limits.register.check(clientKey(req))) return oauthError(res, 429, "too_many_requests");
   let body: Record<string, unknown>;
   try {
@@ -226,15 +270,17 @@ async function register(req: IncomingMessage, res: ServerResponse): Promise<void
     return oauthError(res, 400, "invalid_client_metadata", "body must be a JSON object");
   }
   const uris = body.redirect_uris;
-  if (!Array.isArray(uris) || uris.length < 1 || uris.length > 5 || !uris.every(redirectAllowed)) {
-    return oauthError(res, 400, "invalid_redirect_uri", "1 to 5 redirect URIs, each https or http to localhost, without a #fragment");
+  const st = readState();
+  if (!Array.isArray(uris) || uris.length < 1 || uris.length > 5 || !uris.every((u) => redirectAllowed(u, st))) {
+    return oauthError(res, 400, "invalid_redirect_uri", "1 to 5 redirect URIs, each to claude.ai, chatgpt.com or this computer (others: monomem oauth allow-redirect), without a #fragment");
   }
-  const name = typeof body.client_name === "string" && body.client_name.trim() ? body.client_name.trim().slice(0, 100) : "app";
+  const name = (typeof body.client_name === "string" ? cleanClientName(body.client_name).slice(0, 100) : "") || "app";
   const now = clock.now();
   const client: OAuthClient = { client_id: "mmc_" + randomBytes(16).toString("hex"), client_name: name, redirect_uris: uris as string[], created_at: now };
-  const ok = updateState((s) => {
+  const ok = updateState((s0) => {
+    const s = sweep(s0, tokens);
     const used = new Set(s.grants.map((g) => g.client_id));
-    let clients = s.clients.filter((c) => used.has(c.client_id) || now - c.created_at < CLIENT_UNUSED_TTL_MS);
+    let clients = s.clients;
     // Full: make room by dropping the oldest client nobody approved.
     while (clients.length >= MAX_CLIENTS) {
       const i = clients.findIndex((c) => !used.has(c.client_id));
@@ -244,6 +290,7 @@ async function register(req: IncomingMessage, res: ServerResponse): Promise<void
     return { next: { ...s, clients: [...clients, client] }, result: true };
   });
   if (!ok) return oauthError(res, 400, "invalid_client_metadata", "too many connected apps; remove one with monomem keys remove");
+  audit({ op: "oauth.register", label: "(internet)", kind: "oauth", detail: `${name} -> ${client.redirect_uris.map((u) => new URL(u).origin).join(" ")}` });
   json(res, 201, {
     client_id: client.client_id,
     client_id_issued_at: Math.floor(now / 1000),
@@ -261,7 +308,7 @@ function authorizeGet(req: IncomingMessage, res: ServerResponse, url: URL, st: O
   const client = st.clients.find((c) => c.client_id === q.get("client_id"));
   const to = q.get("redirect_uri") ?? (client?.redirect_uris.length === 1 ? client.redirect_uris[0] : null);
   // An unknown app or an address it did not register: show an error here, never send the browser anywhere.
-  if (!client || !to || !redirectMatches(client, to)) return htmlError(res, 400, "This sign-in link is not valid (unknown app, or an address the app did not register). Start again from the app.");
+  if (!client || !to || !redirectMatches(client, to) || !redirectAllowed(to, st)) return htmlError(res, 400, "This sign-in link is not valid (unknown app, or an address the app did not register). Start again from the app.");
   const state = q.get("state");
   const fail = (error: string, desc: string): void => redirect(res, to, { error, error_description: desc, state }, st.issuer!);
   if (q.get("response_type") !== "code") return fail("unsupported_response_type", "only response_type=code");
@@ -274,14 +321,14 @@ function authorizeGet(req: IncomingMessage, res: ServerResponse, url: URL, st: O
   const requestId = rand(24);
   const csrf = rand(32);
   const scope = (q.get("scope") ?? "").split(/\s+/).includes("write") ? "write" : "read";
-  pending.set(requestId, { client_id: client.client_id, redirect_uri: to, challenge, state, scope, csrf, exp: now + REQUEST_TTL_MS, fails: 0 });
+  pending.set(requestId, { client_id: client.client_id, redirect_uri: to, redirect_sent: q.get("redirect_uri") !== null, challenge, state, scope, csrf, exp: now + REQUEST_TTL_MS, fails: 0 });
   showConsent(res, requestId, pending.get(requestId)!, client, st.issuer!, 200);
 }
 
 function showConsent(res: ServerResponse, requestId: string, p: Pending, client: OAuthClient, issuer: string, status: number, error?: string): void {
   const to = new URL(p.redirect_uri);
   const secure = issuer.startsWith("https:") ? "; Secure" : "";
-  send(res, status, consentHtml({ requestId, csrf: p.csrf, clientName: client.client_name, redirectHost: to.host, loopback: loopbackHost(to.hostname), scope: p.scope, error }), "text/html; charset=utf-8", {
+  send(res, status, consentHtml({ requestId, csrf: p.csrf, clientName: cleanClientName(client.client_name), redirectOrigin: to.origin, loopback: loopbackHost(to.hostname), unknownHost: !knownRedirect(to), scope: p.scope, error }), "text/html; charset=utf-8", {
     ...HTML_HEADERS,
     // form-action must also allow the app's address: browsers apply it to the redirect after the form is sent.
     "Content-Security-Policy": `default-src 'none'; style-src 'unsafe-inline'; form-action 'self' ${to.origin}; frame-ancestors 'none'; base-uri 'none'`,
@@ -325,11 +372,12 @@ async function authorizePost(req: IncomingMessage, res: ServerResponse, st: OAut
   const pair = (f.get("pair_code") ?? "").trim();
   if (!pair) return showConsent(res, requestId, p, client, st.issuer!, 400, "Type the pairing code from monomem oauth pair.");
   if (!usePairCode(pair)) {
+    audit({ op: "oauth.pair.wrong", label: "(consent page)", kind: "oauth", detail: `for ${cleanClientName(client.client_name)}` });
     await limits.tarpit.failed(ckey);
     p.fails += 1;
-    if (p.fails >= 5) {
+    if (p.fails >= REQUEST_MAX_FAILS) {
       pending.delete(requestId);
-      return htmlError(res, 400, "Too many wrong codes. Start again from the app, and make a new code with monomem oauth pair.");
+      return htmlError(res, 400, "Too many wrong codes on this page. Start again from the app.");
     }
     return showConsent(res, requestId, p, client, st.issuer!, 400, "That code is wrong or expired. Make a new one with monomem oauth pair.");
   }
@@ -337,7 +385,7 @@ async function authorizePost(req: IncomingMessage, res: ServerResponse, st: OAut
   const code = rand(32);
   const now = clock.now();
   for (const [k, c] of codes) if (c.exp < now) codes.delete(k);
-  codes.set(sha256(code), { client_id: client.client_id, redirect_uri: p.redirect_uri, challenge: p.challenge, scope, exp: now + CODE_TTL_MS });
+  codes.set(sha256(code), { client_id: client.client_id, redirect_uri: p.redirect_uri, redirect_sent: p.redirect_sent, challenge: p.challenge, scope, exp: now + CODE_TTL_MS });
   redirect(res, p.redirect_uri, { code, state: p.state }, st.issuer!);
 }
 
@@ -346,12 +394,29 @@ async function token(req: IncomingMessage, res: ServerResponse, tokens: TokenEnt
   const f = await form(req);
   const clientId = f.get("client_id") ?? "";
   const grantType = f.get("grant_type");
+  updateState((s) => ({ next: sweep(s, tokens), result: undefined }));
   if (grantType === "authorization_code") {
     const key = sha256(f.get("code") ?? "");
     const c = codes.get(key);
     codes.delete(key); // single use, even when the rest of the request is wrong
+    const now0 = clock.now();
+    for (const [k, u] of usedCodes) if (u.exp < now0) usedCodes.delete(k);
+    const replayed = usedCodes.get(key);
+    if (!c && replayed) {
+      // A used code came back: whoever has it may hold what it issued too, so end that grant (RFC 6749 4.1.2).
+      usedCodes.delete(key);
+      updateState((s) => {
+        const g = s.grants.find((x) => x.label === replayed.label);
+        return { next: g ? dropGrant(s, g, tokens, "authorization code used twice") : s, result: undefined };
+      });
+      audit({ op: "oauth.code-replay", label: replayed.label, kind: "token", detail: "grant ended" });
+      return oauthError(res, 400, "invalid_grant");
+    }
     const verifier = f.get("code_verifier") ?? "";
-    if (!c || clock.now() > c.exp || c.client_id !== clientId || f.get("redirect_uri") !== c.redirect_uri) return oauthError(res, 400, "invalid_grant");
+    const sentRedirect = f.get("redirect_uri");
+    // OAuth 2.1: redirect_uri at /token only when it was sent to /authorize (then it must match); if sent anyway, it must match.
+    const redirectOk = c !== undefined && (c.redirect_sent ? sentRedirect === c.redirect_uri : sentRedirect === null || sentRedirect === c.redirect_uri);
+    if (!c || clock.now() > c.exp || c.client_id !== clientId || !redirectOk) return oauthError(res, 400, "invalid_grant");
     if (!/^[A-Za-z0-9._~-]{43,128}$/.test(verifier) || !sameSecret(b64sha(verifier), c.challenge)) return oauthError(res, 400, "invalid_grant", "PKCE check failed");
     if (!resourceOk(f.get("resource"), issuer)) return oauthError(res, 400, "invalid_target");
     const client = readState().clients.find((x) => x.client_id === clientId);
@@ -361,6 +426,7 @@ async function token(req: IncomingMessage, res: ServerResponse, tokens: TokenEnt
     const now = clock.now();
     const grant: OAuthGrant = { label, client_id: clientId, scope: c.scope, refresh_sha256: sha256(k.refresh), refresh_exp: now + REFRESH_TTL_MS, used_refresh: [], created_at: now, refreshed_at: now, redirect_host: new URL(c.redirect_uri).host };
     updateState((s) => ({ next: { ...s, grants: [...s.grants, grant] }, result: undefined }));
+    usedCodes.set(key, { label, exp: now + USED_CODE_TTL_MS });
     audit({ op: "oauth.grant", label, kind: "token", detail: `scope=${c.scope} to=${grant.redirect_host}` });
     return tokenReply(res, k, c.scope);
   }
@@ -369,7 +435,11 @@ async function token(req: IncomingMessage, res: ServerResponse, tokens: TokenEnt
     const out = updateState((s): { next: OAuthState; result: { access: string; refresh: string; scope: string } | null } => {
       const g = s.grants.find((x) => x.refresh_sha256 === h);
       if (!g) {
-        // An old refresh token coming back means someone kept a copy: end the whole grant (OAuth 2.1 section 4.3.1).
+        // The token rotated a moment ago: a client retrying a request (parallel, or after a timeout), not a copy. Refuse
+        // without ending the grant; the client keeps the tokens from the answer that got through.
+        const justRotated = s.grants.find((x) => x.used_refresh[x.used_refresh.length - 1] === h && clock.now() - x.refreshed_at <= REFRESH_GRACE_MS);
+        if (justRotated) return { next: s, result: null };
+        // An old refresh token coming back later means someone kept a copy: end the whole grant (OAuth 2.1 section 4.3.1).
         const reused = s.grants.find((x) => x.used_refresh.includes(h));
         return { next: reused ? dropGrant(s, reused, tokens, "refresh token reused") : s, result: null };
       }
@@ -408,5 +478,5 @@ async function revoke(req: IncomingMessage, res: ServerResponse, tokens: TokenEn
 /** For `monomem oauth list`. */
 export function grantsForList(): Array<OAuthGrant & { client_name: string }> {
   const s = readState();
-  return s.grants.map((g) => ({ ...g, client_name: s.clients.find((c) => c.client_id === g.client_id)?.client_name ?? "(gone)" }));
+  return s.grants.map((g) => ({ ...g, client_name: cleanClientName(s.clients.find((c) => c.client_id === g.client_id)?.client_name ?? "(gone)") }));
 }
