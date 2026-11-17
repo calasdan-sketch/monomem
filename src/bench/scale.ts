@@ -9,9 +9,13 @@ import { Store } from "../store.js";
 import { injectContext } from "../context-inject.js";
 import { runSearch } from "../search-service.js";
 import { percentile } from "./retrieval-metrics.js";
+import { spawnSync } from "node:child_process";
+import { selfCommand } from "../self.js";
 
 /** Release gate (SPEC-round2, release gate 5): 10k encrypted session start p50 under this. */
 export const GATE_MS = 50;
+/** Release gate (r3 performance A10): 10k encrypted `monomem hook user-prompt`, whole process, prompt recall on, p50 under this. */
+export const HOOK_GATE_MS = 250;
 const NAMESPACES = ["alpha", "beta", "gamma", "delta", "epsilon"];
 
 export interface Timing {
@@ -32,6 +36,11 @@ export interface ModeTimings {
   searchRealistic: Timing;
   /** store.create with default options (similarity edges, linter) on the full store. */
   write: Timing;
+  /**
+   * `monomem hook user-prompt` as Claude Code runs it: a new process (Node start-up included) on the full store, with
+   * MONOMEM_PROMPT_RECALL=on (the costlier path: the C17 prompt step runs too).
+   */
+  hookPrompt: Timing;
   buildMs: number;
   dbMb: number;
   /** Rows whose body is an encryption envelope (0 for plain). */
@@ -44,7 +53,7 @@ export interface ScaleReport {
   plain: ModeTimings;
   encrypted: ModeTimings;
   /** Only at 10,000 notes or more. */
-  gate: { thresholdMs: number; encryptedSessionStartP50: number; pass: boolean } | null;
+  gate: { thresholdMs: number; encryptedSessionStartP50: number; hookThresholdMs: number; encryptedHookPromptP50: number; pass: boolean } | null;
   node: string;
   date: string;
 }
@@ -99,7 +108,22 @@ async function timed(n: number, f: (i: number) => unknown): Promise<number[]> {
   return out;
 }
 
-async function runMode(notes: number, encrypted: boolean, o: { iterations: number; writes: number }): Promise<ModeTimings> {
+/** One `hook user-prompt` process per run, timed spawn to exit. Throws when the hook fails (a broken hook is not fast). */
+function hookRuns(db: string, runs: number): number[] {
+  const { command, args } = selfCommand(["hook", "user-prompt"]);
+  const env = { ...process.env, MONOMEM_DB_PATH: db, MONOMEM_PROMPT_RECALL: "on" };
+  const out: number[] = [];
+  for (let i = 0; i < runs; i++) {
+    const input = JSON.stringify({ session_id: `bench-${i}`, cwd: BENCH_HOME, hook_event_name: "UserPromptSubmit", prompt: `${word(rng(i))} deploy ${word(rng(i + 99))} config` });
+    const t = performance.now();
+    const r = spawnSync(command, args, { input, env, encoding: "utf8", timeout: 30_000 });
+    out.push(performance.now() - t);
+    if (r.status !== 0) throw new Error(`hook user-prompt exited ${r.status}: ${(r.stderr || String(r.error ?? "")).slice(0, 300)}`);
+  }
+  return out;
+}
+
+async function runMode(notes: number, encrypted: boolean, o: { iterations: number; writes: number; hookRuns: number }): Promise<ModeTimings> {
   const dir = join(BENCH_HOME, encrypted ? "scale-enc" : "scale-plain");
   mkdirSync(dir, { recursive: true });
   if (encrypted) ensureKey(dir); // the key file beside the DB is what turns encryption on
@@ -136,6 +160,7 @@ async function runMode(notes: number, encrypted: boolean, o: { iterations: numbe
         s.close();
       }
     });
+    const hookPrompt = timing(hookRuns(db, o.hookRuns));
     const hook = new Store(db, { bodyIndex: "off", auditLog });
     let session: number[];
     try {
@@ -158,7 +183,7 @@ async function runMode(notes: number, encrypted: boolean, o: { iterations: numbe
       const searchRealistic = await timed(o.iterations * 5, () => runSearch(store, `${pick()} ${pick()}`, { mode: "keyword", namespace: ns, limit: 10 }));
       const w = rng(9);
       const write = await timed(o.writes, () => store.create({ namespace: ns, title: words(w, 5), body: body(w) }));
-      return { sessionStart: timing(session), openAndSessionStart: timing(open), search: timing(search), searchRealistic: timing(searchRealistic), write: timing(write), buildMs, ...dbFacts(store, db), ...(bodyIndex ? { bodyIndex } : {}) };
+      return { sessionStart: timing(session), openAndSessionStart: timing(open), search: timing(search), searchRealistic: timing(searchRealistic), write: timing(write), hookPrompt, buildMs, ...dbFacts(store, db), ...(bodyIndex ? { bodyIndex } : {}) };
     } finally {
       store.close();
     }
@@ -179,16 +204,17 @@ function dbFacts(store: Store, db: string): { dbMb: number; sealedBodies: number
   }
 }
 
-export async function runScale(o: { notes: number; iterations?: number; writes?: number }): Promise<ScaleReport> {
-  const opts = { iterations: o.iterations ?? 30, writes: o.writes ?? 200 };
+export async function runScale(o: { notes: number; iterations?: number; writes?: number; hookRuns?: number }): Promise<ScaleReport> {
+  const opts = { iterations: o.iterations ?? 30, writes: o.writes ?? 200, hookRuns: o.hookRuns ?? 9 };
   const plain = await runMode(o.notes, false, opts);
   const encrypted = await runMode(o.notes, true, opts);
   const p50 = encrypted.sessionStart.p50;
+  const hookP50 = encrypted.hookPrompt.p50;
   return {
     notes: o.notes,
     plain,
     encrypted,
-    gate: o.notes >= 10000 ? { thresholdMs: GATE_MS, encryptedSessionStartP50: p50, pass: p50 < GATE_MS } : null,
+    gate: o.notes >= 10000 ? { thresholdMs: GATE_MS, encryptedSessionStartP50: p50, hookThresholdMs: HOOK_GATE_MS, encryptedHookPromptP50: hookP50, pass: p50 < GATE_MS && hookP50 < HOOK_GATE_MS } : null,
     node: process.version,
     date: new Date().toISOString(),
   };
@@ -200,7 +226,7 @@ export function renderScale(r: ScaleReport): string {
     `Synthetic store: ${r.notes} notes in ${NAMESPACES.length} namespaces, temp folder, ${r.node}. ms, p50 / p95.`,
     `${"".padEnd(34)}${"plain".padEnd(18)}encrypted`,
   ];
-  const row = (name: string, k: "sessionStart" | "openAndSessionStart" | "search" | "searchRealistic" | "write"): void => {
+  const row = (name: string, k: "sessionStart" | "openAndSessionStart" | "search" | "searchRealistic" | "write" | "hookPrompt"): void => {
     lines.push(`${name.padEnd(34)}${f(r.plain[k])} ${f(r.encrypted[k])}`);
   };
   row("session start (injectContext)", "sessionStart");
@@ -208,6 +234,7 @@ export function renderScale(r: ScaleReport): string {
   row("keyword search, 2 common words", "search");
   row("keyword search, 2 realistic words", "searchRealistic");
   row("write (create, edges on)", "write");
+  row("hook user-prompt, whole process", "hookPrompt");
   lines.push(`build: plain ${(r.plain.buildMs / 1000).toFixed(1)} s, encrypted ${(r.encrypted.buildMs / 1000).toFixed(1)} s; ` +
     `DB ${r.plain.dbMb} MB / ${r.encrypted.dbMb} MB`);
   const bi = r.encrypted.bodyIndex;
@@ -215,7 +242,7 @@ export function renderScale(r: ScaleReport): string {
   lines.push("(common: drawn from a small Zipf vocabulary, most match most notes; realistic: each word in under 5% of notes. Keyword search cost grows with the notes that match, not the store size.)");
   if (r.gate) {
     lines.push(`release gate: ${r.notes}-note encrypted session start p50 ${r.gate.encryptedSessionStartP50.toFixed(1)} ms ` +
-      `< ${r.gate.thresholdMs} ms: ${r.gate.pass ? "PASS" : "FAIL"}`);
+      `< ${r.gate.thresholdMs} ms; hook user-prompt p50 ${r.gate.encryptedHookPromptP50.toFixed(1)} ms < ${r.gate.hookThresholdMs} ms: ${r.gate.pass ? "PASS" : "FAIL"}`);
   }
   return lines.join("\n");
 }

@@ -12,10 +12,10 @@ test("parseScale reads 10k, 1k and plain numbers, rejects junk", () => {
 });
 
 test("runScale reports plain and encrypted timings, seals bodies, and only gates at 10k", async () => {
-  const r = await runScale({ notes: 120, iterations: 3, writes: 3 });
+  const r = await runScale({ notes: 120, iterations: 3, writes: 3, hookRuns: 2 });
   assert.equal(r.notes, 120);
   for (const mode of [r.plain, r.encrypted]) {
-    for (const k of ["sessionStart", "openAndSessionStart", "search", "searchRealistic", "write"] as const) {
+    for (const k of ["sessionStart", "openAndSessionStart", "search", "searchRealistic", "write", "hookPrompt"] as const) {
       assert.ok(mode[k].p50 > 0 && mode[k].p95 >= mode[k].p50, `${k}: ${JSON.stringify(mode[k])}`);
     }
   }
@@ -32,6 +32,8 @@ test("runScale reports plain and encrypted timings, seals bodies, and only gates
   const text = renderScale(r);
   assert.match(text, /keyword search, 2 common words/);
   assert.match(text, /keyword search, 2 realistic words/);
+  // r3 A10: the whole-process prompt hook is measured too (gated at 10k, with the session-start gate).
+  assert.match(text, /hook user-prompt, whole process/);
 });
 
 test("word() never returns undefined, even when the first draw is near 1 and the second near 0", async () => {
