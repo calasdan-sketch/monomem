@@ -2,7 +2,8 @@
 
 Monomem keeps to two places on its own: **its data folder** and **the config files of the apps you connect with
 `monomem setup`**. It never writes into your project folders unless you ask for it with a command that names the
-folder (`setup --project`, `export --dir`, `export --out`, `backup --out`, `sync --git`). It never writes a `CLAUDE.md` or
+folder (`setup --project`, `export --dir`, `export --out`, `backup --out`, `sync --git`), or `commit-trail on` run inside
+that repository. It never writes a `CLAUDE.md` or
 `AGENTS.md` unless you run `monomem project-rules` (1.5.0) in that repository at a terminal and type yes; then it writes
 only between its own `<!-- monomem:begin v1 -->` and `<!-- monomem:end -->` lines (delete those lines and what is between
 them to remove it). It runs no background service you did not start (`monomem service install` adds one; see below), and every queue it keeps has a size or retry limit. A running server makes one backup a day inside the data folder (`backups/`, below).
@@ -32,6 +33,10 @@ folder). `monomem check --setup` prints which one, and its size.
 | `capture.json`, `spaces.json` | by you | `uninstall --purge` |
 | `setup-history.json` | each `setup` that changed a file (what `--undo` / `uninstall` replay) | `uninstall --purge` |
 | `claude-import-held.json` | `import --claude` (files you chose to hold back) | `uninstall --purge` |
+| `claude-import-state.json` (beside the database) | `import --claude` and the optional Claude Code refresh (1.6.0): per imported file, the hash of its text and the ids of the notes it became, so the next run reads only changed files; no note text | `uninstall --purge` |
+| `oauth.json` | `monomem oauth on` (1.6.0, off by default): the switch, your public address, the connected apps and SHA-256 hashes of their refresh tokens, never a key (mode 0600). Approved apps also add `oauth:<name>` keys (hashed) to `tokens.json` | `monomem oauth off` ends every app; delete the file and remove the `oauth:` keys to remove every trace; `uninstall --purge` |
+| `app-detect.json` | a running server, once a day (1.6.0): which supported apps it found, which are new since the first check and which entries need repair; app names only | `uninstall --purge` |
+| `old-names-seen.json` | an old command name typed at a terminal (1.6.0): when each one last printed its "now called" line, so it prints at most once per 12 hours | `uninstall --purge` |
 | `.sync-work-*`, `sync-conflicts/<time>/` | `sync --git --encrypt` (work folder, removed after); the losing side of an edit conflict | `uninstall --purge` |
 | `sync-git-seen-<id>.json` | `sync --git`: the highest version synced per file, one per repository | `uninstall --purge` |
 | `sync.json`, `sync-status.json`, `sync-repo/` | `sync setup`: where to sync and whether the timer is on; the last sync's time and result; the local copy of a git address | `uninstall --purge` |
@@ -58,7 +63,13 @@ Your notes are not in the program folder; deleting it does not touch them.
 `setup` changes only the `monomem` entry and, if you agree, the Monomem hooks, in:
 `~/.claude.json`, `~/.claude/settings.json` (hooks), Claude Desktop's `claude_desktop_config.json`, `~/.cursor/mcp.json`,
 `~/.codex/config.toml` and `~/.codex/hooks.json`, `~/.gemini/settings.json`, `~/.config/muse/settings.json`, VS Code's
-user `mcp.json`, Zed's `settings.json`, and `./.mcp.json` only with `--project`. Before each change it saves
+user `mcp.json`, Zed's `settings.json`, and `./.mcp.json` only with `--project`. Since 1.6.0 also, for the apps it finds:
+`~/.cursor/hooks.json` (Cursor's start-of-session hook, only if you say yes to it), Windsurf's
+`~/.codeium/windsurf/mcp_config.json`, Devin's `~/.config/devin/mcp_config.json` (on Windows
+`%APPDATA%\devin\mcp_config.json`), `~/.kiro/settings/mcp.json`, Cline CLI's
+`~/.cline/data/settings/cline_mcp_settings.json` (or `CLINE_MCP_SETTINGS_PATH`), `~/.copilot/mcp-config.json`,
+Antigravity's `~/.gemini/config/mcp_config.json`, `~/.qwen/settings.json`, OpenCode's `~/.config/opencode/opencode.json`
+(or `.jsonc`) and Kilo Code's `~/.config/kilo/kilo.jsonc` (or `kilo.json`). [apps.md](./apps.md) lists each one. Before each change it saves
 `<file>.monomem-backup-<time>` beside the file; `setup --undo` and `uninstall` save `...-before-undo` when the file had
 changed since. `setup --action-guard` (opt-in) adds one more `PreToolUse` entry to `~/.claude/settings.json`
 ([action-guard.md](./action-guard.md)), recorded the same way.
@@ -86,6 +97,7 @@ leaves it running. On Windows the task is found by its `monomem-task.xml` in the
 | Command | Writes |
 |---|---|
 | `setup --project` | `./.mcp.json` |
+| `commit-trail on` (1.6.0, asks first) | `.git/hooks/prepare-commit-msg` in that repository, which adds a `Monomem-Notes: #12 #40` line to commit messages. Not written when the repository uses a hook manager (`core.hooksPath`). `monomem commit-trail off` removes it (only Monomem's own hook) |
 | `export --format md --dir <d>` / `export --format json --out <f>` | that folder / file |
 | `backup [--out <d>]` | `<d>`, default `~/monomem-backup-<time>`, or next to the data folder when `MONOMEM_HOME` is set (never the current folder: a backup and its key must not land in a repo) |
 | `uninstall --purge` | the final backup, `~/monomem-final-backup-<time>` (unless `--no-backup`) |
@@ -143,7 +155,11 @@ minutes) and exits. Every retry is bounded:
   the last one runs, and each tick re-reads the setting, so `--auto off` stops it without a restart.
 - **setup**: a busy file is retried for a few seconds, a file rewritten under it at most 5 times.
 - **daily backup** (server only): one `VACUUM INTO` copy a day, checked hourly; a failure is recorded, not retried until the
-  next hourly check. The copy runs on the server thread, so a very large store pauses serving briefly once a day.
+  next hourly check. The copy runs on a worker thread (since 1.6.0), so serving does not pause for it; one at a time.
+- **Claude Code memory refresh** (server only, off unless `MONOMEM_CLAUDE_REFRESH=on` or the Settings switch): every 10
+  minutes it reads only Claude Code's memory files that changed; one run at a time, and the switch is read on every tick.
+- **app check** (server only): two minutes after start, then hourly, at most one look a day for supported apps installed
+  later (file reads only; it never changes an app's file). It runs on the server thread and reads a few dozen small files.
 
 `monomem check --setup` reports the data folder size (warns over 1 GB), the spool size (warns when anything is waiting, and
 when it is full) and the capture backlog: events no session summary has taken in yet (warns over 10,000).
