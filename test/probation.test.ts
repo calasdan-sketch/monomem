@@ -102,3 +102,67 @@ test("session start names new writers once, in one line, and labels no note line
   assert.ok(!out.split("\n").some((l) => /^#\d+/.test(l) && l.includes("[new writer]")), out);
   s.close();
 });
+
+test("F4 silent S1: a write that rolls back after making the probation table does not break every later write", () => {
+  const s = new Store(":memory:");
+  assert.throws(() =>
+    s.transaction(() => {
+      as("newbot", () => s.create({ title: "x", body: "made inside a transaction that fails" }));
+      throw new Error("boom");
+    }),
+    /boom/
+  );
+  const n = as("otherbot", () => s.create({ title: "after", body: "the rollback took the table with it" }));
+  assert.equal(s.read(n.id)!.new_writer, true, "the table is made again and the writer recorded");
+  s.close();
+});
+
+test("F4 security S2: editing other writers' old notes does not end probation; only notes it created and kept count", () => {
+  const s = new Store(":memory:");
+  const ids: number[] = [];
+  for (let i = 0; i < 5; i++) ids.push(as("alice", () => s.create({ title: "old " + i, body: "alice text " + i })).id);
+  s.db.prepare("UPDATE notes SET created_at = ?").run(new Date(Date.now() - 48 * 3_600_000).toISOString());
+  as("newbot", () => s.create({ title: "hello", body: "first note" }));
+  assert.equal(onProbation(s, "newbot"), true);
+  for (const id of ids) as("newbot", () => s.update(id, { body: "edited by newbot " + id }));
+  setProbationSettings(s, { notes: 5 }); // clears the 1 s cache
+  assert.equal(onProbation(s, "newbot"), true, "five edits of old notes are not five kept notes");
+  assert.equal(probationList(s).find((r) => r.writer === "newbot")!.kept, 0);
+  assert.equal(onProbation(s, "alice"), false, "alice created and kept five notes for 48 hours");
+  s.close();
+});
+
+test("F4 ease N2: an app the person connected with setup is not on probation; unknown apps and new app keys are", async () => {
+  const { setProcessWriter } = await import("../src/actor.js");
+  const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = mkdtempSync(join(tmpdir(), "om-prob-setup-"));
+  const change = (client: string) => ({ client, file: "x", real: "x", backup: null, createdFile: false, afterSha: "", inverse: [], label: client });
+  writeFileSync(
+    join(dir, "setup-history.json"),
+    JSON.stringify([
+      { id: "1", at: "2026-11-17T00:00:00Z", version: "1.6.0", changes: [change("project"), change("cursor"), change("shortcut")] },
+      { id: "2", at: "2026-11-17T00:00:01Z", version: "1.6.0", undone: true, changes: [change("windsurf")] },
+    ])
+  );
+  const s = new Store(join(dir, "state.db"));
+  const w = (who: string) => {
+    setProcessWriter(who as `stdio:${string}`);
+    try {
+      return s.create({ title: who, body: "a note from " + who });
+    } finally {
+      setProcessWriter("");
+    }
+  };
+  try {
+    assert.equal(s.read(w("stdio:claude-code").id)!.new_writer, undefined, "the project .mcp.json entry is Claude Code's");
+    assert.equal(s.read(w("stdio:cursor").id)!.new_writer, undefined);
+    assert.equal(s.read(w("stdio:windsurf").id)!.new_writer, true, "an undone setup does not count");
+    assert.equal(s.read(w("stdio:unknownapp").id)!.new_writer, true);
+    assert.equal(s.read(as("newbot", () => s.create({ title: "k", body: "app key" })).id)!.new_writer, true, "a new app key still starts on probation");
+  } finally {
+    s.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -424,6 +424,12 @@ A writer Monomem has not seen before starts **on probation**. A writer here is a
 `stdio:<app>` name (set by `MONOMEM_CLIENT`). The person at the terminal, the owner's main key (`primary`, which the
 dashboard uses) and plain markers (`stdio` with no name, `server`) are never on probation.
 
+An app you connected yourself with `monomem setup` or `monomem connect` is not on probation either: its `stdio:<app>`
+name is the `MONOMEM_CLIENT` value setup wrote into its config, and setup records each app it connected in
+`setup-history.json` in the data folder (an undone setup no longer counts). Probation is for writers nobody set up:
+an unknown app name and every new app key. The app name comes from the app's config file and is not verified, the same
+as for every `stdio:<app>` writer.
+
 While a writer is on probation:
 
 - Its notes are saved and shown at once. Search, read and list label them `[new writer]` (field `new_writer`). Session
@@ -432,8 +438,8 @@ While a writer is on probation:
   `monomem facts` does not count it as a writer agreeing. A non-admin key is affected. An admin key's confirm is not,
   because a person gave it that power.
 
-It leaves probation when it has `probation-notes` notes (default 5) that are at least `probation-hours` old (default 24)
-and were not replaced, archived or flagged. It also leaves when a person runs `monomem trust confirm-writer <name>`.
+It leaves probation when it has `probation-notes` notes (default 5) that it created itself, that are at least
+`probation-hours` old (default 24) and were not replaced, archived or flagged. Editing other writers' notes does not count. It also leaves when a person runs `monomem trust confirm-writer <name>`.
 `monomem trust probation` lists writers on probation and how many notes each has kept. `monomem settings set
 probation-notes 0` turns probation off. Lowering either number needs a person at the terminal.
 
