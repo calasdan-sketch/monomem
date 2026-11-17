@@ -54,6 +54,8 @@ if (stdioCeiling && !stdioMax) {
 const conn: { local: true; cwd: string; maxSensitivity?: NonNullable<typeof stdioMax> } = stdioMax ? { maxSensitivity: stdioMax, local: true, cwd: process.cwd() } : { local: true, cwd: process.cwd() };
 const server = createMcpServer(store, "admin", nsOpts ?? undefined, conn);
 const transport = new StdioServerTransport();
+/** How long to wait for the app to say which folder it has open (MCP roots) before keeping the launch folder. */
+const ROOTS_WAIT_MS = 30_000;
 // The client's own name from the initialize handshake goes to the audit log, labelled as a claim: any program can
 // send any clientInfo. It is never used for written_by or for any access decision.
 server.server.oninitialized = (): void => {
@@ -68,8 +70,10 @@ server.server.oninitialized = (): void => {
   // folder stays (a home or app folder matches every session or none; none = the worst case, every open window applies).
   // Adopting a root is audited, so a person can see the claim.
   if (!server.server.getClientCapabilities()?.roots) return;
+  // Waiting costs nothing (writes before the answer keep the launch folder), so the wait is long: a 2 s limit lost the
+  // project folder for the whole session on a busy machine (seen on a loaded CI runner, every write ~2 s).
   server.server
-    .listRoots(undefined, { timeout: 2000 })
+    .listRoots(undefined, { timeout: ROOTS_WAIT_MS })
     .then((r) => {
       const files = r.roots.filter((x) => x.uri.startsWith("file:"));
       if (files.length !== 1) return;

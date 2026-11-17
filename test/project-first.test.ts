@@ -89,7 +89,9 @@ describe("writer project from MCP roots (C18)", () => {
       try {
         // The server asks for roots right after initialize; give it a moment to hear back before writing.
         let cwd: string | null = null;
-        for (let i = 0; i < 50 && !(cwd && insideFolder(cwd, work)); i++) {
+        // Bounded by time, not tries: on a loaded runner each write took ~2 s. 35 s covers the server's 30 s roots wait.
+        const until = Date.now() + 35_000;
+        for (let i = 0; Date.now() < until && !(cwd && insideFolder(cwd, work)); i++) {
           await client.callTool({ name: "state_write", arguments: { title: `probe ${i}`, body: "x" } });
           const s = new Store(db);
           try {

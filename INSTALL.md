@@ -57,9 +57,9 @@ program in the folder is Node's, which is signed by its makers.
 
 What you will see on Windows, step by step:
 
-1. Right-click the downloaded zip, choose **Properties**, tick **Unblock** at the bottom, click **OK**. (Windows marks
-   files from the internet. Unblocking the zip before you unpack it means none of the unpacked files carry that mark, so
-   Windows does not stop to ask about `monomem.cmd`.)
+1. Check the download first (see **Check the download** below), then right-click the zip, choose **Properties**, tick
+   **Unblock** at the bottom, click **OK**. (Windows marks files from the internet. Unblocking the zip before you unpack
+   it means none of the unpacked files carry that mark, so Windows normally does not stop to ask about `monomem.cmd`.)
 2. Right-click the zip again, choose **Extract All**, then **Extract**. Do not run anything from inside the zip.
 3. Open the `Monomem` folder and double-click `monomem` (the file `monomem.cmd`, shown as "Windows Command Script").
    It opens your notes in the browser. To connect your apps, run setup in a terminal (PowerShell or Command Prompt)

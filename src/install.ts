@@ -71,6 +71,7 @@ export function copyToInstall(from: string, to: string, platform: NodeJS.Platfor
 export function clearDownloadMark(dir: string): void {
   for (const ent of readdirSync(dir, { withFileTypes: true })) {
     const p = join(dir, ent.name);
+    if (ent.isSymbolicLink()) continue; // never follow a link out of the installed copy
     if (ent.isDirectory()) clearDownloadMark(p);
     else rmSync(`${p}:Zone.Identifier`, { force: true });
   }

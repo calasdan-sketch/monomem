@@ -6,7 +6,7 @@
 //   4. rename-aside swap: each top-level entry of the install folder moves to <install>/.old-<ver>, the new one moves in.
 //      A running node.exe (an app's MCP server, the service) cannot be overwritten on Windows, but it can be renamed, so the
 //      swap works while apps are open; any failure puts every moved entry back. The folder's path never changes, so app
-//      settings and hooks (which name <install>/runtime/node and <install>/dist/src/cli.js) need no rewrite.
+//      settings and hooks (which name <install>/runtime/node, runtime\monomem-node.exe on Windows, and <install>/dist/src/cli.js) need no rewrite.
 //   5. the NEW copy runs `update --finish <old version>`: it opens the database (the one-time migration, with its backup,
 //      happens now and not in the first hook, which never migrates) and re-installs the background service if one is set up.
 // The npm install never self-modifies: it prints the npm command. The .old-* and .update-* leftovers go at the next update
