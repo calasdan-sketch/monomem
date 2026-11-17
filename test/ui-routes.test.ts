@@ -5,13 +5,14 @@ import "./setup-env.js";
 import { test, describe, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { DB_PATH } from "../src/config.js";
 import { Store } from "../src/store.js";
 import { actorStore } from "../src/actor.js";
 import { createApiServer } from "../src/api.js";
-import { setUiRunner } from "../src/api/routes-ui.js";
+import { setUiRunner, setUiStarter } from "../src/api/routes-ui.js";
 import { needsYou } from "../src/ui/needs-you.js";
 import { readUiSettings, updateUiSettings, uiSettingOn, writeBackupStatus } from "../src/ui/settings.js";
 import { mintLoginCode } from "../src/login-code.js";
@@ -42,7 +43,7 @@ async function signIn(base: string, terminal = false): Promise<{ local: string; 
   return { local: r.local_session, person: r.dashboard_session };
 }
 
-afterEach(() => setUiRunner(null));
+afterEach(() => (setUiRunner(null), setUiStarter(null)));
 
 describe("Needs you", () => {
   test("counts held writes, unconfirmed outside content, fact disagreements and a failed backup; silent at 0", async () => {
@@ -127,6 +128,8 @@ describe("the local sign-in gate", () => {
   test("with the local session: each button runs the ordinary command, and only the command it names", async () => {
     const runs: string[][] = [];
     setUiRunner(async (args) => (runs.push(args), { code: 0, output: "done" }));
+    const started: string[][] = [];
+    setUiStarter((args) => void started.push(args));
     await withServer(async (base) => {
       const { local } = await signIn(base);
       const h = { "X-Monomem-Local": local };
@@ -135,14 +138,15 @@ describe("the local sign-in gate", () => {
       assert.equal((await call(base, "/ui/apps/connect", ADMIN, { method: "POST", body: { id: "project" }, headers: h })).status, 400, "never a project file from here");
       await call(base, "/ui/apps/undo", ADMIN, { method: "POST", headers: h });
       await call(base, "/ui/update", ADMIN, { method: "POST", body: { check: true }, headers: h });
-      await call(base, "/ui/update", ADMIN, { method: "POST", body: {}, headers: h });
+      const up = await call(base, "/ui/update", ADMIN, { method: "POST", body: {}, headers: h });
+      assert.equal(up.status, 202, "Update now answers at once: the update restarts this server");
+      assert.deepEqual(started, [["update", "--restart-server", String(process.pid)]], "detached from the server, told which server to restart");
       await call(base, "/ui/remove", ADMIN, { method: "POST", headers: h });
       await call(base, "/ui/service", ADMIN, { method: "POST", body: { on: false }, headers: h });
       assert.deepEqual(runs, [
         ["setup", "--only", "cursor", "--yes", "--no-test-note", "--no-doctor"],
         ["setup", "--undo", "--yes"],
         ["update", "--check"],
-        ["update"],
         ["uninstall", "--yes"],
         ["service", "uninstall"],
       ]);
@@ -150,6 +154,41 @@ describe("the local sign-in gate", () => {
       // a session made for another server's code does not work after expiry or for a made-up value
       assert.equal((await call(base, "/ui/remove", ADMIN, { method: "POST", headers: { "X-Monomem-Local": "0".repeat(48) } })).status, 403);
     });
+  });
+
+  test("Update now's output: GET /ui/update/log shows it, with the exit code once the update ended", async () => {
+    const log = join(dirname(DB_PATH), "update.log");
+    mkdirSync(dirname(log), { recursive: true });
+    setUiStarter((_args, file) => writeFileSync(file, "Downloading Monomem 1.7.0...\n"));
+    await withServer(async (base) => {
+      const h = { "X-Monomem-Local": (await signIn(base)).local };
+      assert.equal((await call(base, "/ui/update/log")).status, 403, "local sign-in only");
+      await call(base, "/ui/update", ADMIN, { method: "POST", body: {}, headers: h });
+      let r = (await (await call(base, "/ui/update/log", ADMIN, { headers: h })).json()) as { output: string; done: number | null };
+      assert.deepEqual(r, { output: "Downloading Monomem 1.7.0...\n", done: null });
+      writeFileSync(log, "Could not reach github.com\n(update ended with exit code 1)\n");
+      r = (await (await call(base, "/ui/update/log", ADMIN, { headers: h })).json()) as { output: string; done: number | null };
+      assert.equal(r.done, 1);
+    });
+    rmSync(log, { force: true });
+  });
+
+  test("Back up now copies the server's database file on the worker thread (serving does not pause)", async () => {
+    const created = !existsSync(DB_PATH);
+    const file = new Store(DB_PATH);
+    as("t", () => file.create({ title: "in the file", body: "x" }));
+    as("t", () => file.create({ title: "in the file too", body: "y" }));
+    file.close();
+    try {
+      await withServer(async (base) => {
+        const { local } = await signIn(base);
+        const r = (await (await call(base, "/ui/backup", ADMIN, { method: "POST", headers: { "X-Monomem-Local": local } })).json()) as { ok: boolean; notes: number };
+        assert.equal(r.ok, true);
+        assert.equal(r.notes, 2, "the copy came from the database file (the worker), not the in-memory test store");
+      });
+    } finally {
+      if (created) for (const f of [DB_PATH, DB_PATH + "-wal", DB_PATH + "-shm"]) rmSync(f, { force: true });
+    }
   });
 
   test("Back up now copies the database and records it; GET /ui/state reports it", async () => {

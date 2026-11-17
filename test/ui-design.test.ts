@@ -212,4 +212,31 @@ describe("Welcome (first run)", () => {
     assert.match(p.el("upd_out").innerHTML, /onclick='doUpdate\(\)'>Update now</);
     assert.equal(p.calls.filter((c) => c === "POST /ui/update").length, 2);
   });
+  test("Update now: shows the update's output while it runs, reloads once /health names the new version", async () => {
+    let version = "1.6.0";
+    const p = page((path) => (path === "/health" ? { version } : path === "/ui/update/log" ? { output: "Downloading Monomem 1.7.0...", done: null } : { ok: true, started: true }));
+    let reloaded = 0;
+    p.ctx.location = { reload: () => void reloaded++ };
+    p.ctx.setTimeout = (f: () => void) => setTimeout(f, 0); // the page waits 2 s between looks
+    vm.runInContext("STATE.version = '1.6.0'", p.ctx);
+    p.ctx.doUpdate();
+    await settle();
+    assert.match(p.el("upd_out").innerHTML, /Downloading Monomem 1\.7\.0/);
+    assert.equal(reloaded, 0);
+    version = "1.7.0";
+    await settle();
+    await settle();
+    assert.equal(reloaded, 1);
+  });
+  test("Update now: a failed update stops waiting and shows why", async () => {
+    const p = page((path) => (path === "/health" ? { version: "1.6.0" } : path === "/ui/update/log" ? { output: "Could not reach github.com\n(update ended with exit code 1)", done: 1 } : { ok: true }));
+    p.ctx.setTimeout = (f: () => void) => setTimeout(f, 0);
+    vm.runInContext("STATE.version = '1.6.0'", p.ctx);
+    p.ctx.doUpdate();
+    await settle();
+    await settle();
+    const looks = p.calls.filter((c) => c === "GET /ui/update/log").length;
+    assert.equal(looks, 1, "no more polling after the update ended");
+    assert.match(p.el("upd_out").innerHTML, /Could not reach github\.com/);
+  });
 });

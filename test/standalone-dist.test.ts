@@ -10,7 +10,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdir
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { assetName, cleanupOld, isNewer, parseSums, runUpdate, swapIn, targetOf, type UpdateDeps } from "../src/update.js";
+import { assetName, cleanupOld, isNewer, parseSums, restartServerAfterUpdate, runUpdate, swapIn, targetOf, type RestartDeps, type UpdateDeps } from "../src/update.js";
 import { bundleRoot, copyToInstall, defaultCommand, installDir, samePath, shortcutPlan } from "../src/install.js";
 import { DEFAULT_OPTIONS, readHistory, runSetup, type SetupEnv, type SetupIO } from "../src/setup.js";
 
@@ -300,6 +300,17 @@ describe("rename-aside swap", () => {
     assert.deepEqual(readdirSync(root).filter((n) => n.startsWith(".")), []);
     assert.ok(existsSync(join(root, "runtime", "node")));
   });
+  test("cleanupOld skips a leftover still in use (an open app's node.exe) and never throws", () => {
+    const root = fakeBundle(scratch(), "1.6.0");
+    put(join(root, ".old-1.5.0", "runtime", "node.exe"), "held");
+    put(join(root, ".update-1.6.0", "y"), "y");
+    const locked = (p: string): void => {
+      if (p.includes(".old-1.5.0")) throw Object.assign(new Error("EPERM, Permission denied"), { code: "EPERM" });
+      rmSync(p, { recursive: true, force: true });
+    };
+    assert.deepEqual(cleanupOld(root, locked), [".old-1.5.0"]);
+    assert.ok(!existsSync(join(root, ".update-1.6.0")));
+  });
 });
 
 describe("monomem update", () => {
@@ -391,6 +402,71 @@ describe("monomem update", () => {
     const npm = deps(root, null, { mode: "npm" });
     assert.equal(await runUpdate({ check: false }, npm.d), 0);
     assert.match(npm.all(), /npm i -g monomem@latest/);
+  });
+
+  test("--check never deletes the old copy a failed update tells the person to restore from", async () => {
+    const root = fakeBundle(scratch(), "1.6.0");
+    put(join(root, ".old-1.5.0", "x"), "rollback copy");
+    assert.equal(await runUpdate({ check: true }, deps(root, release()).d), 0);
+    assert.ok(existsSync(join(root, ".old-1.5.0", "x")));
+  });
+
+  test("an earlier update's leftovers still in use: the update goes on, says so, and swaps aside under a fresh name", async () => {
+    const root = fakeBundle(scratch(), "1.6.0");
+    put(join(root, ".old-1.6.0", "runtime", "node"), "held by an open app");
+    const locked = (p: string): void => {
+      if (p.endsWith(".old-1.6.0")) throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+      rmSync(p, { recursive: true, force: true });
+    };
+    const t = deps(root, release(), { remove: locked });
+    assert.equal(await runUpdate({ check: false }, t.d), 0, t.all());
+    assert.equal(readFileSync(join(root, "runtime", "node"), "utf8"), "node for 1.7.0");
+    assert.match(t.all(), /still in use by an open app.*\.old-1\.6\.0/);
+    assert.equal(readFileSync(join(root, ".old-1.6.0", "runtime", "node"), "utf8"), "held by an open app");
+    assert.ok(readdirSync(root).some((n) => /^\.old-1\.6\.0-\d+$/.test(n)), "the replaced files went to a fresh aside folder");
+  });
+
+  test("from the dashboard: the new copy is told which server to restart", async () => {
+    const root = fakeBundle(scratch(), "1.6.0");
+    const t = deps(root, release(), { restartServer: 4242 });
+    assert.equal(await runUpdate({ check: false }, t.d), 0, t.all());
+    assert.deepEqual(t.runs.at(-1)!.slice(2), ["update", "--finish", "1.6.0", "--restart-server", "4242"]);
+  });
+
+  describe("restarting the dashboard's server after the swap (no real process)", () => {
+    const fake = (o: { stops?: boolean; up?: boolean } = {}) => {
+      const calls: string[] = [];
+      let alive = true;
+      const r: RestartDeps = {
+        kill: (pid) => {
+          calls.push(`kill ${pid}`);
+          if (o.stops !== false) alive = false;
+        },
+        alive: () => alive,
+        startServer: () => void calls.push("start"),
+        waitUp: async () => o.up !== false,
+        sleep: async () => undefined,
+      };
+      return { r, calls };
+    };
+    test("no service (Start menu, monomem open): stops the old server, then starts the new one", async () => {
+      const f = fake();
+      const lines: string[] = [];
+      assert.equal(await restartServerAfterUpdate(77, false, f.r, (l) => void lines.push(l)), true);
+      assert.deepEqual(f.calls, ["kill 77", "start"]);
+      assert.match(lines.join("\n"), /running the new version/);
+    });
+    test("with the service: stops the old server and leaves the start to the service", async () => {
+      const f = fake();
+      assert.equal(await restartServerAfterUpdate(77, true, f.r, () => undefined), true);
+      assert.deepEqual(f.calls, ["kill 77"]);
+    });
+    test("a server that will not stop, or a new one that does not answer: says what to do", async () => {
+      const lines: string[] = [];
+      assert.equal(await restartServerAfterUpdate(77, false, fake({ stops: false }).r, (l) => void lines.push(l)), false);
+      assert.equal(await restartServerAfterUpdate(77, false, fake({ up: false }).r, (l) => void lines.push(l)), false);
+      assert.match(lines.join("\n"), /did not stop.*monomem open[\s\S]*did not start.*monomem open/);
+    });
   });
 
   test("the CLI knows `update` and never runs it from a hook", () => {

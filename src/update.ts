@@ -9,13 +9,16 @@
 //      settings and hooks (which name <install>/runtime/node and <install>/dist/src/cli.js) need no rewrite.
 //   5. the NEW copy runs `update --finish <old version>`: it opens the database (the one-time migration, with its backup,
 //      happens now and not in the first hook, which never migrates) and re-installs the background service if one is set up.
-// The npm install never self-modifies: it prints the npm command. The .old-* and .update-* leftovers go at the next update.
+// The npm install never self-modifies: it prints the npm command. The .old-* and .update-* leftovers go at the next update
+// (one still in use by an open app stays, and is tried again the time after).
+// The dashboard's Update button runs `update --restart-server <its pid>` detached from its server, with the output in
+// <data>/update.log: after the swap the new copy stops that server and starts the new version (restartServerAfterUpdate).
 // Contract for future versions: `update --finish <old version>` must keep working (an older copy calls it on the newer one).
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { selfFacts, selfVersion, type SelfMode } from "./self.js";
+import { selfCommand, selfFacts, selfVersion, type SelfMode } from "./self.js";
 
 export const RELEASE_REPO = "calasdan-sketch/monomem";
 export const TARGETS = ["win-x64", "darwin-arm64", "darwin-x64", "linux-x64"] as const;
@@ -99,15 +102,32 @@ export function swapIn(root: string, staged: string, aside: string, rename: Rena
   }
 }
 
-/** Remove what earlier updates left (.old-* still held by a running program then, .update-* downloads). Best effort. */
-export function cleanupOld(root: string): void {
+/** The folder removal the update uses; injectable so a test can make one fail as a locked folder does on Windows. */
+export type RemoveFn = (path: string) => void;
+const removeDir: RemoveFn = (p) => rmSync(p, { recursive: true, force: true, maxRetries: 2 });
+
+/** Remove a folder; false (never a throw) when it cannot go, e.g. an open app still runs a node.exe inside it. */
+export function tryRemove(path: string, rm: RemoveFn = removeDir): boolean {
+  try {
+    rm(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Remove what earlier updates left (.old-* still held by a running program then, .update-* downloads). Best effort: a
+ * folder still in use stays until a later update. Returns the names that could not be removed.
+ */
+export function cleanupOld(root: string, rm: RemoveFn = removeDir): string[] {
   let names: string[] = [];
   try {
     names = readdirSync(root);
   } catch {
-    return;
+    return [];
   }
-  for (const n of names) if (/^\.(old|update)-/.test(n)) rmSync(join(root, n), { recursive: true, force: true, maxRetries: 2 });
+  return names.filter((n) => /^\.(old|update)-/.test(n) && !tryRemove(join(root, n), rm));
 }
 
 /** Windows ships bsdtar (reads zip); a Git for Windows GNU tar earlier on PATH cannot. */
@@ -131,6 +151,9 @@ export interface UpdateDeps {
   /** Run a program and wait; inherit = show its output to the person. */
   run(command: string, args: string[], inherit: boolean): { status: number | null; stdout: string };
   rename?: RenameFn;
+  remove?: RemoveFn;
+  /** The dashboard's server, when the dashboard started this update: the new copy stops it and starts the new version. */
+  restartServer?: number;
 }
 
 const nodeIn = (root: string, platform: NodeJS.Platform): string => join(root, "runtime", platform === "win32" ? "node.exe" : "node");
@@ -151,8 +174,6 @@ export async function runUpdate(flags: { check: boolean }, d: UpdateDeps): Promi
     d.err(`There is no Monomem download for ${d.platform}-${d.arch}. Nothing was changed.`);
     return 1;
   }
-  cleanupOld(d.root);
-
   const offline = (what: string, e: unknown): number => {
     d.err(`Could not reach github.com to ${what} (${e instanceof Error ? e.message : String(e)}). Nothing was changed. Check the internet connection and try again.`);
     return 1;
@@ -178,6 +199,9 @@ export async function runUpdate(flags: { check: boolean }, d: UpdateDeps): Promi
     d.out(`Monomem ${latest} is out (you have ${d.version}). Get it:  monomem update`);
     return 0;
   }
+  // Only now: --check never deletes the old copy a failed update tells the person to restore from.
+  const stuck = cleanupOld(d.root, d.remove);
+  if (stuck.length) d.out(`  (An old copy is still in use by an open app, so it stays until the next update: ${stuck.join(", ")}.)`);
   const name = assetName(latest, target);
   const archive = release.assets?.find((a) => a.name === name);
   const sumsAsset = release.assets?.find((a) => a.name === "SHA256SUMS");
@@ -186,11 +210,12 @@ export async function runUpdate(flags: { check: boolean }, d: UpdateDeps): Promi
     return 1;
   }
 
-  const staging = join(d.root, `.update-${latest}`);
-  rmSync(staging, { recursive: true, force: true });
+  // A download folder still locked from an earlier try gets a fresh name instead of stopping the update.
+  let staging = join(d.root, `.update-${latest}`);
+  if (!tryRemove(staging, d.remove)) staging += `-${Date.now()}`;
   mkdirSync(staging, { recursive: true });
   const fail = (msg: string): number => {
-    rmSync(staging, { recursive: true, force: true });
+    tryRemove(staging, d.remove);
     d.err(msg + " Nothing was changed.");
     return 1;
   };
@@ -206,7 +231,7 @@ export async function runUpdate(flags: { check: boolean }, d: UpdateDeps): Promi
     sums = parseSums((await get(sumsAsset.browser_download_url)).toString("utf8"));
     writeFileSync(file, await get(archive.browser_download_url));
   } catch (e) {
-    rmSync(staging, { recursive: true, force: true });
+    tryRemove(staging, d.remove);
     return offline("download the update", e);
   }
   const want = sums.get(name);
@@ -228,17 +253,18 @@ export async function runUpdate(flags: { check: boolean }, d: UpdateDeps): Promi
   const said = d.run(nodeIn(fresh, d.platform), [cliIn(fresh), "--version"], false);
   if (said.status !== 0 || said.stdout.trim() !== latest) return fail(`The new copy did not start properly (it said "${said.stdout.trim()}", expected ${latest}).`);
 
-  const aside = join(d.root, `.old-${d.version}`);
-  rmSync(aside, { recursive: true, force: true });
+  let aside = join(d.root, `.old-${d.version}`);
+  if (!tryRemove(aside, d.remove)) aside += `-${Date.now()}`;
   try {
     swapIn(d.root, fresh, aside, d.rename);
   } catch (e) {
     return fail(`Could not put the new version in place (${e instanceof Error ? e.message : String(e)}); every file was put back.`);
   }
   d.out(`Installed Monomem ${latest} in ${d.root} (the old ${d.version} is in ${aside} until the next update).`);
-  rmSync(staging, { recursive: true, force: true, maxRetries: 2 });
-  // The new code finishes: database migration and service restart.
-  const fin = d.run(nodeIn(d.root, d.platform), [cliIn(d.root), "update", "--finish", d.version], true);
+  tryRemove(staging, d.remove);
+  // The new code finishes: database migration and service restart (and, from the dashboard, its server's restart).
+  const restart = d.restartServer ? ["--restart-server", String(d.restartServer)] : [];
+  const fin = d.run(nodeIn(d.root, d.platform), [cliIn(d.root), "update", "--finish", d.version, ...restart], true);
   if (fin.status !== 0) {
     d.err(`The new version is in place, but finishing the update failed (above). To go back: close your apps, then move the contents of ${aside} back into ${d.root}.`);
     return 1;
@@ -246,8 +272,78 @@ export async function runUpdate(flags: { check: boolean }, d: UpdateDeps): Promi
   return 0;
 }
 
+/** What restarting the dashboard's server needs; injected so tests never stop or start a real process. */
+export interface RestartDeps {
+  /** Stop a process (POSIX: SIGTERM, the server's own clean shutdown; Windows: it ends at once, SQLite keeps what was saved). */
+  kill(pid: number): void;
+  alive(pid: number): boolean;
+  /** Start `monomem start --log` of this (new) copy in the background, the way `monomem open` does. */
+  startServer(): void;
+  /** True once the new server answers /health. */
+  waitUp(): Promise<boolean>;
+  sleep(ms: number): Promise<void>;
+}
+
+/**
+ * The dashboard's Update button: after the swap, stop the server that ran the button (it still runs the old code) and run
+ * the new one. With the background service set up, the service brings it back (finishUpdate re-installs it); otherwise
+ * (started by `monomem open` or the Start menu) this starts it. Returns false when the server did not come back.
+ */
+export async function restartServerAfterUpdate(pid: number, service: boolean, r: RestartDeps, out: (l: string) => void): Promise<boolean> {
+  out("Stopping the Monomem server that still runs the old version...");
+  try {
+    r.kill(pid);
+  } catch {
+    /* already gone */
+  }
+  for (let i = 0; i < 50 && r.alive(pid); i++) await r.sleep(200);
+  if (r.alive(pid)) {
+    out(`  The old server (process ${pid}) did not stop. Close it, then start Monomem again (monomem open).`);
+    return false;
+  }
+  if (service) return true;
+  r.startServer();
+  if (await r.waitUp()) {
+    out("Monomem is running the new version.");
+    return true;
+  }
+  out("  The new version did not start. Start it with:  monomem open");
+  return false;
+}
+
+function realRestartDeps(): RestartDeps {
+  return {
+    kill: (pid) => process.kill(pid),
+    alive: (pid) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch (e) {
+        return (e as NodeJS.ErrnoException).code === "EPERM";
+      }
+    },
+    startServer: () => {
+      const s = selfCommand(["start", "--log"]);
+      spawn(s.command, s.args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
+    },
+    waitUp: async () => {
+      const { API_PORT } = await import("./config.js");
+      for (let i = 0; i < 40; i++) {
+        try {
+          if ((await fetch(`http://127.0.0.1:${API_PORT}/health`, { signal: AbortSignal.timeout(1000) })).ok) return true;
+        } catch {
+          /* not up yet */
+        }
+        await new Promise((res) => setTimeout(res, 250));
+      }
+      return false;
+    },
+    sleep: (ms) => new Promise((res) => setTimeout(res, ms)),
+  };
+}
+
 /** `update --finish <old>`, run by the NEW copy right after the swap: migrate the database, restart the service. */
-export async function finishUpdate(oldVersion: string, out: (l: string) => void, run: UpdateDeps["run"]): Promise<number> {
+export async function finishUpdate(oldVersion: string, out: (l: string) => void, run: UpdateDeps["run"], serverPid?: number, restart: RestartDeps = realRestartDeps()): Promise<number> {
   const { DB_PATH } = await import("./config.js");
   if (existsSync(DB_PATH)) {
     const { Store, SCHEMA_VERSION } = await import("./store.js");
@@ -258,7 +354,10 @@ export async function finishUpdate(oldVersion: string, out: (l: string) => void,
   const f = selfFacts();
   const self = (args: string[]): [string, string[]] => (f.mode === "sea" ? [f.execPath, args] : [f.execPath, [f.cliPath, ...args]]);
   const [c, a] = self(["service", "status"]);
-  if (run(c, a, false).status === 0) {
+  const service = run(c, a, false).status === 0;
+  // From the dashboard: its server stops first, so a service restart below never ends the process running this update.
+  if (serverPid) await restartServerAfterUpdate(serverPid, service, restart, out); // it prints what to do if it fails
+  if (service) {
     out("Restarting the background service with the new version:");
     const [c2, a2] = self(["service", "install"]);
     if (run(c2, a2, true).status !== 0) out("  The service did not restart (above). Start it again with:  monomem service install");
@@ -289,17 +388,31 @@ export function realUpdateDeps(): UpdateDeps {
   };
 }
 
-/** `monomem update [--check]` and the internal `update --finish <old version>`. */
+/** The pid after `--restart-server`, or undefined. */
+function pidArg(argv: string[]): number | undefined {
+  const i = argv.indexOf("--restart-server");
+  const n = i >= 0 ? Number(argv[i + 1]) : NaN;
+  return Number.isInteger(n) && n > 0 ? n : undefined;
+}
+
+/** The last line of an update the dashboard started (its page reads update.log for it). */
+export const UPDATE_END = (code: number): string => `(update ended with exit code ${code})`;
+
+/** `monomem update [--check]`, the internal `update --finish <old version> [--restart-server <pid>]`, and the dashboard's
+ *  `update --restart-server <pid>`. */
 export async function updateCmd(argv: string[]): Promise<number> {
   const i = argv.indexOf("--finish");
   if (i >= 0) {
     const d = realUpdateDeps();
-    return finishUpdate(argv[i + 1] ?? "?", d.out, d.run);
+    return finishUpdate(argv[i + 1] ?? "?", d.out, d.run, pidArg(argv));
   }
-  const bad = argv.filter((a) => a !== "--check");
+  const pid = pidArg(argv);
+  const bad = argv.filter((a, j) => a !== "--check" && !(pid && (a === "--restart-server" || argv[j - 1] === "--restart-server")));
   if (bad.length) {
     console.error("Usage: monomem update [--check]   (--check only asks github.com whether a newer version is out)");
     return 1;
   }
-  return runUpdate({ check: argv.includes("--check") }, realUpdateDeps());
+  const code = await runUpdate({ check: argv.includes("--check") }, { ...realUpdateDeps(), restartServer: pid });
+  if (pid) console.log(UPDATE_END(code));
+  return code;
 }
