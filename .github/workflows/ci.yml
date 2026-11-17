@@ -89,7 +89,9 @@ jobs:
           sed "s/^MONOMEM_TOKEN=.*/MONOMEM_TOKEN=$(openssl rand -hex 32)/" .env.example > .env
           echo "MONOMEM_ALLOWED_HOSTS=x.ts.net" >> .env
           docker compose up -d --build
-          for i in $(seq 1 60); do curl -fsS -H 'Host: x.ts.net' http://127.0.0.1:8790/health && break; sleep 2; done
+          # Fails here (with the container log) when /health never answers, instead of in a later step.
+          for _ in $(seq 1 60); do curl -fsS -H 'Host: x.ts.net' http://127.0.0.1:8790/health && exit 0; sleep 2; done
+          docker compose logs monomem; echo "::error::/health did not answer within 120 s"; exit 1
       - name: token add (the guide's command; it asks for a typed yes at a terminal, so script(1) gives it one)
         run: |
           echo yes | script -qec "docker compose exec monomem monomem token add alice --max internal" /dev/null | tee token-add.txt

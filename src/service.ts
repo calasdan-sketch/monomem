@@ -95,6 +95,8 @@ export function servicePlan(e: ServiceEnv): ServicePlan {
       "    <StartWhenAvailable>true</StartWhenAvailable>",
       "    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>",
       "    <RestartOnFailure><Interval>PT1M</Interval><Count>999</Count></RestartOnFailure>",
+      // Without it Task Scheduler uses 7 (below-normal CPU, background I/O); 5 is what an interactive program gets.
+      "    <Priority>5</Priority>",
       "  </Settings>",
       '  <Actions Context="Author">',
       `    <Exec><Command>${xml(e.env.ComSpec?.trim() || "C:\\Windows\\System32\\cmd.exe")}</Command><Arguments>${xml(cmdArgs)}</Arguments><WorkingDirectory>${xml(e.dataDir)}</WorkingDirectory></Exec>`,
@@ -148,7 +150,8 @@ export function servicePlan(e: ServiceEnv): ServicePlan {
   }
   // systemd --user (Linux and the other unixes that have it).
   const path = join(e.env.XDG_CONFIG_HOME?.trim() || join(e.home, ".config"), "systemd", "user", SYSTEMD_UNIT);
-  const q = (s: string): string => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  // % starts a systemd specifier (%h, %u ...) even inside quotes, so a literal % is written %%.
+  const q = (s: string): string => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/%/g, "%%")}"`;
   const text = [
     "[Unit]",
     "Description=Monomem memory server (monomem service install)",

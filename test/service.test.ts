@@ -187,6 +187,17 @@ describe("final3 INFRA-S1..S4: the Windows task and re-running install", () => {
     const l = servicePlan(base("linux"));
     assert.deepEqual(l.install.at(-1), ["systemctl", "--user", "restart", "monomem.service"]);
   });
+
+  test("A11 L1: a % in a Linux path is doubled in the unit (systemd reads % as a specifier)", () => {
+    const p = servicePlan(base("linux", { dataDir: "/home/u/100%/mm", cli: "/opt/50%off/cli.js" }));
+    assert.match(p.file.text, /^Environment="MONOMEM_HOME=\/home\/u\/100%%\/mm"$/m);
+    assert.match(p.file.text, /^ExecStart=".*" "\/opt\/50%%off\/cli\.js" "start" "--log"$/m);
+    assert.doesNotMatch(p.file.text.replace(/%%/g, ""), /%/);
+  });
+
+  test("A11 L2: the Windows task runs at normal priority (5), not Task Scheduler's below-normal default of 7", () => {
+    assert.match(servicePlan(base("win32")).file.text, /<Priority>5<\/Priority>/);
+  });
 test("final4 infra L8: macOS retries bootstrap once after 1 s when it fails right after bootout (injected runner)", () => {
     const home = mkdtempSync(join(tmpdir(), "om-svc-mac-"));
     try {
@@ -220,3 +231,11 @@ test("final4 infra L8: macOS retries bootstrap once after 1 s when it fails righ
   });
 });
 
+
+test("A11 L4: the CI wait for /health fails that step by itself when the server never answers", () => {
+  const ci = readFileSync(fileURLToPath(new URL("../../.github/workflows/ci.yml", import.meta.url)), "utf8");
+  const loop = /^\s*for .*\/health && (\w+).*$\n(.*)$/m.exec(ci);
+  assert.ok(loop, "health wait loop not found");
+  assert.equal(loop[1], "exit", "a bare break lets the step pass when /health never answered");
+  assert.match(loop[2], /exit 1/);
+});
