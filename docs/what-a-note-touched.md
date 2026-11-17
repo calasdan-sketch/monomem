@@ -9,7 +9,7 @@ monomem rollback --note 42        # undo it and the notes built on it (shows the
 ```
 
 Both are administrator tools. In the dashboard, a note's "..." menu has **What did this touch?**, which shows the same
-list and offers **Undo it and what was built on it**. Agents with an admin key can use `memory_why` with `touched: true`
+list and offers **Undo it and what was built on it**. Agents with an admin key can use `memory_usage` (action `why`) with `touched: true`
 and `memory_rollback` with `note`. Neither tool is in the default tool set.
 
 ## Proven and likely

@@ -9,11 +9,11 @@
 tokens). A client that loads every tool's schema up front pays this on each request, so the other tools are operator
 tooling you switch on yourself:
 
-- `MONOMEM_TOOLS=all` over stdio: 13 tools, 9,058 characters (about 2,260 tokens). `memory_held`, `memory_rollback`
+- `MONOMEM_TOOLS=all` over stdio: 13 tools, 9,150 characters (about 2,290 tokens). `memory_held`, `memory_rollback`
   and `memory_trust` stay hidden on a local connection unless you set `MONOMEM_STDIO_ADMIN_TOOLS=1`, because a local
   connection has no app key and nobody deliberately gave the agent those powers.
-- With an admin app key over HTTP, or with `MONOMEM_STDIO_ADMIN_TOOLS=1`: all 16 tools, 11,689 characters (about
-  2,920 tokens). The 37 tools of 1.5 were 64,501 characters.
+- With an admin app key over HTTP, or with `MONOMEM_STDIO_ADMIN_TOOLS=1`: all 16 tools, 11,792 characters (about
+  2,950 tokens). The 37 tools of 1.5 were 64,501 characters.
 - Or name only the ones you want: `MONOMEM_TOOLS=memory_sessions,memory_held`.
 
 These sizes are measured over stdio and checked by a test, so this page fails the build if they drift. See
@@ -59,7 +59,7 @@ list:
 
 ```
 monomem start | mcp | check [--setup | --attacks | --usage | --report --out report.html] | connect <app> --print
-monomem setup [--dry-run] [--yes] [--only claude-code,claude-desktop,cursor,codex,gemini,muse,vscode,zed] [--hook|--no-hook] [--undo]   # connect your apps; safe, backed up, undoable
+monomem setup [--dry-run] [--yes] [--only <app>,...] [--hook|--no-hook] [--undo]   # connect your apps (17 apps; monomem help setup lists them); safe, backed up, undoable
 monomem import --claude [--dry-run] [--update] [--project <folder>]   # bring in CLAUDE.md files and Claude Code auto memory
 monomem import --from claude-mem|mem0|basic-memory|mcp-memory [--path p] [--dry-run]   # switch from another memory tool (docs/switching.md)
 monomem import --from claude-code-chats [--dry-run]   # make past Claude Code conversations searchable (docs/switching.md)

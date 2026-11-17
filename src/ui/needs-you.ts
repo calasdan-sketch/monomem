@@ -97,7 +97,7 @@ const SHORT: Record<NeedKind, [string, string]> = {
 export function needsYouLine(store: Store, opts: { namespaces?: string[]; dataDir?: string } = {}): string {
   const n = needsYou(store, { ...opts, conflicts: false });
   if (!n.count) return "";
-  const parts = n.items.map((i) => plural(i.count, ...SHORT[i.kind]) + (i.kind === "unconfirmed" ? " (from outside, not shown)" : ""));
+  const parts = n.items.map((i) => plural(i.count, ...SHORT[i.kind]) + (i.kind === "unconfirmed" ? " (from outside content, not shown)" : ""));
   // One command: `monomem review` covers held writes and unconfirmed notes; anything else is settled in the dashboard.
   const cmd = n.items.every((i) => i.kind === "held" || i.kind === "unconfirmed") ? "monomem review" : "monomem open";
   return `Monomem: ${parts.join(", ")} ${n.count === 1 ? "waits" : "wait"} for the user: ${cmd}.`;

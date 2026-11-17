@@ -25,7 +25,7 @@ refused and nothing is written. Claims can only be added when a note is created:
   `[no longer true in code: claim 1 on src/config.ts]`.
 - Cited lines changed or are gone: the label is `[cited code changed: src/auth.ts:10-24]`.
 
-The labels show in search results, `memory_get`, and at session start. The note is not hidden, changed or deleted for it.
+The labels show in search results, `memory_read`, and at session start. The note is not hidden, changed or deleted for it.
 A label names the file and line numbers only, never the claim's text.
 
 - `monomem review code` lists the notes with a failing claim and what failed; `monomem review` lists them too. `--json`

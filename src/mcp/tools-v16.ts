@@ -194,7 +194,7 @@ function specs(nsActive: boolean): Spec[] {
       title: "Usage and receipts",
       description: "stats: how memory is used. receipt: what a session start showed. why: the story of one note. health: monomem check warnings (read-only, admin).",
       actions: { stats: "memory_stats", receipt: "memory_receipt", why: "memory_why", health: HEALTH_ACTION },
-      shape: { action: z.enum(["stats", "receipt", "why", "health"]).optional(), id: num().optional(), session_id: z.string().optional() },
+      shape: { action: z.enum(["stats", "receipt", "why", "health"]).optional(), id: num().optional(), session_id: z.string().optional(), touched: z.boolean().optional().describe("why, admin: who read it, what was built on it.") },
     },
     {
       name: "memory_sessions",

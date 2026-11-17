@@ -104,10 +104,10 @@ describe("monomem settings set passage_pooling", () => {
     const s = new Store(":memory:");
     try {
       fill(s);
-      assert.match(passagePoolingLine(s), /passage_pooling: off \(default\)/);
+      assert.match(passagePoolingLine(s), /passage-pooling: off \(default\)/);
       assert.match(setPassagePooling(s, "on"), /passages indexed/);
       assert.ok(passageCount(s) > 0);
-      assert.match(passagePoolingLine(s), /passage_pooling: on$/);
+      assert.match(passagePoolingLine(s), /passage-pooling: on$/);
       assert.match(setPassagePooling(s, "off"), /off/);
       assert.equal(passageCount(s), 0);
       assert.equal(passagePoolingOn(s), false);

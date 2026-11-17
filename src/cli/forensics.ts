@@ -13,7 +13,8 @@ export async function noteRollbackCli(store: Store, flags: Record<string, string
       return 1;
     }
     const json = flags.json === true;
-    const how = flags.yes === true || io.interactive ? "" : "Nothing was changed. Run it again at a terminal, or add --yes, to go ahead.";
+    const dryRun = flags["dry-run"] === true;
+    const how = dryRun ? "Dry run: nothing was changed." : flags.yes === true || io.interactive ? "" : "Nothing was changed. Run it again at a terminal, or add --yes, to go ahead.";
     const preview = noteRollbackPreview(
       store,
       caller,
@@ -21,7 +22,7 @@ export async function noteRollbackCli(store: Store, flags: Record<string, string
       how
     );
     io.out(json ? JSON.stringify(preview, null, 2) : preview.warning);
-    if (preview.actions.length === 0) return 0;
+    if (preview.actions.length === 0 || dryRun) return 0;
     if (flags.yes !== true) {
       if (!io.interactive) return 2;
       const a = await io.ask(`\nRoll back note ${preview.note} and ${preview.actions.length - 1 > 0 ? "what was built on it" : "nothing else"}? Type yes: `);

@@ -1,6 +1,6 @@
 // Passage pooling (PLAN D/I, opt-in): long notes are also indexed as overlapping passages, and a note's passage score is
 // its best passage's bm25. search-service fuses that ranking with the whole-note ranking (RRF). Off by default:
-// `monomem settings set passage_pooling on`. With it off nothing here runs and search is unchanged.
+// `monomem settings set passage-pooling on`. With it off nothing here runs and search is unchanged.
 //
 // Storage: one side table, created only when switched on (CREATE ... IF NOT EXISTS; no schema version bump, older binaries
 // ignore it). Contentless FTS5 (`content=''`): the inverted index only, no second copy of the text. Rowid = note id * SLOT

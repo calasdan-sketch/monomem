@@ -44,7 +44,7 @@ schema v22), so going back to 1.5.0 needs no restore.
   7 of them are shown by default (`memory_save`, `memory_search`, `memory_read`, `memory_list`, `memory_archive`,
   `memory_replace`, `memory_catch_up`). Measured over a local stdio connection, the default 7 cost 6,160 characters of
   tool descriptions (about 1,540 tokens; 1.5's 9 default tools were 21,114). `MONOMEM_TOOLS=all` over stdio is 13 tools,
-  9,058 characters; with an admin app key over HTTP (or `MONOMEM_STDIO_ADMIN_TOOLS=1`) all 16 tools are 11,689 characters
+  9,150 characters; with an admin app key over HTTP (or `MONOMEM_STDIO_ADMIN_TOOLS=1`) all 16 tools are 11,792 characters
   (1.5's 37 tools were 64,501). A test pins these numbers. The short `monomem help` lists about 30 commands, with new
   names: `check` (was `health`), `check --setup` (was `doctor`), `check --attacks` (was `drill`), `review held` (was
   `quarantine`), `review duplicates`, `review conflicts`, `review code`, `activity` (was `changes`), `tidy <job>` (was
@@ -145,7 +145,7 @@ schema v22), so going back to 1.5.0 needs no restore.
   lasts one hour and works only on the MCP port; and redirects go only to claude.ai, chatgpt.com or this computer unless
   you allow another site at a terminal. You need your own HTTPS address that reaches your computer. This feature has had
   one dedicated security review (its findings are fixed) and no outside review: treat it as a preview. See docs/oauth.md.
-- **Passage pooling for keyword search (opt-in, off by default).** `monomem settings set passage_pooling on` also ranks
+- **Passage pooling for keyword search (opt-in, off by default).** `monomem settings set passage-pooling on` also ranks
   long notes by their best passage. It stays off because the measurement did not justify it: on the held-out half,
   LongMemEval-S strict Rall@5 went down 1.2 points and LoCoMo-10 R@5 went up 0.4-0.8; the database grows about 37 %; and a
   keyword search with common words is about 12 times slower at 10,000 notes. Not available on an encrypted store.

@@ -67,7 +67,7 @@ Why shown, in {}: files = linked to files you changed, kw = matches your branch,
   shown is only `{recent Nd}`.
 - **Needs you** is one line at the top when something only the person can settle
   waits, with one command: for example `Monomem: 3 unconfirmed notes (from
-  outside, not shown) wait for the user: monomem review.` Unconfirmed notes are
+  outside content, not shown) wait for the user: monomem review.` Unconfirmed notes are
   counted there once, never as a second line.
 - **Project facts** is one line with the current value of every recorded fact
   (`facts` on a write; `monomem facts` lists them all), with the note and its

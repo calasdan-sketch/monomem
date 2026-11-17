@@ -1,4 +1,4 @@
-// `monomem settings set passage_pooling on|off`: opt-in passage pooling for keyword search (store/passages.ts).
+// `monomem settings set passage-pooling on|off` (passage_pooling also works): opt-in passage pooling for keyword search (store/passages.ts).
 // On builds the passage index now (so the first search does not wait) and says what it cost; off removes it.
 import type { Store } from "../store.js";
 import { PASSAGE_SETTING, dropPassages, passageCount, syncPassages } from "../store/passages.js";
@@ -7,12 +7,12 @@ import { PASSAGE_SETTING, dropPassages, passageCount, syncPassages } from "../st
 export function passagePoolingLine(store: Store): string {
   const on = store.getMeta(PASSAGE_SETTING) === "on";
   const sealed = on && store.sealsWrites() ? " (not used: this store is encrypted)" : "";
-  return `passage_pooling: ${on ? "on" : "off"}${on ? "" : " (default)"}${sealed}`;
+  return `passage-pooling: ${on ? "on" : "off"}${on ? "" : " (default)"}${sealed}`;
 }
 
-/** Apply `set passage_pooling <value>`. Returns the message to print, or throws on a bad value. */
+/** Apply `set passage-pooling <value>`. Returns the message to print, or throws on a bad value. */
 export function setPassagePooling(store: Store, value: string): string {
-  if (value !== "on" && value !== "off") throw new Error("passage_pooling must be on or off");
+  if (value !== "on" && value !== "off") throw new Error("passage-pooling must be on or off");
   if (value === "off") {
     store.setMeta(PASSAGE_SETTING, "off");
     dropPassages(store);

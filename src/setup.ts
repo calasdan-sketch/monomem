@@ -1916,9 +1916,11 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   if (!opts.terse) {
     io.out("What I found:");
     for (const t of found) {
-      if (t.id === "project" && !t.exists) continue;
-      io.out(`  ${t.label.padEnd(26)} ${(t.exists ? "found" : t.present ? "installed, no config file yet" : "not found").padEnd(30)}  ${t.present ? t.file : ""}`.trimEnd());
+      if ((t.id === "project" && !t.exists) || (!t.exists && !t.present)) continue;
+      io.out(`  ${t.label.padEnd(26)} ${(t.exists ? "found" : "installed, no config file yet").padEnd(30)}  ${t.present ? t.file : ""}`.trimEnd());
     }
+    const missing = found.filter((t) => t.id !== "project" && !t.exists && !t.present).map((t) => t.label); // one line, not one row each
+    if (missing.length) io.out(`  Not found: ${missing.join(", ")}`);
     io.out("");
   }
 
