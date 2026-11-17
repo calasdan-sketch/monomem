@@ -185,8 +185,8 @@ describe("CLI lines", () => {
     const text = conflictLines(groupConflicts(findConflicts(s))).join("\n");
     assert.match(text, /deploy target\n {2}Fly\.io\n/);
     assert.match(text, /\n {2}Render\n/);
-    assert.ok(text.includes(`monomem supersede --old ${a} --new-id ${b}`));
-    assert.ok(text.includes(`monomem supersede --old ${b} --new-id ${a}`));
+    assert.ok(text.includes(`monomem replace --old ${a} --new-id ${b}`));
+    assert.ok(text.includes(`monomem replace --old ${b} --new-id ${a}`));
     assert.ok(text.includes(`monomem pin ${a}`) && text.includes(`monomem pin ${b}`));
     assert.ok(text.includes('monomem trust distrust "alice" --namespace "default"'));
     assert.ok(!/or the reverse/.test(text));
@@ -284,7 +284,7 @@ describe("dashboard conflicts UI", () => {
     assert.ok(!/Replace #/.test(html));
     const keeps = html.match(/<button[^>]*>Keep /g) ?? [];
     assert.equal(new Set(keeps.map((k) => k.match(/class='[^']*'/)?.[0])).size, 1, "same class on both Keep buttons: neither is primary");
-    assert.ok(html.includes("class='ghost'") && !html.includes("<button>"));
+    assert.ok(!/class='primary'/.test(html), "no Keep is the primary button: no value is the default");
     assert.ok(html.includes("id='cfdlg0'"), "the confirmation lives inside the card");
   });
   test("a pinned note hides the Keep that would change it and says agents cannot change it", () => {
@@ -294,7 +294,7 @@ describe("dashboard conflicts UI", () => {
     const html: string = ctx.cfRow(g, 0);
     assert.ok(!html.includes("Keep Fly.io"), "keeping #1 would change the pinned #2");
     assert.ok(html.includes("Keep Render"));
-    assert.ok(html.includes("#2 pinned: agents cannot change it; the owner can (CLI or an admin key)"));
+    assert.ok(html.includes("#2 pinned: apps cannot change it; you can"));
     assert.ok(!html.includes("Pin #2"));
   });
   test("everything from the server is escaped, in the card and in the dialog", async () => {
@@ -352,7 +352,7 @@ describe("dashboard conflicts UI", () => {
     assert.deepEqual(calls.find((c) => c.path === "/supersede/preview")!.body, { old_ids: [2], new_id: 1, gui: true });
     const d: string = el("cfdlg0").innerHTML;
     assert.match(d, /its 2 other facts go with it/);
-    assert.match(d, /monomem supersede undo 2/);
+    assert.match(d, /Nothing is deleted\. You can undo it right after\./);
     assert.ok(!/Says|ARE YOU SURE/.test(d));
     ctx.cfAct(0, 0);
     await settle();
@@ -470,7 +470,7 @@ describe("adoption wording, key drift, session start", () => {
     for (const [k, v1, v2] of [["database", "pg", "mysql"], ["test_runner", "jest", "vitest"]] as const) { mk(s, "alice", `x${k}`, "y", { [k]: v1 }); mk(s, "bob", `y${k}`, "y", { [k]: v2 }); }
     const out = disputedLines(s, "default");
     assert.equal(out.split("\n").length, 2);
-    assert.match(out, /\(\+1 more: monomem conflicts\)$/);
+    assert.match(out, /\(\+1 more: monomem review conflicts\)$/);
     assert.equal(disputedLines(s, { namespace: "elsewhere" }), "");
     // honest size: the worst case (2 lines, "+N more") in the 4-chars-a-token estimate the rest of the context uses
     assert.ok(Math.ceil(out.length / 4) <= 90, `${Math.ceil(out.length / 4)} tokens`);

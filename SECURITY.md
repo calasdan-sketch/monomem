@@ -6,8 +6,12 @@ content as untrusted input to your agents** — see "Memory safety" below.
 Monomem was renamed from OneMemory. Version numbers in this file that say OneMemory belong to the old name and its
 numbering (1.x and 2.x); Monomem restarted at 1.0.0 (see [CHANGELOG.md](./CHANGELOG.md)).
 
-To check your own setup, run `monomem drill` (replays 20 known memory-poisoning attacks on a copy of your store) and
-`monomem health` (turns that and your security settings into one A to F grade, with the rule printed).
+A command or task that came from outside content (or was built on a distrusted note, or was flagged) cannot be approved,
+claimed or run by any app key, admin keys included, until a person confirms it at a terminal (`monomem confirm <id>`).
+
+To check your own setup, run `monomem check --attacks` (replays 26 known memory-poisoning attacks on a copy of your store; 2 of them are known
+misses) and `monomem check` (turns that and your security settings into one A to F grade, with the rule printed).
+How this maps to OWASP ASI06 (Memory & Context Poisoning), and results on published outside attack sets with every miss: [docs/security-scorecard.md](./docs/security-scorecard.md).
 
 ## Controls
 
@@ -127,14 +131,75 @@ To check your own setup, run `monomem drill` (replays 20 known memory-poisoning 
   and use no token. Anyone with shell access to the machine and its data
   directory owns the store. Since OneMemory 1.1.0 the *agent* on the stdio connection
   does not inherit all of that: its `state_delete` archives instead of
-  erasing, and the operator-only tools (`memory_quarantine`, `trust_policy`,
-  `memory_history_purge`, `memory_consolidate`, `task_approve`), the
-  `include_distrusted` flag and `task_put` with `approve: true` are off for
+  erasing, and the operator-only tools and actions (`memory_held`, `memory_trust`,
+  `memory_rollback`, `memory_history` action `purge`, `memory_tidy` action `merge`, `memory_tasks` action `approve`), the
+  `include_distrusted` flag and `memory_tasks` action `put` with `approve: true` are off for
   it unless the operator sets `MONOMEM_STDIO_ADMIN_TOOLS=1`.
 - **Not covered:** a live attacker holding a valid admin token; an attacker
   who can read both the database and the key file; prompt injection is
-  mitigated, not eliminated (OWASP GenAI #1); there is no OAuth, only static
-  bearer tokens.
+  mitigated, not eliminated (OWASP GenAI #1). OAuth for claude.ai and ChatGPT connectors exists since Monomem 1.6.0
+  but is off by default and is a preview: see "Remote connectors (OAuth)" below.
+
+## Remote connectors (OAuth, Monomem 1.6.0, preview)
+
+Monomem can answer the OAuth sign-in that claude.ai and ChatGPT custom connectors use, so they can read and write your
+notes over the internet. Full details: [docs/oauth.md](./docs/oauth.md).
+
+- **Off by default.** `monomem oauth on <your https address>` switches it on; a person must type `yes` at a terminal.
+  `monomem oauth off` switches the pages off and ends every connected app at once (their keys are removed).
+- **A pairing code from your terminal.** The consent page allows an app only with a code that `monomem oauth pair` prints
+  in a terminal on your computer (10 characters, 10 minutes, one use). No code, no access.
+- **Read, or read and write. Never admin.** An OAuth app can never delete notes, manage keys or approve held notes, and it
+  never sees private notes (ceiling `internal`). Every note it writes is marked as from outside.
+- **MCP-only, short-lived keys.** Each approved app becomes an ordinary app key (`oauth:<app name>`) that lasts one hour,
+  works only on the MCP port (`audience: "mcp"`; refused on the REST API and the dashboard) and is renewed with a
+  one-use refresh token. Keys and refresh tokens are stored as SHA-256 hashes only.
+- **Redirects** go only to claude.ai or chatgpt.com (https, on the default port only) or this computer, unless you allow
+  another site at a terminal.
+- **An app's name is never reused.** Each approved app gets a name no earlier app had (`oauth.json` keeps every name given
+  out). An app you approve again after it was ended is a new writer, so it starts on probation.
+- **You provide the HTTPS address** (Tailscale Funnel or a Cloudflare Tunnel); Monomem itself stays bound to `127.0.0.1`.
+- **Review status:** one dedicated security review (its findings are fixed), no outside review. Treat it as a preview.
+
+Known limits, stated plainly:
+- **Behind a tunnel every caller shares one rate-limit count.** Behind Cloudflare, `MONOMEM_TRUST_CLOUDFLARE=1` counts each
+  caller on its own address. Tailscale Funnel sends no header Monomem can trust, so there a stranger can use up the shared
+  limits (registrations, consent pages, renewals) and get in your way. That is a nuisance, not a way in.
+- **The terminal checks are speed bumps.** The `yes` that `oauth on` and `allow-redirect` ask for, and the terminal check on
+  `oauth pair`, stop an agent that runs commands in a shell. A program running as you can still write `oauth.json` or
+  `tokens.json` directly, as with every other Monomem key.
+- **Before going back to 1.5.0, run `monomem oauth off`.** 1.5.0 does not know an OAuth key's expiry or its MCP-only limit.
+  Each OAuth key in `tokens.json` carries a field that Monomem 1.5 refuses, so 1.5 does not load it, and going back does
+  not turn it into a permanent REST write key. Still run `monomem oauth off` first: it ends every connected app and removes its keys.
+
+## Guards and labels added in Monomem 1.6.0
+
+- **Action guard (opt-in, Claude Code only).** `monomem setup --action-guard` adds a hook that asks you before risky
+  actions once the session has read outside content. It matches command text, so **it is a speed bump, not a sandbox**.
+  It asks before: a push or a publish; a web request when any address on a curl or wget line is not on your known hosts;
+  reading key and credential files (also a curl `@file` upload and a Grep whose glob picks such a file); or writing
+  `AGENTS.md`, `CLAUDE.md`, Claude Code's settings, `.mcp.json`, `.cursor/hooks.json`, `~/.claude.json`, a GitHub
+  workflow or `known-hosts.json` (also by `cp` or `mv`). An alias, a script file or a tool it does not know goes by
+  without a question, and it lets the action through when it cannot decide (a missing or busy database); `monomem check`
+  then warns for 7 days. What it misses: [docs/action-guard.md](./docs/action-guard.md).
+- **Known hosts.** The web hosts the action guard does not ask about (default: github.com, registry.npmjs.org,
+  localhost), in `<data folder>/known-hosts.json`. Adding a host needs a person at a terminal
+  (`monomem settings known-hosts add`); no REST, MCP or dashboard route writes it.
+- **Writer probation.** A writer Monomem has not seen before (for example a new app key) is labelled `[new writer]`, and its
+  confirms of other writers' notes do not count, until it has 5 notes at least 24 hours old that nobody replaced, archived
+  or flagged, or a person runs `monomem trust confirm-writer <name>`. It is a label and a brake on agreement, not a block:
+  its notes are served from the first write. `monomem settings set probation-notes 0` turns it off.
+- **Claim checks.** A note can carry claims about code (a file holds a text, lists a dependency, exists, or a line range
+  has a given hash). Monomem checks them only against files git tracks, and refuses claims from connections that have no
+  folder of their own (HTTP, REST, OAuth), so a key cannot use a claim to guess the content of an untracked file such as
+  `.env`. A refused claim does not say which part failed. Monomem reads files only; it never runs a command.
+  [docs/claim-checks.md](./docs/claim-checks.md).
+- **Observed evidence** on a note is what the writer says it saw (`cited by the writer, not checked`). The
+  `facts-need-evidence` setting is a nudge, not a check: a writer can cite evidence it did not observe.
+- **`NODE_OPTIONS`.** The download runs Node's official `node.exe` (named `monomem-node.exe` in the Windows download; or `node`), which honours the `NODE_OPTIONS`
+  environment variable, as any Node program does. Anything that can set your environment can make it load other code.
+  That needs the same access as running a program as you, so it gives no one more than they already have, but do not set
+  `NODE_OPTIONS` for Monomem from a source you do not trust.
 
 ## Writer trust (OneMemory 1.4.0, hardened in 1.4.1)
 
@@ -160,7 +225,7 @@ note's original author. Read [docs/trust.md](./docs/trust.md) for exactly what t
 - Heartbeats from runners older than OneMemory 1.3.4 are no longer believed by default (`MONOMEM_RUNNER_ACCEPT_LEGACY=1`
   restores the old behaviour). A heartbeat counts only if the runner process wrote it and its own `alive_at` agrees
   with the server's clock within two minutes, so a tag-only touch of an old heartbeat does not make it fresh.
-- **Replacing a note (OneMemory 1.6.0)** is two steps: a preview that changes nothing, then a confirm that needs the preview's one-time
+- **Replacing a note** is two steps: a preview that changes nothing, then a confirm that needs the preview's one-time
   code. The code is signed with a key kept in the database, expires (default 10 minutes), works once, is bound to the caller
   (writer, scope, tenant), to the exact notes and revisions previewed and to the exact replacement text, and a wrong code gets
   one generic message. A distrusted writer, or a replacement that claims lower confidence, needs an administrator and an explicit
@@ -168,7 +233,7 @@ note's original author. Read [docs/trust.md](./docs/trust.md) for exactly what t
   warning; the tool descriptions tell it to show the full warning and wait for you, and the code makes it impossible to confirm
   without a preview, but a careless or manipulated agent could still confirm on its own. The command line asks you at your own
   keyboard and is the strongest gate.
-- **Version history (OneMemory 1.6.0)** keeps the text an edit replaces, so it can hold text someone removed on purpose. It is administrators-only,
+- **Version history** keeps the text an edit replaces, so it can hold text someone removed on purpose. It is administrators-only,
   bounded per note, encrypted at rest when encryption is on (plaintext otherwise, like note bodies), included in `export` unless
   `?history=0` / `--no-history`, and removable with `history purge`. Treat an export that carries history like the database.
 - Pre-upgrade copies (`<db>.pre-v16-backup`) are plaintext snapshots: remove them
@@ -215,7 +280,7 @@ limits, stated plainly:
   older sealed body of the same note from an earlier copy, and it reads as
   current. Encryption here is confidentiality only. Access-log rows are not
   bound to their row.
-- Quarantined (linter-held) writes are sealed too in OneMemory 1.2.1; in 1.2.0 they
+- Held writes (the ones the linter held) are sealed too in OneMemory 1.2.1; in 1.2.0 they
   were stored in plaintext. Monomem 1.5.0 binds each one to its own queue row.
 - Automatic capture with a key (Monomem 1.5.0): captured notes get fixed titles and
   no word tags, and the capture spool is sealed. Captured file paths and working
@@ -251,9 +316,9 @@ prompt-injection / "memory poisoning"** channel. Layers:
 
 - **Write-time linter:** secrets (API keys, private keys, JWTs,
   high-entropy tokens) are blocked; prompt-injection phrasing is
-  **quarantined**, invisible to search and recall until an admin approves it
-  (`monomem quarantine`). It is a pattern linter: it will miss novel
-  phrasing and can flag harmless text. It matches patterns, so a reworded attack passes (`monomem drill` lists this as a
+  **held**, invisible to search and recall until a person approves it
+  (`monomem review held`, or the dashboard's Held list). It is a pattern linter: it will miss novel
+  phrasing and can flag harmless text. It matches patterns, so a reworded attack passes (`monomem check --attacks` lists this as a
   known miss). Text written in invisible Unicode tag characters is decoded and scanned, and any such character
   is flagged, as is a run of four or more variation selectors (the England, Scotland and Wales flag emoji are
   exempt). The `source` field is not scanned; tag characters are removed from it when it is stored. See
@@ -273,20 +338,20 @@ CLI itself, so none of them stops an agent that can run commands.**
   without a terminal) are marked while that session is active (30 minutes idle ends it) and within `MONOMEM_TAINT_WINDOW_HOURS`.
   Not covered, by design: an app with its own key (set `reads_outside` on it), an agent that starts a stdio server from a
   folder with a clean hooked session, and what Monomem cannot see (`Bash` `curl`, apps without hooks). A person can end open
-  windows with `monomem taint clear`. A session summary is written only by the capture hooks; an agent cannot edit one.
+  windows with `monomem settings outside-window clear`. A session summary is written only by the capture hooks; an agent cannot edit one.
 - **Operator gate on the CLI.** These commands lower protection, so they refuse to run unless both standard input and
   output are a terminal, and then ask for a typed `yes`; there is no `--yes` for them: `unpin`, `approve-first <ns> off`, `approve-first --all off`,
-  `resume`, `quarantine approve`, `trust undistrust`, `trust attester-add`, `trust attester-unrevoke`, `token add`, `connect <app> --restricted`, `connect <app> --max <level>` and `connect <app> --print` (each makes a new write key; `--dry-run` makes none and is not gated) and `taint clear` (ends an open outside-content window). The same gate applies to a **pinned** note: `archive`, `restore`, `delete` (with or
-  without `--yes`), `supersede` (its `--old` notes and `supersede undo`) and `history restore` / `history purge` on a note you
-  pinned need the terminal and the typed `yes`. Also gated: `merge --yes` when any note in a group is pinned. Not gated, even on pinned notes: `rollback`, `decay --purge`, `import`,
+  `resume`, `review held approve`, `trust undistrust`, `trust attester-add`, `trust attester-unrevoke`, `keys add`, `connect <app> --restricted`, `connect <app> --max <level>` and `connect <app> --print` (each makes a new write key; `--dry-run` makes none and is not gated) and `settings outside-window clear` (ends an open outside-content window). The same gate applies to a **pinned** note: `archive`, `restore`, `delete` (with or
+  without `--yes`), `replace` (its `--old` notes and `replace undo`) and `history restore` / `history purge` on a note you
+  pinned need the terminal and the typed `yes`. Also gated: `tidy merge --yes` when any note in a group is pinned. Not gated, even on pinned notes: `rollback`, `tidy decay --purge`, `import`,
   and anything that calls the library directly (the gate is in the CLI, not the store).
-  Raising protection (`pin`, `approve-first on`, `trust distrust`, `token remove`) stays scriptable. This raises the bar
+  Raising protection (`pin`, `approve-first on`, `trust distrust`, `keys remove`) stays scriptable. This raises the bar
   against an agent that runs the CLI through a non-interactive shell tool (it gets a clear refusal and nothing changes).
   It is **not a guarantee**: a tool that allocates a pseudo-terminal can pass the terminal check and type the word, and
   an agent that can edit the database file or `tokens.json` directly does not need the CLI at all. Other CLI commands are
   not gated, including ones that weaken protection (`encrypt disable`) or destroy data (`delete --yes` on a note that is not pinned).
 - **Approve-first namespaces** (`monomem approve-first`): writes that do not come from the local CLI are held in the
-  quarantine queue until approved. An admin REST token is treated like any other REST caller, so it is held too.
+  review queue until a person approves them. An admin REST app key is treated like any other REST caller, so it is held too.
 - **Pinned notes** (`monomem pin`): only the CLI can edit, forget, restore, replace or delete them, and the CLI asks for the terminal and a typed `yes` first (see the operator gate above). An admin token can
   unpin a note over REST and then change it.
 - **Flood guard**: a writer label that makes too many writes in an hour is paused until `monomem resume`. The label is
@@ -325,12 +390,22 @@ None of the controls above stops an agent that can run commands as you. These do
 
    This stops the obvious commands. It does **not** stop a determined agent: `node <path>/cli.js`, `sqlite3`,
    `python -c`, `sh -c "monomem ..."`, `cmd /c monomem` or `cat` through a shell all get past prefix rules, and the
-   rules only cover Claude Code. It also blocks you from asking Claude to run `monomem doctor` for you. It does not
+   rules only cover Claude Code. It also blocks you from asking Claude to run `monomem check --setup` for you. It does not
    affect Monomem's own hooks or MCP server, which Claude Code starts directly rather than through its shell tool.
    Use your own data folder path if you set `MONOMEM_HOME`.
 
 ## Limitations (stated honestly)
 
+- **Updates and the checksum.** `monomem update` trusts whoever controls the GitHub release: it checks the download's
+  SHA-256 against the `SHA256SUMS` file from the same release. That catches a damaged download, but both files come from
+  the same place, so someone who could change the release could change both. To check a download by hand, run
+  `gh attestation verify <file> --repo calasdan-sketch/monomem`: it shows whether this project's GitHub build made the
+  file ([INSTALL.md](./INSTALL.md#download-no-nodejs-needed)). Monomem itself is not code-signed yet; the download's only
+  program is Node's official, signed `node`.
+- **Importing Claude Code's memory.** `monomem import --claude` stores each section of your `CLAUDE.md` files and Claude Code's auto memory as a note written by `import:claude` and tagged `claude-import`. Every imported note is held as outside content until you read it: `monomem review` lists them and `monomem confirm <id>` trusts one. Until then they stay out of session start and prompt recall. Read the `--dry-run` list first, especially for files another tool or person could have edited.
+  Code's auto memory as an ordinary note, written by `import:claude` and tagged `claude-import`. Only sections the write
+  check flags are held (`monomem review held`); the others are not held for you to confirm first, so read the
+  `--dry-run` list before you import, especially for files another tool or person could have edited.
 - Single-user, single-node SQLite. No clustering, no multi-tenant isolation
   beyond namespaces on one process.
 - Note history is bounded, not unlimited: `MONOMEM_HISTORY_VERSIONS` earlier
@@ -350,7 +425,7 @@ None of the controls above stops an agent that can run commands as you. These do
   duplicates.
 - Rate limiting is per client address and runs before authentication;
   behind a shared tunnel, clients share a bucket.
-- The audit log records operations, never note content. A failed audit write never fails the request: it is counted (`audit_failures` in `GET /stats`, a warning in `monomem health`) and the first failure, then every 1000th, is printed to stderr.
+- The audit log records operations, never note content. A failed audit write never fails the request: it is counted (`audit_failures` in `GET /stats`, a warning in `monomem check`) and the first failure, then every 1000th, is printed to stderr.
 - **Dispute notices are a nuisance vector.** Any writer that can write a fact can make
   Monomem print "writers disagree on <key>" at the start of sessions in that namespace. The
   notice never shows a fact value that the injection or directive scan, or the fact-value
@@ -396,8 +471,8 @@ These are known gaps, written down so nobody assumes they are covered:
   - `tokens.json` in the data folder: your app keys. Stored as one-way hashes (1.5.0; keys made by an older version are hashed the first time 1.5.0 starts). `tokens.json.bak` is not kept.
   - Each connected app's own config, which must hold the key in plain text to send it: `~/.claude.json` (Claude Code), `~/.cursor/mcp.json` (Cursor), VS Code's `Code/User/mcp.json`, and `./.mcp.json` when you connect with `--project`. (Keyless stdio entries hold no key.)
   - `.key` (the encryption key) and `.attest-key` (the signing key) in the data folder; the dashboard's `sessionStorage` while a tab is open; and the `login-code` file, whose `t` flag ("minted at a terminal") any program running as you can forge.
-  On Windows a data folder that Monomem creates is limited to your account and SYSTEM (`icacls`); that keeps other accounts on the PC out, not programs running as you. An older folder is checked by `monomem doctor`, which prints the fix command. `monomem connect ... --project` refuses to write a key into `./.mcp.json` when the folder is a git repository that does not ignore that file (it would be committed).
-  Any program running as your user, including an agent with a shell tool, can read these and act as that app. A key proves which key wrote, not which agent. That is why a second key's confirm is called corroboration ("two keys agreed") and never lifts the promotion block. `monomem doctor` lists which of these files exist and hold keys.
+  On Windows a data folder that Monomem creates is limited to your account and SYSTEM (`icacls`); that keeps other accounts on the PC out, not programs running as you. An older folder is checked by `monomem check --setup`, which prints the fix command. `monomem connect ... --project` refuses to write a key into `./.mcp.json` when the folder is a git repository that does not ignore that file (it would be committed).
+  Any program running as your user, including an agent with a shell tool, can read these and act as that app. A key proves which key wrote, not which agent. That is why a second key's confirm is called corroboration ("two keys agreed") and never lifts the promotion block. `monomem check --setup` lists which of these files exist and hold keys.
 - **No key rotation for at-rest encryption.** `monomem encrypt` uses one key. Changing it means decrypting and re-encrypting by hand (export, new store, import).
 - **A backup does not carry the encryption key by default** (`monomem backup --include-key` does copy it). Keep your own copy of the key somewhere separate.
 - **Host check is a second layer, not a wall.** A request under an unexpected host name is refused (see `MONOMEM_ALLOWED_HOSTS`), but a request through a proxy or tunnel is let through that check and still needs a valid key.

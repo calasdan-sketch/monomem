@@ -153,9 +153,9 @@ describe("A2: token administration", () => {
       const list = run("list");
       assert.ok(!list.stdout.includes(key));
       assert.match(list.stdout, /my app[\s\S]*sees up to: public/);
-      assert.match(run("remove", "nobody").stdout, /No token labelled "nobody"/);
-      assert.match(run("remove", "my app").stdout, /Removed token "my app"/);
-      assert.match(run("remove", "my app").stdout, /No token labelled/);
+      assert.match(run("remove", "nobody").stdout, /No app key named "nobody"/);
+      assert.match(run("remove", "my app").stdout, /Removed app key "my app"/);
+      assert.match(run("remove", "my app").stdout, /No app key named/);
       assert.match(run("new").stdout.trim(), /^[0-9a-f]{64}$/);
     } finally {
       rmSync(home, { recursive: true, force: true });
@@ -268,8 +268,10 @@ describe("A3: connect / open / setup", () => {
       assert.equal(d.status, 0, String(d.stderr));
       assert.match(String(d.stdout), /Paste this/);
       assert.ok(!existsSync(join(f.home, ".config", "zed")), "no settings file was written");
-      const w = f.run("connect", "windsurf");
-      assert.match(String(w.stdout), /Windsurf: I cannot check where its settings file lives/);
+      // Windsurf's file is documented now (setup/targets.ts): a dry run shows the plan for it and writes nothing.
+      const w = f.run("connect", "windsurf", "--dry-run");
+      assert.match(String(w.stdout), /mcp_config\.json/);
+      assert.ok(!existsSync(join(f.home, ".codeium")), "a dry run writes nothing");
     } finally {
       rmSync(f.home, { recursive: true, force: true });
     }
@@ -356,7 +358,7 @@ describe("A4: errors and CLI polish", () => {
     try {
       const short = String(s.run("help").stdout);
       assert.ok(short.split("\n").length < 70, "short help is one grouped page");
-      assert.match(short, /Get started[\s\S]*Daily[\s\S]*Trust[\s\S]*Maintenance/);
+      assert.match(short, /Get started[\s\S]*Notes[\s\S]*Review[\s\S]*Data and settings/);
       assert.match(short, /connect <app>[\s\S]*open /);
       assert.match(short, /monomem help --all/);
       assert.match(String(s.run("help", "--all").stdout), /rebuild-edges \[--threshold/);
@@ -458,7 +460,7 @@ describe("A4: errors and CLI polish", () => {
     const b2: any = await w.json();
     assert.equal(w.status, 403);
     assert.match(b2.error, /lacks the required 'write' scope/);
-    assert.match(b2.hint, /monomem token add <name> --scope write/);
+    assert.match(b2.hint, /monomem keys add <name> --scope write/);
     await new Promise<void>((r) => server.close(() => r()));
     store.close();
     // scope typo
@@ -499,7 +501,7 @@ describe("A4: errors and CLI polish", () => {
       const held = await fetch(base + "/notes", { method: "POST", headers: H, body: JSON.stringify({ title: "k", body: "key AKIA" + "1234567890ABCD12" }) });
       const hb: any = await held.json();
       assert.equal(held.status, 202);
-      assert.match(hb.quarantined.next, /monomem quarantine list/);
+      assert.match(hb.quarantined.next, /monomem review held list/);
     } finally {
       if (prev === undefined) delete process.env.MONOMEM_LINT;
       else process.env.MONOMEM_LINT = prev;
@@ -524,7 +526,7 @@ describe("A4: errors and CLI polish", () => {
     assert.equal(store.list({}).notes[0].sensitivity, "private");
     const del: any = await client.callTool({ name: "state_delete", arguments: { id: store.list({}).notes[0].id } });
     assert.equal(del.isError, true);
-    assert.match(del.content[0].text, /monomem token add <name> --admin/);
+    assert.match(del.content[0].text, /monomem keys add <name> --admin/);
     await client.close();
     store.close();
   });
@@ -545,16 +547,16 @@ describe("A5: the dashboard", async () => {
   });
 
   test("labels: badge with text, per-note selector, filter, new-note choice, who-am-I banner, apps panel, change window", () => {
-    assert.match(DASHBOARD_JS, /lvlBadge/);
-    assert.match(DASHBOARD_JS, /Who can see this\?/);
+    assert.match(DASHBOARD_JS, /role='menuitemradio'/);
+    assert.match(DASHBOARD_JS, /Who can see this/);
     assert.match(DASHBOARD_HTML, /id="lvlf"/);
     assert.match(DASHBOARD_HTML, /id="n_lvl"/);
     assert.match(DASHBOARD_JS, /\/whoami/);
     assert.match(DASHBOARD_JS, /Signed in as/);
     assert.match(DASHBOARD_JS, /NO LIMIT/);
     assert.match(DASHBOARD_JS, /\/tokens/);
-    assert.match(DASHBOARD_HTML, /id="chwin"/);
-    assert.match(DASHBOARD_HTML, /<option value="30d">/);
+    assert.match(DASHBOARD_JS, /id='chwin'/);
+    assert.match(DASHBOARD_JS, /\["24h","7d","30d"\]/);
   });
 
   test("accessible and themed: aria-live notice, labelled inputs, light/dark, no clickable anchors", () => {

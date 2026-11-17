@@ -38,6 +38,10 @@ import { isStale, stalenessConfig, annotateStaleness } from "./staleness.js";
 // At-rest encryption for note bodies. No module cycle: crypto.ts imports
 // only node: builtins, never store.ts.
 import { BodyIndex, type BodyIndexInfo } from "./store/body-index.js";
+import { migrate as migrateSchema } from "./store/migrate.js";
+import { beginImmediate } from "./store/write-lock.js";
+import { CHANGE_LOG_RETENTION_DAYS, FTS_PREFIX_OPT, SQL_NOW, DEFAULT_NAMESPACE } from "./store/schema-constants.js";
+export { CHANGE_LOG_RETENTION_DAYS, DEFAULT_NAMESPACE } from "./store/schema-constants.js";
 import { encrypt, decryptIfEncrypted, isEncrypted, loadKey, keyPath, noteAad, captureAad } from "./crypto.js";
 import { currentActor, currentWriter, cleanWriter, currentCeiling, actorStore } from "./actor.js";
 import { redact } from "./redact.js";
@@ -115,6 +119,9 @@ import * as surfaceOps from "./store/surfaces.js";
 import * as clientKeyOps from "./store/client-keys.js";
 import * as flagOps from "./store/flags.js";
 import * as codeAnchorOps from "./store/code-anchors.js";
+import * as claimOps from "./claims.js";
+import * as probationOps from "./store/probation.js";
+import * as evidenceOps from "./store/evidence.js";
 import type { CodeChange, CodeChangedItem } from "./store/code-anchors.js";
 export type { CodeChange, CodeChangedItem };
 import type { FlaggedItem, NoteFlag } from "./store/flags.js";
@@ -122,6 +129,8 @@ import * as reputationOps from "./store/reputation.js";
 import type { WriterCounts, WriterEvent } from "./store/reputation.js";
 export type { FlaggedItem, NoteFlag, WriterCounts, WriterEvent };
 import { tagsToStorage, parseTags, dueBase, needsHumanConfirm, sealQuarantineCol, openQuarantineCol, isoOrNull, clampInt, envCount, floodWritesPerHour, isOperatorWrite, isPlainObject } from "./store/rows.js";
+import { recordNoteReads, purgeNoteReads } from "./store/note-reads.js";
+import { scrubPassages } from "./store/passages.js";
 export { dueBase, needsHumanConfirm, clampInt, floodWritesPerHour };
 export { ValidationError, NoteUnreadableError, StaleWriteError, RebuildBusyError, CandidateScanError, QuarantinedError, WriterPausedError };
 
@@ -587,12 +596,6 @@ export interface QuarantineContext {
   notes: Array<{ id: number; title: string; updated_at: string; written_by: string }>;
 }
 
-/** How long change-log rows (incl. deletes) are kept for the change feed. */
-export const CHANGE_LOG_RETENTION_DAYS = 90;
-
-/** FTS5 prefix index on 1-character prefixes (see Store.ensureFtsPrefixIndex). */
-const FTS_PREFIX_OPT = "prefix='1'";
-
 /** Current schema version (PRAGMA user_version). See Store.migrate. */
 export const SCHEMA_VERSION = 22;
 
@@ -602,9 +605,6 @@ export const SCHEMA_VERSION = 22;
  * memory stays one page regardless of store size.
  */
 export const EXPORT_PAGE_SIZE = 500;
-
-/** SQLite expression for "now" as an ISO-8601 string (same shape as Date#toISOString). */
-const SQL_NOW = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 
 /**
  * Absolute TTL deadline for `days` from `from`, or null for "no TTL".
@@ -799,12 +799,25 @@ export interface NoteRecord {
   /** 1.4.0 (1d): one of those notes was written or touched by a distrusted writer (one hop); with its label. */
   built_on_distrusted?: true;
   built_on_distrusted_label?: string;
+  /** r2-innovation #1: this note restates note #echo_of, which the writer's session was shown (not a second source). */
+  echo_of?: number;
+  echo_label?: string;
   /** 1.5.0 (R2-02): "this looks wrong" flags by other writers on this version (store/flags.ts); with its label. */
   flagged?: NoteFlag[];
   flagged_label?: string;
   /** 1.5.0 (R2-03): files this note is about that changed in git since it was written (store/code-anchors.ts); with its label. */
   code_changed?: CodeChange[];
   code_changed_label?: string;
+  /** PLAN I: claims (memory_save claims, src/claims.ts) that no longer hold in the files; with its label. */
+  claims_failed?: claimOps.ClaimFailure[];
+  claims_label?: string;
+  /** 1.6 (PLAN D): the writer is on probation (store/probation.ts): not a second source yet; with its label. */
+  new_writer?: true;
+  new_writer_label?: string;
+  /** 1.6 (PLAN D): what the writer said it observed for this version (store/evidence.ts); [] = inferred; with its label. */
+  basis?: "observed" | "inferred";
+  evidence?: evidenceOps.EvidenceItem[];
+  evidence_label?: string;
 }
 
 /** The re-confirmation expiry settings (_meta; Store.confirmSettings). `set_at`: when the mode was last changed. */
@@ -878,8 +891,6 @@ export interface NoteRow {
   content_at?: string | null;
   writer_cwd?: string | null;
 }
-
-export const DEFAULT_NAMESPACE = "default";
 
 /** A pre-upgrade copy (`-backup`, a dated `-backup-YYYYMMDD-HHMMSS` kept copy) or an unfinished/killed one (`.<id>.partial` and its sidecars). */
 const PREMIGRATION_FILE_RE = /-backup(-\d{8}-\d{6}(-\d+)?)?(\.[0-9a-f]+\.partial(-journal|-wal|-shm)?)?$/;
@@ -958,6 +969,11 @@ function annotateRetention(row: NoteRow, rec: NoteRecord): NoteRecord {
     out.confirmed_by = row.confirmed_by ?? "";
     out.confirmed_kind = row.confirmed_kind ?? "";
     out.confirmed_rev = Number(row.confirmed_rev ?? 0);
+  }
+  const echo = out.tags.find((t) => t.startsWith(taintOps.ECHO_TAG_PREFIX));
+  if (echo && /^\d{1,15}$/.test(echo.slice(taintOps.ECHO_TAG_PREFIX.length))) {
+    out.echo_of = Number(echo.slice(taintOps.ECHO_TAG_PREFIX.length));
+    out.echo_label = `[echo of #${out.echo_of}: restates a note this writer was shown; not a second source]`;
   }
   // 1.4.0: tainted, not grandfathered (=== null: a narrow projection without the column is never flagged), no confirm for this rev.
   if (row.grandfathered_at === null && isTainted(out.tags) && !(row.confirmed_kind && Number(row.confirmed_rev) === Number(row.rev))) {
@@ -1761,7 +1777,7 @@ export class Store {
       return;
     }
     if (found >= 1) this.preMigrationBackup(found);
-    this.db.exec("BEGIN IMMEDIATE");
+    beginImmediate(this.db);
     try {
       const v = version();
       if (v < SCHEMA_VERSION) {
@@ -1932,7 +1948,7 @@ export class Store {
     if (this.getMeta("labels_clean_v1") === "1") return;
     const own = !this.db.isTransaction;
     try {
-      if (own) this.db.exec("BEGIN IMMEDIATE");
+      if (own) beginImmediate(this.db);
       try {
         const plain: Array<[string, string]> = [
           ["notes", "written_by"],
@@ -2300,693 +2316,18 @@ export class Store {
 
   /** Bring a schema at version `v` up to SCHEMA_VERSION. Caller holds the write lock. */
   private migrate(v: number): void {
-    if (v < 1) {
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS notes (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          namespace TEXT NOT NULL DEFAULT '${DEFAULT_NAMESPACE}',
-          title TEXT NOT NULL,
-          body TEXT NOT NULL DEFAULT '',
-          tags TEXT NOT NULL DEFAULT '',
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_notes_namespace ON notes(namespace);
-        CREATE INDEX IF NOT EXISTS idx_notes_ns_created ON notes(namespace, created_at);
-        CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
-          title, body, tags,
-          content='notes', content_rowid='id', ${FTS_PREFIX_OPT}
-        );
-        CREATE TRIGGER IF NOT EXISTS notes_ai AFTER INSERT ON notes BEGIN
-          INSERT INTO notes_fts(rowid, title, body, tags)
-          VALUES (new.id, new.title, new.body, new.tags);
-        END;
-        CREATE TRIGGER IF NOT EXISTS notes_ad AFTER DELETE ON notes BEGIN
-          INSERT INTO notes_fts(notes_fts, rowid, title, body, tags)
-          VALUES('delete', old.id, old.title, old.body, old.tags);
-        END;
-      `);
-      // v1: note revision (compare-and-swap) + provenance source.
-      this.addColumn("notes", "rev", "INTEGER NOT NULL DEFAULT 1");
-      this.addColumn("notes", "source", "TEXT NOT NULL DEFAULT ''");
-    }
-    if (v < 2) {
-      // v2: optional semantic search. One embedding per note (raw Float32
-      // BLOB); ON DELETE CASCADE retires it with the note.
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS note_vectors (
-          note_id INTEGER PRIMARY KEY REFERENCES notes(id) ON DELETE CASCADE,
-          dim INTEGER NOT NULL,
-          model TEXT NOT NULL DEFAULT '',
-          vec BLOB NOT NULL,
-          updated_at TEXT NOT NULL
-        );
-      `);
-    }
-    if (v < 3) {
-      // v3: access tracking. access_count counts user-facing reads;
-      // last_accessed is the latest read (NULL = never read). Writes leave
-      // both alone.
-      this.addColumn("notes", "access_count", "INTEGER NOT NULL DEFAULT 0");
-      this.addColumn("notes", "last_accessed", "TEXT");
-    }
-    if (v < 4) {
-      // v4: similarity edge graph, both directions stored, same-namespace only.
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS note_edges (
-          note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
-          neighbor_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
-          score REAL NOT NULL,
-          PRIMARY KEY (note_id, neighbor_id)
-        );
-        CREATE INDEX IF NOT EXISTS idx_note_edges_note_id ON note_edges(note_id);
-      `);
-    }
-    if (v < 5) {
-      // v5: _meta key/value table + an FTS update trigger gated on content
-      // columns (access-counter bumps must not re-index FTS).
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS _meta (
-          key TEXT PRIMARY KEY,
-          value TEXT NOT NULL
-        );
-        DROP TRIGGER IF EXISTS notes_au;
-        CREATE TRIGGER notes_au AFTER UPDATE ON notes
-        WHEN (old.title IS NOT new.title OR old.body IS NOT new.body OR old.tags IS NOT new.tags)
-        BEGIN
-          INSERT INTO notes_fts(notes_fts, rowid, title, body, tags)
-          VALUES('delete', old.id, old.title, old.body, old.tags);
-          INSERT INTO notes_fts(rowid, title, body, tags)
-          VALUES (new.id, new.title, new.body, new.tags);
-        END;
-      `);
-    }
-    if (v < 6) {
-      // v6: neighbor-direction + (note_id, score) edge indexes.
-      this.db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_note_edges_neighbor ON note_edges(neighbor_id);
-        CREATE INDEX IF NOT EXISTS idx_note_edges_note_score ON note_edges(note_id, score DESC);
-      `);
-    }
-    if (v < 7) {
-      // v7: linter quarantine (held writes, never rows in `notes`) and
-      // plain-file sync identity (sync_map) + merge base (sync_base).
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS quarantine (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          op TEXT NOT NULL,
-          target_id INTEGER,
-          if_rev INTEGER,
-          namespace TEXT NOT NULL,
-          title TEXT,
-          body TEXT,
-          tags TEXT,
-          source TEXT,
-          created_at_override TEXT,
-          reasons TEXT NOT NULL,
-          created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS sync_map (
-          origin TEXT NOT NULL,
-          origin_id INTEGER NOT NULL,
-          local_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
-          PRIMARY KEY (origin, origin_id)
-        );
-        CREATE INDEX IF NOT EXISTS idx_sync_map_local ON sync_map(local_id);
-        CREATE TABLE IF NOT EXISTS sync_base (
-          local_id INTEGER PRIMARY KEY REFERENCES notes(id) ON DELETE CASCADE,
-          hash TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(updated_at, id);
-      `);
-    }
-    if (v < 8) {
-      // v8: change log for the change feed. One row per note create /
-      // content update / delete, written by TRIGGERS inside the writing
-      // transaction: `seq` is a local, monotonic commit-order sequence and
-      // `changed_at` a local stamp taken under the write lock -- never the
-      // writer-supplied updated_at (imports and sync keep old updated_at).
-      // Triggers also capture writes made by an older binary on the same
-      // file. Access-counter bumps are not changes (rev/content unchanged).
-      // Pruned to CHANGE_LOG_RETENTION_DAYS periodically (purgeChangeLog).
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS change_log (
-          seq INTEGER PRIMARY KEY AUTOINCREMENT,
-          note_id INTEGER NOT NULL,
-          kind TEXT NOT NULL,
-          namespace TEXT NOT NULL,
-          title TEXT NOT NULL DEFAULT '',
-          source TEXT NOT NULL DEFAULT '',
-          rev INTEGER,
-          changed_at TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_change_log_at ON change_log(changed_at);
-        CREATE TRIGGER IF NOT EXISTS notes_log_ai AFTER INSERT ON notes BEGIN
-          INSERT INTO change_log (note_id, kind, namespace, title, source, rev, changed_at)
-          VALUES (new.id, 'created', new.namespace, new.title, new.source, new.rev, ${SQL_NOW});
-        END;
-        CREATE TRIGGER IF NOT EXISTS notes_log_au AFTER UPDATE ON notes
-        WHEN (old.rev IS NOT new.rev OR old.title IS NOT new.title OR old.body IS NOT new.body
-              OR old.tags IS NOT new.tags OR old.namespace IS NOT new.namespace
-              OR old.source IS NOT new.source)
-        BEGIN
-          INSERT INTO change_log (note_id, kind, namespace, title, source, rev, changed_at)
-          VALUES (new.id, 'updated', new.namespace, new.title, new.source, new.rev, ${SQL_NOW});
-        END;
-        CREATE TRIGGER IF NOT EXISTS notes_log_ad AFTER DELETE ON notes BEGIN
-          INSERT INTO change_log (note_id, kind, namespace, title, source, rev, changed_at)
-          VALUES (old.id, 'deleted', old.namespace, old.title, old.source, NULL, ${SQL_NOW});
-        END;
-      `);
-      // Seed the log from recent history so the first feed read after the
-      // upgrade is not empty: notes changed within retention (by their
-      // updated_at) and the 1.1.0-rc tombstone table, oldest first.
-      const cutoff = new Date(Date.now() - CHANGE_LOG_RETENTION_DAYS * 86_400_000).toISOString();
-      const hasTombstones = Boolean(
-        this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'note_tombstones'").get()
-      );
-      this.db
-        .prepare(
-          `INSERT INTO change_log (note_id, kind, namespace, title, source, rev, changed_at)
-           SELECT id, kind, namespace, title, source, rev, at FROM (
-             SELECT id, CASE WHEN rev = 1 THEN 'created' ELSE 'updated' END AS kind,
-                    namespace, title, source, rev, updated_at AS at
-               FROM notes WHERE updated_at >= ?
-             ${hasTombstones
-               ? `UNION ALL SELECT note_id, 'deleted', namespace, title, source, NULL, deleted_at
-                    FROM note_tombstones WHERE deleted_at >= ?`
-               : ""}
-           ) ORDER BY at, id`
-        )
-        .run(...(hasTombstones ? [cutoff, cutoff] : [cutoff]));
-      this.db.exec("DROP TABLE IF EXISTS note_tombstones");
-      // 1.1.0-rc "last" markers used another key/value format.
-      this.db.exec("DELETE FROM _meta WHERE key LIKE 'changes_seen:%'");
-      // Quarantined updates remember whether the original patch moved the
-      // note; approval re-applies the namespace only then.
-      this.addColumn("quarantine", "set_namespace", "INTEGER NOT NULL DEFAULT 0");
-    }
-    if (v < 9) {
-      // v9 (a) sync_deleted: deleting a note that came from another machine
-      // must not resurrect it on the next import. sync_map/sync_base cascade
-      // away with the note, so a BEFORE DELETE trigger keeps its identity +
-      // merge base here; import skips the file unless it changed since.
-      // (b) change_log privacy: a deleted note's titles are blanked, and a
-      // rename keeps only the latest title, so /changes doesn't hold old
-      // titles for the whole retention window.
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS sync_deleted (
-          origin TEXT NOT NULL,
-          origin_id INTEGER NOT NULL,
-          hash TEXT,
-          PRIMARY KEY (origin, origin_id)
-        );
-        CREATE TRIGGER IF NOT EXISTS notes_sync_bd BEFORE DELETE ON notes BEGIN
-          INSERT OR REPLACE INTO sync_deleted (origin, origin_id, hash)
-          SELECT m.origin, m.origin_id, (SELECT b.hash FROM sync_base b WHERE b.local_id = old.id)
-            FROM sync_map m WHERE m.local_id = old.id;
-        END;
-        CREATE INDEX IF NOT EXISTS idx_change_log_note ON change_log(note_id);
-        DROP TRIGGER IF EXISTS notes_log_ad;
-        CREATE TRIGGER notes_log_ad AFTER DELETE ON notes BEGIN
-          UPDATE change_log SET title = '' WHERE note_id = old.id AND title <> '';
-          INSERT INTO change_log (note_id, kind, namespace, title, source, rev, changed_at)
-          VALUES (old.id, 'deleted', old.namespace, '', old.source, NULL, ${SQL_NOW});
-        END;
-        DROP TRIGGER IF EXISTS notes_log_au;
-        CREATE TRIGGER notes_log_au AFTER UPDATE ON notes
-        WHEN (old.rev IS NOT new.rev OR old.title IS NOT new.title OR old.body IS NOT new.body
-              OR old.tags IS NOT new.tags OR old.namespace IS NOT new.namespace
-              OR old.source IS NOT new.source)
-        BEGIN
-          INSERT INTO change_log (note_id, kind, namespace, title, source, rev, changed_at)
-          VALUES (new.id, 'updated', new.namespace, new.title, new.source, new.rev, ${SQL_NOW});
-          UPDATE change_log SET title = ''
-           WHERE old.title IS NOT new.title AND note_id = new.id AND title <> ''
-             AND seq < (SELECT max(seq) FROM change_log WHERE note_id = new.id);
-        END;
-      `);
-      this.db.exec("UPDATE change_log SET title = '' WHERE kind = 'deleted' OR note_id NOT IN (SELECT id FROM notes)");
-    }
-    if (v < 10) {
-      // v10 (a) at-rest encryption: body_enc holds the AES-256-GCM envelope.
-      //     When encryption is enabled the plaintext `body` column is left
-      //     EMPTY for encrypted notes so the external-content FTS5 index
-      //     never ingests ciphertext (it would match base64 noise). Search
-      //     therefore covers title+tags for encrypted notes; that tradeoff is
-      //     documented, not hidden. `body` stays the FTS source, unchanged.
-      // (b) retention: expires_at (TTL deadline) + archived_at (soft delete).
-      this.addColumn("notes", "body_enc", "TEXT");
-      this.addColumn("notes", "expires_at", "TEXT");
-      this.addColumn("notes", "archived_at", "TEXT");
-      // Archived notes drop out of the default list/search paths; this index
-      // keeps the archive view cheap without touching the live-note indexes.
-      this.db.exec(
-        "CREATE INDEX IF NOT EXISTS idx_notes_archived ON notes(archived_at, id)"
-      );
-    }
-    if (v < 11) {
-      // v11 (a) archive/restore are changes: add archived_at to the update
-      //     trigger's WHEN clause so the change feed (and sync consumers)
-      //     see a note being archived or restored. (b) quarantine.sealed:
-      //     1 when title/body/tags are stored as encrypted envelopes.
-      this.addColumn("quarantine", "sealed", "INTEGER NOT NULL DEFAULT 0");
-      this.db.exec(`
-        DROP TRIGGER IF EXISTS notes_log_au;
-        CREATE TRIGGER notes_log_au AFTER UPDATE ON notes
-        WHEN (old.rev IS NOT new.rev OR old.title IS NOT new.title OR old.body IS NOT new.body
-              OR old.tags IS NOT new.tags OR old.namespace IS NOT new.namespace
-              OR old.source IS NOT new.source OR old.archived_at IS NOT new.archived_at)
-        BEGIN
-          INSERT INTO change_log (note_id, kind, namespace, title, source, rev, changed_at)
-          VALUES (new.id, 'updated', new.namespace, new.title, new.source, new.rev, ${SQL_NOW});
-          UPDATE change_log SET title = ''
-           WHERE old.title IS NOT new.title AND note_id = new.id AND title <> ''
-             AND seq < (SELECT max(seq) FROM change_log WHERE note_id = new.id);
-        END;
-      `);
-    }
-    if (v < 12) {
-      // v12: change_log.actor = the label of the token / connection that made
-      //     the write (NOT the note's free-form `source`), so exclude_self
-      //     hides a consumer's own writes and nothing else. Rows written
-      //     before this version, by the CLI, by scripts or by any other tool
-      //     carry '' and fall back to `source` when filtered. The stamping is
-      //     done per connection by a TEMP trigger (see installActorStamp), so
-      //     the stored triggers are unchanged and foreign writers still work.
-      this.addColumn("change_log", "actor", "TEXT NOT NULL DEFAULT ''");
-    }
-    if (v < 13) {
-      // v13: server-stamped writer identity ("Who wrote this?"). written_by =
-      //     the last writer (token label, or the stdio / cli / server marker),
-      //     created_by = the first writer, imported_written_by = what an import
-      //     payload CLAIMED. Old rows get '' = unknown (never guessed from the
-      //     client-asserted `source`). Plaintext like title/tags. change_log and
-      //     quarantine carry the writer too, so the feed can filter on it and an
-      //     approved quarantined write keeps its real author.
-      this.addColumn("notes", "written_by", "TEXT NOT NULL DEFAULT ''");
-      this.addColumn("notes", "created_by", "TEXT NOT NULL DEFAULT ''");
-      this.addColumn("notes", "imported_written_by", "TEXT NOT NULL DEFAULT ''");
-      this.addColumn("change_log", "written_by", "TEXT NOT NULL DEFAULT ''");
-      this.addColumn("quarantine", "written_by", "TEXT NOT NULL DEFAULT ''");
-      // The permanent change_log triggers copy the NOTE's writer, so the feed
-      // can never disagree with the row (quarantine approval, imports, and
-      // writers that never register a function all stay correct).
-      this.createLogTriggers();
-      // Composite index shaped like the list / search queries (namespace +
-      // writer filter, newest first). A bare index on the writer column is
-      // very low cardinality (most rows share one value) and made the planner
-      // scan and sort nearly the whole table.
-      this.db.exec("DROP INDEX IF EXISTS idx_notes_written_by");
-      this.db.exec("CREATE INDEX IF NOT EXISTS idx_notes_ns_writer ON notes(namespace, written_by, updated_at DESC)");
-    }
-    if (v < 14) {
-      // v14: the trust layer.
-      //  - notes: imported_created_by (the payload's unverified first-writer
-      //    claim), attested_writer / attested_by (a writer a TRUSTED server
-      //    vouched for, see attest.ts) and merged_from_writers (a JSON array of
-      //    the writers whose notes a consolidation merged: kept for good).
-      //  - change_log: a delete row remembers who wrote the note it deleted
-      //    (note_written_by, plus the attested / merged writers), so the feed can
-      //    filter on a note's author even after the note is gone.
-      //  - trust_distrust: the admin-managed per-namespace list of distrusted
-      //    writers. trust_attesters: public keys whose export attestations the
-      //    admin trusts. Both live in the database, never in a note, so a write
-      //    token cannot touch them.
-      //  - a stable per-database server_id (the existing `store_uuid` in _meta),
-      //    minted here so it exists before anything asks for it.
-      this.addColumn("notes", "imported_created_by", "TEXT NOT NULL DEFAULT ''");
-      this.addColumn("notes", "attested_writer", "TEXT NOT NULL DEFAULT ''");
-      this.addColumn("notes", "attested_by", "TEXT NOT NULL DEFAULT ''");
-      this.addColumn("notes", "merged_from_writers", "TEXT NOT NULL DEFAULT ''");
-      this.addColumn("change_log", "note_written_by", "TEXT NOT NULL DEFAULT ''");
-      this.addColumn("change_log", "note_attested_writer", "TEXT NOT NULL DEFAULT ''");
-      this.addColumn("change_log", "note_attested_by", "TEXT NOT NULL DEFAULT ''");
-      this.addColumn("change_log", "note_merged_from", "TEXT NOT NULL DEFAULT ''");
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS trust_distrust (
-          namespace TEXT NOT NULL,
-          writer TEXT NOT NULL,
-          added_at TEXT NOT NULL,
-          added_by TEXT NOT NULL DEFAULT '',
-          PRIMARY KEY (namespace, writer)
-        );
-        CREATE TABLE IF NOT EXISTS trust_attesters (
-          key_id TEXT PRIMARY KEY,
-          public_key TEXT NOT NULL,
-          server_id TEXT NOT NULL DEFAULT '',
-          label TEXT NOT NULL DEFAULT '',
-          added_at TEXT NOT NULL,
-          added_by TEXT NOT NULL DEFAULT '',
-          not_after TEXT NOT NULL DEFAULT ''
-        );
-        CREATE TABLE IF NOT EXISTS trust_log (
-          seq INTEGER PRIMARY KEY AUTOINCREMENT,
-          at TEXT NOT NULL,
-          actor TEXT NOT NULL DEFAULT '',
-          action TEXT NOT NULL,
-          namespace TEXT NOT NULL DEFAULT '',
-          subject TEXT NOT NULL DEFAULT ''
-        );
-        CREATE INDEX IF NOT EXISTS idx_change_log_writer ON change_log(written_by, seq);
-      `);
-      this.createDeleteTrigger();
-      this.db.prepare("INSERT OR IGNORE INTO _meta (key, value) VALUES ('store_uuid', ?)").run(randomUUID());
-    }
-    if (v < 15) {
-      // v15 (1.6.0): replacing a memory is never silent, never destructive, and never a one-way door.
-      //  - notes.confidence / confidence_by: an optional CLAIM (0..1) and the writer who made it.
-      //  - notes.superseded_by / superseded_at / superseded_by_writer: a note a confirmed replacement retired. The note is also
-      //    archived (archived_at), so every existing read path already leaves it out; these columns say WHY and by what.
-      //  - note_history: earlier titles and bodies of a note (bounded per note), so a bad overwrite can be undone. Bodies are
-      //    sealed like note bodies when at-rest encryption is on. Gone with the note on a hard delete.
-      //  - supersede_used: single-use marks for confirmation tokens (a token works once).
-      //  - supersede_log: who retired / restored what, and when (kept; the notes themselves are never deleted).
-      this.addColumn("notes", "confidence", "REAL");
-      this.addColumn("notes", "confidence_by", "TEXT NOT NULL DEFAULT ''");
-      this.addColumn("notes", "superseded_by", "INTEGER");
-      this.addColumn("notes", "superseded_at", "TEXT");
-      this.addColumn("notes", "superseded_by_writer", "TEXT NOT NULL DEFAULT ''");
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS note_history (
-          hid INTEGER PRIMARY KEY AUTOINCREMENT,
-          note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
-          version INTEGER NOT NULL,
-          title TEXT NOT NULL,
-          body TEXT NOT NULL DEFAULT '',
-          body_enc TEXT,
-          tags TEXT NOT NULL DEFAULT '',
-          source TEXT NOT NULL DEFAULT '',
-          written_by TEXT NOT NULL DEFAULT '',
-          claimed_writer TEXT NOT NULL DEFAULT '',
-          imported INTEGER NOT NULL DEFAULT 0,
-          merged_from TEXT NOT NULL DEFAULT '',
-          confidence REAL,
-          saved_at TEXT NOT NULL,
-          saved_by TEXT NOT NULL DEFAULT '',
-          reason TEXT NOT NULL DEFAULT 'update',
-          bytes INTEGER NOT NULL DEFAULT 0,
-          UNIQUE (note_id, version)
-        );
-        CREATE INDEX IF NOT EXISTS idx_note_history_note ON note_history(note_id, version);
-        CREATE TABLE IF NOT EXISTS supersede_used (
-          nonce TEXT PRIMARY KEY,
-          used_at TEXT NOT NULL,
-          expires_ms INTEGER NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS supersede_log (
-          seq INTEGER PRIMARY KEY AUTOINCREMENT,
-          at TEXT NOT NULL,
-          actor TEXT NOT NULL DEFAULT '',
-          action TEXT NOT NULL,
-          namespace TEXT NOT NULL DEFAULT '',
-          old_id INTEGER NOT NULL,
-          new_id INTEGER,
-          flags TEXT NOT NULL DEFAULT ''
-        );
-        CREATE INDEX IF NOT EXISTS idx_notes_superseded ON notes(superseded_by);
-      `);
-      // The confirmation-token key is made now (a preview must write nothing).
-      this.feedKey();
-    }
-    if (v < 16) {
-      // v16 (2.0.0): automatic memory. Captured observations and session summaries are ordinary notes rows with a kind, so
-      // they inherit lint, quarantine, history, FTS and trust. Every existing read asks for kind 'note' only (RangeOpts.kinds).
-      //  - sessions: one row per agent session (cwd, counts, how far the distiller got, its summary note).
-      //  - capture_events: raw hook events, short-lived (MONOMEM_CAPTURE_RETENTION_DAYS, see sweepCaptureEvents), never
-      //    synced. `output` / `input` are sealed into output_enc / input_enc like a note body when at-rest encryption is on.
-      //  - note_files: which files an observation read or changed (gone with the note).
-      //  - file_context_seen: which files a session was already shown context for.
-      this.addColumn("notes", "kind", "TEXT NOT NULL DEFAULT 'note'");
-      this.addColumn("notes", "session_id", "TEXT NOT NULL DEFAULT ''");
-      this.addColumn("notes", "obs_type", "TEXT NOT NULL DEFAULT ''");
-      this.db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_notes_kind_session ON notes(namespace, kind, session_id, created_at);
-        CREATE TABLE IF NOT EXISTS sessions (
-          id TEXT PRIMARY KEY,
-          namespace TEXT NOT NULL DEFAULT '',
-          cwd TEXT NOT NULL DEFAULT '',
-          agent TEXT NOT NULL DEFAULT 'claude-code',
-          started_at TEXT NOT NULL,
-          ended_at TEXT,
-          prompt_count INTEGER NOT NULL DEFAULT 0,
-          event_count INTEGER NOT NULL DEFAULT 0,
-          distilled_seq INTEGER NOT NULL DEFAULT 0,
-          summary_note_id INTEGER
-        );
-        CREATE TABLE IF NOT EXISTS capture_events (
-          seq INTEGER PRIMARY KEY AUTOINCREMENT,
-          session_id TEXT NOT NULL,
-          at TEXT NOT NULL,
-          event TEXT NOT NULL,
-          tool TEXT NOT NULL DEFAULT '',
-          input TEXT NOT NULL DEFAULT '',
-          input_enc TEXT,
-          output TEXT NOT NULL DEFAULT '',
-          output_enc TEXT,
-          ok INTEGER NOT NULL DEFAULT 1,
-          bytes INTEGER NOT NULL DEFAULT 0
-        );
-        CREATE INDEX IF NOT EXISTS idx_capture_events_session ON capture_events(session_id, seq);
-        CREATE TABLE IF NOT EXISTS note_files (
-          note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
-          path TEXT NOT NULL,
-          action TEXT NOT NULL,
-          PRIMARY KEY (note_id, path, action)
-        );
-        CREATE INDEX IF NOT EXISTS idx_note_files_path ON note_files(path);
-        CREATE TABLE IF NOT EXISTS file_context_seen (
-          session_id TEXT NOT NULL,
-          path TEXT NOT NULL,
-          PRIMARY KEY (session_id, path)
-        );
-      `);
-    }
-    if (v < 17) {
-      // v17: who read what, and the flood guard's write counter.
-      //  - access_log: one row per memory read (when, writer identity, tool or route, namespaces, a short redacted query
-      //    preview, how many results). Never note text or titles. The preview is sealed when at-rest encryption is on.
-      //    Kept MONOMEM_ACCESS_LOG_DAYS (sweepExpired).
-      //  - write_rate: one row per counted create/update, per writer, for the rolling-hour flood check. Kept one hour.
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS access_log (
-          seq INTEGER PRIMARY KEY AUTOINCREMENT,
-          at TEXT NOT NULL,
-          writer TEXT NOT NULL DEFAULT '',
-          tool TEXT NOT NULL,
-          namespaces TEXT NOT NULL DEFAULT '',
-          query TEXT NOT NULL DEFAULT '',
-          results INTEGER NOT NULL DEFAULT 0
-        );
-        CREATE INDEX IF NOT EXISTS idx_access_log_at ON access_log(at);
-        CREATE TABLE IF NOT EXISTS write_rate (
-          writer TEXT NOT NULL,
-          at TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_write_rate ON write_rate(writer, at);
-      `);
-    }
-    if (v < 18) {
-      // v18: human-only notes and rollback by writer.
-      //  - notes.pinned: 1 = the operator pinned the note; only the local CLI may change it (see refuseAgentOnPinned). A column, not
-      //    a _meta list, so every read path shows it for free and an older build refuses this file (user_version) instead of
-      //    opening it and silently ignoring the pins.
-      //  - note_history_dropped: per note and per writer, when the versions that writer replaced were dropped from note_history
-      //    (pruned by the limits, or purged). No text. Lets a rollback say "cannot fully undo" instead of guessing.
-      this.addColumn("notes", "pinned", "INTEGER NOT NULL DEFAULT 0");
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS note_history_dropped (
-          note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
-          saved_by TEXT NOT NULL,
-          first_at TEXT NOT NULL,
-          last_at TEXT NOT NULL,
-          count INTEGER NOT NULL DEFAULT 0,
-          PRIMARY KEY (note_id, saved_by)
-        );
-      `);
-      //  - archive_log (+ triggers): archive/restore history for --as-of. Part of v18, so the migration (one transaction, under the
-      //    write lock) creates it once and a failure aborts the upgrade instead of being swallowed.
-      this.createArchiveLog();
-    }
-    if (v < 19) {
-      // v19: per-memory sensitivity labels (public < internal < private; see src/sensitivity.ts).
-      //  - notes.sensitivity: every existing note becomes "internal" (the default), so nothing changes for anyone until a
-      //    label is set. The column is NOT NULL, so a row can never be "unlabelled"; an unknown value is hidden from every
-      //    token that has a ceiling.
-      //  - change_log.note_sensitivity: the label a note had when it was deleted (the delete row outlives the note, and the
-      //    change feed must be able to hide it from a restricted token). Older delete rows read "internal".
-      //  - quarantine.sensitivity: the label a held write carries, so approving it does not quietly relabel the note.
-      // An older build refuses a v19 file ("newer than this build supports") instead of opening it and ignoring the labels.
-      this.addColumn("notes", "sensitivity", `TEXT NOT NULL DEFAULT '${DEFAULT_SENSITIVITY}'`);
-      this.addColumn("change_log", "note_sensitivity", `TEXT NOT NULL DEFAULT '${DEFAULT_SENSITIVITY}'`);
-      this.addColumn("quarantine", "sensitivity", `TEXT NOT NULL DEFAULT '${DEFAULT_SENSITIVITY}'`);
-      this.db.exec("CREATE INDEX IF NOT EXISTS idx_notes_ns_sensitivity ON notes(namespace, sensitivity)");
-      // The default list (newest first inside one namespace) read and sorted the whole namespace; this index serves it in order.
-      this.db.exec("CREATE INDEX IF NOT EXISTS idx_notes_ns_updated ON notes(namespace, updated_at DESC, id DESC)");
-      this.db.exec("CREATE INDEX IF NOT EXISTS idx_notes_live_updated ON notes(archived_at, updated_at DESC, id DESC)");
-      this.createDeleteTrigger();
-    }
-    if (v < 20) {
-      // v20 (1.4.0): trust. Everything the release needs lands in this one step (one backup, one transaction).
-      //  - notes.grandfathered_at: when the upgrade ran, for every note that existed then (new notes leave it NULL). Notes
-      //    from before the upgrade are exempt from the new holds, and any re-confirmation clock starts here, so upgrading
-      //    hides nothing.
-      //  - notes.approved_at / approved_by: a held write that was approved (its created_at/updated_at keep the WRITTEN time).
-      //  - notes.confirmed_*: the latest qualifying confirm (kind human|admin|corroborated), valid only while confirmed_rev = rev.
-      //  - quarantine.forget_after / confidence: a held write keeps them, so approving it applies them.
-      //  - sessions.outside_at: when a captured session last read outside content (web, other MCP servers).
-      //  - confirmations: every confirm, counted or not (who, whether authenticated, what source they named; kind
-      //    'not_counted' with the rule in `reason`).
-      //  - note_links: add-only "derived from" links between notes.
-      for (const c of ["grandfathered_at", "approved_at", "approved_by", "confirmed_at", "confirmed_by", "confirmed_kind"]) this.addColumn("notes", c, "TEXT");
-      this.addColumn("notes", "confirmed_rev", "INTEGER");
-      // 1 = the last content write by the local CLI ran at a terminal (stdin and stdout); see retroTaint.
-      this.addColumn("notes", "cli_tty", "INTEGER");
-      this.addColumn("quarantine", "forget_after", "INTEGER");
-      this.addColumn("quarantine", "confidence", "REAL");
-      // A held edit that CLEARS its confidence or forget date (null): a JSON list of those field names, applied on approval.
-      this.addColumn("quarantine", "clears", "TEXT");
-      this.addColumn("sessions", "outside_at", "TEXT");
-      // The taint window asks "open sessions of this namespace" on every agent write.
-      this.db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_ns_open ON sessions(namespace, ended_at)");
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS confirmations (
-          id INTEGER PRIMARY KEY,
-          note_id INTEGER NOT NULL,
-          note_rev INTEGER NOT NULL,
-          at TEXT NOT NULL,
-          by TEXT NOT NULL,
-          by_authed INTEGER NOT NULL,
-          kind TEXT NOT NULL,
-          source TEXT NOT NULL,
-          source_key TEXT NOT NULL,
-          reason TEXT NOT NULL DEFAULT ''
-        );
-        CREATE INDEX IF NOT EXISTS idx_confirm_note ON confirmations(note_id, at);
-        CREATE TABLE IF NOT EXISTS note_links (
-          note_id INTEGER NOT NULL,
-          derived_from INTEGER NOT NULL,
-          added_at TEXT NOT NULL,
-          added_by TEXT NOT NULL,
-          PRIMARY KEY (note_id, derived_from)
-        );
-        CREATE INDEX IF NOT EXISTS idx_links_parent ON note_links(derived_from);
-      `);
-      this.db.prepare("UPDATE notes SET grandfathered_at = ? WHERE grandfathered_at IS NULL").run(new Date().toISOString());
-    }
-    if (v < 21) {
-      // v21 (1.5.0): everything round 1 of 1.5.0 needs, in this one step (one backup, one transaction). Later 1.5.0 items add
-      // their columns here too: the release ships as one schema bump. Every step is idempotent.
-      //  - notes.content_at: when the TITLE or BODY last changed (or the held write was written). The re-confirmation clock
-      //    starts from this, not from updated_at, so a tag/confidence/TTL edit or a corroboration can no longer restart it.
-      //    Existing notes get their updated_at, except a note whose current version carries a corroborated confirm: that
-      //    confirm used to restart the clock, so its time is kept and upgrading changes no due date (hides nothing).
-      //  - notes.writer_cwd: the folder of the local, unauthenticated process that last wrote the content (stdio server launch
-      //    folder, or the CLI at a non-terminal). Taint windows are matched by folder, not by the namespace the writer names.
-      //    Never exported or synced. NULL = unknown origin.
-      if (!this.hasColumn("notes", "content_at")) {
-        this.addColumn("notes", "content_at", "TEXT");
-        this.db.exec(
-          `UPDATE notes SET content_at = CASE WHEN confirmed_kind = 'corroborated' AND confirmed_rev = rev AND confirmed_at > updated_at THEN confirmed_at ELSE updated_at END WHERE content_at IS NULL`
-        );
-      }
-      this.addColumn("notes", "writer_cwd", "TEXT");
-      //  - capture_events.spool_id: the id a spooled hook event carries; a second insert of the same id is ignored, so a drain cut
-      //    off after the insert cannot store (and count) an event twice (R1-13). Live hook events have NULL.
-      //  - notes_links_ad: deleting a note removes its note_links rows (either column) and its confirmations, so no row names an id
-      //    that no longer exists (and a later note that reuses the id cannot inherit them). Orphans already there are removed.
-      //  - idx_notes_origin: a partial index over the notes the unconfirmed scan looks at (stamped, live, not grandfathered), so
-      //    session start does not read the whole table (R1-16). Its WHERE terms are repeated verbatim in Store.unconfirmedSql.
-      this.db.exec("CREATE INDEX IF NOT EXISTS idx_notes_origin ON notes(namespace) WHERE tags LIKE '%obs.origin:%' AND archived_at IS NULL AND grandfathered_at IS NULL");
-      this.addColumn("capture_events", "spool_id", "TEXT");
-      this.db.exec(`
-        DELETE FROM note_links WHERE note_id NOT IN (SELECT id FROM notes) OR derived_from NOT IN (SELECT id FROM notes);
-        DELETE FROM confirmations WHERE note_id NOT IN (SELECT id FROM notes);
-        DROP TRIGGER IF EXISTS notes_links_ad;
-        CREATE TRIGGER notes_links_ad AFTER DELETE ON notes BEGIN
-          DELETE FROM note_links WHERE note_id = old.id OR derived_from = old.id;
-          DELETE FROM confirmations WHERE note_id = old.id;
-        END;
-      `);
-      this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_capture_spool ON capture_events(spool_id) WHERE spool_id IS NOT NULL");
-    }
-    if (v < 22) {
-      // v22 (1.5.0, round 2): one more step for the round-2 items (one backup, one transaction). Unreleased: later round-2
-      // items add their tables HERE. To add a table: CREATE it in this exec, add its "DELETE FROM <table> WHERE note_id =
-      // old.id;" line to the notes_links_ad trigger at the end, and drop it in test/legacy-db.ts (the v22 block). Idempotent.
-      //  - F-05: idx_note_edges_note_id is a prefix of note_edges' primary key (pure write cost): dropped. (archived_at, kind)
-      //    makes the unfiltered live COUNT covering.
-      //  - note_flags (R2-02): "this looks wrong" flags. Nothing in the note changes; a flag names the rev it was about.
-      //  - note_client_keys (R2-04): idempotency keys on note writes, per writer, stored hashed (never the raw key).
-      //  - writer_events (R2-08): what happened to a writer's writes (held by the linter, rejected, rolled back, flag upheld,
-      //    replaced), for the counts `monomem trust` shows. Counts only: no row outlives its usefulness by naming content, and
-      //    the rows stay when a note is deleted (the count is about the writer, not the note).
-      //  - code_anchors (R2-03): the files a note is about, each with its git blob, the commit and the repository root at
-      //    write time. Plain paths (like note_files), never note text.
-      //  - idx_notes_obs, idx_notes_tag_task, idx_notes_tag_convention, idx_notes_kind_summary, idx_notes_pinned,
-      //    idx_notes_facts (round 4, 100k gate): session start's decisions, conventions, open-task count, latest summary, pinned
-      //    notes and fact notes read only those rows, not the whole namespace. The partial ones are named in the query (INDEXED
-      //    BY, see TAG_INDEXES, pinnedNotes, liveFactNotesIn) because the planner cannot tell a rare row from a common one.
-      this.db.exec(`
-        DROP INDEX IF EXISTS idx_note_edges_note_id;
-        CREATE INDEX IF NOT EXISTS idx_notes_live_kind ON notes(archived_at, kind);
-        CREATE INDEX IF NOT EXISTS idx_notes_obs ON notes(obs_type, updated_at DESC, id DESC);
-        CREATE INDEX IF NOT EXISTS idx_notes_tag_task ON notes(updated_at DESC, id DESC) WHERE instr(tags, '"task"') > 0;
-        CREATE INDEX IF NOT EXISTS idx_notes_tag_convention ON notes(updated_at DESC, id DESC) WHERE instr(tags, '"convention"') > 0;
-        CREATE INDEX IF NOT EXISTS idx_notes_kind_summary ON notes(updated_at DESC, id DESC) WHERE kind = 'summary';
-        CREATE INDEX IF NOT EXISTS idx_notes_pinned ON notes(id) WHERE pinned = 1;
-        CREATE INDEX IF NOT EXISTS idx_notes_facts ON notes(id) WHERE tags LIKE '%"fact:%' AND archived_at IS NULL AND superseded_at IS NULL;
-        CREATE TABLE IF NOT EXISTS note_flags (
-          id INTEGER PRIMARY KEY,
-          note_id INTEGER NOT NULL,
-          note_rev INTEGER NOT NULL,
-          flagged_by TEXT NOT NULL,
-          reason TEXT NOT NULL DEFAULT '',
-          at TEXT NOT NULL,
-          tainted INTEGER NOT NULL DEFAULT 0,
-          cleared_at TEXT,
-          cleared_by TEXT
-        );
-        CREATE INDEX IF NOT EXISTS idx_note_flags_note ON note_flags(note_id, note_rev);
-        CREATE INDEX IF NOT EXISTS idx_note_flags_by ON note_flags(flagged_by, at);
-        CREATE TABLE IF NOT EXISTS note_client_keys (
-          writer TEXT NOT NULL,
-          key_hash TEXT NOT NULL,
-          note_id INTEGER NOT NULL,
-          at TEXT NOT NULL,
-          PRIMARY KEY (writer, key_hash)
-        );
-        CREATE INDEX IF NOT EXISTS idx_note_client_keys_note ON note_client_keys(note_id);
-        CREATE TABLE IF NOT EXISTS writer_events (
-          id INTEGER PRIMARY KEY,
-          writer TEXT NOT NULL,
-          event TEXT NOT NULL,
-          note_id INTEGER,
-          at TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_writer_events ON writer_events(at, writer);
-        CREATE TABLE IF NOT EXISTS code_anchors (
-          note_id INTEGER NOT NULL,
-          path TEXT NOT NULL,
-          blob TEXT NOT NULL,
-          commit_sha TEXT NOT NULL,
-          repo_root TEXT NOT NULL,
-          at TEXT NOT NULL,
-          PRIMARY KEY (note_id, path)
-        );
-        DELETE FROM code_anchors WHERE note_id NOT IN (SELECT id FROM notes);
-        DELETE FROM note_flags WHERE note_id NOT IN (SELECT id FROM notes);
-        DELETE FROM note_client_keys WHERE note_id NOT IN (SELECT id FROM notes);
-        DROP TRIGGER IF EXISTS notes_links_ad;
-        CREATE TRIGGER notes_links_ad AFTER DELETE ON notes BEGIN
-          DELETE FROM note_links WHERE note_id = old.id OR derived_from = old.id;
-          DELETE FROM confirmations WHERE note_id = old.id;
-          DELETE FROM note_flags WHERE note_id = old.id;
-          DELETE FROM note_client_keys WHERE note_id = old.id;
-          DELETE FROM code_anchors WHERE note_id = old.id;
-        END;
-      `);
-    }
+    migrateSchema(
+      {
+        db: this.db,
+        hasColumn: (table, column) => this.hasColumn(table, column),
+        addColumn: (table, column, decl) => this.addColumn(table, column, decl),
+        createLogTriggers: () => this.createLogTriggers(),
+        createDeleteTrigger: () => this.createDeleteTrigger(),
+        createArchiveLog: () => this.createArchiveLog(),
+        feedKey: () => this.feedKey(),
+      },
+      v
+    );
   }
 
   /** The delete log row also remembers the deleted note's writers (v14). Caller holds the write lock. */
@@ -3146,6 +2487,10 @@ export class Store {
       clientKey?: string;
       /** R2-03: files the note is about, as the request named them (checkFilesInput); anchored in the writer's git repository. */
       files?: string[];
+      /** PLAN I: claim checks and line citations, as the request gave them (src/claims.ts checks them now, before the lock). */
+      claims?: unknown;
+      /** 1.6: what the writer observed (checkEvidenceInput); [] = inferred. */
+      evidence?: evidenceOps.EvidenceItem[];
     } & LintOpts = {}
   ): NoteRecord {
     if (!opts.bulkImport) this.floodGate(opts.lint ?? "full");
@@ -3161,10 +2506,15 @@ export class Store {
     // 1.4.0 taint, before the hold so a held write keeps it. Internal writes for someone else (writtenBy: an approval, a
     // sync) and restores carry only what their own tags or `outside` say.
     // ponytail: a held create (quarantine) keeps the inherited taint but not the links themselves; carry them in the hold if asked.
-    const derived = this.derivedIds(input.derived_from);
+    const asked = this.derivedIds(input.derived_from);
+    // r2-innovation #1 (echo guard, store/taint.ts): restating a note this session was shown links to it and is labelled.
+    const echo = opts.bulkImport || opts.writtenBy !== undefined ? null : taintOps.echoOf(this, input.title ?? "", input.body ?? "");
+    const derived = echo !== null && !asked.includes(echo) ? [...asked, echo] : asked;
+    if (echo !== null) input = { ...input, tags: [...(input.tags ?? []).filter((t) => !t.startsWith(taintOps.ECHO_TAG_PREFIX)), `${taintOps.ECHO_TAG_PREFIX}${echo}`] };
     // R2-03: the git calls run here, before the write lock; a path outside the repository is refused before anything is stored.
     // ponytail: a held create (quarantine) does not keep its anchors; carry them in the hold if asked.
     const anchors = codeAnchorOps.prepareAnchors(opts.files);
+    const claims = claimOps.prepareClaims(opts.claims);
     const taint = [
       ...new Set([
         ...this.taintFor(input.outside, opts.bulkImport || opts.writtenBy !== undefined ? null : currentWriter()),
@@ -3251,6 +2601,7 @@ export class Store {
       // Key state is read INSIDE the write transaction (see writeKey): the
       // row is inserted with an empty body, then sealed against its own id.
       const encrypting = this.writeKey() !== null;
+      if (!opts.bulkImport && opts.writtenBy === undefined) probationOps.noteWriterSeen(this, writer, now);
       const result = this.db
         .prepare(
           `INSERT INTO notes (namespace, title, body, tags, source, written_by, created_by, imported_written_by,
@@ -3294,6 +2645,8 @@ export class Store {
       if (opts.clientKey !== undefined) clientKeyOps.recordClientKey(this, id, writer, opts.clientKey, now);
       this.addLinks(id, derived, writer, now);
       codeAnchorOps.setAnchors(this, id, anchors, now);
+      claimOps.setClaims(this, id, claims, now);
+      evidenceOps.setEvidence(this, id, startRev, opts.evidence, now);
       this.stampCliTerminal(id, writer);
       // An archived (restored-as-forgotten) note stays out of the edge graph.
       if (!archivedAt) this.noteWritten(namespace, id, { rev: startRev, title: input.title, body });
@@ -3549,7 +2902,7 @@ export class Store {
    * export/neighbors) funnels through here, so callers never see ciphertext
    * and never need to know encryption is on.
    */
-  private rec(row: NoteRow): NoteRecord {
+  /** @internal */ rec(row: NoteRow): NoteRecord {
     const r = rowToRecord(row, this.serverIdValue);
     if (row.body_enc) {
       // DecryptIfEncrypted throws on auth failure (wrong/tampered key) --
@@ -3572,7 +2925,7 @@ export class Store {
       r.access_count += p.n;
       if (!r.last_accessed || p.at > r.last_accessed) r.last_accessed = p.at;
     }
-    return codeAnchorOps.annotateCodeChanged(this, row, flagOps.annotateFlags(this, row, this.annotateConfirmRules(row, annotateRetention(row, r))));
+    return evidenceOps.annotateEvidence(this, row, probationOps.annotateProbation(this, row, claimOps.annotateClaims(this, row, codeAnchorOps.annotateCodeChanged(this, row, flagOps.annotateFlags(this, row, this.annotateConfirmRules(row, annotateRetention(row, r)))))));
   }
 
   /**
@@ -3973,7 +3326,7 @@ export class Store {
     if (existing.status === "superseded") {
       throw new ValidationError(
         `note ${id} was replaced by ${existing.superseded_by !== undefined ? `note ${existing.superseded_by}` : "another note"} and is only kept as a record, so it cannot be edited. ` +
-          `To bring it back first, undo the replacement (supersede undo).`
+          `To bring it back first, undo the replacement (replace undo).`
       );
     }
 
@@ -4853,13 +4206,15 @@ export class Store {
     const nsRow = this.db.prepare("SELECT namespace FROM notes WHERE id = ?").get(id) as { namespace: string } | undefined;
     if (nsRow) refuseAgentInApproveFirst(this, nsRow.namespace, "bringing back a replaced note");
     const now = new Date().toISOString();
-    this.beginWrite();
+    // Inside a caller's transaction (a writer rollback undoes many replacements in one) the rows ride on it.
+    const nested = this.db.isTransaction;
+    if (!nested) this.beginWrite();
     try {
       const row = this.db.prepare("SELECT namespace, superseded_by FROM notes WHERE id = ? AND superseded_by IS NOT NULL").get(id) as
         | { namespace: string; superseded_by: number }
         | undefined;
       if (!row || this.idHidden(id)) {
-        this.rollbackTx();
+        if (!nested) this.rollbackTx();
         return null;
       }
       this.db
@@ -4868,8 +4223,9 @@ export class Store {
       this.db
         .prepare("INSERT INTO supersede_log (at, actor, action, namespace, old_id, new_id, flags) VALUES (?, ?, 'undo', ?, ?, ?, '')")
         .run(now, actor, row.namespace, id, row.superseded_by);
-      this.commitTx();
+      if (!nested) this.commitTx();
     } catch (e) {
+      if (nested) throw e;
       try {
         this.rollbackTx();
       } catch {
@@ -5012,7 +4368,7 @@ export class Store {
     if (this.idHidden(id)) return null;
     const cur = this.db.prepare("SELECT superseded_by FROM notes WHERE id = ?").get(id) as { superseded_by: number | null } | undefined;
     if (cur && cur.superseded_by !== null) {
-      throw new ValidationError(`note ${id} was replaced by ${this.idHidden(cur.superseded_by) ? "another note" : `note ${cur.superseded_by}`}; use "supersede undo" to bring it back (a plain restore would hide that it was replaced)`);
+      throw new ValidationError(`note ${id} was replaced by ${this.idHidden(cur.superseded_by) ? "another note" : `note ${cur.superseded_by}`}; use "replace undo" to bring it back (a plain restore would hide that it was replaced)`);
     }
     // A restored captured row counts as just read, or the next decay sweep would archive it again at once.
     this.writeTx(() =>
@@ -5040,10 +4396,8 @@ export class Store {
    * pass. Rows are read INSIDE the write transaction (in id-ordered pages, so
    * memory stays bounded on big stores): reading first and locking later
    * would encrypt a stale body and silently overwrite a concurrent edit.
-   * Returns the number of notes newly encrypted.
-   *
-   * Afterwards the plaintext words are scrubbed from the FTS segments and
-   * free pages (see scrubPlaintext).
+   * Returns the number of notes newly encrypted. Afterwards the plaintext words are scrubbed from the FTS segments and
+   * free pages (see scrubPlaintext); the passage index (pooling) is dropped inside the transaction.
    */
   encryptAll(key: Buffer): number {
     // Overwrite freed pages so dropped plaintext is not left in the file.
@@ -5083,6 +4437,7 @@ export class Store {
       this.sealHistory(key);
       this.sealCaptureEvents(key);
       this.sealAccessLog(key, true);
+      scrubPassages(this); // pooling never runs with a key: drop its plain passage index (store/passages.ts)
       this.commitTx();
     } catch (e) {
       try {
@@ -5343,7 +4698,7 @@ export class Store {
    * upgraded the file from another process can't slip in between the check and the write; this process then refuses.
    */
   /** @internal */ beginWrite(): void {
-    this.db.exec("BEGIN IMMEDIATE");
+    beginImmediate(this.db);
     const uv = Number((this.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
     if (uv > SCHEMA_VERSION) {
       this.db.exec("ROLLBACK");
@@ -8125,6 +7480,7 @@ export class Store {
       const namespaces = new Set(e.namespaces ?? []);
       let results = e.results ?? 0;
       const seen = new Set<unknown>();
+      const ids: number[] = [];
       const walk = (v: unknown, depth: number): void => {
         if (!v || typeof v !== "object" || depth > 6 || seen.has(v)) return;
         seen.add(v);
@@ -8132,6 +7488,7 @@ export class Store {
         const o = v as Record<string, unknown>;
         if (typeof o.id === "number") {
           results++;
+          ids.push(o.id);
           if (typeof o.namespace === "string") namespaces.add(o.namespace);
           return;
         }
@@ -8146,16 +7503,18 @@ export class Store {
       // (it used to, for up to the full busy timeout). A row skipped under contention is reported once per process.
       let wrote = false;
       this.bestEffortWrite(() => {
+        const at = new Date().toISOString();
         this.db
           .prepare("INSERT INTO access_log (at, writer, tool, namespaces, query, results) VALUES (?, ?, ?, ?, ?, ?)")
           .run(
-            new Date().toISOString(),
+            at,
             currentWriter(),
             e.tool.slice(0, 100),
             [...namespaces].filter(Boolean).sort().join(",").slice(0, 500),
             key ? encrypt(preview, key, ACCESS_AAD) : preview,
             Math.max(0, Math.floor(results) || 0)
           );
+        recordNoteReads(this.db, at, currentWriter(), e.tool.slice(0, 100), ids); // C23: which notes this read handed out
         this.bookkeepingChanges += 1;
         wrote = true;
       });
@@ -8198,7 +7557,9 @@ export class Store {
   /** Drop access-log rows past MONOMEM_ACCESS_LOG_DAYS (all of them when it is 0) and flood counts older than an hour. */
   private sweepAccessLog(now: number): void {
     const days = accessLogDays();
-    this.db.prepare("DELETE FROM access_log WHERE at < ?").run(days === 0 ? "9999" : new Date(now - days * 86_400_000).toISOString());
+    const cutoff = days === 0 ? "9999" : new Date(now - days * 86_400_000).toISOString();
+    this.db.prepare("DELETE FROM access_log WHERE at < ?").run(cutoff);
+    purgeNoteReads(this.db, cutoff);
     this.db.prepare("DELETE FROM write_rate WHERE at < ?").run(new Date(now - 3_600_000).toISOString());
   }
 
@@ -8304,7 +7665,7 @@ export class Store {
     if (this.dbPath === ":memory:" && !process.env.MONOMEM_AUDIT_LOG) return;
     if (receipt) this.ensureAuditKey();
     // Name the key that made the change (a label, never the key itself) so `monomem audit` can say who did what.
-    const who = actorStore.getStore()?.label;
+    const who = actorStore.getStore()?.label || (currentWriter().startsWith("stdio") ? currentWriter() : undefined); // a keyless local app: its stdio:<app> name
     const e = entry.label === undefined && who ? { ...entry, label: who } : entry;
     // Inside a transaction the write may still be rolled back: the line is written only once it commits (commitTx).
     if (this.db.isTransaction) return void this.pendingAudit.push([e, receipt]);
@@ -8838,6 +8199,12 @@ export class Store {
       }
     }
     return null;
+  }
+
+  /** The store a note first came from by file sync (the origin store id), or null for a note written here. */
+  syncOriginOf(localId: number): string | null {
+    const row = this.db.prepare("SELECT origin FROM sync_map WHERE local_id = ? LIMIT 1").get(localId) as { origin: string } | undefined;
+    return row ? row.origin : null;
   }
 
   /** Every (local id -> origin identity) link, for export. */

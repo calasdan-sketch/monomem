@@ -93,7 +93,10 @@ describe("R1-12 hidden notes answer like missing ones", () => {
       ["memory_flag", (id) => ({ id, reason: "" })],
       ["memory_flag", (id) => ({ id, reason: "x".repeat(201) })],
     ];
-    const out = async (name: string, args: Record<string, unknown>): Promise<string> => norm(0, JSON.stringify(await client.callTool({ name, arguments: args })));
+    // The 1.5-name hint ("x is now y") is shown once per agent, on whichever call comes first: it depends on call order,
+    // never on whether the note exists, so it is dropped before comparing.
+    const dropHint = (r: any) => ({ ...r, content: (r.content ?? []).filter((c: any) => !/ is now memory_\w+\. The old name still works\.\)$/.test(String(c.text ?? ""))) });
+    const out = async (name: string, args: Record<string, unknown>): Promise<string> => norm(0, JSON.stringify(dropHint(await client.callTool({ name, arguments: args }))));
     try {
       for (const [name, args] of tools) {
         const miss = await out(name, args(MISSING));

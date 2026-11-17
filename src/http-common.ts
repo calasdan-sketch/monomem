@@ -91,18 +91,21 @@ export function normalizeTokens(token: string | TokenEntry[]): TokenEntry[] {
  */
 export function exitOnListenError(server: Server, port: number, envVar: string, what: string): Server {
   return server.on("error", (e: NodeJS.ErrnoException) => {
-    if (e.code === "EADDRINUSE") {
-      console.error(
-        `[monomem] ${what} port ${port} is already in use -- is Monomem (or something else) already running? ` +
-          `Stop it, or pick another port with ${envVar}=<port>.`
-      );
-    } else if (e.code === "EACCES") {
-      console.error(`[monomem] no permission to listen on ${what} port ${port}; pick another with ${envVar}=<port>.`);
-    } else {
-      console.error(`[monomem] ${what} server failed to listen on port ${port}: ${e.message}`);
-    }
+    console.error(listenErrorMessage(e, port, envVar, what));
     process.exit(1);
   });
+}
+
+/** What went wrong listening on `port`, and what to do about it. */
+export function listenErrorMessage(e: NodeJS.ErrnoException, port: number, envVar: string, what: string): string {
+  if (e.code === "EADDRINUSE") {
+    return (
+      `[monomem] ${what} port ${port} is already in use -- is Monomem (or something else) already running? ` +
+      `Stop it, or pick another port with ${envVar}=<port>.`
+    );
+  }
+  if (e.code === "EACCES") return `[monomem] no permission to listen on ${what} port ${port}; pick another with ${envVar}=<port>.`;
+  return `[monomem] ${what} server failed to listen on port ${port}: ${e.message}`;
 }
 
 /**

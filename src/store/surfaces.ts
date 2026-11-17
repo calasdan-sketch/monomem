@@ -7,6 +7,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Store } from "../store.js";
 import { SPOOL_FILE } from "../capture.js";
+import { passageCount } from "./passages.js";
 
 export interface EncryptionSurface {
   surface: string;
@@ -82,7 +83,13 @@ export function encryptionSurfaces(s: Store, o: { dataDir: string; dbPath: strin
     counted("capture spool", spoolSealed, spoolPlain, `${SPOOL_FILE} lines waiting to be stored; plain lines are from before the key or before 1.5.0`),
     counted("captured titles and tags", capturedFixed, capturedWords, key ? "sealed here = a fixed title and no word tags; older captured notes keep their words" : "no key: captured titles and tags use the words of the session"),
     never("captured file paths and folders", n("SELECT COUNT(*) AS c FROM note_files") + n("SELECT COUNT(*) AS c FROM sessions WHERE cwd <> ''"), "never encrypted: a secret in a file or folder name stays readable"),
-    never("code anchors", n("SELECT COUNT(*) AS c FROM code_anchors"), "files a note was written about (state_write files): repository path, file path and git ids, never encrypted"),
+    never("code anchors", n("SELECT COUNT(*) AS c FROM code_anchors"), "files a note was written about (memory_save files): repository path, file path and git ids, never encrypted"),
+    // PLAN I: code_claims exists only once a note carried claims (src/claims.ts creates it).
+    never("claim checks", s.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'code_claims'").get() ? n("SELECT COUNT(*) AS c FROM code_claims") : 0, "checks a note carries (memory_save claims): repository path, file paths, check text and line hashes, never encrypted"),
+    // 1.6 (PLAN D): memory_save evidence (store/evidence.ts); its side table exists only once a note was saved with evidence.
+    ...(s.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'note_evidence'").get()
+      ? [counted("observed evidence", n("SELECT COUNT(*) AS c FROM note_evidence WHERE items LIKE 'v3:%'"), n("SELECT COUNT(*) AS c FROM note_evidence WHERE items NOT LIKE 'v3:%'"), "what a writer said it observed (memory_save evidence): sealed when saved with a key")]
+      : []),
     never("search index", notes, plainBodies ? `every title and tag, and the bodies of the ${plainBodies} plain notes; sealed bodies are not indexed on disk` : "every title and tag; sealed bodies are not indexed on disk"),
     {
       surface: "body search index",
@@ -91,6 +98,7 @@ export function encryptionSurfaces(s: Store, o: { dataDir: string; dbPath: strin
         ? `held in memory by each Monomem process that searches while encryption is on (servers build it at start, the hooks never do): every body's words, decrypted. Monomem never writes it to disk, but the OS can page it to swap or a hibernation file and a crash dump can contain it; MONOMEM_BODY_INDEX=off turns it off (in this process: ${s.bodyIndexInfo().state})`
         : "not used without a key: search reads the on-disk index (swap and crash-dump caveat applies only with a key; MONOMEM_BODY_INDEX=off turns it off)",
     },
+    never("passage index", passageCount(s), key ? "passage pooling never runs with a key; encrypt enable drops this index" : "with passage_pooling on: the words of plain note bodies, cut into passages, never encrypted"),
     never("change feed log", n("SELECT COUNT(*) AS c FROM change_log"), "titles of recent changes, kept for the change feed"),
     never("embeddings", n("SELECT COUNT(*) AS c FROM note_vectors"), "vectors are never encrypted; with embeddings on, the decrypted body is sent to your embeddings endpoint"),
     counted("access log", accessSealed, n("SELECT COUNT(*) AS c FROM access_log WHERE query <> ''") - accessSealed, "the redacted 120-character preview of what was asked"),

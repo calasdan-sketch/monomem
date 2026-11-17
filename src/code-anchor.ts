@@ -48,24 +48,22 @@ export function checkFilesInput(files: unknown): string[] | undefined {
   });
 }
 
-const inside = (root: string, p: string): boolean => p === root || p.startsWith(root.endsWith(sep) ? root : root + sep);
+export const inside = (root: string, p: string): boolean => p === root || p.startsWith(root.endsWith(sep) ? root : root + sep);
 
-/**
- * Anchors for `files` written from `cwd`: each path must be inside the repository that holds `cwd` (no absolute path
- * outside it, no symlink out of it) and tracked by git. [] when `cwd` is not in a repository with a commit (or git is
- * missing): the note is written without anchors, as before. Throws ValidationError for a path that breaks the rules.
- */
-export function anchorsFor(files: string[], cwd: string): CodeAnchor[] {
-  if (!files.length) return [];
+/** Where `files` (named from `cwd`) are in their git repository: the root as git names it, its real path, HEAD, and each path
+ * relative to the root (forward slashes). null when `cwd` is not in a repository with a commit (or git is missing). Throws
+ * ValidationError for a path outside the repository, through a symlink out of it, or naming a folder. `what` names the
+ * request field in messages. Shared by code anchors and claim checks (../claims.ts). */
+export function repoPaths(files: string[], cwd: string, what = "files"): { root: string; realRoot: string; commit: string; rels: string[] } | null {
   const top = git(cwd, ["rev-parse", "--show-toplevel", "HEAD"]);
   const [rootRaw, commit] = (top ?? "").split("\n").map((s) => s.trim());
-  if (!rootRaw || !/^[0-9a-f]{40,64}$/.test(commit ?? "")) return [];
+  if (!rootRaw || !/^[0-9a-f]{40,64}$/.test(commit ?? "")) return null;
   const root = resolve(rootRaw);
   let realRoot: string;
   try {
     realRoot = realpathSync.native(root);
   } catch {
-    return [];
+    return null;
   }
   // git reports the real path; a cwd reached through a link or an 8.3 short name (macOS /var -> /private/var, Windows
   // RUNNER~1) names the same folder differently, so a relative path is also tried from the real cwd.
@@ -75,35 +73,56 @@ export function anchorsFor(files: string[], cwd: string): CodeAnchor[] {
   } catch {
     /* unreadable cwd: keep it as given */
   }
-  const rels = [...new Set(files.map((f) => {
+  const rels = files.map((f) => {
     const given = resolve(cwd, f);
     const abs = inside(root, given) || inside(realRoot, given) ? given : resolve(realCwd, f);
-    if (!inside(root, abs) && !inside(realRoot, abs)) throw new ValidationError("files: a path must be inside this repository");
+    if (!inside(root, abs) && !inside(realRoot, abs)) throw new ValidationError(`${what}: a path must be inside this repository`);
     if (existsSync(abs)) {
       let real: string;
       try {
         real = realpathSync.native(abs);
       } catch {
-        throw new ValidationError("files: a path could not be checked");
+        throw new ValidationError(`${what}: a path could not be checked`);
       }
-      if (!inside(realRoot, real)) throw new ValidationError("files: a path leads outside this repository (symlink)");
-      if (statSync(real).isDirectory()) throw new ValidationError("files: name files, not folders");
+      if (!inside(realRoot, real)) throw new ValidationError(`${what}: a path leads outside this repository (symlink)`);
+      if (statSync(real).isDirectory()) throw new ValidationError(`${what}: name files, not folders`);
     }
     const rel = relative(inside(root, abs) ? root : realRoot, abs).split(sep).join("/");
-    if (!rel || rel.startsWith("../") || isAbsolute(rel)) throw new ValidationError("files: a path must be inside this repository");
+    if (!rel || rel.startsWith("../") || isAbsolute(rel)) throw new ValidationError(`${what}: a path must be inside this repository`);
     return rel;
-  }))];
-  // The blob in the index: what the file will be once committed. No filters run (ls-files never calls a clean filter).
-  const out = git(root, ["ls-files", "-s", "-z", "--", ...rels.map((r) => `:(literal)${r}`)]) ?? "";
+  });
+  return { root, realRoot, commit: commit!, rels };
+}
+
+/** The blob in git's index for each of `rels` that git tracks (path -> sha); an untracked path is absent. The blob is what
+ * the file will be once committed. No filters run (ls-files never calls a clean filter). Shared with claims.ts. */
+export function indexBlobs(root: string, rels: readonly string[]): Map<string, string> {
   const blobs = new Map<string, string>();
+  if (!rels.length) return blobs;
+  const out = git(root, ["ls-files", "-s", "-z", "--", ...rels.map((r) => `:(literal)${r}`)]) ?? "";
   for (const rec of out.split("\0")) {
     const m = /^\d+ ([0-9a-f]{40,64}) \d+\t(.+)$/s.exec(rec);
     if (m) blobs.set(m[2], m[1]);
   }
+  return blobs;
+}
+
+/**
+ * Anchors for `files` written from `cwd`: each path must be inside the repository that holds `cwd` (no absolute path
+ * outside it, no symlink out of it) and tracked by git. [] when `cwd` is not in a repository with a commit (or git is
+ * missing): the note is written without anchors, as before. Throws ValidationError for a path that breaks the rules.
+ */
+export function anchorsFor(files: string[], cwd: string): CodeAnchor[] {
+  if (!files.length) return [];
+  const where = repoPaths(files, cwd);
+  if (!where) return [];
+  const { root, commit } = where;
+  const rels = [...new Set(where.rels)];
+  const blobs = indexBlobs(root, rels);
   return rels.map((rel) => {
     const blob = blobs.get(rel);
     if (!blob) throw new ValidationError(`files: ${rel.slice(0, 120)} is not tracked by git here (git add it first)`);
-    return { path: rel, blob, commit: commit!, root };
+    return { path: rel, blob, commit, root };
   });
 }
 

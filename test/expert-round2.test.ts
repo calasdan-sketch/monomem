@@ -1,4 +1,4 @@
-import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
+import { slow } from "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
 // Expert round 2: names refused at write time, setup pins MONOMEM_HOME everywhere, edit cleans up, a damaged database is
 // reported, health's audit check survives rotation, recall wording and meter, MCP argument drift, writer identity, CLI
 // output, and audit lines only for committed writes.
@@ -13,7 +13,7 @@ import { DatabaseSync } from "node:sqlite";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { Store, ValidationError } from "../src/store.js";
+import { IMPORT_INSERT_BATCH, Store, ValidationError } from "../src/store.js";
 import { renderAudit } from "../src/audit-view.js";
 import { PROJECT_ROOT, resolveDataDir, resolveTokens } from "../src/config.js";
 import { DEFAULT_OPTIONS, runSetup, type SetupEnv, type SetupIO, type SetupOptions } from "../src/setup.js";
@@ -129,11 +129,11 @@ describe("2. setup and MONOMEM_HOME", () => {
     assert.equal(r.dir, join(homedir(), "x"));
   });
 
-  test("connect windsurf prints a real entry with MONOMEM_CLIENT=windsurf and the data folder", () => {
+  test("connect windsurf writes a real entry with MONOMEM_CLIENT=windsurf and the data folder (its documented file)", () => {
     const home = tmp("om-r2-ws-");
-    const r = cli(home, ["connect", "windsurf"]);
+    const r = cli(home, ["connect", "windsurf", "--yes"], { HOME: home, USERPROFILE: home, APPDATA: join(home, "AppData") });
     assert.equal(r.status, 0, r.stderr);
-    const json = JSON.parse(r.stdout.slice(r.stdout.indexOf("{")));
+    const json = JSON.parse(readFileSync(join(home, ".codeium", "windsurf", "mcp_config.json"), "utf8"));
     assert.equal(json.mcpServers.monomem.env.MONOMEM_CLIENT, "windsurf");
     assert.equal(json.mcpServers.monomem.env.MONOMEM_HOME, resolve(home));
     assert.notEqual(json.mcpServers.monomem.command, "monomem");
@@ -221,12 +221,12 @@ describe("5. health's audit check", () => {
 });
 
 describe("6. session-start recall", () => {
-  test("the footer names state_read id= by default; state_read takes ids as an alias", async () => {
+  test("the footer names memory_read id= by default; state_read takes ids as an alias", async () => {
     const s = new Store(":memory:");
     try {
       for (let i = 0; i < 3; i++) s.create({ title: `deploy note ${i}`, body: "how we deploy" });
       const text = await withEnv({ MONOMEM_TOOLS: undefined }, () => injectContext(s, { signals: {} }));
-      assert.match(text, /Open any with state_read id=N$/);
+      assert.match(text, /Open any with memory_read id=N$/);
       const client = await mcp(s);
       const r = toolJson(await client.callTool({ name: "state_read", arguments: { ids: [1] } }));
       assert.equal((r.note as { id: number }).id, 1);
@@ -409,8 +409,35 @@ describe("10. audit lines only for committed writes", () => {
     });
   });
 
+  test("an import releases the write lock between batches, so another connection can write mid-import", async () => {
+    // The deterministic half of the check below: right after the first batch commits (importNotes is parked on its
+    // yield), a second connection that refuses to wait at all (busy_timeout 0) gets the write lock. One transaction for
+    // the whole import, or a lock held across the yield, fails here on any machine, fast or slow.
+    const home = tmp("om-r2-yield-");
+    const db = join(home, "state.db");
+    const s = new Store(db);
+    const other = new DatabaseSync(db);
+    try {
+      const notes = Array.from({ length: IMPORT_INSERT_BATCH * 3 }, (_, i) => ({ title: `imported ${i}`, body: "x" }));
+      const importing = s.importNotes(notes as never, { deferEdges: true } as never);
+      other.exec("PRAGMA busy_timeout = 0;");
+      const mid = (other.prepare("SELECT COUNT(*) AS n FROM notes").get() as { n: number }).n;
+      assert.ok(mid > 0 && mid < notes.length, `the import is part-way (${mid} of ${notes.length} notes)`);
+      assert.doesNotThrow(() => {
+        other.exec("BEGIN IMMEDIATE;");
+        other.exec("COMMIT;");
+      }, "the write lock is free between import batches");
+      await importing;
+      assert.equal(s.countAll(), notes.length);
+    } finally {
+      other.close();
+      s.close();
+    }
+  });
+
   test("during a large import, a write from another process finishes within a few seconds", async () => {
     const home = tmp("om-r2-import-");
+    const notes = Array.from({ length: 3000 }, (_, i) => ({ title: `imported ${i}`, body: "some text to import ".repeat(10) }));
     // The same `add` into an idle store, timed under the same machine load: what is left over is the wait for the lock,
     // not process start-up (which a busy full-suite run can stretch past a fixed budget on its own).
     const idle = tmp("om-r2-idle-");
@@ -418,9 +445,22 @@ describe("10. audit lines only for committed writes", () => {
     const idleChild = spawn(process.execPath, [CLI, "add", "baseline"], { env: { ...process.env, MONOMEM_HOME: idle, ONEMEMORY_HOME: idle }, stdio: "ignore" });
     assert.equal(await new Promise<number | null>((r) => idleChild.on("exit", r)), 0);
     const baseline = Date.now() - idleStarted;
+    // The same import alone, on this machine now. Between batches the import only yields with setImmediate (store.ts,
+    // importNotes: a longer pause was measured to buy nothing), so on a loaded runner the other process's busy handler
+    // can sleep through every gap and get the lock only when the import ends. The bound is therefore the import's own
+    // length plus room, not a fixed 3 s that a slow runner's import alone exceeded (3330 ms on Windows CI). The test
+    // above checks deterministically that the gaps are there.
+    const alone = new Store(join(idle, "import-alone.db"));
+    let importMs: number;
+    try {
+      const t = Date.now();
+      await alone.importNotes(structuredClone(notes) as never, { deferEdges: true } as never);
+      importMs = Date.now() - t;
+    } finally {
+      alone.close();
+    }
     const s = new Store(join(home, "state.db"));
     try {
-      const notes = Array.from({ length: 3000 }, (_, i) => ({ title: `imported ${i}`, body: "some text to import ".repeat(10) }));
       const importing = s.importNotes(notes as never, { deferEdges: true } as never);
       await new Promise((r) => setTimeout(r, 30));
       const started = Date.now();
@@ -429,7 +469,10 @@ describe("10. audit lines only for committed writes", () => {
       const took = Date.now() - started;
       await importing;
       assert.equal(code, 0);
-      assert.ok(took - baseline < 3000, `the other writer waited ${took - baseline} ms beyond its ${baseline} ms start-up`);
+      assert.ok(
+        took - baseline < importMs + slow(1500),
+        `the other writer waited ${took - baseline} ms beyond its ${baseline} ms start-up; the import alone takes ${importMs} ms`
+      );
     } finally {
       s.close();
     }

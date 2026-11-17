@@ -1,5 +1,5 @@
 // Conflict detector: two live notes from different writers that disagree about the same thing. Flags only.
-import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
+import { slow } from "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { Store } from "../src/store.js";
@@ -87,7 +87,7 @@ describe("surfaces", () => {
       server.close();
       s.close();
     }
-    assert.match(DASHBOARD_JS, /<h3>Conflicts \(/);
+    assert.match(DASHBOARD_JS, /<h3 class='t-head'>Conflicts \(/);
     assert.match(DASHBOARD_JS, /esc\(v\.value\)/);
   });
 });
@@ -119,6 +119,6 @@ test("a planted 250k-character line with a long whitespace run is skipped in mil
   mk(s, "bob", "Deploy target: Render", "y");
   const t = Date.now();
   findConflicts(s);
-  assert.ok(Date.now() - t < 500, `took ${Date.now() - t} ms`);
+  assert.ok(Date.now() - t < slow(500), `took ${Date.now() - t} ms`);
   s.close();
 });

@@ -1,5 +1,5 @@
 // 1.4.2: regression tests for the third expert review (RV5). Each test pins one verified defect of 1.4.1.
-import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
+import { slow, timeScale } from "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, existsSync, statSync, readFileSync, writeFileSync, mkdirSync, readdirSync, symlinkSync, copyFileSync, utimesSync, chmodSync } from "node:fs";
@@ -58,11 +58,22 @@ describe("the harness is hermetic", () => {
     // (a throwaway data directory, and the full tool surface so the suite can
     // exercise the operator tools a plain install no longer registers; the flood guard off for bulk tests). Any
     // other MONOMEM_* variable means the developer's shell leaked in.
-    const deliberate = new Set(["MONOMEM_HOME", "MONOMEM_TOOLS", "MONOMEM_FLOOD_WRITES_PER_HOUR", "MONOMEM_SCAN_CACHE_SECONDS", "MONOMEM_NO_SERVER_PROBE", "MONOMEM_RECALL_TIMEOUT_MS"]); // NO_SERVER_PROBE: doctor never probes a real server from a test; RECALL_TIMEOUT: a loaded CI runner must not trip the 5 s session-start cap
+    const deliberate = new Set(["MONOMEM_HOME", "MONOMEM_TOOLS", "MONOMEM_FLOOD_WRITES_PER_HOUR", "MONOMEM_SCAN_CACHE_SECONDS", "MONOMEM_NO_SERVER_PROBE", "MONOMEM_RECALL_TIMEOUT_MS", "MONOMEM_TEST_TIME_SCALE"]); // NO_SERVER_PROBE: doctor never probes a real server from a test; RECALL_TIMEOUT: a loaded CI runner must not trip the 5 s session-start cap; TEST_TIME_SCALE: CI widens wall-clock bounds (read by test/setup-env.ts only, never by src)
     const left = Object.keys(process.env).filter((k) => k.startsWith("MONOMEM_") && !deliberate.has(k));
     assert.deepEqual(left, []);
-    assert.equal(process.env.MONOMEM_TOOLS, "all", "the suite runs against the full tool surface");
+    assert.equal(process.env.MONOMEM_TOOLS, "legacy-1.5,all", "the suite runs against the full tool surface");
     assert.ok(process.env.MONOMEM_HOME?.includes("monomem-test-home-"), "the data directory is a throwaway one");
+  });
+
+  test("MONOMEM_TEST_TIME_SCALE: a number from 1 to 10 widens wall-clock bounds; anything else counts as 1", () => {
+    assert.equal(timeScale(""), 1);
+    assert.equal(timeScale("abc"), 1);
+    assert.equal(timeScale("0.5"), 1, "never tighter than written");
+    assert.equal(timeScale("-3"), 1);
+    assert.equal(timeScale("3"), 3);
+    assert.equal(timeScale("2.5"), 2.5);
+    assert.equal(timeScale("1000"), 10, "capped, so a typo cannot turn a bound into no bound");
+    assert.equal(slow(100), 100 * timeScale());
   });
 });
 
@@ -677,7 +688,7 @@ describe("6b: the backup file is streamed", () => {
     const r = cli(home, ["import", "--file", f, "--dedupe"]);
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /Imported 1300 note/);
-    assert.match(r.stdout, /rebuild-edges/);
+    assert.match(r.stdout, /tidy edges/);
     const again = cli(home, ["import", "--file", f, "--dedupe"]);
     assert.match(again.stdout, /Imported 0 note\(s\), skipped 1300/);
     rmSync(home, { recursive: true, force: true });
@@ -810,7 +821,7 @@ describe("doctor and the primary token", () => {
     const only = cli(home, ["doctor"]);
     assert.match(only.stdout, /\[warn\] 1 distrust rule\(s\) exist, but the only token is the primary one/);
     const scoped = cli(home, ["doctor"], { MONOMEM_TOKENS: JSON.stringify([{ token: "w".repeat(40), scope: "write", label: "agent" }]) });
-    assert.match(scoped.stdout, /\[ok\]\s+1 distrust rule\(s\); 1 non-admin token/);
+    assert.match(scoped.stdout, /\[ok\]\s+1 distrust rule\(s\); 1 non-admin key/);
     rmSync(home, { recursive: true, force: true });
   });
 
@@ -858,6 +869,8 @@ describe("docs and CI stay in step with the code", () => {
       }
     };
     walk("src");
+    // The folders the large files were split into (Phase 0) hold code that used to sit in src/ itself.
+    for (const d of ["src/mcp", "src/api", "src/doctor", "src/cli"]) walk(d);
     const doc = read("docs", "configuration.md");
     const rows = [...doc.matchAll(/^\|\s*`(MONOMEM_[A-Z0-9_]+)`/gm)].map((m) => m[1]);
     const dupes = rows.filter((r, i) => rows.indexOf(r) !== i);
@@ -919,6 +932,22 @@ describe("docs and CI stay in step with the code", () => {
     const pkg = JSON.parse(read("package.json")) as { engines: { node: string } };
     const floor = pkg.engines.node.replace(/^>=/, "").trim();
     assert.ok(ci.includes(`"${floor}"`), `ci.yml must pin ${floor} so the claimed floor is executed, not assumed`);
+  });
+
+  test("only pull requests get the small matrix: push, nightly, dispatch and the publish call run all 12 cells", () => {
+    const ci = read(".github", "workflows", "ci.yml");
+    const m = /include: \$\{\{ fromJSON\(github\.event_name == 'pull_request' && '(\[[^']*\])' \|\| '(\[[^']*\])'\) \}\}/.exec(ci);
+    assert.ok(m, "the matrix is chosen by event: pull_request small, everything else full");
+    const cells = (j: string): string[] => (JSON.parse(j) as Array<{ os: string; node: string }>).map((c) => `${c.os}/${c.node}`).sort();
+    const pr = cells(m[1]);
+    const full = cells(m[2]);
+    const want = ["ubuntu-latest", "windows-latest", "macos-latest"].flatMap((os) => ["22.16.0", "22", "24", "26"].map((n) => `${os}/${n}`)).sort();
+    assert.deepEqual(full, want, "the full matrix is every system x every Node line");
+    for (const c of pr) assert.ok(full.includes(c), `${c} is a full-matrix cell`);
+    for (const os of ["ubuntu-latest", "windows-latest", "macos-latest"]) assert.ok(pr.some((c) => c.startsWith(os)), `pull requests still run on ${os}`);
+    assert.ok(pr.includes("ubuntu-latest/22.16.0"), "pull requests still run the Node floor");
+    assert.match(ci, /schedule:/);
+    assert.match(ci, /workflow_dispatch:/);
   });
 
   test("every glossary field name of the feed exists in the code", () => {

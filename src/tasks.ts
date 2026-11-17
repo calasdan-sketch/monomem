@@ -27,6 +27,7 @@ import { RESERVED_TAG_PREFIX } from "./reserved-tags.js";
 import { runnerNotice } from "./liveness.js";
 import { currentWriter } from "./actor.js";
 import { heldFromSessionStart } from "./taint.js";
+import { overwritesOf, type Overwrite } from "./store/overwrites.js";
 import {
   TASK_STATUSES,
   TASK_TAG,
@@ -37,12 +38,15 @@ import {
   TAG_CKEY,
   TAG_LEASE,
   TAG_APPROVAL,
+  TAG_CLAIM,
   APPROVAL_RE,
   stateOf,
   parseBody,
   commandHash,
   verifyApproval,
   isTaskNote,
+  heldForPerson,
+  heldTaskMessage,
   type TaskStatus,
   type TaskState,
   type BodyParts,
@@ -61,6 +65,7 @@ export {
   isTaskNote,
   approvalNonce,
   classifyQueuedCommand,
+  heldForPerson,
   scanQueuedCommands,
   scanWaitingCommands,
   envRunnerId,
@@ -293,6 +298,7 @@ function tagsFromState(base: readonly string[], s: TaskState): string[] {
     ...(s.lease ? [`${TAG_LEASE}${s.lease.expMs}:${s.lease.owner}`] : []),
     ...(s.ckey ? [`${TAG_CKEY}${s.ckey}`] : []),
     ...(s.approval ? [`${TAG_APPROVAL}${s.approval}`] : []),
+    ...(s.lease && s.claim ? [`${TAG_CLAIM}${s.claim.atMs}:${s.claim.prev}:${s.claim.by}`] : []),
   ];
 }
 
@@ -645,6 +651,7 @@ export function putTask(
     lease: null,
     ckey: key ? ckeyTag(namespace, key) : null,
     approval: null,
+    claim: null,
   };
   if (cmd && !target) throw new ValidationError("a command needs a `target`: the runner name that may execute it");
   if (cmd && st !== undefined && st !== "queued") {
@@ -757,7 +764,7 @@ export function listTasks(store: Store, opts: TaskListOpts = {}): { tasks: Task[
 function distrustedTaskError(id: number): ValidationError {
   return new ValidationError(
     `task #${id} was written by a writer on this namespace's distrust list; it cannot be claimed or approved. ` +
-      "An admin can review it (include_distrusted) and, if it is fine, copy it into a new task under a trusted writer (rewriting it keeps the writer on its taint list) or take the writer off the list."
+      "An admin can review it (include_distrusted) and, if it is fine, copy it into a new task under a trusted writer (rewriting it keeps the writer on the distrust list) or take the writer off the list."
   );
 }
 
@@ -819,6 +826,7 @@ export function claimTask(
     }
     // A task a distrusted writer wrote is not for the board to hand out (a holder may still let go of a lease).
     if (!input.release && store.isDistrusted(existing)) throw distrustedTaskError(existing.id);
+    if (!input.release && heldForPerson(existing)) throw new ValidationError(heldTaskMessage(existing, "claim"));
     const cur = stateOf(existing);
     if (parseBody(existing.body).command && !input.release) {
       throw new ValidationError(
@@ -851,6 +859,9 @@ export function claimTask(
         );
       }
       heartbeat = Boolean(live);
+      const by = currentWriter();
+      // A heartbeat by the same writer keeps the first claim's time and status, so a rollback puts back what was there before.
+      next.claim = heartbeat && cur.claim && cur.claim.by === by ? cur.claim : by ? { atMs: now, prev: cur.status, by } : null;
       next.lease = { owner, expMs: now + ttl * 1000 };
       next.owner = owner;
       if (next.status === "idea" || next.status === "planned") next.status = "running";
@@ -912,6 +923,8 @@ export function approveTask(
   }
   // Never put the admin gate in front of a command a distrusted writer wrote.
   if (!input.revoke && store.isDistrusted(existing)) throw distrustedTaskError(existing.id);
+  // Nor a command whose text came from outside content (or a distrusted base, or a flag) that no PERSON confirmed. Revoke always works.
+  if (!input.revoke && heldForPerson(existing)) throw new ValidationError(heldTaskMessage(existing, "approve"));
   const cur = stateOf(existing);
   const cmd = parseBody(existing.body).command;
   const next: TaskState = { ...cur, lease: null }; // approving or revoking also clears any lease
@@ -949,6 +962,19 @@ export function approveTask(
   );
   if (!note) throw new TaskNotFoundError(`no task with id ${input.id}`);
   return taskFromNote(note, store);
+}
+
+/**
+ * The `approve: true` create shortcut: approve, unless the new task is held for a person (outside content etc.). Then the
+ * task stays queued and unapproved (the safe state) and the reason goes back as a warning instead of failing the create.
+ */
+export function approveOrHold(store: Store, task: Task, scope: WriteScope, warnings: import("./lint.js").LintFinding[]): Task {
+  const n = store.read(task.id); // gate-ok: approveOrHold: the task this call just created; only its held flags are read, nothing is returned
+  if (n && heldForPerson(n)) {
+    warnings.push({ category: "approval", label: heldTaskMessage(n, "approve"), field: "command" });
+    return task;
+  }
+  return approveTask(store, { id: task.id, if_rev: task.rev }, scope);
 }
 
 /**
@@ -1219,6 +1245,8 @@ export interface CatchUpOpts {
 }
 
 export const CATCH_UP_SHOWN_CHANGES = 30;
+/** How far back catch_up looks for overwrites of your notes when there is no earlier catch-up to start from. */
+const OVERWRITE_LOOKBACK_MS = 7 * 86_400_000;
 
 export interface CatchUp {
   changes?: {
@@ -1239,6 +1267,9 @@ export interface CatchUp {
   handoffs: Handoff[];
   /** One line, present only when approved commands are waiting and the runner looks offline (see liveness.ts). */
   runner_notice?: string;
+  /** r2-improvement #3: your notes whose text another writer replaced since your last catch-up (7 days without one). */
+  overwritten?: Overwrite[];
+  overwritten_hint?: string;
 }
 
 /**
@@ -1289,6 +1320,12 @@ export function catchUp(store: Store, opts: CatchUpOpts = {}): CatchUp {
   // common case costs one cheap probe, not a heartbeat read and a classifier pass.
   const notice = runnerNotice(store, opts.namespaces);
   if (notice) out.runner_notice = notice;
+  const since = out.changes?.since && !out.changes.markerReset ? out.changes.since : new Date(Date.now() - OVERWRITE_LOOKBACK_MS).toISOString();
+  const over = overwritesOf(store, currentWriter(), since, opts.namespaces);
+  if (over.length) {
+    out.overwritten = over;
+    out.overwritten_hint = "Another writer replaced text you wrote. Read the note (memory_read) and its history if the change looks wrong, and tell the user.";
+  }
   return out;
 }
 
@@ -1382,7 +1419,7 @@ export function buildBoardSummary(
     }
     const more = total - shown;
     sections.push(
-      [`Open tasks (${total}${more > 0 ? `, showing ${shown}` : ""}):`, ...lines, ...(more > 0 ? [`- … and ${more} more (task_list)`] : [])].join("\n")
+      [`Open tasks (${total}${more > 0 ? `, showing ${shown}` : ""}):`, ...lines, ...(more > 0 ? [`- … and ${more} more (memory_tasks)`] : [])].join("\n")
     );
   }
   if (handoff) {

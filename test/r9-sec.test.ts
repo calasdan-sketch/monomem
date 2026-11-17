@@ -1,6 +1,6 @@
 // Release-blocking security fixes: attacker text in Monomem-voiced lines, writer wording from one list, archive_log in the v18
 // migration (two processes), audit verify --expect, and the drill's scope sentence.
-import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads
+import { slow } from "./setup-env.js"; // throwaway MONOMEM_HOME before src loads
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -201,7 +201,7 @@ test("a read never waits behind another process's write lock to log itself", asy
   lock.prepare("UPDATE notes SET rev = rev WHERE id = 1").run();
   const t = Date.now();
   s.logAccess({ tool: "state_search", query: "hello", results: 1 });
-  assert.ok(Date.now() - t < 1000, `logAccess waited ${Date.now() - t} ms`);
+  assert.ok(Date.now() - t < slow(1000), `logAccess waited ${Date.now() - t} ms`);
   lock.exec("ROLLBACK");
   lock.close();
   s.close();

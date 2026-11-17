@@ -1,12 +1,17 @@
-# Switching to Monomem from claude-mem, mem0, basic-memory or the official MCP memory server
+# Switching to Monomem from claude-mem, mem0, basic-memory, Codex, Notion or the official MCP memory server
 
 `monomem import --from <tool>` copies another memory tool's notes into Monomem. It works the same way as
 `import --claude`:
 
+- Every imported note is saved as **unconfirmed (from outside)**: it is kept out of session start, labeled in search and
+  `monomem ls`, and listed in `monomem review` until a person confirms it (`monomem confirm <id>`). Reading a note does not
+  confirm it. Another app's memory is text any program on this computer could have written, so it is not trusted on
+  arrival. (These notes are not in `monomem review held`: that queue is for writes that were not saved.)
+
 - It runs only on this computer and sends nothing anywhere. It **reads** the other tool's data and never changes or deletes it.
 - Start with `--dry-run`. It shows what would be imported and writes nothing. It does not even create the Monomem data folder.
 - Anything that looks like a password or token is skipped. It is counted, but it is never shown or stored.
-- Every note goes through the memory linter. Text that reads like an instruction to an AI is held in `monomem quarantine` for you to approve or reject.
+- Every note goes through the memory linter. Text that reads like an instruction to an AI is held in `monomem review held` for you to approve or reject.
 - Each note keeps the other tool's id in its `source` field (`import:claude-mem:obs:42`, `import:mem0:<id>`,
   `import:basic-memory:<permalink>`, `import:mcp-memory:entity:<name>`). If you run the import again, it adds only what is new.
 - Notes are written by `import:<tool>` and tagged `imported:<tool>`. `--namespace ns` puts them in a namespace of your choice.
@@ -21,6 +26,72 @@ Get everything across first and check it. Remove the old tool only after that.
 Notes that `import --claude` brings in from CLAUDE.md files and Claude Code's auto-memory (tagged `claude-md` or
 `claude-auto-memory`) are left out of Claude Code's own session-start notes, because Claude Code already reads those files;
 search and your other apps still see them.
+
+The dashboard's Welcome screen does the same: under **Bring in memories** it lists what it found on this computer
+(Claude Code's own memory, claude-mem, basic-memory, the MCP memory server, Codex memories) and asks before each one.
+A Notion export or a mem0 file needs a path, so those two are done from the terminal.
+
+## Claude Code's own memory (`import --claude`)
+
+Claude Code keeps its own memory in CLAUDE.md files and in auto memory (`~/.claude/projects/<project>/memory/*.md`). Your
+other apps never see it. `monomem import --claude` copies it in:
+
+```sh
+monomem import --claude --dry-run     # what it would bring in
+monomem import --claude               # asks first; --yes skips the question
+monomem import --claude --update      # also refresh notes whose file text changed
+monomem import --claude --no-project  # leave out the CLAUDE.md files of the current folder
+```
+
+- Notes stay unconfirmed (from outside) until you confirm them (see above).
+- Monomem remembers what it imported (`claude-import-state.json` in the data folder). Running it again reads only the files
+  whose text changed. A changed section is listed as "changed since"; `--update` refreshes it in place, unconfirmed again.
+- When a file Claude Code had is gone (removed or renamed), the next run says so and lists the notes Monomem still keeps
+  from it. Nothing in Monomem is deleted because a file went away.
+- `monomem check` shows one line: when you last imported, how many files changed since, and how many imported notes are
+  still unconfirmed (`monomem review`).
+- `monomem setup` offers the import when it finds these files (it asks; it never imports without a yes).
+- **Keep it in step (optional, off by default).** While Monomem's server runs, it can look every 10 minutes for files
+  Claude Code changed and bring them in, unconfirmed the same way. Turn it on in the dashboard's Settings ("Bring in Claude Code's
+  memory as it changes"), or set `MONOMEM_CLAUDE_REFRESH=on` (which wins over the switch). It never runs from a hook and
+  never when the server is not running.
+
+What it cannot do, from Claude Code's own documentation (https://code.claude.com/docs/en/memory): auto memory is kept
+per machine, so only this computer's files are read; Claude Code itself loads only the first 200 lines (25 KB) of
+MEMORY.md at session start, and Monomem does not change that; and auto memory is not written from subagents, so there is
+nothing of theirs to bring in.
+
+## From Codex
+
+Codex CLI and the ChatGPT desktop app keep local memories (off by default in Codex; switch them on there first) under
+`$CODEX_HOME` (default `~/.codex`) in `memories/` and `memories_v2/`, as documented at
+https://learn.chatgpt.com/docs/customization/memories.
+
+```sh
+monomem import --from codex --dry-run
+monomem import --from codex --path /other/codex-home
+```
+
+- Only `MEMORY.md` (the consolidated handbook) and `memory_summary.md` are read, cut into one note per level 1 or 2
+  heading. `raw_memories.md`, `rollout_summaries/` and `skills/` are Codex's working material and are left out.
+- The same section in `memories/` and `memories_v2/` becomes one note.
+- A section whose text changed in Codex comes in as a new note on the next run; the older one stays until you archive it.
+
+## From a Notion export
+
+In Notion: Settings, Export all workspace content (or a page's ... menu, Export), format **Markdown & CSV**.
+
+```sh
+monomem import --from notion --path ~/Downloads/Export-1234.zip --dry-run
+monomem import --from notion --path ~/Downloads/Export-1234          # or the unzipped folder
+```
+
+- One page = one note. Notion's 32-character id is dropped from the title, and the folder of parent pages is shown as the
+  group. Database tables (`.csv`) are not read; their rows are exported as pages too.
+- The zip is read in memory, never unpacked to disk. A zip inside it (Notion splits large exports into parts) is opened
+  too. ZIP64 archives (over 4 GB) are not read: unzip them and point `--path` at the folder. Pages over 1 MiB are skipped
+  and counted.
+- A page edited in Notion and exported again comes in as a new note; the older one stays until you archive it.
 
 ## From claude-mem
 
@@ -142,7 +213,7 @@ monomem import --from claude-code-chats --path <folder>      # another projects 
 - **Where it goes:** the `chats` namespace (`--namespace` to change it). Every note is tagged `imported:claude-code-chats` and
   `chat.session:<id>`, and Claude's messages also carry the model-written label. Chat notes are **never shown at session
   start** or in the "new notes" line, however your namespaces are set up: they are for search (`monomem search`,
-  `state_search`), not for every session's opening context.
+  `memory_search`), not for every session's opening context.
 - **Same rules as the other imports:** read only, nothing leaves your computer, a message that looks like a secret is
   skipped (not stored, not shown), the memory linter may hold a message that reads like an instruction to an AI for your
   review, and running it again adds only new messages. The secret check reads each message as written: a secret the chat

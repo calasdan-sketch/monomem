@@ -30,7 +30,6 @@ async function mcp(store: Store, conn: Record<string, unknown> = { local: true }
 describe("R1-05 MCP: any tool reply that carries an unconfirmed note marks the connection", () => {
   const probes: Array<[string, (c: Client, noteId: number, taskId: number) => Promise<unknown>]> = [
     ["state_write confidence-only edit of the tainted note", (c, n) => c.callTool({ name: "state_write", arguments: { id: n, confidence: 0.5 } })],
-    ["task_claim", (c, _n, t) => c.callTool({ name: "task_claim", arguments: { id: t, owner: "me" } })],
     ["task_put update", (c, _n, t) => c.callTool({ name: "task_put", arguments: { id: t, owner: "me2" } })],
     ["task_get", (c, _n, t) => c.callTool({ name: "task_get", arguments: { id: t } })],
     ["task_list", (c) => c.callTool({ name: "task_list", arguments: {} })],
@@ -50,6 +49,18 @@ describe("R1-05 MCP: any tool reply that carries an unconfirmed note marks the c
       assert.ok(w.tags.includes(VIA), `next write is marked: ${w.tags.join()}`);
     });
   }
+});
+
+test("A1: task_claim refuses an unconfirmed task and hands back none of its text", async () => {
+  const store = new Store(":memory:");
+  setProcessWriter("stdio");
+  const web = await mcp(store, { local: true, readsOutside: true });
+  const task = json(await web.callTool({ name: "task_put", arguments: { title: "deploy", notes: "SECRET-PAYLOAD-TASK", next_step: "SECRET-PAYLOAD-NEXT" } })).task;
+  const c = await mcp(store, { local: true });
+  const reply = body(await c.callTool({ name: "task_claim", arguments: { id: task.id, owner: "me" } }));
+  assert.match(reply, /monomem confirm/);
+  assert.doesNotMatch(reply, /SECRET-PAYLOAD/);
+  store.close();
 });
 
 describe("R1-05 REST: PUT /notes/:id and POST /tasks/:id/claim mark the token and trigger read_it", () => {
@@ -75,8 +86,12 @@ describe("R1-05 REST: PUT /notes/:id and POST /tasks/:id/claim mark the token an
       const cf = await call(B.token, "POST", `/notes/${n.id}/confirm`, { source: "https://docs.vendor.example" });
       assert.equal(cf.counted, false);
       assert.equal(cf.reason, "read_it");
+      // A1: claiming the unconfirmed task is refused and hands back none of its text; reading it does hand it over.
       const cl = await call(B.token, "POST", `/tasks/${t.id}/claim`, { owner: "B" });
-      assert.match(JSON.stringify(cl), /SECRET-PAYLOAD-TASK/);
+      assert.doesNotMatch(JSON.stringify(cl), /SECRET-PAYLOAD-TASK/);
+      assert.match(JSON.stringify(cl), /monomem confirm/);
+      const got = await call(B.token, "GET", `/tasks/${t.id}`);
+      assert.match(JSON.stringify(got), /SECRET-PAYLOAD-TASK/);
       const cf2 = await call(B.token, "POST", `/notes/${t.id}/confirm`, { source: "https://ci.example" });
       assert.equal(cf2.reason, "read_it", JSON.stringify(cf2));
     } finally {

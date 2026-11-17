@@ -61,9 +61,27 @@ export function readAudit(q: AuditQuery = {}, now = Date.now(), path = auditPath
   return { entries: out.slice(0, limit), truncated: out.length > limit };
 }
 
+/** Plain words for the audit op codes people meet most; any other code is shown with its dots and dashes as spaces. */
+const OP_WORDS: Record<string, string> = {
+  quarantine: "held", "quarantine-approve": "held, approved", "quarantine-reject": "held, rejected", "quarantine-keep": "held, kept",
+  supersede: "replaced", "supersede-undo": "replace undone", "write-refused": "write refused", "mcp.connect": "app connected",
+  "sign-start": "signing started", "taint-clear": "outside label cleared", "retro-taint": "outside label added",
+  "token.add": "app key added", "token.remove": "app key removed", "sweep-expire": "expired notes archived",
+  "sweep-decay": "old captures archived", "changes.ack": "changes confirmed", "spool-drop": "capture spool dropped",
+};
+const opWord = (op: string): string => OP_WORDS[op] ?? op.replace(/[._-]+/g, " ");
+
+/** Who, in plain words: a keyless local app by its name (stdio:claude-code), else the key's label, else the person. */
+function byWho(label: string | undefined): string {
+  if (!label) return "by you (command line) or the server";
+  if (label === "stdio") return "by an app with no key (local)";
+  if (label.startsWith("stdio:")) return `by ${printable(label.slice(6), 40)} (local app, no key)`;
+  return `by ${printable(label, 80)}`;
+}
+
 export function renderAudit(entries: AuditEntry[]): string {
   if (!entries.length) return "No matching entries.";
   return entries
-    .map((e) => `${e.ts.slice(0, 19).replace("T", " ")}  ${e.op.padEnd(14)} ${e.label ? `by ${printable(e.label, 80)}` : "by (no key: command line or server)"}${e.namespace ? `  [${printable(e.namespace, 100)}]` : ""}${e.id !== undefined ? `  #${e.id}` : ""}${e.kind === "read" || e.kind === "search" ? `  ${e.bytes ?? 0} result(s)` : ""}`)
+    .map((e) => `${e.ts.slice(0, 19).replace("T", " ")}  ${opWord(e.op).padEnd(22)} ${byWho(e.label)}${e.namespace ? `  [${printable(e.namespace, 100)}]` : ""}${e.id !== undefined ? `  #${e.id}` : ""}${e.kind === "read" || e.kind === "search" ? `  ${e.bytes ?? 0} result(s)` : ""}`)
     .join("\n");
 }

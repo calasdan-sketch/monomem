@@ -14,15 +14,22 @@
 //   - replaced (superseded) or archived notes: skipped with the reason.
 //   - pinned notes and notes in approve-first namespaces are the operator's alone: done from the CLI, skipped (and listed)
 //     over REST and MCP, which count as agents.
+// Beyond notes it touched (r2-improvement #2), the same plan also undoes what the writer did TO other notes since T:
+//   - a replacement it confirmed that is still in force    -> bring the replaced note back (unreplace);
+//   - a flag it raised that is still open                  -> clear it (unflag);
+//   - a task lease it took that is still its claim         -> release it and put the status back (release).
+// A restored version keeps the author of that text (written_by), so "who said this" is right again; who restored it is in
+// the change log and the history reason "rollback".
 // Writer names match exactly; "stdio" also means every stdio:<app> (the same family rule the distrust list uses).
 import { createHash, randomBytes } from "node:crypto";
-import { currentWriter, cleanWriter } from "./actor.js";
+import { currentWriter, cleanWriter, isWriterMarker } from "./actor.js";
 import { audit, scopeAllows } from "./security.js";
 import { Store, StaleWriteError, historyLimits, type NoteRecord } from "./store.js";
 import { SupersedeError, callerKey, supersedeTtlSeconds, type Caller } from "./supersede.js";
 import { safe } from "./supersede-text.js";
 import { maybeEmbed } from "./search-service.js";
-import { nameIs, nearWriter, stdioFamily, suggestWriter } from "./trust.js";
+import { nameIs, nameIsSql, nearWriter, stdioFamily, suggestWriter } from "./trust.js";
+import { stateOf, TASK_TAG, TAG_CLAIM, TAG_LEASE } from "./task-core.js";
 
 const TOKEN_DOMAIN = "rollback-v1";
 /** How many lines of each list the plain-text preview prints (the JSON always has all of them). */
@@ -33,12 +40,20 @@ export interface RollbackItem {
   namespace: string;
   title: string;
   rev: number;
-  action: "archive" | "restore";
+  action: "archive" | "restore" | "unreplace" | "unflag" | "release";
   /** action "restore": the version that becomes the current text again. */
   restore_version?: number;
+  /** action "unreplace": the note that replaced this one (left as it is). */
+  replaced_by?: number;
+  /** action "unflag": how many open flags by the writer are cleared. */
+  flags?: number;
+  /** action "release": the task status that comes back. */
+  back_to?: string;
   pinned?: true;
   /** Applied although another writer changed the note later (include_conflicts). */
   conflict?: true;
+  /** Rollback by note only: the note itself, or how it is tied to it (blast-radius.ts). */
+  basis?: "the note" | "proven" | "likely";
 }
 
 export interface RollbackSkip {
@@ -48,6 +63,7 @@ export interface RollbackSkip {
   reason: "conflict" | "cannot_fully_undo" | "operator_only" | "replaced" | "archived";
   detail: string;
   pinned?: true;
+  basis?: RollbackItem["basis"];
 }
 
 export interface RollbackPlan {
@@ -96,25 +112,108 @@ export function planRollback(store: Store, writer: string, since: string, includ
   for (const id of store.rollbackCandidates(writer, family, since, namespaces)) {
     const n = store.read(id); // gate-ok: operator rollback (admin), confined to the caller's namespaces by rollbackCandidates
     if (!n) continue;
-    const base = { id, namespace: n.namespace, title: n.title, ...(n.pinned ? { pinned: true as const } : {}) };
-    const step = decide(store, n, isW, since);
-    if (!step) continue;
-    if ("skip" in step) {
-      skipped.push({ ...base, reason: step.skip, detail: step.detail });
-      continue;
-    }
-    if (step.conflict && !includeConflicts) {
-      skipped.push({ ...base, reason: "conflict", detail: step.conflict });
-      continue;
-    }
-    if (!operator && (n.pinned || store.isApproveFirst(n.namespace))) {
-      const why = n.pinned ? "the note is pinned" : `namespace "${n.namespace}" is approve-first`;
-      skipped.push({ ...base, reason: "operator_only", detail: `${why}: only the monomem CLI can roll it back` });
-      continue;
-    }
-    actions.push({ ...base, rev: n.rev, action: step.action, ...(step.version ? { restore_version: step.version } : {}), ...(step.conflict ? { conflict: true as const } : {}) });
+    planNote(store, n, isW, since, includeConflicts, operator, actions, skipped);
   }
+  planSideEffects(store, { writer, family, since, namespaces, operator }, actions, skipped);
   return { writer, since, include_conflicts: includeConflicts, actions, skipped };
+}
+
+/** One note's step (archive or restore) or skip, for the changes `isW` made to it since `since`. Pushes onto the lists. */
+export function planNote(
+  store: Store,
+  n: NoteRecord,
+  isW: (v: unknown) => boolean,
+  since: string,
+  includeConflicts: boolean,
+  operator: boolean,
+  actions: RollbackItem[],
+  skipped: RollbackSkip[],
+  extra: { basis?: RollbackItem["basis"] } = {}
+): void {
+  const base = { id: n.id, namespace: n.namespace, title: n.title, ...(n.pinned ? { pinned: true as const } : {}), ...extra };
+  const step = decide(store, n, isW, since);
+  if (!step) return;
+  if ("skip" in step) {
+    skipped.push({ ...base, reason: step.skip, detail: step.detail });
+    return;
+  }
+  if (step.conflict && !includeConflicts) {
+    skipped.push({ ...base, reason: "conflict", detail: step.conflict });
+    return;
+  }
+  if (operatorOnlySkip(store, n, operator, skipped, extra)) return;
+  actions.push({ ...base, rev: n.rev, action: step.action, ...(step.version ? { restore_version: step.version } : {}), ...(step.conflict ? { conflict: true as const } : {}) });
+}
+
+/** Pinned notes and approve-first namespaces: only the local CLI may roll them back. True (and listed as skipped) when refused. */
+export function operatorOnlySkip(store: Store, n: NoteRecord, operator: boolean, skipped: RollbackSkip[], extra: { basis?: RollbackItem["basis"] } = {}): boolean {
+  if (operator || !(n.pinned || store.isApproveFirst(n.namespace))) return false;
+  const why = n.pinned ? "the note is pinned" : `namespace "${n.namespace}" is approve-first`;
+  skipped.push({ id: n.id, namespace: n.namespace, title: n.title, ...(n.pinned ? { pinned: true as const } : {}), ...extra, reason: "operator_only", detail: `${why}: only the monomem CLI can roll it back` });
+  return true;
+}
+
+/** Replacements, flags and task claims the writer made since `since` that are still in force (see the header). */
+function planSideEffects(
+  store: Store,
+  w: { writer: string; family: boolean; since: string; namespaces?: string[]; operator: boolean },
+  actions: RollbackItem[],
+  skipped: RollbackSkip[]
+): void {
+  const nsSql = w.namespaces ? ` AND n.namespace IN (${w.namespaces.map(() => "?").join(",")})` : "";
+  const ns = w.namespaces ?? [];
+  const base = (n: NoteRecord) => ({ id: n.id, namespace: n.namespace, title: n.title, ...(n.pinned ? { pinned: true as const } : {}) });
+  const operatorOnly = (n: NoteRecord): boolean => {
+    if (w.operator || !(n.pinned || store.isApproveFirst(n.namespace))) return false;
+    const why = n.pinned ? "the note is pinned" : `namespace "${n.namespace}" is approve-first`;
+    skipped.push({ ...base(n), reason: "operator_only", detail: `${why}: only the monomem CLI can roll it back` });
+    return true;
+  };
+  const a = nameIsSql("l.actor", w.writer, w.family);
+  const reps = store.db
+    .prepare(
+      `SELECT DISTINCT l.old_id AS id, l.new_id AS new_id FROM supersede_log l JOIN notes n ON n.id = l.old_id
+        WHERE l.action = 'supersede' AND ${a.sql} AND l.at >= ? AND n.superseded_by = l.new_id${nsSql} ORDER BY l.old_id`
+    )
+    .all(...a.params, w.since, ...ns) as Array<{ id: number; new_id: number }>;
+  for (const r of reps) {
+    const n = store.read(Number(r.id)); // gate-ok: operator rollback side effects (admin), confined to the caller's namespaces by the query
+    if (!n || operatorOnly(n)) continue;
+    actions.push({ ...base(n), rev: n.rev, action: "unreplace", replaced_by: Number(r.new_id) });
+  }
+  const f = nameIsSql("f.flagged_by", w.writer, w.family);
+  const flags = store.db
+    .prepare(
+      `SELECT f.note_id AS id, COUNT(*) AS c FROM note_flags f JOIN notes n ON n.id = f.note_id
+        WHERE f.cleared_at IS NULL AND ${f.sql} AND f.at >= ?${nsSql} GROUP BY f.note_id ORDER BY f.note_id`
+    )
+    .all(...f.params, w.since, ...ns) as Array<{ id: number; c: number }>;
+  // A flag raised at this computer (the person at the CLI, or a local app) can hold a task for a person: an app key must not
+  // clear it through rollback, or it could then approve the task the flag was holding (r3 security S1).
+  const localFlagger = !w.operator && (isWriterMarker(w.writer) || w.writer.startsWith("stdio:"));
+  for (const r of flags) {
+    const n = store.read(Number(r.id)); // gate-ok: operator rollback side effects (admin), confined to the caller's namespaces by the query
+    if (!n || operatorOnly(n)) continue;
+    if (localFlagger) {
+      skipped.push({ ...base(n), reason: "operator_only", detail: "a person or local app on this computer raised this flag: only the monomem CLI can clear it" });
+      continue;
+    }
+    actions.push({ ...base(n), rev: n.rev, action: "unflag", flags: Number(r.c) });
+  }
+  const now = Date.now();
+  const sinceMs = Date.parse(w.since);
+  // Every claimed task, paged (a plan reads only: the pages do not shift under it).
+  const page = 500;
+  for (let offset = 0; ; offset += page) {
+    const notes = store.list({ namespaces: w.namespaces, limit: page, offset, withTags: [TASK_TAG], withTagPrefix: TAG_CLAIM, count: false }).notes;
+    for (const t of notes) {
+      const st = stateOf(t);
+      if (!st.claim || !st.lease || st.lease.expMs <= now || st.claim.atMs < sinceMs || !nameIs(st.claim.by, w.writer, w.family)) continue;
+      if (operatorOnly(t)) continue;
+      actions.push({ ...base(t), rev: t.rev, action: "release", back_to: st.claim.prev });
+    }
+    if (notes.length < page) break;
+  }
 }
 
 type Step = { action: "archive" | "restore"; version?: number; conflict?: string } | { skip: RollbackSkip["reason"]; detail: string } | null;
@@ -153,14 +252,14 @@ function decide(store: Store, n: NoteRecord, isW: (v: unknown) => boolean, since
   return { action: "restore", version: first.version, ...(who.length ? { conflict: `changed later by ${who.map((w) => `"${safe(w, 40)}"`).join(", ")}` } : {}) };
 }
 
-function planHash(p: RollbackPlan): string {
+export function planHash(p: RollbackPlan): string {
   return createHash("sha256")
-    .update(JSON.stringify(p.actions.map((a) => [a.id, a.rev, a.action, a.restore_version ?? 0])))
+    .update(JSON.stringify(p.actions.map((a) => [a.id, a.rev, a.action, a.restore_version ?? 0, a.replaced_by ?? 0, a.flags ?? 0, a.back_to ?? ""])))
     .digest("hex")
     .slice(0, 32);
 }
 
-function gate(caller: Caller): string[] | undefined {
+export function gate(caller: Caller): string[] | undefined {
   if (!scopeAllows(caller.scope, "admin")) throw new SupersedeError("rolling back a writer is for administrators", 403);
   return caller.ownNamespace !== undefined ? [caller.ownNamespace] : undefined;
 }
@@ -184,6 +283,12 @@ function previewText(p: RollbackPlan, ttl: number, how: string, hint?: { writer:
   }
   if (arch.length) out.push(`Archive ${arch.length} note(s) it created:`, ...list(arch, (a) => line(a) + (a.conflict ? " (others changed it too)" : "")));
   if (rest.length) out.push(`Put back the earlier text of ${rest.length} note(s) it changed:`, ...list(rest, (a) => `${line(a)} -> version ${a.restore_version}${a.conflict ? " (overwrites later changes by others)" : ""}`));
+  const unrep = p.actions.filter((a) => a.action === "unreplace");
+  const unflag = p.actions.filter((a) => a.action === "unflag");
+  const rel = p.actions.filter((a) => a.action === "release");
+  if (unrep.length) out.push(`Bring back ${unrep.length} note(s) it replaced (the replacement stays):`, ...list(unrep, (a) => `${line(a)}, replaced by note ${a.replaced_by}`));
+  if (unflag.length) out.push(`Clear the flags it raised on ${unflag.length} note(s):`, ...list(unflag, (a) => `${line(a)} (${a.flags} flag${a.flags === 1 ? "" : "s"})`));
+  if (rel.length) out.push(`Release ${rel.length} task claim(s) it holds:`, ...list(rel, (a) => `${line(a)} -> back to ${a.back_to}`));
   if (p.skipped.length) out.push(`Skipped ${p.skipped.length} note(s):`, ...list(p.skipped, (s) => `${line(s)}: ${s.reason.replace(/_/g, " ")}, ${s.detail}`));
   // An empty plan has nothing to confirm: no code, no --yes line (round-2 ease of use: "add --yes to go ahead" with nothing to do misled).
   if (p.actions.length === 0) return out.join("\n");
@@ -236,7 +341,56 @@ export interface RollbackResult {
   message: string;
   archived: number[];
   restored: Array<{ id: number; version: number; now_rev: number }>;
+  /** Notes brought back from a replacement the writer made. */
+  unreplaced: number[];
+  /** Notes whose open flags by the writer were cleared. */
+  unflagged: number[];
+  /** Tasks whose claim by the writer was released. */
+  released: number[];
   skipped: RollbackSkip[];
+}
+
+/** Apply one unreplace / unflag / release step inside the confirm transaction. False for a note action (archive, restore). */
+export function applySideEffect(store: Store, a: RollbackItem, writer: string, since: string, done: { unreplaced: number[]; unflagged: number[]; released: number[] }): boolean {
+  if (a.action === "unreplace") {
+    if (!store.supersedeUndo(a.id, `rollback:${writer}`)) throw new StaleWriteError(`note ${a.id} is no longer replaced; nothing was changed`);
+    done.unreplaced.push(a.id);
+    return true;
+  }
+  if (a.action === "unflag") {
+    const f = nameIsSql("flagged_by", writer, stdioFamily(writer));
+    store.db
+      .prepare(`UPDATE note_flags SET cleared_at = ?, cleared_by = 'rollback' WHERE note_id = ? AND cleared_at IS NULL AND ${f.sql} AND at >= ?`)
+      .run(new Date().toISOString(), a.id, ...f.params, since);
+    done.unflagged.push(a.id);
+    return true;
+  }
+  if (a.action === "release") {
+    const t = store.read(a.id); // gate-ok: operator rollback side effects, the planned task re-read under the write lock
+    if (!t) throw new StaleWriteError(`task ${a.id} is gone; nothing was changed`);
+    const lease = stateOf(t).lease;
+    const tags = t.tags.filter((x) => !x.startsWith(TAG_CLAIM) && !x.startsWith(TAG_LEASE) && !x.startsWith("status:") && !(lease && x === `owner:${lease.owner}`));
+    store.update(a.id, { tags: [...tags, `status:${a.back_to}`] }, { ifRev: a.rev, noFloodCount: true });
+    done.released.push(a.id);
+    return true;
+  }
+  return false;
+}
+
+/** Apply one archive / restore step inside the confirm transaction. */
+export function applyNoteStep(store: Store, a: RollbackItem, archived: number[], restored: RollbackResult["restored"]): void {
+  // R2-08: counted against the note's writer as it stands before the rollback (a family name like "stdio" is not a writer).
+  store.recordWriterEvent(store.read(a.id)?.written_by ?? "", "rolled_back", a.id); // gate-ok: operator rollback, only the writer name is used
+  if (a.action === "archive") {
+    store.archive(a.id);
+    archived.push(a.id);
+    return;
+  }
+  // The text goes back with its own author (who restored it is in the change log and the history reason).
+  const author = store.historyVersion(a.id, a.restore_version as number)?.written_by ?? "";
+  const back = store.restoreVersion(a.id, a.restore_version as number, { ifRev: a.rev, reason: "rollback", noFloodCount: true, ...(author ? { writtenBy: author } : {}) });
+  if (!back) throw new StaleWriteError(`note ${a.id} is gone; nothing was changed`);
+  restored.push({ id: a.id, version: a.restore_version as number, now_rev: back.rev });
 }
 
 /** Recompute the embeddings of the notes a rollback restored (their text changed). Best effort, like every write path. */
@@ -267,23 +421,20 @@ export function rollbackConfirm(store: Store, caller: Caller, req: { token: unkn
     if (planHash(plan) !== t.h) throw new StaleWriteError("notes changed since the preview; nothing was changed. Run the preview again");
     const archived: number[] = [];
     const restored: RollbackResult["restored"] = [];
+    const done = { unreplaced: [] as number[], unflagged: [] as number[], released: [] as number[] };
     for (const a of plan.actions) {
-      // R2-08: counted against the note's writer as it stands before the rollback (a family name like "stdio" is not a writer).
-      store.recordWriterEvent(store.read(a.id)?.written_by ?? "", "rolled_back", a.id); // gate-ok: operator rollback, only the writer name is used
-      if (a.action === "archive") {
-        store.archive(a.id);
-        archived.push(a.id);
-      } else {
-        const back = store.restoreVersion(a.id, a.restore_version as number, { ifRev: a.rev, reason: "rollback", noFloodCount: true });
-        if (!back) throw new StaleWriteError(`note ${a.id} is gone; nothing was changed`);
-        restored.push({ id: a.id, version: a.restore_version as number, now_rev: back.rev });
-      }
+      if (applySideEffect(store, a, writer, since, done)) continue;
+      applyNoteStep(store, a, archived, restored);
     }
-    return { archived, restored, skipped: plan.skipped };
+    return { archived, restored, ...done, skipped: plan.skipped };
   });
-  audit({ op: "rollback", label: writer, detail: `since ${since}: archived ${out.archived.length}, restored ${out.restored.length}, skipped ${out.skipped.length}` });
+  const more =
+    (out.unreplaced.length ? `, brought back ${out.unreplaced.length}` : "") +
+    (out.unflagged.length ? `, cleared flags on ${out.unflagged.length}` : "") +
+    (out.released.length ? `, released ${out.released.length} task claim(s)` : "");
+  audit({ op: "rollback", label: writer, detail: `since ${since}: archived ${out.archived.length}, restored ${out.restored.length}${more}, skipped ${out.skipped.length}` });
   const message =
-    `Rolled back "${safe(writer, 60)}" since ${since}: archived ${out.archived.length}, restored ${out.restored.length}, skipped ${out.skipped.length}. ` +
+    `Rolled back "${safe(writer, 60)}" since ${since}: archived ${out.archived.length}, restored ${out.restored.length}${more}, skipped ${out.skipped.length}. ` +
     "Undo: `monomem restore <id>` for an archived note, `monomem history restore <id> <version>` for a restored one.";
   return { ok: true, message, ...out };
 }

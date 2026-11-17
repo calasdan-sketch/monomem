@@ -1,6 +1,6 @@
 {
   "name": "monomem",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "mcpName": "io.github.calasdan-sketch/monomem",
   "description": "Shared memory for AI coding agents. A writer on every note (stamped by the server for token callers; a config label for local stdio apps), injection-linted writes, undo for replacements and edits. Self-hosted, MIT.",
   "license": "MIT",
@@ -71,7 +71,8 @@
     "CHANGELOG.md",
     "docs/*.md",
     "bench/scenarios/*.json",
-    "!docs/RUNNER.md"
+    "!docs/RUNNER.md",
+    "!docs/LAUNCH.md"
   ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
@@ -79,6 +80,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "esbuild": "^0.25.12",
     "typescript": "^5.7.2"
   },
   "overrides": {

@@ -1,7 +1,7 @@
 // llm.ts: the optional local-model summary. Off by default, loopback only, bounded, re-redacted, linted, and on any
 // failure the deterministic summary stays. A local http stub plays the model.
-import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
-import { test, describe, before, after } from "node:test";
+import { slow } from "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
+import { test, describe, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -50,6 +50,9 @@ describe("LLM summarizer", () => {
       req.on("data", (c) => (b += c));
       req.on("end", () => {
         seen.push({ url: req.url ?? "", body: b ? JSON.parse(b) : null });
+        // No keep-alive: a pooled socket from an earlier case (one never answers, one redirects) was once reused on a
+        // slow Windows runner and the next call hung to the 30 s timeout without reaching this stub.
+        res.shouldKeepAlive = false;
         reply(req, b, res);
       });
     });
@@ -57,6 +60,8 @@ describe("LLM summarizer", () => {
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   });
   after(() => new Promise<void>((r) => server.close(() => r())));
+  // Each case starts with no sockets left from the one before (the "never answers" case leaves one open).
+  beforeEach(() => server?.closeAllConnections());
 
   test("off by default; loopback only unless explicitly allowed; endpoint and timeout derived", () => {
     const err = process.stderr.write;
@@ -179,8 +184,15 @@ describe("LLM summarizer", () => {
       const db = join(dir, "state.db");
       new Store(db).close();
       const env = { MONOMEM_LLM_URL: base, MONOMEM_LLM_MODEL: "tiny" };
-      const slow = answer("Detached title\nThe body.");
-      reply = (req, body, res) => void setTimeout(() => slow(req, body, res), 1500);
+      const late = answer("Detached title\nThe body.");
+      // The model does not answer until the test lets it, so "session-end did not wait for the model" is checked
+      // directly, with no wall-clock bound a slow runner can miss (CI once took 7 s for session-end alone).
+      // The fallback only stops a session-end that DOES wait from hanging the run; the assertion below still fails it.
+      let answered = false;
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      const fallback = setTimeout(() => release(), slow(20_000));
+      reply = (req, body, res) => void gate.then(() => ((answered = true), late(req, body, res)));
       const p = { session_id: "d1", cwd: "/w" };
       // Substantial enough to be summarised at all (see the floor in
       // extract.ts); this test is about session-end not blocking, not about
@@ -190,11 +202,12 @@ describe("LLM summarizer", () => {
         { ...p, prompt: "Move the refunds flow onto the new payments client and cover it with tests." },
         { dbPath: db, dataDir: dir, env }
       );
-      const t0 = Date.now();
       await captureHook("session-end", p, { dbPath: db, dataDir: dir, env });
-      assert.ok(Date.now() - t0 < 1500, `session-end waited ${Date.now() - t0} ms for the model`);
+      assert.equal(answered, false, "session-end waited for the model");
+      release();
+      clearTimeout(fallback);
       let title = "";
-      for (let i = 0; i < 100 && title !== "Session: Detached title"; i++) {
+      for (let i = 0; i < slow(100) && title !== "Session: Detached title"; i++) {
         await new Promise((r) => setTimeout(r, 100));
         const s = new Store(db);
         title = s.list({ kinds: ["summary"] }).notes[0]?.title ?? "";

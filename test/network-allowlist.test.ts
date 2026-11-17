@@ -10,10 +10,17 @@ const ALLOWED = new Map([
   ["src/llm.ts", 1],
   ["src/hook.ts", 1],
   ["src/runner-sign.ts", 1],
-  ["src/dashboard.ts", 2], // browser-side fetches to the server that served the page (the API calls, and the one-time sign-in code)
-  ["src/cli.ts", 4], // `monomem open`, `monomem restore` and `monomem doctor` (its version, and its /status body-index line): is my own server up? (127.0.0.1 only)
+  ["src/ui/js-core.ts", 2], // browser-side fetches to the server that served the page (the API calls, and the one-time sign-in code)
+  ["src/cli.ts", 1], // `monomem backup restore`: is my own server up? (127.0.0.1 only)
+  ["src/embeddings-offer.ts", 1], // `monomem setup`: does a local Ollama have nomic-embed-text? (127.0.0.1:11434 only)
+  ["src/cli/connect.ts", 1], // `monomem open`: is my own server up? (127.0.0.1 only)
+  ["src/doctor/server.ts", 2], // `monomem doctor`: the local server's version, and its /status body-index line (127.0.0.1 only)
   ["src/local-server.ts", 1], // session start proves a local server holds this store's main key (GET /proof, loopback only)
   ["src/recall.ts", 1], // the recall hook asks that proven local server for body matches (POST /relevant)
+  ["src/update.ts", 3], // `monomem update` (typed only, never in hooks): the latest release from api.github.com, then its archive + SHA256SUMS; after a dashboard update, is the restarted server up? (127.0.0.1 only)
+  ["src/cli/stop.ts", 1], // `monomem stop`: does the server `monomem open` started still answer? (127.0.0.1 only)
+  ["src/ui/js-settings.ts", 1], // dashboard Update: polls /health on the server that served the page until the new version answers
+  ["src/attack-sets/index.ts", 1], // `monomem check --attacks --set poisonedrag-nq` (typed only): the pinned PoisonedRAG file from raw.githubusercontent.com, SHA-256 checked
 ]);
 const CALL = /\bfetch\(|\bhttps?\.(?:request|get)\(|new WebSocket\(|\bnet\.connect\(|\btls\.connect\(/g;
 

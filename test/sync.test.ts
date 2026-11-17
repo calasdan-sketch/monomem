@@ -93,22 +93,27 @@ describe("export / import", () => {
     s.close();
   });
 
-  test("an archived (forgotten) note is not exported and its old file is pruned", () => {
+  test("A8: an archived (forgotten) note keeps its file with an archive marker (same body, same hash); one never synced stays out", () => {
     const s = new Store(":memory:");
     const a = s.create({ title: "Keep", namespace: "work" });
-    const b = s.create({ title: "Forget me", body: "db pass is Winter2026", namespace: "work" });
+    const b = s.create({ title: "Forget me", body: "old host", namespace: "work" });
     exportMarkdown(s, dir);
     assert.equal(files(dir).length, 2);
+    const before = readFileSync(join(dir, files(dir).find((f) => f.includes("forget-me"))!), "utf8");
     s.archive(b.id);
+    const never = s.create({ title: "Never synced", namespace: "work" });
+    s.archive(never.id);
     const r = exportMarkdown(s, dir);
-    assert.equal(r.removed, 1);
-    assert.deepEqual(files(dir).length, 1);
-    assert.ok(files(dir).every((f) => !readFileSync(join(dir, f), "utf8").includes("Winter2026")));
+    assert.equal(r.removed, 0);
+    assert.equal(files(dir).length, 2, "the never-synced archived note is not written");
+    const after = readFileSync(join(dir, files(dir).find((f) => f.includes("forget-me"))!), "utf8");
+    assert.match(after, /\narchived_at: ".+"\narchived_by: ".+"\n---\nold host\n$/);
+    assert.equal(after.replace(/\narchived_at: .*\narchived_by: .*/, ""), before, "only the marker lines were added");
     assert.ok(s.read(a.id));
     s.close();
   });
 
-  test("prune removes files of deleted / renamed notes, never foreign files", () => {
+  test("prune removes files of renamed notes, marks a deleted note's file archived, never touches foreign files", () => {
     const s = new Store(":memory:");
     const a = s.create({ title: "Alpha", namespace: "work" });
     const b = s.create({ title: "Beta", namespace: "work" });
@@ -117,11 +122,13 @@ describe("export / import", () => {
     s.delete(a.id);
     s.update(b.id, { title: "Beta renamed" });
     const r = exportMarkdown(s, dir);
-    assert.equal(r.removed, 2);
+    assert.equal(r.removed, 1, "only the renamed note's old file");
     assert.deepEqual(
       files(dir).map((f) => f.replace(/--.*$/, "")),
-      ["work/README.md", "work/beta-renamed"]
+      ["work/README.md", "work/alpha", "work/beta-renamed"]
     );
+    assert.match(readFileSync(join(dir, files(dir).find((f) => f.startsWith("work/alpha"))!), "utf8"), /\narchived_by: /);
+    assert.equal(readFileSync(join(dir, "work", "README.md"), "utf8"), "# my own file\n");
     exportMarkdown(s, dir, { prune: false });
     s.close();
   });
@@ -330,7 +337,7 @@ describe("sync hardening (r3)", () => {
     assert.equal((await importMarkdown(s, dir)).counts.quarantined, 1);
     const r2 = await importMarkdown(s, dir);
     assert.equal(r2.counts.quarantined, 1);
-    assert.match(r2.entries[0].detail!, /already held in quarantine #/);
+    assert.match(r2.entries[0].detail!, /already held \(held write #/);
     assert.equal(s.listQuarantine().length, 1);
     s.close();
   });

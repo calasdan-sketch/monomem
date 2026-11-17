@@ -3,7 +3,7 @@
 // Store; Store keeps a one-line delegate for each. Imports `type { Store }` only.
 
 import type { LintMode, Store } from "../store.js";
-import { cleanWriter, currentWriter } from "../actor.js";
+import { actorStore, cleanWriter, currentWriter } from "../actor.js";
 import { ValidationError, WriterPausedError } from "../errors.js";
 import { CONFIRM_MODES } from "../taint.js";
 import { floodWritesPerHour, isOperatorWrite, isPlainObject, isStringArray } from "./rows.js";
@@ -37,6 +37,10 @@ export function resumeWriter(s: Store, label: string): boolean {
 /** The identity the flood guard counts, or null for writes it leaves alone: see floodGate. */
 export function floodSubject(s: Store, mode: LintMode): string | null {
   const w = currentWriter();
+  // r2-improvement #5: the owner's main key ("primary", the only key that may carry that name; the dashboard signs in with
+  // it) is a person, like the CLI: the guard exists to stop agents, so it never pauses the owner.
+  const a = actorStore.getStore();
+  if (a?.authed === true && a.label === "primary") return null;
   return isOperatorWrite(mode) || w === "" || w === "server" ? null : w;
 }
 
@@ -49,7 +53,7 @@ export function refusePaused(s: Store): void {
 export function pausedError(s: Store, w: string): WriterPausedError {
   return new WriterPausedError(
     `writer "${w}" is paused by the flood guard (more than ${floodWritesPerHour()} writes in an hour). ` +
-      `Its writes are refused until an operator runs: monomem resume ${w}`
+      `Its writes are refused until an operator runs: monomem resume ${w} (or, from the dashboard or with the main key: POST /flood/resume {"writer":"${w}"})`
   );
 }
 

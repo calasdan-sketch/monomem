@@ -10,7 +10,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Store } from "../src/store.js";
 import { putTask, approveTask, catchUp, buildBoardSummary, classifyQueuedCommand, scanWaitingCommands } from "../src/tasks.js";
 import { runRecall } from "../src/recall.js";
-import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -532,9 +532,10 @@ describe("runner status: recall hook, CLI, dashboard", () => {
     }
   });
 
-  test("dashboard: the banner is fed from /runner/status and written with textContent", () => {
-    const here = dirname(fileURLToPath(import.meta.url));
-    const src = readFileSync(join(here, "..", "src", "dashboard.js"), "utf8");
+  test("dashboard: the banner is fed from /runner/status and written with textContent", async () => {
+    // The script is assembled from src/ui/js-*.ts; check what the browser actually gets.
+    const { DASHBOARD_JS: src, DASHBOARD_HTML } = await import("../src/dashboard.js");
+    assert.match(DASHBOARD_HTML, /id="runner"/, "the page has a runner banner");
     assert.match(src, /\/runner\/status/);
     const i = src.indexOf("loadRunner");
     assert.ok(i >= 0, "loadRunner is present");

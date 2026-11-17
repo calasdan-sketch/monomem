@@ -1,4 +1,4 @@
-import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
+import { slow } from "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
 // 1.5.0: on an encrypted store the session-start hook matches titles and tags itself (it never builds the in-memory body
 // index). A Monomem server for the SAME store running on loopback has that index: the hook asks it for body matches
 // within a short time budget, and falls back to title-and-tag matching when there is no server, a slow one, or one that
@@ -40,6 +40,23 @@ const listen = (srv: Server): Promise<number> => new Promise((r) => srv.listen(0
 const close = (srv: Server): Promise<void> => new Promise((r) => srv.close(() => r()));
 const signals = { branch: "zephyrcanyon", diffFiles: [] };
 
+/** How long the same session start takes on this machine with no server probe at all: timing checks compare against it. */
+async function noProbeMs(db: string, dir: string): Promise<number> {
+  process.env.MONOMEM_NO_SERVER_PROBE = "1";
+  try {
+    // The slower of two runs: one cold or GC-hit sample would make the comparison below flake (release-gate L-2).
+    let worst = 0;
+    for (let i = 0; i < 2; i++) {
+      const t = Date.now();
+      await runRecall({ dbPath: db, cwd: dir, signals });
+      worst = Math.max(worst, Date.now() - t);
+    }
+    return worst;
+  } finally {
+    delete process.env.MONOMEM_NO_SERVER_PROBE;
+  }
+}
+
 describe("session start on an encrypted store asks a local server for body matches", () => {
   // The hook reads the main key from MONOMEM_TOKEN (else the .token file); every case has one, so every case really asks.
   before(() => (process.env.MONOMEM_TOKEN = TOKEN));
@@ -51,7 +68,9 @@ describe("session start on an encrypted store asks a local server for body match
     const srv = createApiServer(serverStore, TOKEN);
     try {
       const port = await listen(srv);
-      const ctx = contextOf(await runRecall({ dbPath: db, cwd: dir, signals, serverPort: port }));
+      // This checks the answer, not the clock: the server runs in this same process, so on a loaded CI machine it can miss
+      // the 300 ms budget and session start correctly falls back (the never-answers case below checks that budget).
+      const ctx = contextOf(await runRecall({ dbPath: db, cwd: dir, signals, serverPort: port, serverAskMs: 5000 }));
       // An empty context means session start's 5 s cap fired (a loaded machine), not a wrong match: say so plainly.
       assert.notEqual(ctx, "", "session start returned no context: its 5 s cap fired before the notes were read");
       assert.match(ctx, new RegExp(`#${target}\\b[^\\n]*Old deploy notes[^\\n]*\\{[^}]*kw`), ctx);
@@ -68,9 +87,13 @@ describe("session start on an encrypted store asks a local server for body match
     const port = await listen(free);
     await close(free); // a port nothing listens on
     try {
+      // "No server costs almost nothing", measured against the same session start with no server probe at all (a fixed
+      // 800 ms failed on a loaded Windows runner where session start itself took longer).
+      const base = await noProbeMs(db, dir);
       const t0 = Date.now();
       const ctx = contextOf(await runRecall({ dbPath: db, cwd: dir, signals, serverPort: port }));
-      assert.ok(Date.now() - t0 < 800, "within the hook's soft budget");
+      const took = Date.now() - t0;
+      assert.ok(took < base + slow(500), `no server took ${took} ms; session start without asking took ${base} ms`);
       assert.doesNotMatch(ctx, new RegExp(`#${target}\\b`), "the body-only note is not found without the server");
       assert.match(ctx, /filler/, "the rest of session start is unchanged");
     } finally {
@@ -86,9 +109,13 @@ describe("session start on an encrypted store asks a local server for body match
     });
     const port = await listen(hang);
     try {
+      const base = await noProbeMs(db, dir);
       const t0 = Date.now();
       const ctx = contextOf(await runRecall({ dbPath: db, cwd: dir, signals, serverPort: port }));
-      assert.ok(Date.now() - t0 < SERVER_ASK_MS + 600, `took ${Date.now() - t0} ms`);
+      const took = Date.now() - t0;
+      // The ask adds at most its budget on top of session start itself (measured above on this machine; a fixed
+      // SERVER_ASK_MS + 600 failed on a loaded Windows runner where session start alone took longer).
+      assert.ok(took < base + SERVER_ASK_MS + slow(500), `took ${took} ms; session start without asking took ${base} ms`);
       assert.equal(asked, 1, "the hook did ask, then gave up");
       assert.doesNotMatch(ctx, new RegExp(`#${target}\\b`));
     } finally {

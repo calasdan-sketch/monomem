@@ -415,7 +415,10 @@ describe("9. MCP reports ignored arguments", () => {
       const bad = await client.callTool({ name: "state_write", arguments: { text: "remember this" } });
       assert.match(toolText(bad), /a new note needs a title or a body \(you sent `text`; use `body`\)/);
       assert.equal(s.list({}).notes.length, 1);
-      const w = toolJson(await client.callTool({ name: "state_write", arguments: { title: "t", content: "x" } }));
+      // A3: title + content with no body saves nothing (the text would be lost); with a body, content is reported as ignored.
+      assert.match(toolText(await client.callTool({ name: "state_write", arguments: { title: "t", content: "x" } })), /nothing was saved[\s\S]*use `body`/);
+      assert.equal(s.list({}).notes.length, 1);
+      const w = toolJson(await client.callTool({ name: "state_write", arguments: { title: "t", body: "b", content: "x" } }));
       assert.deepEqual(w.ignored_arguments, ["content"]);
       assert.match(String(w.ignored_hint), /did you mean `body`/);
       const q = toolJson(await client.callTool({ name: "state_search", arguments: { query: "deploy", namespaces: ["work"] } }));
@@ -444,7 +447,7 @@ describe("10. recall ids; CLI edit works for non-terminals", () => {
       const old = notes.map((n) => `- [${n.title}]: ${n.body}`).join("\n");
       assert.ok(lines.join("\n").length < old.length, "fewer characters (tokens) than the old rendering");
       const ctx = await injectContext(s, { signals: {} });
-      assert.match(ctx, /Open any with (?:state_read id=N|memory_get ids=\[N\])$/);
+      assert.match(ctx, /Open any with (?:state_read id=N|memory_get ids=\[N\]|memory_read id=N)$/);
     } finally {
       s.close();
     }

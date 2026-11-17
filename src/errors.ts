@@ -89,7 +89,7 @@ export class QuarantinedError extends ValidationError {
     readonly findings: LintFinding[]
   ) {
     super(
-      `held in quarantine #${quarantineId} pending admin review (${describeFindings(findings)})`
+      `a person must approve it before it is saved (held write #${quarantineId}: ${describeFindings(findings)})`
     );
   }
 }

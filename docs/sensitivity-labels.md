@@ -39,10 +39,10 @@ In `tokens.json` or `MONOMEM_TOKENS`:
 | counts, stats, change feed, file-context, neighbours, history, tasks | the note is left out, counts included |
 | write a note | rejected (`400`) if the label is above the ceiling. An unlabelled write gets `internal`, or the ceiling if that is lower |
 | relabel | cannot go above the ceiling. Lowering a label needs an `admin` token |
-| update, delete, archive, restore, supersede a hidden note | not found, nothing changes |
-| held (quarantined) writes | hidden the same way; approving one keeps its label |
+| update, delete, archive, restore, replace a hidden note | not found, nothing changes |
+| held writes | hidden the same way; approving one keeps its label |
 | consolidate | the merged note gets the strictest label of its sources |
-| `why`, receipts (`memory_receipt`), the pinned list, rollback plans, fact-conflict warnings, session-neighbour boosts | a hidden note is left out; a replacement it cannot see is called "another note" |
+| `why`, receipts (`memory_usage` action `receipt`), the pinned list, rollback plans, fact-conflict warnings, session-neighbour boosts | a hidden note is left out; a replacement it cannot see is called "another note" |
 | the read access log (`/access`) and the meter totals in `/stats` | not available to a key with a ceiling: they hold what every app searched for and token totals that are not split by label |
 
 A hidden note leaks no title, snippet, id, count or error difference. The check is made inside the
@@ -59,14 +59,14 @@ reads every note. So:
   a `max_sensitivity` (see [give-an-app-limited-access.md](./give-an-app-limited-access.md)).
 - If an app must use stdio, set `MONOMEM_STDIO_MAX_SENSITIVITY` in its `env` block. That is a cap you
   set yourself, so only trust it for apps that do not edit their own config.
-- `monomem doctor` warns when an app is wired over stdio while private notes exist.
+- `monomem check --setup` warns when an app is wired over stdio while private notes exist.
 
 Changes to `tokens.json` apply within about two seconds without a restart. A removed token stops
 working at once, and a new ceiling applies to that token's next request.
 
 ## Labelling notes
 
-- MCP and REST: `state_write` / `POST /notes` / `PUT /notes/:id` accept `sensitivity`.
+- MCP and REST: `memory_save` / `POST /notes` / `PUT /notes/:id` accept `sensitivity`.
 - Operator: `monomem label <id> [public|internal|private]` shows or sets a label. The CLI has no
   ceiling, so the operator can relabel anything.
 

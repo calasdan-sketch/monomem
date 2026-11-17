@@ -1,4 +1,5 @@
-// `monomem setup`: connect Monomem to Claude Code, Claude Desktop, Cursor, Codex CLI, Gemini CLI, Muse, VS Code and Zed
+// `monomem setup`: connect Monomem to Claude Code, Claude Desktop, Cursor, Codex CLI, Gemini CLI, Muse, VS Code, Zed and the
+// apps in setup/targets.ts (Windsurf, Devin, Kiro, Cline CLI, Copilot CLI, Antigravity, Qwen Code, OpenCode, Kilo Code)
 // without hand-editing JSON (or TOML, for Codex).
 //
 // The promises, in the order a nervous person would ask for them:
@@ -21,7 +22,13 @@ import { createRequire } from "node:module";
 import { applyOps, getMember, getPath, JsonEditError, opsAreApplied, parseDoc, parseJsonc, type Op } from "./jsonc-edit.js";
 import { applyTomlOps, findTable, hasServer, tomlOpsApplied } from "./toml-table.js";
 import { applyLegacyEnv, homeDataDir } from "./legacy-env.js";
+import { EMBEDDINGS_OFFER_ENV, embeddingsOfferLine } from "./embeddings-offer.js";
 import { privateDir } from "./private-dir.js";
+import { addToPath, installDir, pathPlan, removeFromPath, samePath, windowsUserPath, type PathEntry } from "./install.js";
+import { subagentMemoryOn } from "./prompt/switches.js";
+import { planCursorHook } from "./setup/cursor-hook.js";
+import { EXTRA_CLIENT_IDS, EXTRA_TARGETS, extraFound, extraTarget, shapeEntry, stdView } from "./setup/targets.js";
+import { SELF_CLI, quoteShellArg, selfCommand, selfFacts, selfShellLine, type SelfFacts, type SelfMode } from "./self.js";
 
 // ---- environment (injectable, so tests never touch a real configuration) ---------------------------------------------
 
@@ -33,8 +40,10 @@ export interface SetupEnv {
   cwd: string;
   nodeVersion: string;
   execPath: string;
-  /** Absolute path of this package's cli.js. */
+  /** Absolute path of this package's cli.js (the executable itself in the single-exe build). */
   cliPath: string;
+  /** How this copy is packaged (self.ts); absent = "npm". */
+  mode?: SelfMode;
   version: string;
   now: () => Date;
   /**
@@ -42,6 +51,8 @@ export interface SetupEnv {
    * undefined = not looked up yet, null = looked up and not found.
    */
   globalCliPath?: string | null;
+  /** The Windows per-user Path value (install.ts). Tests inject a fake; unset = the real one, read only in bundle mode. */
+  userPath?: import("./install.js").UserPathIO;
 }
 
 /** Expand Windows 8.3 short names (PROGRA~1) and symlinks to the real long path; keep the input if that is impossible. */
@@ -53,7 +64,7 @@ export function longPath(p: string): string {
   }
 }
 
-export function realEnv(version: string, cliPath: string): SetupEnv {
+export function realEnv(version: string, cliPath: string = SELF_CLI): SetupEnv {
   return {
     home: homedir(),
     platform: process.platform,
@@ -62,6 +73,7 @@ export function realEnv(version: string, cliPath: string): SetupEnv {
     nodeVersion: process.versions.node,
     execPath: longPath(process.execPath),
     cliPath: longPath(cliPath),
+    mode: selfFacts().mode,
     version,
     now: () => new Date(),
   };
@@ -103,6 +115,12 @@ export interface SetupOptions {
   forceEmpty: boolean;
   /** Remove an old (`onememory` / `claude-bridge`) entry that sits beside a `monomem` one. Only ever set after a typed yes. */
   removeOld?: boolean;
+  /** A local Ollama with nomic-embed-text was found (embeddings-offer.ts): new app entries get MONOMEM_EMBEDDINGS=auto. */
+  embeddings?: boolean;
+  /** Bundle mode: put the install folder on PATH. "ask" (default: part of the plan you say y to; --yes leaves it out), "yes" (--path), "no" (--no-path). */
+  path?: "ask" | "yes" | "no";
+  /** `--action-guard`: only add the opt-in action guard hook to Claude Code (action-guard-setup.ts), nothing else. */
+  actionGuard?: boolean;
 }
 
 export const DEFAULT_OPTIONS: SetupOptions = { dryRun: false, yes: false, undo: false, hook: "ask", project: false, noTestNote: false, noDoctor: false, command: "auto", forceEmpty: false };
@@ -110,7 +128,7 @@ export const DEFAULT_OPTIONS: SetupOptions = { dryRun: false, yes: false, undo: 
 const EMPTY_FILE_MSG = (file: string): string =>
   `${file} exists but is completely empty (0 bytes). A program may have been cut off while saving it, and replacing it could lose settings. Look for a backup next to it, or if you are sure it is empty run setup again with --force-empty.`;
 
-export const CLIENT_IDS = ["claude-code", "claude-desktop", "cursor", "codex", "gemini", "muse", "vscode", "zed", "project"] as const;
+export const CLIENT_IDS = ["claude-code", "claude-desktop", "cursor", "codex", "gemini", "muse", "vscode", "zed", ...EXTRA_CLIENT_IDS, "project"] as const;
 export type ClientId = (typeof CLIENT_IDS)[number];
 
 // ---- detection ---------------------------------------------------------------------------------------------------------
@@ -167,6 +185,7 @@ export function detectClients(e: SetupEnv): ClientTarget[] {
   add("muse", "Muse", join(xdgConfig(e), "muse", "settings.json"));
   add("vscode", "VS Code", join(e.platform === "win32" ? appData(e) : e.platform === "darwin" ? join(e.home, "Library", "Application Support") : xdgConfig(e), "Code", "User", "mcp.json"));
   add("zed", "Zed", e.platform === "win32" ? join(appData(e), "Zed", "settings.json") : join(xdgConfig(e), "zed", "settings.json"));
+  for (const t of EXTRA_TARGETS) out.push({ id: t.id, label: t.label, ...extraFound(e, t) });
   const proj = join(e.cwd, ".mcp.json");
   out.push({ id: "project", label: "This folder's .mcp.json", file: proj, exists: existsSync(proj), present: existsSync(proj) });
   return out;
@@ -231,7 +250,7 @@ export const NPX_LATENCY_NOTE = (version: string): string =>
   "    (b) keep npx and accept the delay on every prompt and read (the background hooks are not affected).\n" +
   "  I do not install anything for you.";
 
-const CLIENT_LABEL: Record<string, string> = { "claude-code": "Claude Code", "claude-desktop": "Claude Desktop", cursor: "Cursor", codex: "Codex", gemini: "Gemini CLI", muse: "Muse", vscode: "VS Code", zed: "Zed" };
+const CLIENT_LABEL: Record<string, string> = { "claude-code": "Claude Code", "claude-desktop": "Claude Desktop", cursor: "Cursor", codex: "Codex", gemini: "Gemini CLI", muse: "Muse", vscode: "VS Code", zed: "Zed", ...Object.fromEntries(EXTRA_TARGETS.map((t) => [t.id, t.label])) };
 
 /** "Claude Code and Cursor": the apps whose files setup is about to change (a running app can rewrite its own file). */
 export function closeList(ids: string[]): string {
@@ -250,21 +269,29 @@ export function buildServerEntry(e: SetupEnv, opts: Pick<SetupOptions, "command"
     // the Claude Code MCP docs do not state it (checked), so it is not confirmed there. Verify with `/mcp` after setup.
     entry = e.platform === "win32" ? { command: "cmd", args: ["/c", "npx", "-y", pkg, "mcp"] } : { command: "npx", args: ["-y", pkg, "mcp"] };
   } else {
-    // Absolute node + absolute cli.js: nothing depends on PATH, and it is the same on every OS.
-    entry = { command: e.execPath, args: [e.cliPath, "mcp"] };
+    // Absolute node + absolute cli.js (the executable alone in the single-exe build): nothing depends on PATH, same on every OS.
+    entry = selfCommand(["mcp"], selfOf(e));
   }
   if (withType) entry = { type: "stdio", ...entry };
   if (env && Object.keys(env).length) entry.env = env;
   return entry;
 }
 
-/** The command a hook runs (a shell runs it, so: bare `node`, forward slashes, quoted path). */
+/** self.ts facts for this setup environment (injected paths, so tests never depend on the running process). */
+export function selfOf(e: SetupEnv, cliPath = e.cliPath): SelfFacts {
+  return { mode: e.mode ?? "npm", execPath: e.execPath, cliPath, platform: e.platform };
+}
+
+/** ` --db "<path>"` for a hook command line, or "". */
+const dbArg = (e: SetupEnv, dbPath?: string): string => (dbPath ? ` --db ${quoteShellArg(dbPath, e.platform)}` : "");
+
+/** The command a hook runs (a shell runs it, so: bare `node` in the npm install, forward slashes, quoted path; selfShellLine). */
 export function buildHookCommand(e: SetupEnv, opts: Pick<SetupOptions, "command">, dbPath?: string): string {
   const useNpx = opts.command === "npx" || (opts.command === "auto" && runningFromNpxCache(e.cliPath));
-  const db = dbPath ? ` --db "${dbPath.replace(/\\/g, "/")}"` : "";
+  const db = dbArg(e, dbPath);
   const cli = useNpx && opts.command === "auto" && e.globalCliPath ? e.globalCliPath : null;
   if (useNpx && !cli) return `npx -y monomem@${e.version} recall --budget-ms 800${db}`;
-  return `node "${(cli ?? e.cliPath).replace(/\\/g, "/")}" recall --budget-ms 800${db}`;
+  return selfShellLine(`recall --budget-ms 800${db}`, selfOf(e, cli ?? e.cliPath));
 }
 
 /** Apps whose config accepts a web (HTTP) MCP server with headers: Claude Code and VS Code (type "http"), Cursor (url + headers). */
@@ -377,7 +404,7 @@ function pickLegacyKeepers(
   const groups = new Map<string, Array<{ s: Found; db: string; notes: number; bridgeDb: boolean }>>();
   for (const s of servers) {
     const entry = safeParseEntry(base, s);
-    if (!entry || classifyEntry(s.name, entry) !== "legacy") continue;
+    if (!entry || classifyEntry(s.name, stdView(entry)) !== "legacy") continue;
     // A claude-bridge entry with its own database is judged (and named in the hint) by THAT database, never by --db.
     const own = isBridge(s.name, entry) ? migrateEntry(e, opts, entry, withType).db : null;
     const db = own !== null ? resolve(own) : dbOf(entry);
@@ -386,7 +413,7 @@ function pickLegacyKeepers(
     groups.set(at(s), list);
   }
   for (const all of groups.values()) {
-    const where = all[0].s.path.length === 1 ? "" : ` (project ${all[0].s.path[1]})`;
+    const where = all[0].s.path[0] !== "projects" ? "" : ` (project ${all[0].s.path[1]})`;
     const mono = servers.find((x) => x.name === "monomem" && at(x) === at(all[0].s));
     const others = all.filter((x) => !x.bridgeDb);
     for (const x of all) {
@@ -568,7 +595,7 @@ interface FoundServer {
   end: number;
 }
 
-function findServers(text: string, includeProjects: boolean, key = "mcpServers"): FoundServer[] {
+function findServers(text: string, includeProjects: boolean, key: string | readonly string[] = "mcpServers"): FoundServer[] {
   const doc = parseDoc(text);
   const res: FoundServer[] = [];
   const add = (path: string[]): void => {
@@ -576,7 +603,7 @@ function findServers(text: string, includeProjects: boolean, key = "mcpServers")
     if (!node || node.kind !== "object") return;
     for (const m of node.members!) res.push({ path, name: m.key, start: m.value.start, end: m.value.end });
   };
-  add([key]);
+  add(typeof key === "string" ? [key] : [...key]);
   if (includeProjects) {
     const projects = getPath(doc, ["projects"]);
     if (projects && projects.kind === "object") for (const p of projects.members!) add(["projects", p.key, "mcpServers"]);
@@ -589,7 +616,9 @@ function findServers(text: string, includeProjects: boolean, key = "mcpServers")
  * "mcp_servers" (Meta's docs) but "mcpServers" is also seen and accepted as a legacy spelling, so an existing
  * "mcpServers" is kept rather than adding a second block.
  */
-function serversKey(id: ClientId, text: string): string {
+function serversKey(id: ClientId, text: string): string | readonly string[] {
+  const extra = extraTarget(id);
+  if (extra) return typeof extra.key === "function" ? extra.key(text) : extra.key;
   if (id === "vscode") return "servers";
   if (id === "zed") return "context_servers";
   if (id === "muse") return text.trim() && !getPath(parseDoc(text), ["mcp_servers"]) && getPath(parseDoc(text), ["mcpServers"]) ? "mcpServers" : "mcp_servers";
@@ -629,14 +658,37 @@ const PINNED_VERSION = /monomem@(\d+\.\d+\.\d+)/i;
  * Why an app's Monomem entry would not start this version, else null: an absolute command or a .js argument (cli.js) that
  * no longer exists (stale: the install moved or was removed), or an npx pin to another version (outdated).
  */
-export function entryProblem(entry: Record<string, unknown>, version: string, exists: (p: string) => boolean = existsSync): string | null {
+export function entryProblem(entry: Record<string, unknown>, version: string, exists: (p: string) => boolean = existsSync, self?: OtherCopyEnv): string | null {
   const cmd = typeof entry.command === "string" ? entry.command : "";
   const args = Array.isArray(entry.args) ? entry.args.map(String) : [];
   const absolute = (p: string): boolean => /^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(p);
   for (const p of [cmd, ...args.filter((a) => /\.js$/i.test(a))]) {
     if (p && absolute(p) && !exists(p)) return `points at ${p}, which no longer exists`;
   }
-  return pinProblem([cmd, ...args].join(" "), version);
+  return (self ? otherCopyProblem(self, [cmd, ...args]) : null) ?? pinProblem([cmd, ...args].join(" "), version);
+}
+
+export type OtherCopyEnv = Pick<SetupEnv, "mode" | "cliPath" | "platform" | "env" | "home">;
+const CLI_JS = /[\\/]dist[\\/]src[\\/]cli\.js$/i;
+
+/**
+ * The standalone download only: a launch that runs another Monomem copy (an npm install's cli.js, or npx) instead of this
+ * download, so the app still needs Node.js and that copy; removing them later would leave it with no memory. Else null.
+ */
+export function otherCopyProblem(e: OtherCopyEnv, words: string[]): string | null {
+  if (e.mode !== "bundle") return null;
+  const cli = words.find((w) => CLI_JS.test(w));
+  if (cli) {
+    const ours = [e.cliPath, join(installDir(e), "dist", "src", "cli.js")];
+    return ours.some((o) => samePath(o, cli, e.platform)) ? null : `runs another Monomem copy (${cli}), not this download, so it still needs Node.js and that copy`;
+  }
+  return words.some((w) => /^monomem@/i.test(w)) ? "runs Monomem through npx, not this download, so it still needs Node.js" : null;
+}
+
+/** The cli.js path in a hook command line (quoted or not), else null. */
+function hookCliPath(command: string): string | null {
+  const m = /"([^"]*[\\/]dist[\\/]src[\\/]cli\.js)"|(\S*[\\/]dist[\\/]src[\\/]cli\.js)(?=\s)/i.exec(command);
+  return m ? (m[1] ?? m[2]) : null;
 }
 
 /** "launches monomem X, this is Y" when the text pins another version with npx (monomem@X.Y.Z), else null. */
@@ -646,9 +698,9 @@ export function pinProblem(text: string, version: string): string | null {
 }
 
 /** entryProblem for Codex's [mcp_servers.monomem] TOML table text. */
-function tomlEntryProblem(ours: string, version: string): string | null {
+function tomlEntryProblem(ours: string, version: string, self?: OtherCopyEnv): string | null {
   const command = /\bcommand\s*=\s*["']([^"']*)["']/.exec(ours)?.[1] ?? "";
-  return entryProblem({ command, args: [...ours.matchAll(/["']([^"']+\.js)["']/gi)].map((m) => m[1]) }, version) ?? pinProblem(ours, version);
+  return entryProblem({ command, args: [...ours.matchAll(/["']([^"']+\.js)["']/gi)].map((m) => m[1]) }, version, existsSync, self) ?? pinProblem(ours, version);
 }
 
 /**
@@ -669,7 +721,7 @@ export function connectedApps(e: SetupEnv): { found: string[]; connected: string
       continue;
     }
     try {
-      if (findServers(text, c.id === "claude-code", serversKey(c.id, text)).some((s) => classifyEntry(s.name, safeParseEntry(text, s)) === "monomem")) connected.add(c.label);
+      if (findServers(text, c.id === "claude-code", serversKey(c.id, text)).some((s) => classifyEntry(s.name, stdView(safeParseEntry(text, s) ?? {})) === "monomem")) connected.add(c.label);
     } catch {
       /* a config that cannot be read: not connected as far as doctor can tell */
     }
@@ -685,7 +737,7 @@ export function appEntryProblems(e: SetupEnv): string[] {
     if (c.id === "codex") {
       const table = findTable(text, ["mcp_servers", "monomem"]);
       const ours = table ? text.slice(table.start, table.end) : "";
-      const r = ours ? tomlEntryProblem(ours, e.version) : null;
+      const r = ours ? tomlEntryProblem(ours, e.version, e) : null;
       if (r) out.push(`${c.label}: "monomem" ${r}`);
       continue;
     }
@@ -696,10 +748,11 @@ export function appEntryProblems(e: SetupEnv): string[] {
       continue;
     }
     for (const s of servers) {
-      const entry = safeParseEntry(text, s);
+      const raw = safeParseEntry(text, s);
+      const entry = raw && stdView(raw);
       if (!entry || classifyEntry(s.name, entry) !== "monomem") continue;
-      const r = entryProblem(entry, e.version);
-      if (r) out.push(`${c.label}: "${s.name}"${s.path.length === 1 ? "" : ` (project ${s.path[1]})`} ${r}`);
+      const r = entryProblem(entry, e.version, existsSync, e);
+      if (r) out.push(`${c.label}: "${s.name}"${s.path[0] !== "projects" ? "" : ` (project ${s.path[1]})`} ${r}`);
     }
   }
   for (const h of hookHosts(e)) {
@@ -707,6 +760,8 @@ export function appEntryProblems(e: SetupEnv): string[] {
     if (!text) continue;
     const r = pinProblem([...text.matchAll(/"command"\s*:\s*"([^"]*monomem@[^"]*)"/gi)].map((m) => m[1]).join(" "), e.version);
     if (r) out.push(`${h.label}: a Monomem hook ${r}`);
+    const other = otherCopyHooks(e, text, h)[0];
+    if (other) out.push(`${h.label}: a Monomem hook ${other.problem}`);
   }
   return out;
 }
@@ -779,7 +834,7 @@ function planToml(e: SetupEnv, opts: SetupOptions, target: ClientTarget, text: s
     const pinned = pinMismatch(e, pin, (k) => tomlString(ours, k));
     if (pinned === "differs") return { ...already, already: [], conflicts: [`${target.label}: "monomem" uses a different data folder than the one set in this shell (${pinText(pin)}). Make them the same in ${target.file}, or unset MONOMEM_HOME / MONOMEM_DB_PATH here, then run setup again`] };
     if (pinned === "missing") Object.assign(want, pin);
-    const stale = tomlEntryProblem(ours, e.version);
+    const stale = tomlEntryProblem(ours, e.version, e);
     if (stale) {
       // TOML tables are not rewritten in place; say exactly what to do instead of calling a broken entry fine.
       return { ...already, already: [], warnings: [`${target.label}: "monomem" ${stale}. Delete the [mcp_servers.monomem] table (and its env table) from ${target.file}, then run monomem setup again`] };
@@ -828,7 +883,7 @@ function planToml(e: SetupEnv, opts: SetupOptions, target: ClientTarget, text: s
       warnings: [],
     };
   }
-  const entry = buildServerEntry(e, opts, { MONOMEM_CLIENT: target.id, ...(opts.db ? { MONOMEM_DB_PATH: opts.db } : {}), ...(opts.home ? { MONOMEM_HOME: opts.home } : {}) });
+  const entry = buildServerEntry(e, opts, { MONOMEM_CLIENT: target.id, ...(opts.db ? { MONOMEM_DB_PATH: opts.db } : {}), ...(opts.home ? { MONOMEM_HOME: opts.home } : {}), ...(opts.embeddings ? EMBEDDINGS_OFFER_ENV : {}) });
   if (opts.db) shared.dbs.add(opts.db);
   const ops: Op[] = [{ op: "set", path: ["mcp_servers"], key: "monomem", value: entry }];
   const lines = [`add the "monomem" memory server${opts.db ? ` (database ${opts.db})` : ""}`];
@@ -864,8 +919,8 @@ export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, 
   const inverse: Op[] = [];
   const withType = target.id === "claude-code" || target.id === "project" || target.id === "vscode";
   const servers = base.trim() === "" ? [] : findServers(base, target.id === "claude-code", key);
-  const top = servers.filter((s) => s.path.length === 1);
-  const hasOneTop = top.some((s) => classifyEntry(s.name, safeParseEntry(base, s) ?? {}) === "monomem");
+  const top = servers.filter((s) => s.path[0] !== "projects");
+  const hasOneTop = top.some((s) => classifyEntry(s.name, stdView(safeParseEntry(base, s) ?? {})) === "monomem");
   let migrated = 0;
   let labelled = 0;
   let replaced = 0;
@@ -884,8 +939,8 @@ export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, 
       );
       continue;
     }
-    const kind = classifyEntry(s.name, entry);
-    const where = s.path.length === 1 ? "" : ` (project ${s.path[1]})`;
+    const kind = classifyEntry(s.name, stdView(entry));
+    const where = s.path[0] !== "projects" ? "" : ` (project ${s.path[1]})`;
     if (replacedMono.has(s)) continue; // an empty "monomem" that an old entry with notes replaces (below)
     if (kind === "monomem" && opts.httpEntry) {
       // Monomem's OWN entry (the one setup wrote, with no key) is replaced by the limited one. The change is shown, the file
@@ -895,7 +950,7 @@ export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, 
         continue;
       }
       if ((entry as { url?: unknown }).url !== undefined || (entry as { headers?: unknown }).headers !== undefined) {
-        conflicts.push(`${target.label}: "${s.name}"${where} already connects this app with its own key. To change its limit, take that connection out first: monomem token list  (then monomem token remove <name> and monomem setup --undo), and run connect again`);
+        conflicts.push(`${target.label}: "${s.name}"${where} already connects this app with its own key. To change its limit, take that connection out first: monomem keys list  (then monomem keys remove <name> and monomem setup --undo), and run connect again`);
         continue;
       }
       const limited = { ...(withType ? { type: "http" } : {}), url: opts.httpEntry.url, headers: opts.httpEntry.headers } as unknown as ServerEntry;
@@ -903,6 +958,22 @@ export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, 
       inverse.unshift({ op: "set", path: s.path, key: s.name, value: entry });
       lines.push(`replace Monomem's own "${s.name}" entry${where}: it connected this app to ALL your notes with no key and no limit; the new entry uses its own key and limit`);
       replaced++;
+      continue;
+    }
+    const shaped = extraTarget(target.id);
+    if (kind === "monomem" && shaped && shaped.shape !== "std" && shaped.shape !== "copilot") {
+      // OpenCode / Kilo write the command as one array: read it back as command + args, rewrite only a stale entry.
+      const std = stdView(entry);
+      const problem = typeof std.command === "string" && std.command ? entryProblem(std, e.version, existsSync, e) : "names no program to start";
+      if (!problem) {
+        already.push(`${target.label}: "${s.name}" is already set up`);
+        continue;
+      }
+      const env = std.env && typeof std.env === "object" ? (std.env as Record<string, string>) : {};
+      ops.push({ op: "set", path: s.path, key: s.name, value: { ...entry, ...shapeEntry(shaped.shape, buildServerEntry(e, opts, env)) } });
+      inverse.unshift({ op: "set", path: s.path, key: s.name, value: entry });
+      lines.push(`rewrite "${s.name}": it ${problem}`);
+      labelled++;
       continue;
     }
     if (kind === "monomem") {
@@ -925,7 +996,7 @@ export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, 
       if (pinned === "missing") Object.assign(add, pin);
       // An entry that would not start this version (its cli.js is gone, or npx pins another version) is rewritten: same
       // name, same env and extra settings, this version's launch command.
-      const problem = entryProblem(entry, e.version);
+      const problem = entryProblem(entry, e.version, existsSync, e);
       const fresh: ServerEntry = { ...entry, ...buildServerEntry(e, opts, { ...((env as Record<string, string> | null) ?? {}), ...add }, withType && "type" in entry) };
       // Only when rewriting changes something: an entry that already is what setup writes now stays (no rewrite loop).
       if (problem && JSON.stringify(fresh) !== JSON.stringify(entry)) {
@@ -1007,6 +1078,7 @@ export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, 
     const env: Record<string, string> = { MONOMEM_CLIENT: appLabel(target.id) };
     if (opts.db) env.MONOMEM_DB_PATH = opts.db;
     if (opts.home) env.MONOMEM_HOME = opts.home;
+    if (opts.embeddings) Object.assign(env, EMBEDDINGS_OFFER_ENV);
     let entry: ServerEntry;
     if (opts.httpEntry) {
       // Only apps whose web-connection format is documented are written here; the others get a paste-in snippet from `connect`.
@@ -1025,8 +1097,10 @@ export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, 
       ops.push({ op: "set", path: [], key: "schema_version", value: 1 });
       inverse.unshift({ op: "remove", path: [], key: "schema_version" });
     }
-    ops.push({ op: "set", path: [key], key: "monomem", value: entry });
-    inverse.unshift({ op: "remove", path: [key], key: "monomem" });
+    const extra = extraTarget(target.id);
+    const at = typeof key === "string" ? [key] : [...key];
+    ops.push({ op: "set", path: at, key: "monomem", value: extra ? shapeEntry(extra.shape, entry) : entry });
+    inverse.unshift({ op: "remove", path: at, key: "monomem" });
     lines.push(`add the "monomem" memory server${opts.db ? ` (database ${opts.db})` : ""}`);
     if (opts.db) shared.dbs.add(opts.db);
   }
@@ -1083,17 +1157,69 @@ export const CAPTURE_HOOKS: ReadonlyArray<{ on: string; event: string; async: bo
   { on: "PreCompact", event: "pre-compact", async: true },
 ];
 
+/** Added for Claude Code only when MONOMEM_SUBAGENT_MEMORY=on is set where setup runs (hookHosts); synchronous: its output is the pack. */
+export const SUBAGENT_START_HOOK: CaptureHook = { on: "SubagentStart", event: "subagent-start", async: false };
+
 /** `monomem hook <event>` as a hook command (same launcher rules as buildHookCommand). */
 export function buildCaptureCommand(e: SetupEnv, opts: Pick<SetupOptions, "command">, event: string, dbPath?: string): string {
   const useNpx = opts.command === "npx" || (opts.command === "auto" && runningFromNpxCache(e.cliPath));
-  const db = dbPath ? ` --db "${dbPath.replace(/\\/g, "/")}"` : "";
+  const db = dbArg(e, dbPath);
   // Every hook runs the installed (global) copy when there is one: pinned, no npx start-up, no download.
   const cli = useNpx && opts.command === "auto" && e.globalCliPath ? e.globalCliPath : e.cliPath;
   if (useNpx && cli === e.cliPath) return `npx -y monomem@${e.version} hook ${event}${db}`;
-  return `node "${cli.replace(/\\/g, "/")}" hook ${event}${db}`;
+  return selfShellLine(`hook ${event}${db}`, selfOf(e, cli));
 }
 
 const CAPTURE_REWRITE = "replace the automatic memory hooks";
+
+export interface OtherCopyHook {
+  on: string;
+  item: { hooks?: Array<{ command?: unknown }>; command?: unknown };
+  /** The other copy's cli.js path as written: finds the entry again (unappend). */
+  cli: string;
+  problem: string;
+}
+
+/**
+ * The standalone download: hook entries (start-of-session and capture events) whose command runs another Monomem copy's
+ * cli.js (otherCopyProblem). Entries with comments inside are left alone, as elsewhere.
+ */
+export function otherCopyHooks(e: SetupEnv, text: string, host: HookHost, ons: string[] = [host.start.on, ...host.events.map((h) => h.on)]): OtherCopyHook[] {
+  if (e.mode !== "bundle" || !text.trim()) return [];
+  let doc: ReturnType<typeof parseDoc>;
+  try {
+    doc = parseDoc(text);
+  } catch {
+    return [];
+  }
+  const out: OtherCopyHook[] = [];
+  for (const on of new Set(ons)) {
+    for (const i of getPath(doc, ["hooks", on])?.items ?? []) {
+      let item: OtherCopyHook["item"];
+      try {
+        item = JSON.parse(text.slice(i.start, i.end));
+      } catch {
+        continue;
+      }
+      const cmds = Array.isArray(item.hooks) ? item.hooks.map((x) => (typeof x?.command === "string" ? x.command : "")) : typeof item.command === "string" ? [item.command] : []; // Cursor: {command}
+      for (const c of cmds) {
+        const cli = hookCliPath(c);
+        const problem = cli && /\s(?:recall|hook)\b/.test(c) ? otherCopyProblem(e, [cli]) : null;
+        if (cli && problem) {
+          out.push({ on, item, cli, problem });
+          break;
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/** A hook command of another copy run by this download: the launcher changes, `recall ...` / `hook <event> ...` stays. */
+export function moveHookCommand(e: SetupEnv, command: string, cli: string): string {
+  const tail = hookCliPath(command) === cli ? /\s((?:recall|hook)\b.*)$/s.exec(command) : null;
+  return tail ? selfShellLine(tail[1], selfOf(e)) : command;
+}
 
 export function planHook(e: SetupEnv, opts: SetupOptions, dbForHook?: string): { change: FileChange | null; already: boolean; conflict?: string } {
   return planHooks(e, opts, dbForHook, { recall: true, capture: false });
@@ -1112,6 +1238,8 @@ export interface HookHost {
   events: ReadonlyArray<CaptureHook>;
   /** Extra plan lines (notes). */
   notes?: string[];
+  /** "cursor": ~/.cursor/hooks.json's own shape, start-of-session only (setup/cursor-hook.ts). */
+  format?: "cursor";
 }
 
 /**
@@ -1135,7 +1263,15 @@ const OLD_CLAUDE_START_MATCHER = "startup|clear";
 export function hookHosts(e: SetupEnv): HookHost[] {
   const muse = detectClients(e).find((t) => t.id === "muse")!.file;
   return [
-    { client: "claude-code", label: "Claude Code hook", agent: "Claude", file: join(claudeDir(e), "settings.json"), start: { on: "SessionStart", matcher: CLAUDE_START_MATCHER }, events: CAPTURE_HOOKS },
+    {
+      client: "claude-code",
+      label: "Claude Code hook",
+      agent: "Claude",
+      file: join(claudeDir(e), "settings.json"),
+      start: { on: "SessionStart", matcher: CLAUDE_START_MATCHER },
+      // Subagent memory (prompt/subagent.ts) is opt-in: its SubagentStart pack is wired only when the person chose it.
+      events: subagentMemoryOn(e.env) ? [...CAPTURE_HOOKS, SUBAGENT_START_HOOK] : CAPTURE_HOOKS,
+    },
     {
       client: "codex",
       label: "Codex CLI hook",
@@ -1173,6 +1309,7 @@ export function hookHosts(e: SetupEnv): HookHost[] {
         return { on, event, async: false };
       }),
     },
+    { client: "cursor", label: "Cursor hook", agent: "Cursor", file: join(e.home, ".cursor", "hooks.json"), start: { on: "sessionStart" }, events: [], format: "cursor" },
   ];
 }
 
@@ -1184,6 +1321,8 @@ export function hookHosts(e: SetupEnv): HookHost[] {
  * `upgradeOnly` (with capture): only rewrite capture hooks of the old package / another npx version, add none.
  */
 export function planHooks(e: SetupEnv, opts: SetupOptions, dbForHook: string | undefined, want: { recall: boolean; capture: boolean; upgradeOnly?: boolean }, host: HookHost = hookHosts(e)[0]): { change: FileChange | null; already: boolean; conflict?: string } {
+  // Cursor gets the start-of-session hook only (no capture hooks), so a capture-only plan has nothing to add or report.
+  if (host.format === "cursor") return want.recall && !want.upgradeOnly ? planCursorHook(e, opts, dbForHook, host) : { change: null, already: false };
   const file = host.file;
   const text = readTextFile(file);
   if (text === "" && !opts.forceEmpty) return { change: null, already: false, conflict: EMPTY_FILE_MSG(file) };
@@ -1195,6 +1334,18 @@ export function planHooks(e: SetupEnv, opts: SetupOptions, dbForHook: string | u
   const ops: Op[] = [];
   const inverse: Op[] = [];
   const lines: string[] = [];
+  // The standalone download over an earlier (npm) install: those hooks move to this download, same place and settings.
+  // ponytail: undo finds the moved entry by its command ("hook <event>"); with a second Monomem hook on the same event the
+  // first one goes back instead (same commands, order differs).
+  const moved = text ? otherCopyHooks(e, text, host, [...(want.recall ? [host.start.on] : []), ...(want.capture ? host.events.map((h) => h.on) : [])]) : [];
+  for (const m of moved) {
+    const hooks = (m.item.hooks ?? []).map((x) => (typeof x?.command === "string" ? { ...x, command: moveHookCommand(e, x.command, m.cli) } : x));
+    const back = /\b(recall --budget-ms|hook [\w-]+)/.exec(JSON.stringify(hooks))?.[1] ?? HOOK_MARKER;
+    ops.push({ op: "unappend", path: ["hooks"], key: m.on, marker: m.cli }, { op: "append", path: ["hooks"], key: m.on, value: { ...m.item, hooks } });
+    inverse.unshift({ op: "append", path: ["hooks"], key: m.on, value: m.item });
+    inverse.unshift({ op: "unappend", path: ["hooks"], key: m.on, marker: back });
+  }
+  if (moved.length) lines.push(`move ${host.agent}'s Monomem hooks (${moved.length}) to this download, same place and settings: a hook ${moved[0].problem}`);
   // The old package's start-of-session hook (`npx -y onememory-mcp@<v> recall|hook session-start`) is rewritten to the current command.
   const oldNpx = want.recall && doc ? oldStartHook(e.version).exec(text!.slice(...startRange(doc, host.start.on))) : null;
   const oldEntry = oldNpx ? getPath(doc!, ["hooks", host.start.on])?.items?.find((i) => text!.slice(i.start, i.end).includes(oldNpx[0])) : undefined;
@@ -1280,6 +1431,16 @@ export function planHooks(e: SetupEnv, opts: SetupOptions, dbForHook: string | u
       added++;
     }
     if (added) lines.push(`record what ${host.agent} does in every project (files, commands, errors) into Monomem, stored only on this machine (MONOMEM_CAPTURE=off turns it off)`);
+    // The hook processes read MONOMEM_SUBAGENT_MEMORY from the app's environment: Claude Code passes its settings "env" to them.
+    if (host.events.includes(SUBAGENT_START_HOOK) && !want.upgradeOnly) {
+      const set = doc ? getPath(doc, ["env"]) : undefined;
+      const now = set ? getMember(set, "MONOMEM_SUBAGENT_MEMORY") : undefined;
+      if (!now) {
+        ops.push({ op: "set", path: ["env"], key: "MONOMEM_SUBAGENT_MEMORY", value: "on" });
+        inverse.unshift({ op: "remove", path: ["env"], key: "MONOMEM_SUBAGENT_MEMORY" });
+        lines.push(`give ${host.agent}'s subagents up to 10 lines of memory when they start, and keep one short note of what each found (MONOMEM_SUBAGENT_MEMORY=on in its settings "env")`);
+      }
+    }
     if (rewritten) lines.push(`${CAPTURE_REWRITE} (${rewritten}) from the old onememory-mcp package (or another npx version) with the installed Monomem, same place and settings`);
   }
   if (!ops.length) return { change: null, already: true };
@@ -1382,8 +1543,8 @@ export function lineDiff(before: string, after: string, file: string): string[] 
 // ---- writing: backup + atomic + re-read ----------------------------------------------------------------------------------
 
 export interface WrittenChange {
-  /** Which client this entry configured, so callers can group by vendor. */
-  client: ClientId;
+  /** Which client this entry configured, so callers can group by vendor ("shortcut": the Start menu / Applications entry). */
+  client: ClientId | "shortcut" | "git-hook";
   file: string;
   /** Resolved real file (the target of a symlink). */
   real: string;
@@ -1393,6 +1554,8 @@ export interface WrittenChange {
   inverse: Op[];
   label: string;
   format?: "toml";
+  /** A folder setup created around the file (the macOS .app); undo removes it with the file. */
+  createdDir?: string;
 }
 
 const sha = (s: string): string => createHash("sha256").update(s).digest("hex");
@@ -1534,6 +1697,8 @@ export interface HistorySession {
   dbs?: Array<{ path: string; before: number | null }>;
   /** An old claude-bridge entry was replaced in this session. */
   migratedLegacy?: boolean;
+  /** The PATH entry this session added (install.ts): undo removes exactly it. */
+  path?: PathEntry;
 }
 
 /** The data folder: MONOMEM_HOME, else ~/.monomem. */
@@ -1622,6 +1787,7 @@ export async function undoLast(e: SetupEnv, io: SetupIO): Promise<number> {
 /** Put back every file one setup session changed (newest change first). Returns how many could not be undone. */
 export function undoSession(e: SetupEnv, io: SetupIO, s: HistorySession): number {
   let failed = 0;
+  if (s.path) failed += undoPath(e, io, s.path); // added last, so taken out first
   for (const c of [...s.changes].reverse()) {
     try {
       const current = existsSync(c.real) ? readFileSync(c.real, "utf8") : null;
@@ -1633,6 +1799,7 @@ export function undoSession(e: SetupEnv, io: SetupIO, s: HistorySession): number
         // Untouched since we wrote it: put the exact original back.
         if (c.createdFile) {
           unlinkSync(c.real);
+          if (c.createdDir) rmSync(c.createdDir, { recursive: true, force: true });
           io.out(`  ${c.file}: removed (setup had created it)`);
         } else if (c.backup && existsSync(c.backup)) {
           const orig = readFileSync(c.backup);
@@ -1661,6 +1828,17 @@ export function undoSession(e: SetupEnv, io: SetupIO, s: HistorySession): number
   return failed;
 }
 
+function undoPath(e: SetupEnv, io: SetupIO, p: PathEntry): number {
+  try {
+    const removed = removeFromPath(p, p.kind === "registry" ? (e.userPath ?? windowsUserPath()) : undefined);
+    io.out(removed ? `  ${p.where}: took out ${p.dir} (setup had added it)` : `  ${p.where}: ${p.dir} is not there any more, nothing to do`);
+    return 0;
+  } catch (err) {
+    io.err(`  ${p.where}: could not take out ${p.dir} (${(err as Error).message}). Remove it by hand.`);
+    return 1;
+  }
+}
+
 // ---- the command --------------------------------------------------------------------------------------------------------------
 
 function describeSchema(v: number | null, current: number): string {
@@ -1679,7 +1857,33 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
     );
     return 1;
   }
-  if (opts.undo) return undoLast(e, io);
+  if (opts.undo) return opts.dryRun ? (await import("./setup/undo-preview.js")).undoPreview(e, io) : undoLast(e, io);
+  if (opts.actionGuard) return (await import("./action-guard-setup.js")).runActionGuardSetup(e, io, opts);
+  // The standalone download: app settings and hooks must name the folder's permanent home (install.ts), not the folder it
+  // was unpacked in (Downloads, a temp copy of a zip). Everything below plans with the home's paths; the copy is a listed step.
+  let placement: { from: string; to: string } | null = null;
+  let shortcut: import("./install.js").ShortcutPlan | null = null;
+  let pathStep: PathEntry | null = null;
+  let pathSkipped: PathEntry | null = null;
+  if (e.mode === "bundle") {
+    const inst = await import("./install.js");
+    const root = inst.bundleRoot(e.cliPath);
+    const home = inst.installDir(e);
+    if (!inst.samePath(root, home, e.platform)) {
+      placement = { from: root, to: home };
+      e = { ...e, execPath: inst.rebase(e.execPath, root, home), cliPath: inst.rebase(e.cliPath, root, home) };
+    }
+    const sp = inst.shortcutPlan(e, home);
+    if (!existsSync(sp.file)) shortcut = sp;
+    // PATH: asked as a step of the plan, or --path; --yes alone leaves it out (it changes every terminal, not one app).
+    const pathWanted = opts.path === "yes" || (opts.path !== "no" && !opts.yes);
+    pathStep = opts.path === "no" ? null : pathPlan(e, home, e.platform === "win32" ? (e.userPath ?? windowsUserPath()) : undefined);
+    if (pathStep && !pathWanted) {
+      pathSkipped = pathStep;
+      pathStep = null;
+    }
+  }
+  const extra = !!placement || !!shortcut || !!pathStep;
   if (e.globalCliPath === undefined && opts.command === "auto" && runningFromNpxCache(e.cliPath)) e = { ...e, globalCliPath: detectGlobalCli(e) ?? null };
 
   // Old-style names (ONEMEMORY_*, CLAUDE_BRIDGE_*) in the shell count as MONOMEM_*, exactly as at run time. A copy, so the
@@ -1696,10 +1900,11 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   if (!opts.home && runtimeHome(e) !== resolve(join(e.home, ".monomem"))) opts = { ...opts, home: runtimeHome(e) };
   if (!opts.terse) {
     io.out(`Monomem setup (version ${e.version})`);
-    io.out(`  Node ${e.nodeVersion}: OK\n`);
+    io.out(e.mode === "bundle" ? `  Built-in runtime (Node ${e.nodeVersion}): OK\n` : `  Node ${e.nodeVersion}: OK\n`);
   }
   if (legacyHome) io.out(`Your notes are in ${opts.home} (the folder from when Monomem was called OneMemory; there is no ~/.monomem store), so each app entry and hook setup writes gets MONOMEM_HOME=${opts.home} and keeps using them.\n`);
   else if (opts.home) io.out(`MONOMEM_HOME is set (${opts.home}), so each app entry setup writes gets MONOMEM_HOME too and uses that data folder.\n`);
+  if (opts.embeddings && !opts.httpEntry) io.out(embeddingsOfferLine + "\n");
   if (opts.only) {
     const bad = opts.only.filter((x) => !(CLIENT_IDS as readonly string[]).includes(x));
     if (bad.length) {
@@ -1711,9 +1916,11 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   if (!opts.terse) {
     io.out("What I found:");
     for (const t of found) {
-      if (t.id === "project" && !t.exists) continue;
-      io.out(`  ${t.label.padEnd(26)} ${(t.exists ? "found" : t.present ? "installed, no config file yet" : "not found").padEnd(30)}${t.present ? t.file : ""}`.trimEnd());
+      if ((t.id === "project" && !t.exists) || (!t.exists && !t.present)) continue;
+      io.out(`  ${t.label.padEnd(26)} ${(t.exists ? "found" : "installed, no config file yet").padEnd(30)}  ${t.present ? t.file : ""}`.trimEnd());
     }
+    const missing = found.filter((t) => t.id !== "project" && !t.exists && !t.present).map((t) => t.label); // one line, not one row each
+    if (missing.length) io.out(`  Not found: ${missing.join(", ")}`);
     io.out("");
   }
 
@@ -1758,12 +1965,12 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
     if (v !== null && v > SCHEMA_VERSION) plan.conflicts.push(`database ${d} is at schema v${v}, which is newer than this version (v${SCHEMA_VERSION}); install the newest monomem`);
   }
 
-  if (plan.changes.length === 0 && plan.conflicts.length === 0) {
+  if (plan.changes.length === 0 && plan.conflicts.length === 0 && !extra) {
     if (plan.already.length === 0) {
         io.out("I found no app to connect on this computer (none of the supported apps is installed), so nothing was changed. That is fine. What to do next:");
-        io.out("  1. If you use one of these, name it and I will create its settings file:  monomem connect claude-code   (also: claude-desktop, cursor, codex, gemini, muse, vscode, zed)");
-        io.out("  2. Or connect an app by hand: it needs the command  monomem mcp  (see INSTALL.md), or for a web connection run  monomem token add <app-name>  and paste what it prints.");
-        io.out("  3. Not sure? Run  monomem doctor  to see what Monomem can find.");
+        io.out(`  1. If you use one of these, name it and I will create its settings file:  monomem connect claude-code   (also: ${CLIENT_IDS.filter((i) => i !== "project" && i !== "claude-code").join(", ")})`);
+        io.out("  2. Or connect an app by hand: it needs the command  monomem mcp  (see INSTALL.md), or for a web connection run  monomem keys add <app-name>  and paste what it prints.");
+        io.out("  3. Not sure? Run  monomem check --setup  to see what Monomem can find.");
       }
   }
   if (plan.conflicts.length) {
@@ -1794,7 +2001,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
       }
     }
     // Automatic memory builds on the start-of-session hook: with --no-hook it is only added when asked for by name (--capture).
-    if (capture !== "no" && !(capture === "ask" && opts.hook === "no")) {
+    if (h.format !== "cursor" && capture !== "no" && !(capture === "ask" && opts.hook === "no")) {
       const pc = planHooks(e, opts, hookDb, { recall: opts.hook !== "no", capture: true }, h);
       if (pc.conflict) plan.conflicts.push(pc.conflict);
       else if (pc.already) plan.already.push(`${who}: the automatic memory hooks are already installed`);
@@ -1825,16 +2032,19 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
     if (missing.length) io.out(`\nNot installed: start-of-session hook. Add it: monomem setup --hook (without it, ${names(missing)} only ${missing.length === 1 ? "sees" : "see"} your notes when it searches for them).`);
   };
 
-  if (plan.changes.length === 0 && !anyHook && !anyCapture) {
+  if (plan.changes.length === 0 && !anyHook && !anyCapture && !extra) {
     for (const a of plan.already) io.out(`  (already fine) ${a}`);
     for (const w of plan.warnings) io.out(`  (careful) ${w}`);
-    io.out(plan.already.length ? "\nNothing to change: Monomem is already connected. To check it, run:  monomem doctor" : "\nNothing was changed.");
+    io.out(plan.already.length ? "\nNothing to change: Monomem is already connected. To check it, run:  monomem check --setup" : "\nNothing was changed.");
     hookLines();
     return 0;
   }
 
   io.out("What I will do:");
   let n = 1;
+  if (placement) io.out(`  ${n++}. Copy Monomem from ${placement.from} to ${placement.to}, its home on this computer (no admin rights needed), so your apps' settings name a folder that never moves. You can delete the downloaded folder afterwards`);
+  if (pathStep) io.out(`  ${n++}. Add ${pathStep.dir} to ${pathStep.where}${pathStep.line ? `: the line  ${pathStep.line}` : ""}, so \`monomem\` works in any new terminal. monomem setup --undo takes out exactly that entry (--no-path leaves it out)`);
+  if (shortcut) io.out(`  ${n++}. Add a "Monomem" entry to ${shortcut.where} that opens your notes in the browser (${shortcut.file}). monomem setup --undo and monomem uninstall remove it`);
   for (const c of plan.changes) for (const l of c.lines) io.out(`  ${l.startsWith("note:") ? "   " : `${n++}. ${c.label}: `}${l}`);
   // --yes asks nothing, so the hook it adds is a step like any other (Claude Code only, unless --hook: see the else branch below).
   if (opts.yes && opts.hook !== "no")
@@ -1842,7 +2052,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   if (capture === "ask") for (const h of upgradeHosts) io.out(`  ${n++}. ${h.label.replace(/ hook$/, "")}: upgrade your existing automatic memory hooks from the old onememory-mcp package (or another npx version) to this Monomem, same place and settings. They are already installed; this is not a new hook`);
   for (const d of dbs) io.out(`  ${n++}. Database ${d}: ${describeSchema(Store.peekSchemaVersion(d), SCHEMA_VERSION)}`);
   if (!opts.noTestNote) io.out(`  ${n++}. Write a test note, read it back and delete it, so you know writing, reading and deleting all work (only that one note is deleted; no other note is touched)`);
-  io.out(`  ${n++}. Run \`monomem doctor\` and tell you how to check the connection in your assistant`);
+  io.out(`  ${n++}. Run \`monomem check --setup\` and tell you how to check the connection in your assistant`);
   for (const a of plan.already) io.out(`  (already fine) ${a}`);
   for (const w of plan.warnings) io.out(`  (careful) ${w}`);
   io.out("");
@@ -1879,7 +2089,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
     if ((anyHook && !wantHook) || (anyCapture && !wantCapture)) io.out("(The hooks above are only added if you say yes to them, or pass --hook / --capture. With --yes the start-of-session hook for Claude Code is added too; --no-hook leaves it out.)");
     return 0;
   }
-  if (plan.changes.length === 0 && !anyHook && !anyCapture) return 0;
+  if (plan.changes.length === 0 && !anyHook && !anyCapture && !extra) return 0;
 
   if (!opts.yes) {
     if (!io.interactive) {
@@ -1889,7 +2099,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
       );
       return 1;
     }
-    const a = (await io.ask(plan.changes.length ? "Go ahead with the changes above? Type y to continue, anything else cancels: " : "Install the hooks? Type y: ")).trim().toLowerCase();
+    const a = (await io.ask(plan.changes.length || extra ? "Go ahead with the changes above? Type y to continue, anything else cancels: " : "Install the hooks? Type y: ")).trim().toLowerCase();
     if (a !== "y" && a !== "yes") {
       io.out("Cancelled. Nothing was changed.");
       return 0;
@@ -1976,6 +2186,17 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
     return 1;
   }
 
+  // 1b. The standalone download moves into its home before any setting names that home.
+  if (placement) {
+    try {
+      (await import("./install.js")).copyToInstall(placement.from, placement.to);
+      io.out(`Copied Monomem to ${placement.to}.`);
+    } catch (err) {
+      io.err(`Could not copy Monomem to ${placement.to} (${(err as Error).message}), so I changed NO configuration.`);
+      return 1;
+    }
+  }
+
   // 2. Configuration files.
   const written: WrittenChange[] = [];
   // Each hook file: automatic memory (with the start-of-session hook when that was wanted too), else the hook alone.
@@ -2006,9 +2227,29 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
     }
     return 1;
   }
-  if (written.length) {
+  // The Start menu / Applications entry: recorded like a file setup created, so --undo and uninstall remove it.
+  const saved = [...written];
+  if (shortcut) {
+    try {
+      const afterSha = (await import("./install.js")).createShortcut(shortcut, e.platform);
+      saved.push({ client: "shortcut", file: shortcut.file, real: shortcut.file, backup: null, createdFile: true, afterSha, inverse: [], label: `${shortcut.where} entry`, ...(shortcut.createdDir ? { createdDir: shortcut.createdDir } : {}) });
+      io.out(`Added "Monomem" to ${shortcut.where}: ${shortcut.file}`);
+    } catch (err) {
+      io.err(`Could not add the ${shortcut.where} entry (${(err as Error).message}). Everything else is done; open your notes with:  monomem open`);
+    }
+  }
+  let pathAdded: PathEntry | undefined;
+  if (pathStep) {
+    try {
+      pathAdded = addToPath(pathStep, pathStep.kind === "registry" ? (e.userPath ?? windowsUserPath()) : undefined);
+      io.out(`Added ${pathStep.dir} to ${pathStep.where}. Open a new terminal to use \`monomem\` there.`);
+    } catch (err) {
+      io.err(`Could not add ${pathStep.dir} to ${pathStep.where} (${(err as Error).message}). Everything else is done.`);
+    }
+  } else if (pathSkipped) io.out(`Not added to PATH (--yes leaves it out). To add ${pathSkipped.dir}: monomem setup --yes --path`);
+  if (saved.length || pathAdded) {
     const all = readHistory(e);
-    all.push({ id: stamp(e.now()), at: e.now().toISOString(), version: e.version, changes: written, dbs: dbsBefore, migratedLegacy });
+    all.push({ id: stamp(e.now()), at: e.now().toISOString(), version: e.version, changes: saved, dbs: dbsBefore, migratedLegacy, ...(pathAdded ? { path: pathAdded } : {}) });
     saveHistory(e, all);
   }
   {
@@ -2038,10 +2279,11 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
 
   // 3. Doctor.
   if (!opts.noDoctor) {
-    io.out("\nmonomem doctor:");
+    io.out("\nmonomem check --setup:");
     const env = { ...e.env };
     if (primaryDb !== DB_PATH) env.MONOMEM_DB_PATH = primaryDb;
-    const r = spawnSync(e.execPath, [e.cliPath, "doctor"], { env, encoding: "utf8", timeout: 60_000 });
+    const self = selfCommand(["doctor"], selfOf(e));
+    const r = spawnSync(self.command, self.args, { env, encoding: "utf8", timeout: 60_000 });
     for (const l of `${r.stdout ?? ""}${r.stderr ?? ""}`.split("\n")) if (l.trim()) io.out("  " + l);
   }
 
@@ -2075,7 +2317,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   io.out("  Check it loaded: type  /mcp  (or your tool's equivalent) and look for  monomem  connected.");
   if (proof) {
     io.out(`\nOne memory, ${proof.sameVendor ? "two assistants" : "two companies' assistants"}. Thirty seconds to see it:`);
-    io.out(`  1. In ${proof.a}, say:   Remember: my staging server is on port 8443.`);
+    io.out(`  1. In ${proof.a}, say:   Save to Monomem: my staging server is on port 8443.`);
     io.out(`  2. In ${proof.b}, ask:   What port is my staging server on?`);
     // Never assert what the other assistant WILL say: it searches memory only
     // if it decides to, and some hosts have no session-start hook at all. An
@@ -2084,16 +2326,22 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
     io.out(`\n  ${proof.b} was never told, and nothing left this machine. If it says it does not know,`);
     io.out("  ask it to search your memory — some assistants only look when you ask.");
     io.out("\n  Then ask either one:   Who wrote that note, and when?");
-    io.out("  Every memory names the assistant that wrote it. That is the part other memory");
-    io.out("  servers skip: when two agents disagree, you can see which one to believe.");
+    io.out("  Every memory names the assistant that wrote it, so when two agents disagree you can see");
+    io.out("  which one to believe.");
   } else {
     io.out("\nNow prove it (about 30 seconds):");
-    io.out("  1. Say:   Remember: my staging server is on port 8443.");
+    io.out("  1. Say:   Save to Monomem: my staging server is on port 8443.");
     io.out("  2. Start a brand-new chat and ask:   What port is my staging server on?");
-    io.out("\n  The new chat was never told. It answers 8443. Wire up a second assistant with `monomem setup` and the same memory follows you there.");
+    io.out("\n  The new chat was never told, so an answer of 8443 came from your memory. Wire up a second assistant with `monomem setup` and the same memory follows you there.");
   }
+  // "Save to Monomem", never "Remember": Claude Code files a "remember ..." request in its own auto memory, and the
+  // proof would then pass without Monomem.
+  io.out('\n  Why "Save to Monomem" and not just "remember": some assistants, Claude Code among them, keep a memory of');
+  io.out("  their own, and a plain \"remember\" can land there instead, where your other apps cannot see it.");
+  await (await import("./claude-refresh.js")).offerClaudeMemoryImport(e, io, !!opts.yes, primaryDb);
   await offerClaudeMemPreview(e, io, opts, primaryDb);
   await offerServerMemoryPreview(e, io, opts, primaryDb);
+  await (await import("./cli/commit-trail.js")).offerCommitTrail(e, io, opts); // PLAN I: per repository, asks first
   io.out("\nIf monomem is missing or red: docs/live-claude-code.md has the fixes. To go back: monomem setup --undo");
   hookLines();
   return 0;

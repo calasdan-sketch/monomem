@@ -1,7 +1,7 @@
 // Task board, session handoffs and catch-up: the tasks.ts service, the
 // task_put / task_list / session_handoff / catch_up MCP tools, the REST
 // routes, the exact-tag list filter, and the SessionStart recall section.
-import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
+import { slow } from "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -569,7 +569,7 @@ describe("recall: task board in the SessionStart hook", () => {
       const t0 = Date.now();
       const ctx = ctxOf(await runRecall({ dbPath: db }));
       assert.ok(ctx.length <= RECALL_MAX_CHARS + 600, `context too large: ${ctx.length}`); // + banner
-      assert.ok(Date.now() - t0 < 2000);
+      assert.ok(Date.now() - t0 < slow(2000));
       assert.match(ctx, /Open tasks \(40, showing \d+\):/, "header counts the total, not the shown rows");
       assert.match(ctx, /Latest handoff from pc/, "the handoff is never cut by a long task list");
     } finally {

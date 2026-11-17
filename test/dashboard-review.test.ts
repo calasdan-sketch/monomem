@@ -1,198 +1,101 @@
-// The dashboard's Review view: notes an AI agent wrote that nobody has looked at yet. The page script is run in a
-// stub browser so the filtering and the accept/delete calls are tested for real.
+// The dashboard's Review tab shows the same items as `monomem review` (r2-improvement #4): unconfirmed outside content and
+// notes past re-confirmation, flagged notes, notes about code that changed, plus facts two writers disagree on. It used to
+// page through every note (1.35 MB at 3,075 notes) and list each agent note "to accept"; that queue is gone.
 import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import vm from "node:vm";
+import type { AddressInfo } from "node:net";
 import { DASHBOARD_HTML, DASHBOARD_JS } from "../src/dashboard.js";
+import { Store } from "../src/store.js";
+import { actorStore } from "../src/actor.js";
+import { createApiServer } from "../src/api.js";
 
-interface Call {
-  path: string;
-  method: string;
-  body?: any;
-}
+const as = <T>(label: string, f: () => T): T => actorStore.run({ label, authed: true }, f);
+const ADMIN = "a".repeat(40);
+const settle = () => new Promise((r) => setTimeout(r, 30));
 
-function page(notes: any[]) {
-  const calls: Call[] = [];
+/** The page script in a stub browser whose fetch goes to a real server. */
+function page(base: string, calls: string[]) {
   const els = new Map<string, any>();
   const el = (id: string): any => {
-    if (!els.has(id)) els.set(id, { value: "", style: {}, textContent: "", innerHTML: "", checked: false, addEventListener() {}, focus() {}, appendChild() {} });
+    if (!els.has(id)) els.set(id, { value: "", style: {}, textContent: "", innerHTML: "", checked: false, hidden: false, addEventListener() {}, focus() {}, appendChild() {}, getAttribute: () => null, setAttribute() {}, removeAttribute() {} });
     return els.get(id);
   };
-  const store: Record<string, any[]> = { notes };
   const ctx: any = {
     document: { getElementById: el, createElement: () => ({ style: {} }) },
-    sessionStorage: { getItem: () => "tok", setItem() {}, removeItem() {} },
-    alert: (m: string) => void calls.push({ path: "alert:" + m, method: "ALERT" }),
-    confirm: () => true,
-    setTimeout,
-    clearTimeout,
-    encodeURIComponent,
-    fetch: async (path: string, opts: any = {}) => {
-      const body = opts.body ? JSON.parse(opts.body) : undefined;
-      calls.push({ path, method: opts.method ?? "GET", body });
-      let json: any = { notes: store.notes };
-      const m = /^\/notes\/(\d+)$/.exec(path);
-      if (m && (opts.method ?? "GET") === "GET") json = { note: store.notes.find((n) => n.id === Number(m[1])) };
-      if (m && opts.method === "PUT") {
-        const n = store.notes.find((x) => x.id === Number(m[1]));
-        n.tags = body.tags;
-        json = { note: n };
-      }
-      if (m && opts.method === "DELETE") {
-        store.notes = store.notes.filter((x) => x.id !== Number(m[1]));
-        json = { ok: true };
-      }
-      const q = /^\/notes\?(.*)$/.exec(path);
-      if (q) {
-        const sp = new URLSearchParams(q[1]);
-        const off = Number(sp.get("offset") ?? 0);
-        json = { notes: store.notes.slice(off, off + Number(sp.get("limit") ?? 50)) };
-      }
-      if (path.startsWith("/runner/status")) json = {};
-      return { ok: true, status: 200, json: async () => json };
-    },
+    // The key appears only after the script has loaded, so its own start-up load does not race the view under test.
+    sessionStorage: { getItem: (k: string) => (k === "om_tok" && ctx.ready ? ADMIN : ""), setItem() {}, removeItem() {} },
+    setTimeout, clearTimeout, encodeURIComponent, Promise,
+    fetch: (path: string, o: any = {}) => (calls.push(`${o.method ?? "GET"} ${path}`), fetch(base + path, o)),
   };
   vm.createContext(ctx);
   vm.runInContext(DASHBOARD_JS, ctx);
-  return { ctx, calls, el };
+  ctx.ready = true;
+  return { ctx, el };
 }
 
-const N = (id: number, by: string, tags: string[] = []) => ({ id, title: "t" + id, body: "b", tags, namespace: "default", written_by: by, rev: 1, updated_at: "2026-10-25T10:00:00Z" });
-const settle = () => new Promise((r) => setTimeout(r, 20));
+async function withServer(fn: (base: string, s: Store) => Promise<void>): Promise<void> {
+  const s = new Store(":memory:");
+  const server = createApiServer(s, [{ token: ADMIN, scope: "admin", label: "primary" }]);
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  try {
+    await fn(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, s);
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+    s.close();
+  }
+}
 
-describe("dashboard review queue", () => {
-  test("the page has a Review button", () => {
-    assert.match(DASHBOARD_HTML, /onclick="loadReview\(\)"/);
-    assert.match(DASHBOARD_HTML, />Review</);
-  });
-  test("the script is valid JavaScript", () => {
+describe("dashboard Review = monomem review", () => {
+  test("the page has a Review tab and valid script", () => {
+    assert.match(DASHBOARD_HTML, /id="tab_review" onclick="loadReview\(\)">Review/);
     assert.doesNotThrow(() => new vm.Script(DASHBOARD_JS));
+    assert.ok(!/reviewQueue|acceptNote/.test(DASHBOARD_JS), "the every-agent-note queue is gone");
   });
-  // This test was renamed at 1.0.0 and its assertion was not. It read
-  // `assert.match(DASHBOARD_HTML, /one<span/)` under the title "the page says
-  // Monomem, not the old name", so it did the opposite of what it claimed:
-  // it pinned the old wordmark and would have failed the fix. The wordmark is
-  // split across a tag, which is also why every grep for "onememory" missed
-  // it, so assert on the split form -- a plain /monomem/ check would pass on
-  // the <title> while the header still said something else.
-  test("the page says Monomem, not the old name", () => {
-    assert.ok(!/claude<span/.test(DASHBOARD_HTML));
-    assert.ok(!/one<span/.test(DASHBOARD_HTML), "dashboard still renders the onememory wordmark");
-    assert.match(DASHBOARD_HTML, /mono<span/);
-    // Both places it appears: the header and the token gate.
-    assert.equal((DASHBOARD_HTML.match(/mono<span/g) || []).length, 2);
-  });
-  test("queue = agent-written notes that are not yet reviewed; your own and imported notes are not queued", () => {
-    const { ctx } = page([]);
-    const q = ctx.reviewQueue([N(1, "claude-code-token"), N(2, "cli"), N(3, "stdio"), N(4, "import:claude"), N(5, "phone", ["reviewed"]), N(6, ""), N(7, "server")]);
-    assert.deepEqual(q.map((n: any) => n.id), [1, 3]);
-  });
-  test("filtering by writer", () => {
-    const { ctx } = page([]);
-    const all = [N(1, "alice-token"), N(2, "bob-token"), N(3, "alice-token")];
-    assert.deepEqual(ctx.reviewQueue(all, "alice-token").map((n: any) => n.id), [1, 3]);
-    assert.deepEqual(ctx.reviewQueue(all, "nobody"), []);
-  });
-  test("loading the view lists the queue with a writer picker and accept/delete buttons", async () => {
-    const { ctx, el } = page([N(1, "claude-code-token"), N(2, "cli")]);
-    ctx.loadReview();
-    await settle();
-    const html = el("list").innerHTML;
-    assert.match(html, /<select id='rv_writer'/);
-    assert.match(html, /claude-code-token \(1\)/);
-    assert.match(html, /acceptNote\(1\)/);
-    assert.ok(!/acceptNote\(2\)/.test(html), "the cli-written note is not queued");
-    assert.match(el("count").textContent, /1 to review/);
-  });
-  test("accept adds the tag reviewed (keeping the others) with the revision it read, then the note leaves the queue", async () => {
-    const { ctx, calls, el } = page([N(1, "agent", ["x"])]);
-    ctx.acceptNote(1);
-    await settle();
-    const put = calls.find((c) => c.method === "PUT")!;
-    assert.equal(put.path, "/notes/1");
-    assert.deepEqual(put.body.tags, ["x", "reviewed"]);
-    assert.equal(put.body.if_rev, 1);
-    assert.match(el("list").innerHTML, /Nothing waiting for review/);
-  });
-  test("accepting twice does not duplicate the tag", async () => {
-    const { ctx, calls } = page([N(1, "agent", ["reviewed"])]);
-    ctx.acceptNote(1);
-    await settle();
-    assert.deepEqual(calls.find((c) => c.method === "PUT")!.body.tags, ["reviewed"]);
-  });
-  test("delete from the review view refreshes the review, not the main list", async () => {
-    const { ctx, calls } = page([N(1, "agent"), N(2, "agent")]);
-    ctx.loadReview();
-    await settle();
-    ctx.del(1);
-    await settle();
-    assert.ok(calls.some((c) => c.method === "DELETE" && c.path === "/notes/1"));
-    const last = calls.filter((c) => c.method === "GET").pop()!;
-    assert.match(last.path, /^\/notes\?limit=500/);
-  });
-  test("note text is escaped, not injected as HTML", async () => {
-    const evil = { ...N(1, "agent"), title: "<img src=x onerror=alert(1)>", body: "<script>alert(1)</script>" };
-    const { ctx, el } = page([evil]);
-    ctx.loadReview();
-    await settle();
-    assert.ok(!el("list").innerHTML.includes("<img src=x"));
-    assert.ok(!el("list").innerHTML.includes("<script>alert"));
-    assert.match(el("list").innerHTML, /&lt;img src=x/);
-  });
-});
 
-describe("dashboard review queue against the real REST API", () => {
-  test("the API gives the page what it needs: written_by on each note, and a tag-only edit keeps the writer", async () => {
-    const { createApiServer } = await import("../src/api.js");
-    const { Store } = await import("../src/store.js");
-    const store = new Store(":memory:");
-    const server = createApiServer(store, [
-      { token: "t".repeat(40), scope: "write", label: "claude-code" },
-      { token: "a".repeat(40), scope: "admin", label: "owner" },
-    ]);
-    await new Promise<void>((r) => server.listen(0, r));
-    const base = `http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}`;
-    const h = (t: string) => ({ Authorization: `Bearer ${t}`, "Content-Type": "application/json" });
-    try {
-      const made = (await (await fetch(`${base}/notes`, { method: "POST", headers: h("t".repeat(40)), body: JSON.stringify({ title: "agent note", body: "x" }) })).json()) as { note: any };
-      const list = (await (await fetch(`${base}/notes?limit=500`, { headers: h("a".repeat(40)) })).json()) as { notes: any[] };
-      assert.equal(list.notes[0].written_by, "claude-code");
-      const put = await fetch(`${base}/notes/${made.note.id}`, { method: "PUT", headers: h("a".repeat(40)), body: JSON.stringify({ tags: ["reviewed"], if_rev: made.note.rev }) });
-      assert.equal(put.status, 200);
-      const after = (await (await fetch(`${base}/notes/${made.note.id}`, { headers: h("a".repeat(40)) })).json()) as { note: any };
-      assert.deepEqual(after.note.tags, ["reviewed"]);
-      assert.equal(after.note.written_by, "claude-code", "accepting does not take over authorship");
-      const { DASHBOARD_JS } = await import("../src/dashboard.js");
-      const ctx: any = { document: { getElementById: () => ({ addEventListener() {}, style: {}, focus() {}, value: "", textContent: "", innerHTML: "" }) }, sessionStorage: { getItem: () => "x" }, fetch: async () => ({ ok: true, status: 200, json: async () => ({}) }), setTimeout, clearTimeout, encodeURIComponent };
-      vm.createContext(ctx);
-      vm.runInContext(DASHBOARD_JS, ctx);
-      assert.deepEqual(ctx.reviewQueue(list.notes).map((n: any) => n.id), [made.note.id], "before accepting it is queued");
-      assert.deepEqual(ctx.reviewQueue([after.note]), [], "after accepting it is not");
-    } finally {
-      await new Promise<void>((r) => server.close(() => r()));
-      store.close();
-    }
+  test("the page says Monomem, not an old name", () => {
+    assert.ok(!/onememory|claude-bridge/i.test(DASHBOARD_HTML));
+    assert.equal((DASHBOARD_HTML.match(/<span>Monomem<\/span>|<h1>Monomem<\/h1>/g) || []).length, 2, "header and sign-in");
   });
-});
 
-describe("dashboard review queue: paging", () => {
-  test("a note past the first 500 is still found", async () => {
-    const notes = Array.from({ length: 1203 }, (_, i) => N(i + 1, "cli"));
-    notes.push(N(5000, "agent-x"));
-    const { ctx, calls, el } = page(notes);
-    ctx.loadReview();
-    await settle();
-    await settle();
-    assert.equal(el("count").textContent, "1 to review");
-    assert.ok(calls.filter((c) => c.path.startsWith("/notes?")).length >= 3, "three pages were fetched");
-    assert.match(calls.find((c) => c.path.includes("offset=1000"))?.path ?? "", /limit=500/);
+  test("200 ordinary agent notes, 1 from outside and 1 flagged: Review lists 2, the same ids as store lists, without paging /notes", async () => {
+    await withServer(async (base, s) => {
+      for (let i = 0; i < 200; i++) as("claude-code", () => s.create({ title: `ordinary ${i}`, body: "x" }));
+      const outside = as("research-bot", () => s.create({ title: "Acme pricing <b>", body: "acme costs 40", source: "https://vendor.example", outside: true }));
+      const flagged = as("claude-code", () => s.create({ title: "Deploy with npm", body: "npm run deploy" }));
+      as("stdio:codex", () => s.flagNote(flagged.id, "we deploy with pnpm now"));
+      const cli = [...s.reviewList(), ...s.flaggedList(), ...s.codeChangedList()].map((x) => x.id).sort((a, b) => a - b);
+      assert.deepEqual(cli, [outside.id, flagged.id].sort((a, b) => a - b));
+
+      const calls: string[] = [];
+      const p = page(base, calls);
+      p.ctx.loadReview();
+      for (let i = 0; i < 20 && !p.el("list").innerHTML; i++) await settle();
+      const html = p.el("list").innerHTML as string;
+      assert.match(p.el("count").textContent, /^2 notes wait/);
+      assert.match(html, /aria-label='confirm note #\d+' onclick='reviewConfirm\(\d+\)'>Confirm: I checked it</);
+      assert.match(html, /we deploy with pnpm now/);
+      assert.match(html, /Acme pricing &lt;b&gt;/, "titles are escaped");
+      assert.ok(!html.includes("ordinary 1"), "ordinary agent notes are not listed");
+      assert.ok(!calls.some((c) => c.startsWith("GET /notes")), "no paging through every note");
+    });
   });
-  test("exactly 500 notes costs one extra empty page, not a hang", async () => {
-    const { ctx, el } = page(Array.from({ length: 500 }, (_, i) => N(i + 1, "agent-y")));
-    ctx.loadReview();
-    await settle();
-    await settle();
-    assert.equal(el("count").textContent, "500 to review");
+
+  test("Confirm releases the note; Keep needs a person session and says how to get one", async () => {
+    await withServer(async (base, s) => {
+      const outside = as("research-bot", () => s.create({ title: "Acme pricing", body: "40", source: "https://vendor.example", outside: true }));
+      const flagged = as("claude-code", () => s.create({ title: "Deploy", body: "npm" }));
+      as("stdio:codex", () => s.flagNote(flagged.id, "wrong"));
+      const calls: string[] = [];
+      const p = page(base, calls);
+      p.ctx.reviewConfirm(outside.id);
+      for (let i = 0; i < 20 && !calls.some((c) => c.startsWith("GET /ui/review")); i++) await settle();
+      assert.ok(calls.includes(`POST /notes/${outside.id}/confirm`));
+      const keep = await fetch(`${base}/ui/review/${flagged.id}/keep`, { method: "POST", headers: { Authorization: `Bearer ${ADMIN}` } });
+      assert.equal(keep.status, 403);
+      assert.match(((await keep.json()) as { error: string }).error, /monomem open/);
+      assert.equal(s.flaggedList().length, 1, "the key alone did not clear the flag");
+    });
   });
 });

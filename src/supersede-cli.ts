@@ -13,6 +13,7 @@
 //   monomem history purge <id> [--yes]
 //   monomem pin [<id>]  |  monomem unpin <id>
 //   monomem rollback --writer <name> --since <iso|duration> [--include-conflicts] [--yes] [--json]
+//   monomem rollback --note <id> [--include-likely] [--include-conflicts] [--yes] [--json]   (src/cli/forensics.ts)
 //
 // There is deliberately NO --yes for a replacement: a script has to carry a code that was made by looking at a preview.
 //
@@ -41,8 +42,8 @@ export interface CliIO {
   gate?: (kind: "pinned" | "outside", ids: number[], what: string) => Promise<void>;
 }
 
-const VALUE_FLAGS = ["old", "new-id", "title", "body", "body-file", "tags", "confidence", "confirm-token", "if-rev", "writer", "since"];
-const BOOL_FLAGS = ["acknowledge-risk", "json", "include-distrusted", "yes", "include-conflicts"];
+const VALUE_FLAGS = ["old", "new-id", "title", "body", "body-file", "tags", "confidence", "confirm-token", "if-rev", "writer", "since", "note"];
+const BOOL_FLAGS = ["acknowledge-risk", "json", "include-distrusted", "yes", "include-conflicts", "include-likely"];
 
 export function parseArgs(args: string[]): { flags: Record<string, string | true>; rest: string[] } {
   const flags: Record<string, string | true> = {};
@@ -174,7 +175,7 @@ export async function supersedeCli(store: Store, args: string[], io: CliIO, call
     return 0;
   } catch (e) {
     if (e instanceof QuarantinedError) {
-      io.err(`Held for review (quarantine #${e.quarantineId}); nothing was replaced.`);
+      io.err(`Held for review (held write #${e.quarantineId}); nothing was replaced.`);
       return 1;
     }
     if (e instanceof SupersedeError || e instanceof ValidationError) {
@@ -234,7 +235,7 @@ export async function historyCli(store: Store, args: string[], io: CliIO, caller
     return 0;
   } catch (e) {
     if (e instanceof QuarantinedError) {
-      io.err(`Held for review (quarantine #${e.quarantineId}); the version was not restored.`);
+      io.err(`Held for review (held write #${e.quarantineId}); the version was not restored.`);
       return 1;
     }
     if (e instanceof ValidationError) {
@@ -274,17 +275,22 @@ export async function pinCli(store: Store, kind: "pin" | "unpin", args: string[]
 /** `monomem rollback --writer <name> --since <iso|duration> [--include-conflicts] [--yes] [--json]` */
 export async function rollbackCli(store: Store, args: string[], io: CliIO, caller: Caller = OWNER): Promise<number> {
   try {
-    const { flags } = parseArgs(args);
+    // --dry-run = the preview only (what rollback does without --yes anyway); taken out here so no other command accepts it silently.
+    const dryRun = args.includes("--dry-run");
+    const { flags } = parseArgs(args.filter((a) => a !== "--dry-run"));
+    if (dryRun) flags["dry-run"] = true;
+    if (flags.note !== undefined) return (await import("./cli/forensics.js")).noteRollbackCli(store, flags, io, caller);
     const json = flags.json === true;
     if (!s(flags.since)?.trim()) {
       const w = s(flags.writer)?.trim() || "<writer>";
       io.err(`Error: --since is required: how far back to undo, an ISO time or a duration (30m, 2h, 7d). Example: monomem rollback --writer ${w} --since 2h`);
       return 1;
     }
-    const how = flags.yes === true || io.interactive ? "" : "Nothing was changed. Run it again at a terminal, or add --yes, to go ahead.";
+    const how = dryRun ? "Dry run: nothing was changed." : flags.yes === true || io.interactive ? "" : "Nothing was changed. Run it again at a terminal, or add --yes, to go ahead.";
     const preview = rollbackPreview(store, caller, { writer: s(flags.writer), since: s(flags.since), include_conflicts: flags["include-conflicts"] === true }, how);
     io.out(json ? JSON.stringify(preview, null, 2) : preview.warning);
     if (preview.actions.length === 0) return preview.did_you_mean ? 1 : 0;
+    if (dryRun) return 0;
     if (flags.yes !== true) {
       if (!io.interactive) return 2;
       const a = await io.ask(`
@@ -300,7 +306,7 @@ Roll back ${preview.actions.length} note(s)? Type yes: `);
     return 0;
   } catch (e) {
     if (e instanceof QuarantinedError) {
-      io.err(`A restored text was held for review (quarantine #${e.quarantineId}); nothing was rolled back.`);
+      io.err(`A restored text was held for review (held write #${e.quarantineId}); nothing was rolled back.`);
       return 1;
     }
     if (e instanceof ValidationError) {

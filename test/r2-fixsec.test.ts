@@ -239,7 +239,7 @@ describe("token-file", () => {
     const home = tmp();
     const r = cli(home, ["token", "list"], { MONOMEM_TOKENS: env });
     assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /1 more token\(s\) come from MONOMEM_TOKENS \(labels: from-env\)/);
+    assert.match(r.stdout, /1 more (?:token|app key)\(s\) come from MONOMEM_TOKENS \(labels: from-env\)/);
     assert.ok(!r.stdout.includes(secret));
     const add = cli(home, ["token", "add", "--label", "x", "--scope", "read"], {});
     assert.match(add.stderr, /person must run it in a terminal/); // gate unchanged

@@ -92,7 +92,7 @@ describe("setup: the old npx hook", () => {
     assert.equal(back.hooks.SessionStart[0].hooks[0].command, OLD);
   });
   test("doctor accepts the old hook", () => {
-    const src = readFileSync(join(dirname(CLI), "..", "..", "src", "cli.ts"), "utf8");
+    const src = readFileSync(join(dirname(CLI), "..", "..", "src", "doctor", "hooks.ts"), "utf8"); // doctor's hook checks
     assert.equal((src.match(/\(monomem\|onememory\|cli\\\.js\)/g) ?? []).length, 2);
   });
 });

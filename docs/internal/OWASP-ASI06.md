@@ -2,6 +2,8 @@
 
 > **Internal. Not for publication until the owner approves.**
 
+> Superseded on 2026-11-17 by the public [docs/security-scorecard.md](../security-scorecard.md) (re-checked against 1.5.0). Kept for history.
+
 Checked 2026-11-04 against `main` (3732209). Verdicts are strict. "Covered" means we read the code and a test or bench scenario exercises it. A claim found only in docs is marked Partial.
 
 ## Sources

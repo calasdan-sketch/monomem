@@ -51,7 +51,7 @@ describe("session-start context", () => {
     assert.ok(text.startsWith(`What I know about this project:\nLast session: Session: refactor\n\nLatest session summary (#${sum.id}`), text.slice(0, 120));
     assert.ok(text.indexOf("Recent memory (1 note):\n#81 [A plain note] {recent 0d}: remember this") > 0);
     assert.match(text, /\n#\d+ \[change\] Observation number \d+ \(\d{4}-\d\d-\d\d, ~\d+ tok\)/);
-    assert.match(text, /Showing \d+ of 82 memories in ~\d+ tokens \(estimate\)(?:, condensed from ~\d+ tokens of notes and captured events|\. The notes themselves are only ~\d+ tokens; the rest is headers and index lines)\. Open any with memory_get ids=\[N\]$/);
+    assert.match(text, /Showing \d+ of 82 memories in ~\d+ tokens \(estimate\)(?:, condensed from ~\d+ tokens of notes and captured events|\. The notes themselves are only ~\d+ tokens; the rest is headers and index lines)\. Open any with memory_read id=N$/);
     const big = await injectContext(s, { signals: noGit, tokens: 3000 });
     assert.ok(big.length > text.length, "a bigger budget shows more");
     assert.equal(indexLine(sum).startsWith(`#${sum.id} by capture: [summary] Session: refactor`), true);
@@ -65,7 +65,7 @@ describe("session-start context", () => {
     const text = await injectContext(s, { signals: noGit });
     assert.doesNotMatch(text, new RegExp(`\\n#${sum.id} \\[summary\\]`));
     assert.match(text, /Showing 2 of 2 memories/);
-    assert.match(text, /memory_get ids=\[N\]$/);
+    assert.match(text, /memory_read id=N$/);
     s.close();
   });
 
@@ -113,5 +113,32 @@ describe("session-start context", () => {
       else process.env.MONOMEM_SPACES = prev;
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// Plan A2: session start ranks a restated older note behind the newer one (search-service demoteTwins) and must SAY so,
+// as search does: README promises the `restated_by` label in session start too.
+describe("session start: restated label (A2)", () => {
+  test("an older note restated by the same writer carries the restated label in the Recent and Index sections", async () => {
+    const s = new Store(":memory:");
+    const old = as("alice", () => s.create({ title: "quarzo build server", body: "The quarzo build server is kalmuth. Quarzo quarzo.", tags: ["fact:build_server=kalmuth"] })).id;
+    const neu = as("alice", () => s.create({ title: "quarzo build server moved", body: "Update: quarzo builds moved off the old box; the build server is now prendal.", tags: ["fact:build_server=prendal"] })).id;
+    for (const [id, d] of [[old, 2], [neu, 1]]) s.captureDb().prepare("UPDATE notes SET updated_at = ?, created_at = ?, content_at = ? WHERE id = ?").run(daysAgo(d), daysAgo(d), daysAgo(d), id);
+    // A near tie (within RESTATE_MAX_RATIO) that puts the older note first before the twin rule: it alone is linked to the changed files.
+    const ins = s.captureDb().prepare("INSERT INTO note_files (note_id, path, action) VALUES (?, ?, 'changed')");
+    ins.run(old, "src/a.ts");
+    ins.run(old, "src/b.ts");
+    const signals = { branch: "quarzo", diffFiles: ["src/a.ts", "src/b.ts"] };
+    const { ranked } = await rankContext(s, { signals });
+    assert.deepEqual(ranked.map((n) => n.id), [neu, old]);
+    const label = new RegExp(`\\[restated by newer note #${neu} from the same writer`);
+    const recent = await injectContext(s, { signals });
+    const oldLine = recent.split("\n").find((l) => l.startsWith(`#${old} `))!;
+    assert.match(oldLine, label, recent);
+    assert.doesNotMatch(recent.split("\n").find((l) => l.startsWith(`#${neu} `))!, /restated by/);
+    // Index lines (limit 1 sends the older note to the index) carry it too.
+    const index = await injectContext(s, { signals, limit: 1 });
+    assert.match(index.split("\n").find((l) => l.startsWith(`#${old} `))!, label, index);
+    s.close();
   });
 });

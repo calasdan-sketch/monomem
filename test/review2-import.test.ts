@@ -1,5 +1,5 @@
 // 1.7.1: hostile files cannot make import slow; a held section is queued once.
-import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
+import { slow } from "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
 import { test, describe, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -25,7 +25,7 @@ describe("import: headings are found without backtracking", () => {
   test("the reported case ('# a' + 20000 spaces + 'b') finishes at once", () => {
     const t0 = Date.now();
     const r = splitSections("# a" + " ".repeat(20000) + "b\nbody\n", "t");
-    assert.ok(Date.now() - t0 < 500, `took ${Date.now() - t0} ms`);
+    assert.ok(Date.now() - t0 < slow(500), `took ${Date.now() - t0} ms`);
     assert.equal(r.sections.length, 1);
   });
   test("the CLI finishes on that file, even as a dry run", () => {
@@ -55,7 +55,7 @@ describe("import: headings are found without backtracking", () => {
     assert.equal(stripHtmlComments("a<!-- never closed"), "a<!-- never closed");
     const t0 = Date.now();
     stripHtmlComments(rep("<!--"));
-    assert.ok(Date.now() - t0 < 1000);
+    assert.ok(Date.now() - t0 < slow(1000));
   });
 });
 
@@ -113,7 +113,7 @@ describe("import / setup / linter: 1 MB hostile text finishes quickly", () => {
         const t0 = Date.now();
         f(text);
         const ms = Date.now() - t0;
-        assert.ok(ms < 4000, `${fname} on "${iname}" took ${ms} ms`);
+        assert.ok(ms < slow(4000), `${fname} on "${iname}" took ${ms} ms`);
       }
     });
   }

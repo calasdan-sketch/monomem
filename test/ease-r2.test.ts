@@ -302,9 +302,9 @@ describe("U-08 the verbs people try first get a hint (nothing runs)", () => {
       assert.equal(undo.status, 1);
       assert.match(undo.stderr, /monomem history restore <id> <version>/);
       assert.match(undo.stderr, /monomem rollback --writer <writer> --since 1h/);
-      assert.match(undo.stderr, /monomem supersede undo <id>/);
-      assert.match(run(dir, ["approve", "3"]).stderr, /monomem quarantine approve <id>/);
-      assert.match(run(dir, ["reject"]).stderr, /monomem quarantine reject <id>/);
+      assert.match(undo.stderr, /monomem replace undo <id>/);
+      assert.match(run(dir, ["approve", "3"]).stderr, /monomem review held approve <id>/);
+      assert.match(run(dir, ["reject"]).stderr, /monomem review held reject <id>/);
       const d = run(dir, ["distrust", "cursor"]);
       assert.equal(d.status, 1);
       assert.match(d.stderr, /monomem trust distrust <writer> --namespace '\*'/);
@@ -346,7 +346,9 @@ describe("U-15 the first run looks right", () => {
   test("memory tidiness is 100 on an empty store (no backup to miss yet)", () => {
     const counts = { duplicate: 0, stale_twin: 0, quarantined: 0, lint: 0, pii: 0 } as any;
     assert.equal(computeHealth({ counts, tokensWithoutCeiling: 0, backupAgeDays: null, noteCount: 0 }).score, 100);
-    assert.equal(computeHealth({ counts, tokensWithoutCeiling: 0, backupAgeDays: null, noteCount: 1 }).score, 90);
+    // 1.6.0: no backup yet costs nothing on any store (the server backs up daily); an old one still does.
+    assert.equal(computeHealth({ counts, tokensWithoutCeiling: 0, backupAgeDays: null, noteCount: 1 }).score, 100);
+    assert.equal(computeHealth({ counts, tokensWithoutCeiling: 0, backupAgeDays: 31, noteCount: 1 }).score, 90);
   });
 
   test("the first note added after setup on a new store is #1", async () => {

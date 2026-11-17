@@ -38,7 +38,7 @@ export function flaggedFactValue(v: string): string | null {
       : null)
   );
 }
-export const WITHHELD = "[value withheld: flagged, see monomem conflicts]";
+export const WITHHELD = "[value withheld: flagged, see monomem review conflicts]";
 
 /** The keys agents are told to reuse, so two writers state one decision under one key. One list: the tool text, SKILL.md and the docs repeat it. */
 export const COMMON_FACT_KEYS = ["deploy_target", "package_manager", "test_runner", "database", "node_version", "base_url", "ci_provider", "formatter"] as const;
@@ -302,7 +302,7 @@ export function disputedLines(store: Store, opts: DisputeOpts | string = {}): st
     }).join(" vs ");
     return `Monomem: writers disagree on ${o.namespace === undefined ? `[${printable(namespace, 40)}] ` : ""}${printable(key, 40)}: ${text}. Check with the user.`;
   });
-  if (found.length > MAX_DISPUTE_LINES) lines[lines.length - 1] += ` (+${found.length - MAX_DISPUTE_LINES} more: monomem conflicts)`;
+  if (found.length > MAX_DISPUTE_LINES) lines[lines.length - 1] += ` (+${found.length - MAX_DISPUTE_LINES} more: monomem review conflicts)`;
   return lines.join("\n");
 }
 
@@ -345,7 +345,9 @@ export function factsTable(notes: readonly NoteRecord[]): Record<string, FactRow
     const writersOfKey = new Map<string, Set<string>>();
     for (const [sk, mine] of stated) {
       const [key, w] = sk.split("\u0000");
-      (writersOfKey.get(key) ?? writersOfKey.set(key, new Set()).get(key)!).add(w);
+      // r2-innovation #1: a writer whose every note on this key is an echo of a note it was shown is not a second source.
+      // PLAN D: nor is a writer on probation (store/probation.ts).
+      if (!mine.every((m) => m.n.echo_of !== undefined || m.n.new_writer === true)) (writersOfKey.get(key) ?? writersOfKey.set(key, new Set()).get(key)!).add(w);
       mine.sort((a, b) => newestFirst(a.n, b.n));
       if (!mine.some((m) => m.norm !== mine[0].norm)) continue;
       keys.get(key)!.get(mine[0].norm)!.current = true;
@@ -354,7 +356,7 @@ export function factsTable(notes: readonly NoteRecord[]): Record<string, FactRow
     out[ns] = [...keys].sort(([a], [b]) => a.localeCompare(b)).map(([key, vals]) => {
       const values = [...vals.values()].map((e) => ({ value: e.value, writers: [...e.writers].sort(), ids: e.ids.sort((a, b) => a - b), since: e.since, older: e.older.sort((a, b) => a - b), current: e.current }));
       const spelt = [...(spellings.get(key) ?? [])].filter((x) => x !== key).sort();
-      return { key, disputed: disputedKeys.has(key), agreed: values.length === 1 && writersOfKey.get(key)!.size >= 2, values, spellings: spelt };
+      return { key, disputed: disputedKeys.has(key), agreed: values.length === 1 && (writersOfKey.get(key)?.size ?? 0) >= 2, values, spellings: spelt };
     });
   }
   return out;
@@ -401,7 +403,7 @@ export async function factsCmd(args: string[]): Promise<void> {
       const groups = groupConflicts(findConflicts(store, { namespaces: ns ? [ns] : undefined }).filter((c) => c.tier === "fact"));
       if (!groups.length) console.log("facts check: no disputed facts.");
       else {
-        console.log(`facts check: ${groups.length} disputed fact${groups.length === 1 ? "" : "s"}: ${groups.slice(0, 5).map((g) => `${printable(g.namespace, 40)}/${printable(g.key, 40)}`).join(", ")}${groups.length > 5 ? ", ..." : ""}. Run: monomem conflicts`);
+        console.log(`facts check: ${groups.length} disputed fact${groups.length === 1 ? "" : "s"}: ${groups.slice(0, 5).map((g) => `${printable(g.namespace, 40)}/${printable(g.key, 40)}`).join(", ")}${groups.length > 5 ? ", ..." : ""}. Run: monomem review conflicts`);
         process.exitCode = 1;
       }
       return;

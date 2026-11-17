@@ -75,6 +75,89 @@ export function receiptAdd(
   }
 }
 
+/**
+ * C17: add what a later push showed (the prompt step, a subagent pack) to the session's receipt without replacing what
+ * session start wrote. A note already on the receipt keeps its first row (INSERT OR IGNORE), so "shown once per session" is
+ * this one statement. Fail-silent, never waits on a lock; false when nothing could be recorded (receipts off, busy).
+ */
+export function receiptAppend(
+  store: Store,
+  r: { sessionId: string; namespace: string; client: string; why: string; shown: Array<{ id: number; tokens: number }> },
+  now: number = Date.now()
+): boolean {
+  if (!r.sessionId || !r.shown.length || accessLogDays() === 0) return false;
+  return quick(store, (db) => {
+    db.exec(SCHEMA);
+    const next = Number((db.prepare("SELECT COALESCE(MAX(rank), 0) AS m FROM memory_receipts WHERE session_id = ?").get(r.sessionId) as { m: number }).m) + 1;
+    const ins = db.prepare("INSERT OR IGNORE INTO memory_receipts (session_id, note_id, namespace, client, at, rank, why, tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+    const at = new Date(now).toISOString();
+    r.shown.forEach((n, i) => ins.run(r.sessionId, n.id, r.namespace, r.client, at, next + i, r.why, Math.max(0, Math.round(n.tokens))));
+  });
+}
+
+/** The notes this session was already shown (any push), with when; empty when there is no receipt table yet. */
+export function receiptShown(store: Store, sessionId: string): Map<number, string> {
+  if (!sessionId || !hasTable(store)) return new Map();
+  const rows = store.captureDb().prepare("SELECT note_id, at FROM memory_receipts WHERE session_id = ?").all(sessionId) as Array<{ note_id: number; at: string }>;
+  return new Map(rows.map((x) => [Number(x.note_id), x.at]));
+}
+
+// Notices said once per session (retired notes, known fixes, subagent packs). Same lifetime as receipts; no schema bump.
+const NOTICES = `CREATE TABLE IF NOT EXISTS session_notices (
+  session_id TEXT NOT NULL,
+  note_id INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  at TEXT NOT NULL,
+  PRIMARY KEY (session_id, note_id, kind)
+)`;
+
+/** The (note id, kind) pairs already said to this session, as "id:kind". */
+export function noticesSaid(store: Store, sessionId: string): Set<string> {
+  const db = store.captureDb();
+  if (!sessionId || !db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_notices'").get()) return new Set();
+  const rows = db.prepare("SELECT note_id, kind FROM session_notices WHERE session_id = ?").all(sessionId) as Array<{ note_id: number; kind: string }>;
+  return new Set(rows.map((x) => `${Number(x.note_id)}:${x.kind}`));
+}
+
+/** The rows of one notice kind for a session (note id, when said); empty when there is no notice table yet. */
+export function noticeRows(store: Store, sessionId: string, kind: string): Array<{ id: number; at: string }> {
+  const db = store.captureDb();
+  if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_notices'").get()) return [];
+  return (db.prepare("SELECT note_id, at FROM session_notices WHERE session_id = ? AND kind = ?").all(sessionId, kind) as Array<{ note_id: number; at: string }>).map((r) => ({ id: Number(r.note_id), at: r.at }));
+}
+
+/** Record notices as said. False when they could not be recorded: the caller then says nothing, rather than repeating. */
+export function noticesMark(store: Store, sessionId: string, said: Array<{ id: number; kind: string }>, now: number = Date.now()): boolean {
+  if (!sessionId || !said.length || accessLogDays() === 0) return false;
+  return quick(store, (db) => {
+    db.exec(NOTICES);
+    db.prepare("DELETE FROM session_notices WHERE at < ?").run(new Date(now - accessLogDays() * 86_400_000).toISOString());
+    const ins = db.prepare("INSERT OR IGNORE INTO session_notices (session_id, note_id, kind, at) VALUES (?, ?, ?, ?)");
+    const at = new Date(now).toISOString();
+    for (const n of said) ins.run(sessionId, n.id, n.kind, at);
+  });
+}
+
+/** Run a small write with no lock wait (a hook never waits behind another process); false on any failure. */
+function quick(store: Store, fn: (db: ReturnType<Store["captureDb"]>) => void): boolean {
+  const db = store.captureDb();
+  const prev = Number((db.prepare("PRAGMA busy_timeout").get() as Record<string, unknown> | undefined)?.timeout ?? 0);
+  try {
+    db.exec("PRAGMA busy_timeout = 0;");
+    fn(db);
+    return true;
+  } catch (e) {
+    process.stderr.write(`monomem: receipt not saved (${(e as Error).message})\n`);
+    return false;
+  } finally {
+    try {
+      db.exec(`PRAGMA busy_timeout = ${prev};`);
+    } catch {
+      /* the connection is gone; nothing to restore */
+    }
+  }
+}
+
 function hasTable(store: Store): boolean {
   return !!store.captureDb().prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_receipts'").get();
 }

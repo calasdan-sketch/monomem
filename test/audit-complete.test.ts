@@ -127,10 +127,17 @@ describe("audit completeness and chain", () => {
   });
 
   test("a same-size rewrite inside one mtime tick does not reuse the cached tail (F-03)", () => {
-    // Restore size AND mtime exactly as audit() cached them. A float mtime does not always round-trip through
-    // utimes, so try a few nearby values and repeat until one lands (each try about 50%).
+    // Restore size AND mtime exactly as audit() cached them. utimes takes seconds as a double, whose step near today
+    // (about 238 ns) is coarser than an NTFS tick (100 ns), so only some mtimes can be set back exactly: per try about
+    // 30% locally and far less on a loaded Windows runner (30 tries all missed once on CI). So: first see whether the
+    // rewrite already landed in the same tick, then try every double within a few steps of the target, and allow
+    // many tries (each a few ms).
+    const near = (sec: number): number[] => {
+      const step = 2 ** (Math.floor(Math.log2(sec)) - 52);
+      return Array.from({ length: 13 }, (_, k) => sec + (k - 6) * step);
+    };
     let hit = false;
-    for (let tries = 0; tries < 30 && !hit; tries++) {
+    for (let tries = 0; tries < 300 && !hit; tries++) {
       audit({ op: "s1" });
       const st = statSync(log);
       const all = readFileSync(log, "utf8").trim().split("\n");
@@ -138,9 +145,12 @@ describe("audit completeness and chain", () => {
       last.op = "s2"; // same length, different hash
       all[all.length - 1] = JSON.stringify(last);
       writeFileSync(log, all.join("\n") + "\n");
-      for (let d = -5; d <= 5 && !hit; d++) {
-        utimesSync(log, st.atimeMs / 1000, st.mtimeMs / 1000 + d * 1e-7);
-        hit = statSync(log).mtimeMs === st.mtimeMs && statSync(log).size === st.size;
+      const same = (): boolean => statSync(log).mtimeMs === st.mtimeMs && statSync(log).size === st.size;
+      hit = same();
+      for (const sec of near(st.mtimeMs / 1000)) {
+        if (hit) break;
+        utimesSync(log, st.atimeMs / 1000, sec);
+        hit = same();
       }
       if (!hit) audit({ op: "s-retry" }); // re-sync the cache; the chain stays valid
     }

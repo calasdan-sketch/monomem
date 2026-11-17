@@ -13,9 +13,10 @@ import "./legacy-env.js"; // second: read the old CLAUDE_BRIDGE_* variables as M
 import { createApiServer } from "./api.js";
 import { createMcpHttpServer } from "./mcp-http.js";
 import { hardenTokensFile } from "./tokens-admin.js";
-import { exitOnListenError } from "./http-common.js";
+import { listenErrorMessage } from "./http-common.js";
 import {
   DB_PATH,
+  DATA_DIR,
   API_PORT,
   MCP_HTTP_PORT,
   BIND_HOST,
@@ -25,6 +26,7 @@ import {
   prepareDataDir,
   TOKEN_FILE,
   isLoopback,
+  PACKAGE_VERSION,
 } from "./config.js";
 import { autoConsolidateCooperative, AUTO_MERGE_SCORE } from "./consolidate.js";
 import { resolveStartupNamespace } from "./namespace.js";
@@ -33,7 +35,9 @@ import { openStoreOrExit, SERVER_BUSY_TIMEOUT_MS } from "./db-problem.js";
 import { abortAllWaiters } from "./change-wait.js";
 import { pruneStaleHeartbeats } from "./liveness.js";
 import { rotateLogIfNeeded } from "./security.js";
+import { maybeDailyBackupAsync, autoBackupOn } from "./backup-schedule.js";
 import { appendFileSync } from "node:fs";
+import type { Server } from "node:http";
 import { dirname, join, resolve } from "node:path";
 
 /**
@@ -134,9 +138,22 @@ const mcpServer = createMcpHttpServer(store, tokens, nsOpts ?? undefined);
 // listen callback counts down), and the pass itself is cooperative, so
 // startup latency is unaffected and a large scan never stalls serving.
 let transportsUp = 0;
-function scheduleJanitor(): void {
+// r2-improvement #5: one busy port does not take the other transport down. Each one that cannot listen says why and what
+// to do; the process exits only when neither could start.
+let transportsFailed = 0;
+function transportFailed(server: Server, port: number, envVar: string, what: string): Server {
+  return server.on("error", (e: NodeJS.ErrnoException) => {
+    console.error(listenErrorMessage(e, port, envVar, what));
+    transportsFailed += 1;
+    if (transportsFailed === 2) process.exit(1);
+    console.error(`[monomem] started without ${what}: everything else is running. Fix the port and restart to get ${what} back.`);
+    scheduleJanitor(false);
+  });
+}
+function scheduleJanitor(up: boolean): void {
+  if (up) transportsUp += 1;
   if (!(AUTO_CONSOLIDATE_INTERVAL_MS && AUTO_CONSOLIDATE_INTERVAL_MS > 0)) return;
-  if (++transportsUp !== 2) return;
+  if (transportsUp + transportsFailed !== 2 || transportsUp === 0) return;
   void runAutoConsolidation();
   const timer = setInterval(() => {
     void runAutoConsolidation();
@@ -144,7 +161,7 @@ function scheduleJanitor(): void {
   timer.unref(); // never keep the process alive on the scheduler's account
 }
 
-exitOnListenError(apiServer, API_PORT, "MONOMEM_PORT", "API").listen(API_PORT, BIND_HOST, () => {
+transportFailed(apiServer, API_PORT, "MONOMEM_PORT", "API + dashboard").listen(API_PORT, BIND_HOST, () => {
   console.error(`[monomem] API + dashboard on http://${BIND_HOST}:${API_PORT}`);
   if (!isLoopback(BIND_HOST)) {
     console.error(`[monomem] warning: listening on ${BIND_HOST}, not loopback, over plain HTTP (tokens and notes cross the network unencrypted). Put it behind your own TLS / authenticated tunnel: see INFRA.md.`);
@@ -157,14 +174,14 @@ exitOnListenError(apiServer, API_PORT, "MONOMEM_PORT", "API").listen(API_PORT, B
   console.error(
     `[monomem] try: curl -H "Authorization: Bearer ${tokenExpr}" "http://127.0.0.1:${API_PORT}/notes?limit=5"`
   );
-  scheduleJanitor();
+  scheduleJanitor(true);
 });
 
-exitOnListenError(mcpServer, MCP_HTTP_PORT, "MONOMEM_MCP_PORT", "MCP").listen(MCP_HTTP_PORT, BIND_HOST, () => {
+transportFailed(mcpServer, MCP_HTTP_PORT, "MONOMEM_MCP_PORT", "MCP over HTTP").listen(MCP_HTTP_PORT, BIND_HOST, () => {
   console.error(
     `[monomem] MCP over HTTP on http://${BIND_HOST}:${MCP_HTTP_PORT}/mcp (for apps that connect over HTTP with a key; see docs/give-an-app-limited-access.md)`
   );
-  scheduleJanitor();
+  scheduleJanitor(true);
 });
 
 if (AUTO_CONSOLIDATE_INTERVAL_MS && AUTO_CONSOLIDATE_INTERVAL_MS > 0) {
@@ -196,11 +213,68 @@ const purgeTimer = setInterval(purgeNow, purgeEveryMs);
 purgeTimer.unref();
 setTimeout(purgeNow, Math.min(30_000, purgeEveryMs)).unref();
 
+// Automatic daily backup (backup-schedule.ts): checked a minute after start, then hourly; at most one copy a day,
+// 7 daily + 4 weekly kept in <data>/backups. The dashboard's Settings switch is read on every tick; MONOMEM_AUTO_BACKUP=off
+// (read once, here) stops the timer and wins over the switch.
+// The copy runs on a worker thread (backup-worker.ts), so serving does not pause for it; one at a time.
+let backupRunning = false;
+const backupNow = (): void => {
+  if (backupRunning) return;
+  backupRunning = true;
+  void maybeDailyBackupAsync(DB_PATH, { dataDir: DATA_DIR })
+    .then((r) => {
+      if (!r) return;
+      if (r.error) console.error(`[monomem] automatic backup failed: ${r.error} (monomem check shows it; monomem backup makes one by hand)`);
+      else if (r.made) console.error(`[monomem] automatic backup made in ${r.dir}${r.removed.length ? ` (${r.removed.length} older removed)` : ""}`);
+      if (r.keyWarning) console.error(`[monomem] ${r.keyWarning}`);
+    })
+    .catch((e: unknown) => console.error(`[monomem] automatic backup failed: ${(e as Error).message}`))
+    .finally(() => {
+      backupRunning = false;
+    });
+};
+const backupTimer = autoBackupOn() ? setInterval(backupNow, 3_600_000) : undefined;
+backupTimer?.unref();
+if (backupTimer) setTimeout(backupNow, 60_000).unref();
+
+// Claude Code memory bridge (claude-refresh.ts): off unless MONOMEM_CLAUDE_REFRESH=on or the Settings switch; every 10 minutes
+// it reads only Claude Code's memory files that changed and brings them in held. The switch is read on every tick.
+let bridgeRunning = false;
+const bridgeTimer = setInterval(() => {
+  if (bridgeRunning) return;
+  bridgeRunning = true;
+  void Promise.all([import("./claude-refresh.js"), import("./setup.js")])
+    .then(([b, s]) => b.bridgeTick(s.realEnv(PACKAGE_VERSION), DB_PATH, DATA_DIR, (l) => console.error(l)))
+    .catch((e: Error) => console.error(`[monomem] Claude Code memory refresh failed: ${e.message}`))
+    .finally(() => {
+      bridgeRunning = false;
+    });
+}, 10 * 60_000);
+bridgeTimer.unref();
+// Notice apps installed later (app-detect.ts): two minutes after start, then hourly, at most one look a day. Read only;
+// the result is the "Connect / Not this one / Repair" items in Needs you and Settings.
+// ponytail: runs on the server's thread (a few dozen small file reads, no app started); move it to a worker if it shows up in timings.
+const appCheckNow = (): void => {
+  void Promise.all([import("./app-detect.js"), import("./setup.js"), import("./config.js")])
+    .then(([d, s, c]) => d.maybeCheckApps(s.realEnv(c.PACKAGE_VERSION), DATA_DIR))
+    .catch((e: Error) => console.error(`[monomem] app check failed: ${e.message}`));
+};
+const appCheckTimer = setInterval(appCheckNow, 3_600_000);
+appCheckTimer.unref();
+setTimeout(appCheckNow, 120_000).unref();
+
+// Device sync on a timer: only after `monomem sync setup --auto on` (off by default; it talks to your git remote).
+void Promise.all([import("./sync/device.js"), import("./self.js")])
+  .then(([d, self]) => d.startSyncTimer(DATA_DIR, () => self.selfCommand([]), (l) => console.error(l)))
+  .catch((e: Error) => console.error(`[monomem] device sync timer not started: ${e.message}`));
+
 let closing = false;
 function shutdown(): void {
   if (closing) return;
   closing = true;
   clearInterval(purgeTimer);
+  clearInterval(backupTimer);
+  clearInterval(appCheckTimer);
   // Live waits (memory_since / GET /changes?wait=) end NOW and answer with
   // timedOut:true, so a restart drains in milliseconds instead of resetting
   // sockets at the 3s safety net.

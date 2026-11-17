@@ -1,5 +1,5 @@
 // `monomem import --claude`: layout as documented at https://code.claude.com/docs/en/memory
-import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
+import { slow } from "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
 import { test, describe, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -233,6 +233,14 @@ describe("import --claude: running it", () => {
     assert.ok(notes.some((n) => n.title === "Project Atlas / Deploy" && n.body.includes("Thursday")));
     assert.match(x.all(), /written by "import:claude"/);
   });
+  test("imported notes are held (not trusted) until a person confirms them, and the output says how (r3 security L6)", async () => {
+    const f = fixture();
+    const x = io();
+    assert.equal(await runClaudeImport(f.e, x, o(f.db)), 0);
+    const notes = allNotes(f.db);
+    assert.ok(notes.length > 0 && notes.every((n) => n.unconfirmed === true), "every imported note is unconfirmed");
+    assert.match(x.all(), /unconfirmed \(from outside\)[\s\S]*monomem confirm/);
+  });
   test("without a terminal and without --yes it refuses and writes nothing", async () => {
     const f = fixture();
     const x = io();
@@ -397,7 +405,7 @@ describe("import --claude: passwords written as plain text", () => {
     for (const evil of ["a_".repeat(500_000), "password:".repeat(100_000), "x".repeat(1_000_000), "a-b_".repeat(250_000) + "pass", "://" + "u:".repeat(300_000)]) {
       const t0 = Date.now();
       looksLikeCredential(evil);
-      assert.ok(Date.now() - t0 < 2000, `${evil.slice(0, 12)}... took ${Date.now() - t0} ms`);
+      assert.ok(Date.now() - t0 < slow(2000), `${evil.slice(0, 12)}... took ${Date.now() - t0} ms`);
     }
   });
   test("a section with a typed password is skipped like any other secret, and never printed", async () => {

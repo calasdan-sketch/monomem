@@ -1,6 +1,6 @@
 // 1.2.0 release-blocking setup/UX fixes: hook latency launcher, honest capture wording, health wording, drill with no store,
 // server-memory offer, quarantine next step, and the remote /mcp Authorization header the docs tell teammates to use.
-import "./setup-env.js";
+import { slow } from "./setup-env.js";
 import { test, describe, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
@@ -85,7 +85,7 @@ describe("sync hooks and npx", () => {
     const ms = Date.now() - t0;
     assert.equal(r.status, 0);
     console.log(`# node launcher hook user-prompt: ${ms} ms`);
-    assert.ok(ms < 3000);
+    assert.ok(ms < slow(3000));
   });
 });
 
@@ -186,7 +186,7 @@ test("quarantine list ends with the next step", () => {
   }
   st.close();
   const r = spawnSync(process.execPath, [join(process.cwd(), "dist", "src", "cli.js"), "quarantine"], { env: { ...process.env, MONOMEM_HOME: dir, MONOMEM_DB_PATH: db }, encoding: "utf8" });
-  assert.match(r.stdout, /To decide: monomem quarantine show <id>, then approve <id> \| keep-history <id> \| reject <id>/, r.stdout + r.stderr);
+  assert.match(r.stdout, /To decide: monomem review held show <id>, then approve <id> \| keep-history <id> \| reject <id>/, r.stdout + r.stderr);
 });
 
 describe("remote /mcp with an Authorization header (what INSTALL.md tells teammates to configure)", () => {

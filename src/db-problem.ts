@@ -15,16 +15,16 @@ export function describeDbFailure(path: string, err: unknown): { problem: string
   if (/malformed|corrupt|not a database|disk image|file is encrypted/i.test(msg)) {
     return {
       problem: `database problem at ${path}: the file looks damaged (${msg})`,
-      fix: `Stop Monomem. If you have a backup (monomem backup makes them), run: monomem restore <backup folder>  (it moves the damaged ${path} aside, with its -wal / -shm, and puts the backup in place). If not, move ${path} (and any state.db-wal / state.db-shm beside it) to a safe folder, then start Monomem again for a fresh empty one. Do not delete the damaged file until you are sure.`,
+      fix: `Stop Monomem (monomem stop, and close the apps that use it). If you have a backup (monomem backup makes them), run: monomem restore <backup folder>  (it moves the damaged ${path} aside, with its -wal / -shm, and puts the backup in place). If not, move ${path} (and any state.db-wal / state.db-shm beside it) to a safe folder, then start Monomem again for a fresh empty one. Do not delete the damaged file until you are sure.`,
     };
   }
   if (/locked|busy/i.test(msg)) {
-    return { problem: `database problem at ${path}: the file is locked (${msg})`, fix: "Another Monomem is probably running. Stop it, or wait a moment, then try again." };
+    return { problem: `database problem at ${path}: the file is locked (${msg})`, fix: "Another Monomem is probably running. Stop it (monomem stop), or wait a moment, then try again." };
   }
   if (/EACCES|EPERM|permission|readonly|read-only/i.test(msg)) {
     return { problem: `database problem at ${path}: no permission (${msg})`, fix: `Make sure your user can read and write ${path} and the folder it is in.` };
   }
-  return { problem: `database problem at ${path}: ${msg}`, fix: "Run  monomem doctor  for more detail. If it keeps happening, restore a backup over the file (monomem backup makes them)." };
+  return { problem: `database problem at ${path}: ${msg}`, fix: "Run  monomem check --setup  for more detail. If it keeps happening, restore a backup over the file (monomem backup makes them)." };
 }
 
 /**

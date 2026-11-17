@@ -175,7 +175,7 @@ export async function runRulesImport(opts: RulesImportOptions, out: (s: string) 
     }
     out(`${candidates.length} section(s) in ${files.length} file(s): ${create} new, ${same} already imported, ${changed} changed since (left as they are), ${secrets} skipped because they look like a secret.`);
     if (secrets) out("  Skipped sections are not stored and not shown. Take the secret out of the file and run again.");
-    if (heldSkipped) out(`  ${heldSkipped} section(s) were held by the memory linter on an earlier run (see \`monomem quarantine list\`).`);
+    if (heldSkipped) out(`  ${heldSkipped} section(s) were held by the memory linter on an earlier run (see \`monomem review held list\`).`);
     for (const s of skipped) out(`  skipped ${s.display}: ${s.why}`);
     for (const u of unreadable) out(`  could not read ${u}`);
     if (opts.dryRun) {
@@ -201,7 +201,7 @@ export async function runRulesImport(opts: RulesImportOptions, out: (s: string) 
     }
     if (heldNow) writeHeld(opts.dbPath, held);
     out(`Imported ${created} new note(s), tagged "${RULES_TAG}" and written by "${RULES_WRITER}".`);
-    if (heldNow) out(`${heldNow} section(s) were held by the memory linter (they read like an instruction to an AI): see \`monomem quarantine list\`.`);
+    if (heldNow) out(`${heldNow} section(s) were held by the memory linter (they read like an instruction to an AI): see \`monomem review held list\`.`);
     if (failed) {
       out(`${failed} section(s) could not be stored.`);
       return 1;

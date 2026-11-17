@@ -11,14 +11,14 @@ whole truth: who sets each, when it changes, and whether a distrust rule or `not
 
 | Field | Question it answers | Set by | Changes when | Distrust rule / `not_written_by` |
 |---|---|---|---|---|
-| `written_by` | who last changed the **content** (title or body)? | the server: from the token label for token callers; for a local stdio app, a label set in that app's config (`MONOMEM_CLIENT`, not authenticated); for a CLI or server job, a fixed marker | every content edit (not tags, status, archive); a merge | yes (current writer) |
+| `written_by` | who last changed the **content** (title or body)? | the server: from the app key's label for callers with an app key; for a local stdio app, a label set in that app's config (`MONOMEM_CLIENT`, not authenticated); for a CLI or server job, a fixed marker | every content edit (not tags, status, archive); a merge | yes (current writer) |
 | `created_by` | who first wrote it? | the server | never | no, on its own (kept for display and audit) |
 | `writer_id` | which database minted that label? `<server_id>/<written_by>` | derived | with `written_by` | the id form of a rule uses it |
-| `merged_from_writers` | whose hands has the content passed through? (the **taint set**) | the server: merge sources, every earlier content writer, claimed names from an import | **only grows**; survives edits and exports | yes: any listed name matches |
-| `attested_writer`, `attested_by` | the original author a **verified** signature vouched for, and the vouching server | an import whose attestation verified against a trusted key | cleared by a later content edit (the previous values move into the taint set) | yes |
-| `imported_written_by`, `imported_created_by` | what a file or payload **claimed** | the import payload (unverified) | never | adds taint at import time (copied into `merged_from_writers`); the field itself is display only |
+| `merged_from_writers` | whose hands has the content passed through? (the **writer set**; formerly called the taint set) | the server: merge sources, every earlier content writer, claimed names from an import | **only grows**; survives edits and exports | yes: any listed name matches |
+| `attested_writer`, `attested_by` | the original author a **verified** signature vouched for, and the vouching server | an import whose attestation verified against a trusted key | cleared by a later content edit (the previous values move into the writer set) | yes |
+| `imported_written_by`, `imported_created_by` | what a file or payload **claimed** | the import payload (unverified) | never | adds to the writer set at import time (copied into `merged_from_writers`); the field itself is display only |
 | `source` | what the client says it is | the client (free text) | any edit | no (a claim) |
-| `imported_unverified` | did this note arrive **without** a verified attestation? (`true` or absent) | an import whose attestation was missing or failed (OneMemory 1.4.2) | never | no (a display flag; the claimed names are in the taint set) |
+| `imported_unverified` | did this note arrive **without** a verified attestation? (`true` or absent) | an import whose attestation was missing or failed (OneMemory 1.4.2) | never | no (a display flag; the claimed names are in the writer set) |
 
 ### Fields added in Monomem 1.4.0
 
@@ -28,7 +28,7 @@ except `derived_from` are set by the server, never by a write (a REST `PUT` that
 | Field | What it says | Set by | Changes when |
 |---|---|---|---|
 | `grandfathered_at` | the note existed before the 1.4.0 upgrade (the upgrade time). Exempts it from the outside-content hold and starts its expiry clock | the schema v20 upgrade | cleared if a later edit adds a new outside-content mark |
-| `approved_at`, `approved_by` | when, and by whom, a held write was approved. `created_at` / `updated_at` keep the time the write was made | approving a held write ([memory-linter.md](./memory-linter.md#quarantine)) | the next approval of a held edit |
+| `approved_at`, `approved_by` | when, and by whom, a held write was approved. `created_at` / `updated_at` keep the time the write was made | approving a held write ([memory-linter.md](./memory-linter.md#held-writes)) | the next approval of a held edit |
 | `confirmed_at`, `confirmed_by`, `confirmed_kind`, `confirmed_rev` | the strongest counted confirm: when, who, `human`, `admin` or `corroborated`, and the note version it covers. It applies only while `confirmed_rev` equals the note's `rev` | a counted confirm ([trust.md](./trust.md#confirming-notes)) | a stronger or equal confirm; a weaker one is recorded in the `confirmations` table but leaves these alone |
 | `unconfirmed`, `unconfirmed_label` | `true` and `[unconfirmed - from outside content]`: the note carries an `obs.origin:*` mark, is not grandfathered, and no confirm covers this version | computed on read | an edit (unconfirmed again), a counted confirm |
 | `expired`, `expired_label` | `true` and `[expired - not re-confirmed in N days]`: nobody changed or confirmed it within the period ([search.md](./search.md#re-confirmation-expiry)) | computed on read; never in mode `off` | an edit, a confirm, a mode change |
@@ -36,24 +36,24 @@ except `derived_from` are set by the server, never by a write (a REST `PUT` that
 | `built_on_distrusted`, `built_on_distrusted_label` | `true` and `[built on a distrusted writer]`: a note in `derived_from` was touched by a distrusted writer (one hop) | computed on read | a distrust rule added or removed |
 
 The outside-content mark itself is not a field: it is the reserved `obs.origin:*` tags in `tags`
-([trust.md](./trust.md#outside-content-and-taint-140)). A stated `source`, and the source on a confirm, stay claims: Monomem
+([trust.md](./trust.md#outside-content-140)). A stated `source`, and the source on a confirm, stay claims: Monomem
 never fetches or checks them.
 
-**Change-feed names.** The feed (`/changes`, `memory_since`) reports the writer of the *note* next to the
+**Change-feed names.** The feed (`/changes`, `memory_catch_up` action `changes`) reports the writer of the *note* next to the
 actor of the *change*: `writer_id` is `<server_id>/<label>` of the entry's own writer, `note_written_by` is
 the note's current `written_by` as of that entry, and `note_writer_id` is `<server_id>/<note_written_by>`.
 The filters `written_by` / `not_written_by` and `note_written_by` / `not_note_written_by` read those
-(the `not_` forms also look at the taint set). The change log also stores the note's attested pair and taint set at the time of the entry (`note_attested_writer`,
+(the `not_` forms also look at the writer set). The change log also stores the note's attested pair and writer set at the time of the entry (`note_attested_writer`,
 `note_attested_by`, `note_merged_from`) so that filtering still works after the note is deleted.
 
-**Why these were not collapsed into one `touched_by` set (reviewed in OneMemory 1.4.1).** The taint set *is* the
+**Why these were not collapsed into one `touched_by` set (reviewed in OneMemory 1.4.1).** The writer set *is* the
 single thing a policy needs, and the three matchers read nothing else in practice. But
 `written_by` and the attested pair have jobs of their own that a set cannot do: `written_by` is "who
 holds the content now" (the `written_by` / `note_written_by` filters, the WHO WROTE THIS banner, and
 the stamp the runner trusts for heartbeats), and the attested pair is a *verified* author that a
 signature covers exactly (any change to a covered field breaks it). Folding them would change the shape of every API result and the
 signed record, and need a migration over every row and change-log entry. OneMemory 1.4.1 keeps the shapes
-(additive changes only), makes the taint set complete (earlier writers and claims are in it), and
+(additive changes only), makes the writer set complete (earlier writers and claims are in it), and
 documents the table above. A future major version can collapse the display fields once clients stop
 reading them.
 
@@ -65,7 +65,7 @@ approved or having its status changed, the runner recording a command's outcome,
 restore, or an edit of `source`. Who made such a change is recorded in the change log
 (`change_log.actor`), not in `written_by`. So an admin tagging an untrusted agent's note does not
 become its author, and `not_written_by=<untrusted agent>` keeps hiding it. A merge made by
-`memory_consolidate` is stamped with whoever ran the merge (its sources are deleted), and the
+`memory_tidy` action `merge` is stamped with whoever ran the merge (its sources are deleted), and the
 note stores `merged_from_writers` (the sources' distinct writers; since OneMemory 1.4.1 also every earlier content writer
 of the note, so a rewrite never clears them). `not_written_by=<a source's writer>` therefore treats the merged note as touched by that writer
 and hides it, and a distrust rule on that writer hides it too. The task *text* is the content: editing a task's title, next step, notes or command
@@ -73,13 +73,13 @@ changes `written_by`, and the approval is voided anyway.
 
 `written_by` is, in order:
 
-1. the **label of the authenticated token** behind the call (REST, MCP over HTTP);
+1. the **label of the authenticated app key** behind the call (REST, MCP over HTTP);
 2. else a fixed marker for the process: `stdio` (the local MCP stdio server; `stdio:<app>` when
    its launch config sets `MONOMEM_CLIENT`, which `monomem setup` does per app. That name is
    self-declared by the config file, not authenticated), `cli` (an
-   `monomem ...` command, including `import --dir` and `consolidate`), `server` (the
+   `monomem ...` command, including `import --dir` and `tidy merge`), `server` (the
    long-running server's own background jobs), `runner` (the command runner process, which writes
-   the heartbeat that `runner_status` trusts);
+   the heartbeat that `memory_tasks` action `runner` trusts);
 3. else `""` (unknown): a library caller with no identity, or any row written before
    schema v13.
 
@@ -99,8 +99,8 @@ can know.
 
 ## Where you see it
 
-- **Notes, lists, search hits, `state_relevant`, export** carry `written_by` and `created_by`.
-- **Tasks and handoffs** (`task_put`, `task_list`, `task_get`, `session_handoff`, `catch_up`)
+- **Notes, lists, search hits (`memory_search` in every mode), export** carry `written_by` and `created_by`.
+- **Tasks and handoffs** (`memory_tasks` actions `put` / `list` / `get`, `memory_sessions` action `handoff`, `memory_catch_up`)
   carry `written_by` (and tasks `created_by`). A task's `owner` and a handoff's `surface` are
   still the writer's own claims.
 - **MCP results**: the first content block is unchanged (untrusted-data banner + JSON). A second
@@ -121,9 +121,9 @@ can know.
 ## Filtering: ignore yourself, distrust a client
 
 `written_by=X` keeps only notes whose last writer is exactly `X`; `not_written_by=X` drops them.
-They exist on `state_list`, `state_search`, `state_relevant`, `task_list`, `catch_up` (MCP) and `GET /notes`,
-`GET /search`, `POST /relevant`, `GET /tasks`, `GET /handoffs`, `GET /catch-up` (REST), the CLI `relevant`,
-`changes` and `watch`, and on the change feed (`memory_since`, `memory_ack`, `GET /changes`, `POST /ack`).
+They exist on `memory_list`, `memory_search`, `memory_tasks` action `list`, `memory_catch_up` (MCP) and `GET /notes`,
+`GET /search`, `POST /relevant`, `GET /tasks`, `GET /handoffs`, `GET /catch-up` (REST), the CLI `search`,
+`activity` and `activity --follow`, and on the change feed (`memory_catch_up` actions `changes` and `ack`, `GET /changes`, `POST /ack`).
 A value may be a bare label or a writer id (`<server_id>/<label>`). They also match a verified
 `attested_writer` and `merged_from_writers`, so a restored or merged note is still caught.
 `not_written_by` does **not** exclude unknown-writer (`""`) rows, because it cannot tell who wrote
@@ -141,9 +141,9 @@ An import never trusts the payload's labels on their own: the **importing caller
 `created_by`, and the payload's value is kept in `imported_written_by`, clearly labelled as a claim. The one
 exception is a note whose attestation verifies against a key an admin trusts: its original author is then
 kept as `attested_writer`. (The stamped `written_by` is still the importer.) Re-importing an export keeps the
-original claim. A write the linter quarantined keeps its real author when an admin approves it, in the note **and** in
+original claim. A write the linter held keeps its real author when an admin approves it, in the note **and** in
 the change feed (the permanent change-log triggers copy the note's writer).
-A note made by consolidation is written by whoever ran the consolidation. Restoring an
+A note made by merging duplicates is written by whoever ran the merge. Restoring an
 unsigned backup flattens history: every note becomes the importer's, and the payload's claims are kept only as
 `imported_written_by`, so `not_written_by` hygiene is not meaningful on it. Restoring the database **file**
 (`monomem backup`) keeps everything.
@@ -152,7 +152,7 @@ unsigned backup flattens history: every note becomes the importer's, and the pay
 
 - Attribution tells you who wrote a note; it does not decide whether to believe them. Since OneMemory 1.4.0 an admin
   can say whom not to believe ([trust.md](./trust.md)), but even then treat every note as untrusted data.
-- Anyone with the database file, or any admin token, can change anything. `written_by` guards against
+- Anyone with the database file, or any admin key, can change anything. `written_by` guards against
   a *client* lying; it is not tamper-proof against the operator.
 - File sync (`export --format md` / `import --dir`) writes notes as whoever runs the command (`cli`);
   front matter (`origin_writer`) is shown as an unverified claim and never trusted for identity.
@@ -161,7 +161,7 @@ unsigned backup flattens history: every note becomes the importer's, and the pay
 - **Identity is a label.** Two tokens with the same label are the same writer; renaming a token changes who
   new writes are attributed to. Labels from two servers can collide, which is what `writer_id`
   (`<server_id>/<label>`) is for: a filter or rule may use it to say which server.
-- **Heartbeat trust** (`runner_status`): only a note stamped `runner` counts, and its time is the
+- **Heartbeat trust** (`memory_tasks` action `runner`): only a note stamped `runner` counts, and its time is the
   server's own timestamp, not the `alive_at` in the body. A runner older than 1.3.4 stamps no marker (`""`);
   since OneMemory 1.4.0 those heartbeats are **no longer believed** unless `MONOMEM_RUNNER_ACCEPT_LEGACY=1` (see [RUNNER.md](https://github.com/calasdan-sketch/monomem/blob/main/docs/RUNNER.md)). Anyone with write access to the database file can still stamp anything.
 - **Upgrading while old processes run.** A process still running the pre-1.3.3 code keeps writing

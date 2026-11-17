@@ -16,6 +16,7 @@ import { captureAad, encrypt, spoolAad } from "./crypto.js";
 import { currentWriter } from "./actor.js";
 import { isOutsideTool } from "./taint.js";
 import { audit } from "./security.js";
+import { beginImmediate } from "./store/write-lock.js";
 
 export const HOOK_EVENTS = ["session-start", "user-prompt", "post-tool", "post-tool-failure", "stop", "subagent-stop", "session-end", "pre-compact"] as const;
 export type HookEvent = (typeof HOOK_EVENTS)[number];
@@ -151,7 +152,7 @@ const isOutsideEvent = (ev: CaptureEvent): boolean => (ev.event === "post-tool" 
  */
 export function recordEvent(store: Store, ev: CaptureEvent & { spool_id?: string }, namespace: string): { newSession: boolean; seq: number } {
   const db = store.captureDb();
-  db.exec("BEGIN IMMEDIATE");
+  beginImmediate(db);
   try {
     // 1.5.0 (R1-13): a spooled line carries an id; one already stored (the drain was cut off after the insert) is not stored again.
     if (ev.spool_id && db.prepare("SELECT 1 FROM capture_events WHERE spool_id = ?").get(ev.spool_id)) {

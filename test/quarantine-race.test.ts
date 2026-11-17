@@ -178,7 +178,7 @@ describe("R1-14 REST keep-history 'by' and the CLI existence check", () => {
         });
         assert.equal(r.status, 1);
         assert.match(r.stderr, /Refused/, `${action}: ${r.stderr}`);
-        assert.doesNotMatch(r.stderr, /no quarantined/i);
+        assert.doesNotMatch(r.stderr, /no (quarantined|held) write/i);
       }
     } finally {
       rmSync(home, { recursive: true, force: true });

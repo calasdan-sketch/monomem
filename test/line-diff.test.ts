@@ -159,8 +159,8 @@ describe("dashboard renders the diff", () => {
     const p = page(() => ({ warning: "ARE YOU SURE", token: "t", diff: DIFF }));
     p.ctx.qReplace(1, 2);
     await settle();
-    const kids = p.el("msg").children as any[];
-    assert.ok(kids.some((k) => /class='diff'/.test(k.innerHTML ?? "")), JSON.stringify(kids));
+    assert.match(p.el("cf_body").innerHTML, /class='diff'/);
+    assert.match(p.el("cf_body").innerHTML, /ARE YOU SURE/);
   });
   test("replace (Conflicts): the dialog bullets carry the diff", async () => {
     const p = page(() => ({ warning: "w", token: "t", diff: DIFF }));

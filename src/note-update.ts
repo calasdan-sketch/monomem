@@ -6,6 +6,8 @@
 import type { NoteRecord, Store } from "./store.js";
 import { assertPlainWriteTags, assertReviewedTag } from "./reserved-tags.js";
 import { withFacts } from "./facts.js";
+import { lineDiff } from "./line-diff.js";
+import { printable } from "./security.js";
 
 export type NoteUpdateCheck =
   | { ok: true; target: NoteRecord; tags: string[] | undefined }
@@ -42,4 +44,45 @@ export function prepareNoteUpdate(
     assertReviewedTag(merged, target.tags, c.mayReview);
   }
   return { ok: true, target, tags: merged };
+}
+
+// ---- r2-improvement #3: overwrites are never silent -----------------------------------------------------------------
+
+/** Lines of diff an overwrite notice or a stale-write reply carries. */
+const NOTICE_DIFF_LINES = 12;
+
+/**
+ * An update replaced text a DIFFERENT writer wrote: who, when, which rev, and a short line diff, plus one plain sentence for
+ * the agent to pass on. Null when the text did not change or the caller wrote it itself. Line diff goes through printable().
+ */
+export function overwriteNotice(before: NoteRecord, after: NoteRecord, me: string): { replaced_other_writer: { by: string; at: string; old_rev: number; line_diff: string[] }; notice: string } | null {
+  if (!before.written_by || before.written_by === me) return null;
+  if (before.title === after.title && before.body === after.body) return null;
+  const diff = lineDiff(before.body, after.body, NOTICE_DIFF_LINES);
+  return {
+    replaced_other_writer: { by: before.written_by, at: before.updated_at, old_rev: before.rev, line_diff: diff },
+    notice:
+      `You replaced text that "${printable(before.written_by, 60)}" wrote (rev ${before.rev}). Tell the user, and pass if_rev next time so a ` +
+      "change by someone else is not overwritten unseen. The old text is in the note's history.",
+  };
+}
+
+/**
+ * A stale if_rev: who changed the note since the caller's revision, how, the current revision and a short diff from the text
+ * the caller had to the text now, so the agent can merge without another read and without a blind forced retry.
+ */
+export function staleDetail(store: Store, id: number, ifRev: number): { message: string; stale: Record<string, unknown> } | null {
+  const cur = store.readVisible(id, { hideArchived: true });
+  if (!cur) return null;
+  const later = store.historyOf(id).filter((e) => e.version >= ifRev).sort((x, y) => x.version - y.version);
+  const mine = later[0];
+  const by = [...new Set(later.map((e) => e.saved_by).filter(Boolean))];
+  const changedBy = by.length ? by : cur.written_by ? [cur.written_by] : [];
+  const how = later.length ? [...new Set(later.map((e) => (e.reason === "update" ? "edited the text" : e.reason)))].join(", ") : "changed tags or settings (the text is the same)";
+  const lineDiffOut = mine ? lineDiff(mine.body, cur.body, NOTICE_DIFF_LINES) : [];
+  const who = changedBy.length ? changedBy.map((w) => `"${printable(w, 60)}"`).join(", ") : "another writer";
+  return {
+    message: `stale write: note ${id} is at rev ${cur.rev} (you have ${ifRev}); ${who} ${how} since your read. Merge with the diff below and retry with if_rev ${cur.rev}`,
+    stale: { current_rev: cur.rev, your_rev: ifRev, changed_by: changedBy[0] ?? "", changed_by_all: changedBy, changed_at: cur.updated_at, how, title: cur.title, line_diff: lineDiffOut },
+  };
 }

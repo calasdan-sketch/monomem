@@ -121,7 +121,7 @@ export function quarantineRow(s: Store, row: Record<string, unknown>): Quarantin
       }
     } catch {
       throw new ValidationError(
-        `held write #${row.id} cannot be opened: it was damaged or moved, or the encryption key is missing or changed. Throw it away with: monomem quarantine reject ${row.id}`
+        `held write #${row.id} cannot be opened: it was damaged or moved, or the encryption key is missing or changed. Throw it away with: monomem review held reject ${row.id}`
       );
     }
   }
@@ -255,7 +255,7 @@ export function applyHeldUpdate(s: Store, id: number, q: QuarantineEntry, held: 
   // applying them unguarded could overwrite later edits.
   if (held.if_rev === null) {
     throw new ValidationError(
-      `quarantined update #${id} predates rev tracking, so it can't be applied safely; reject it and re-submit the change`
+      `held update #${id} predates rev tracking, so it can't be applied safely; reject it and re-submit the change`
     );
   }
   // A stale if_rev makes update() throw "stale write" -- a conflict the
@@ -283,7 +283,7 @@ export function applyHeldUpdate(s: Store, id: number, q: QuarantineEntry, held: 
   }
   if (!updated) {
     throw new ValidationError(
-      `quarantined update #${id} targets note ${q.target_id}, which no longer exists; reject it instead`
+      `held update #${id} targets note ${q.target_id}, which no longer exists; reject it instead`
     );
   }
   // A held sync update: record the synced content as the merge base (else the next origin edit looks like a conflict).
@@ -352,7 +352,7 @@ export function keepQuarantineAsHistory(s: Store, id: number, byId?: number): { 
   // 1.4.0: retiring one note in favour of another is a promotion of the other; neither side may be outside content no person
   // has confirmed. The CLI (behind its operator gate) decides that itself.
   if (currentWriter() !== "cli" && isTainted(s.getQuarantine(id)?.tags ?? [])) {
-    throw new ValidationError(`Can't keep as history: held write #${id} came from outside content. A person must decide it in a terminal: monomem quarantine keep-history ${id}`);
+    throw new ValidationError(`Can't keep as history: held write #${id} came from outside content. A person must decide it in a terminal: monomem review held keep-history ${id}`);
   }
   const note = s.transaction(() => {
     // Inside the transaction: if applying the held write fails, the operator's pass is not left behind as a confirm.

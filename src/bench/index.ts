@@ -1,7 +1,7 @@
 // `monomem bench`: run the benchmark. Also what `npm run bench` calls.
 import { existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
+import { assetsRoot } from "../self.js";
 import { PACKAGE_VERSION } from "../config.js";
 import { loadKnownGaps, loadScenarios, runScenario, type KnownGap } from "./engine.js";
 import { MonomemAdapter } from "./monomem-adapter.js";
@@ -24,10 +24,11 @@ export interface BenchOptions {
   onResult?: (id: string, status: string) => void;
 }
 
-/** bench/scenarios next to the package root: dist/src/bench -> ../../../bench/scenarios. */
+/** bench/scenarios in the package root (a source checkout or the npm package); the single executable carries none. */
 export function defaultScenarioDir(): string {
-  const here = dirname(fileURLToPath(import.meta.url));
-  return resolve(here, "..", "..", "..", "bench", "scenarios");
+  const root = assetsRoot();
+  if (!root) throw new Error("bench runs from a source checkout or the npm package, not from the standalone executable (it carries no scenarios)");
+  return resolve(root, "bench", "scenarios");
 }
 
 export async function runBench(opts: BenchOptions = {}): Promise<{ report: Report; scenarios: Scenario[] }> {
@@ -84,7 +85,7 @@ export const BENCH_USAGE = [
   "  --help               This text.",
   "",
   "monomem bench --longmemeval | --locomo [--data file] [--limit N] [--mode keyword|hybrid]",
-  "                [--granularity session|turn] [--encrypted] [--split a|b] [--json]",
+  "                [--granularity session|turn] [--encrypted] [--split a|b] [--passages] [--json]",
   "",
   "  Retrieval benchmark on LongMemEval-S or LoCoMo (downloaded once to ~/.cache/monomem-bench unless --data):",
   "  recall@5/10, recall_all@10, nDCG@10, MRR per question type, search latency, indexing time. No LLM.",

@@ -1,5 +1,5 @@
 // 1.7.1: git sync stays quiet once both computers agree, and its dry run creates nothing.
-import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
+import { slow } from "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
 import { test, describe, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
@@ -141,7 +141,7 @@ describe("sync --git: credentials in remote URLs", { skip }, () => {
     const t0 = Date.now();
     scrubUrls("http://" + "a:".repeat(300_000));
     scrubUrls("a".repeat(1_000_000) + "://");
-    assert.ok(Date.now() - t0 < 3000);
+    assert.ok(Date.now() - t0 < slow(3000));
   });
   test("a remote whose URL carries a password is refused and the password is never printed", async () => {
     const w = world();

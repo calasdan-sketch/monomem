@@ -16,6 +16,14 @@ import { describeDbFailure } from "./db-problem.js";
 import { embeddingsConfig } from "./embeddings.js";
 import { acceptLegacyHeartbeats } from "./liveness.js";
 import { scanPii } from "./pii.js";
+import { qualityReport } from "./quality.js";
+import { backupFailure, backupsDir, dailyBackupsOn } from "./backup-schedule.js";
+import { backupAgeDays } from "./digest.js";
+import { syncProblem } from "./sync/device.js";
+import { bridgeLine, heldImports } from "./claude-refresh.js";
+
+/** Daily backups on, but none for this many days: check warns (the server was not running, or every copy failed). */
+const BACKUP_LATE_DAYS = 2;
 
 /** info: a fact worth showing that never lowers the grade. */
 export type Status = "ok" | "warn" | "fail" | "info";
@@ -26,6 +34,34 @@ export interface HealthCheck {
   status: Status;
   /** One line: what was found and what it means. */
   text: string;
+  /** Warn and fail lines only: a sentence the person can paste to their agent to get help with this line. */
+  ask?: string;
+}
+
+/**
+ * "Fix it with your agent": what to paste to an agent for each warning. Each one asks the agent to look and explain
+ * first and to ask before it changes anything, so pasting it never changes a setting by itself.
+ */
+const ASK: Record<string, string> = {
+  node: "Check which Node.js version I have and tell me how to install Node.js 22.16 or later. Ask me before you install anything.",
+  database: "Run monomem check --setup and explain the Database problem in plain words. Do not delete, move or replace the database file; ask me first.",
+  "trust-settings": "Run monomem check --verbose and explain the damaged trust settings and the command that resets each one. Ask me before you run any of them.",
+  apps: "Run monomem setup --dry-run and tell me what it would change in my app connections. Ask me before you run it for real.",
+  drill: "Run monomem check --attacks and explain in plain words which attack got through and why. Do not change any settings.",
+  exposure: "Run monomem check --verbose and explain the Exposure line: which app keys have no limit and which notes hold personal data. Ask me before you change any key or note.",
+  audit: "Run monomem check --verbose and explain the Audit chain line. Do not edit or delete the audit log.",
+  "audit-write": "Run monomem check --verbose and explain why the audit log cannot be written. Ask me before you change any folder permissions.",
+  "confirm-backlog": "Run monomem review and summarise the unconfirmed notes for me. Let me decide which ones to keep.",
+  backup: "Run monomem check --verbose and explain the Backups line. Ask me before you run monomem backup or change any backup setting.",
+  sync: "Run monomem check --verbose and explain the Device sync line. Ask me before you change any sync setting.",
+};
+
+/** The sentence to paste for one warn or fail line; a plain "explain it" request for a check with no sentence of its own. */
+export function askFor(c: Pick<HealthCheck, "id" | "label">): string {
+  if (ASK[c.id]) return ASK[c.id];
+  if (c.id.startsWith("security:"))
+    return `Run monomem check --setup and explain the "${c.label}" warning and which setting causes it. Ask me before you change any setting.`;
+  return `Run monomem check --verbose and explain the "${c.label}" line in plain words, then suggest a fix. Ask me before you change anything.`;
 }
 export interface HealthReport {
   grade: string;
@@ -38,7 +74,7 @@ export interface HealthReport {
 
 const LETTERS = ["A", "B", "C", "D", "E", "F"];
 export const GRADE_RULE =
-  "Start at A. Each warn lowers it one step (A to F). Any fail caps it at D. Unexpected drill reach (an attack other than the two known misses got through) is F. Info lines never change the grade. A to C exits 0, D to F exits 1.";
+  "Start at A. Each warn lowers it one step (A to F). Any fail caps it at D. An unexpected attack in the attack replay (one other than the two known misses got through) is F. Info lines never change the grade. A to C exits 0, D to F exits 1.";
 export const NOT_COVERED = "Not covered: the injection check is a pattern linter; reworded attacks and self-poisoning still get through. " + DRILL_SCOPE;
 
 /** The grade, computed only from the check statuses (the drill check failing is the F case). */
@@ -79,7 +115,7 @@ export async function securityFindings(dataDir: string, bindHost: string): Promi
     out.push({ id: "lint", label: "linter weakened", status: "warn", short: `MONOMEM_LINT weakens the memory linter (${policy})`, detail: lintDetail });
   }
   if (process.env.MONOMEM_STDIO_ADMIN_TOOLS === "1") {
-    out.push({ id: "admin", label: "stdio admin tools", status: "fail", short: "MONOMEM_STDIO_ADMIN_TOOLS=1 lets an agent approve its own held writes", detail: "MONOMEM_STDIO_ADMIN_TOOLS=1 lets an agent on the stdio server use the admin tools (approve its own quarantined writes, unpin, delete). Unset it unless you want that." });
+    out.push({ id: "admin", label: "stdio admin tools", status: "fail", short: "MONOMEM_STDIO_ADMIN_TOOLS=1 lets an agent approve its own held writes", detail: "MONOMEM_STDIO_ADMIN_TOOLS=1 lets an agent on the stdio server use the admin tools (approve its own held writes, unpin, delete). Unset it unless you want that." });
   }
   if (!LOOPBACK.includes(bindHost)) {
     out.push({ id: "bind", label: "non-loopback bind", status: "warn", short: `MONOMEM_BIND=${bindHost} is not loopback`, detail: `MONOMEM_BIND=${bindHost} is not a loopback address: anything that can reach this machine on the network can reach the API, so it must be behind your own authenticated tunnel (INFRA.md).` });
@@ -181,7 +217,7 @@ function auditLines(path: string): string[] {
  * anywhere in the log, unless the log has rotated past it. It cannot see tampering that happened before its first run, and
  * once rotation has dropped the remembered line it cannot tell rotation from removal.
  */
-function auditCheck(path: string | undefined, db: Db | undefined, notes: number): Result {
+function auditCheck(path: string | undefined, db: Db | undefined, notes: number, readOnly = false): Result {
   const a = verifyAuditChain(path);
   if (a.breaks > 0) return { status: "fail", text: `${plural(a.breaks, "break")} (first at line ${a.brokenLine}): a log line was edited or removed` };
   let seen: { lines: number; hash: string; ts?: string } | undefined;
@@ -213,7 +249,7 @@ function auditCheck(path: string | undefined, db: Db | undefined, notes: number)
     else if (lines.length < seen.lines) return { status: "warn", text: `the log has ${plural(lines.length, "line")}, fewer than the ${seen.lines} it had at the last health check: lines were removed` };
     else return { status: "warn", text: `line ${seen.lines} is not the line health saw there last time: the log was edited or replaced (health only notices changes since its last run)` };
   }
-  try {
+  if (!readOnly) try {
     db?.prepare("INSERT OR REPLACE INTO _meta (key, value) VALUES (?, ?)").run(SEEN_KEY, JSON.stringify({ lines: lines.length, hash: sha(lines[lines.length - 1]), ts: lastTs(lines) }));
   } catch {
     /* read-only database: skip the note */
@@ -233,6 +269,11 @@ export interface HealthOpts {
   drill?: typeof runDrill;
   /** Where the app configs are looked for (tests); default the real home folder. */
   setupEnv?: import("./setup.js").SetupEnv;
+  /**
+   * The MCP health action: write nothing (not even the audit-log marker) and skip the attack replay, which swaps
+   * process-wide settings while it runs and so must not run inside a server that is answering other calls.
+   */
+  readOnly?: boolean;
 }
 
 export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
@@ -244,15 +285,16 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
   const nodeOk = nodeIsOk(process.versions.node) && sqliteHasFts5();
   add("node", "Node", nodeOk ? "ok" : "fail", nodeOk ? `Node ${process.versions.node} with SQLite FTS5` : `Node ${process.versions.node} needs >= ${MIN_NODE_TEXT} with SQLite FTS5, or search fails`);
 
-  let notes = 0, held = 0, distrust = 0, marked = 0, dbOk = false;
+  let notes = 0, held = 0, distrust = 0, marked = 0, claudeHeld = 0, dbOk = false;
   let meterText = "meter unavailable";
   let piiNotes = 0, privateNotes = 0, labelledNotes = 0;
+  let hygiene = "";
   let confirmLines: string[] = [];
   let backlog = "";
   let audit: Result | undefined;
   if (existsSync(dbPath)) {
     try {
-      const s = new Store(dbPath);
+      const s = new Store(dbPath, o.readOnly ? { noMigrate: true } : {});
       try {
         const damaged = s.integrityProblem();
         if (damaged) {
@@ -266,7 +308,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
               approve_first: "every namespace is approve-first until you set it again: monomem approve-first <namespace> on|off",
               flood_paused: "every agent writer is paused until you resume one: monomem resume <writer>",
               revoked_attester_keys: "no attester key is believed until the list is rewritten: monomem trust attester-revoke <key>",
-              confirm_mode: "expiry runs in enforce mode until you set it: monomem config set confirm-mode label",
+              confirm_mode: "expiry runs in enforce mode until you set it: monomem settings set confirm-mode label",
             };
             add("trust-settings", "Trust settings", "warn", `damaged stored setting${bad.length === 1 ? "" : "s"}, read in the strictest form: ${bad.map((k) => `${k} (${how[k]})`).join("; ")}`);
           }
@@ -281,6 +323,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
           notes = s.countAll();
           step("held", "Held writes", () => void (held = s.listQuarantine({ limit: 500 }).length));
           step("distrust", "Distrusted writers", () => void (distrust = s.distrustRules().length));
+          step("claude-memory", "Claude Code memory", () => void (claudeHeld = heldImports(s)));
           step("confirm", "Confirm rules", () => void (confirmLines = s.confirmRuleLines()));
           step("confirm-backlog", "Unconfirmed backlog", () => {
             const b = s.confirmBacklog();
@@ -298,8 +341,21 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
             const m = meterStats(s);
             meterText = `${plural(notes, "note")}, database ${(m.db_bytes / 1048576).toFixed(1)} MB; the meter counts ~${m.totals.saved_tokens} tokens saved over ${plural(m.totals.sessions, "session")} (estimate, ~4 characters a token)`;
           });
+          // F4 silent L5: passage pooling switched on but not used on an encrypted store; said, never a grade step.
+          if (s.getMeta("passage_pooling") === "on" && s.sealsWrites()) {
+            add("passage-pooling", "Passage pooling", "info", "switched on but not used: this store is encrypted, so search ranks whole notes only (an on-disk passage index would hold the words of sealed bodies)");
+          }
+          // Memory hygiene is heuristic, so it informs and never costs a grade step.
           try {
-            audit = auditCheck(o.auditPath, s.captureDb(), notes);
+            const c = (await qualityReport(s)).counts;
+            hygiene = c.empty + c.restated + c.duplicate
+              ? `${plural(c.empty, "empty note")}, ${plural(c.restated, "note")} restated but never retired, ${c.duplicate} ${c.duplicate === 1 ? "group" : "groups"} of duplicates: monomem review duplicates lists each with its fix`
+              : "no empty notes, no notes restated but never retired, no duplicates";
+          } catch (e) {
+            hygiene = `could not be checked: ${(e as Error).message}`;
+          }
+          try {
+            audit = auditCheck(o.auditPath, s.captureDb(), notes, o.readOnly);
           } catch (e) {
             audit = { status: "warn", text: `could not read the audit log: ${(e as Error).message}` };
           }
@@ -331,25 +387,29 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
   try {
     const { appEntryProblems, realEnv } = await import("./setup.js");
     const { PACKAGE_VERSION } = await import("./config.js");
-    const { fileURLToPath } = await import("node:url");
-    const probs = appEntryProblems(o.setupEnv ?? realEnv(PACKAGE_VERSION, fileURLToPath(new URL("./cli.js", import.meta.url))));
+    const probs = appEntryProblems(o.setupEnv ?? realEnv(PACKAGE_VERSION));
     if (probs.length) add("apps", "App connections", "warn", `${probs.join("; ")}: run monomem setup`);
   } catch {
     /* configs could not be inspected */
   }
 
   const sec = await securityFindings(o.dataDir ?? DATA_DIR, o.bindHost ?? BIND_HOST);
-  if (sec.length) for (const f of sec) add(`security:${f.id}`, f.label, f.status, `${f.short} (monomem doctor has the detail)`);
+  if (sec.length) for (const f of sec) add(`security:${f.id}`, f.label, f.status, `${f.short} (monomem check --setup has the detail)`);
   else add("security", "Security settings", "ok", "no weakening settings found (lint, stdio admin tools, bind address, cloud-sync folder, remote embeddings, browser origins, file permissions, proxy trust, legacy runners)");
 
-  if (dbOk) {
+  if (dbOk && o.readOnly) add("drill", "Attack replay", "info", "not run here: run monomem check --attacks in a terminal");
+  else if (dbOk) {
     try {
       const d: DrillReport = await (o.drill ?? runDrill)({ dbPath });
-      add("drill", "Drill", d.ok ? "ok" : "fail", d.ok ? (d.reached.length ? `${d.attacks - d.reached.length} of ${d.attacks} known attacks blocked; ${d.reached.length === 1 ? "the 1 that gets through is a known limit" : `the ${d.reached.length} that get through are known limits`}` : `none of ${d.attacks} known attacks reached the agent`) + (d.approve_first ? " (approve-first is on: held writes wait for your review; approving one unread lets it in)" : "") : `${d.unexpected.length} unexpected of ${d.attacks} attacks reached the agent: ${d.unexpected.map((x) => x.id).join(", ")} (monomem drill has the detail)`);
+      // Held, blocked and stored-with-a-warning are counted apart: a warned attack is stored, so it is never called blocked.
+      const n = (v: string): number => (d.rows ?? []).filter((x) => x.verdict === v).length;
+      const split = d.rows ? ` (${n("held")} held, ${n("blocked")} blocked, ${n("warned")} stored with a warning)` : "";
+      const stopped = `${d.attacks - d.reached.length} of ${d.attacks} known attacks did not reach an agent as trusted content${split}`;
+      add("drill", "Attack replay", d.ok ? "ok" : "fail", d.ok ? (d.reached.length ? `${stopped}; ${d.reached.length === 1 ? "the 1 that gets through is a known limit" : `the ${d.reached.length} that get through are known limits`}` : stopped) + (d.approve_first ? " (approve-first is on: held writes wait for your review; approving one unread lets it in)" : "") : `${d.unexpected.length} unexpected of ${d.attacks} attacks reached the agent: ${d.unexpected.map((x) => x.id).join(", ")} (monomem check --attacks has the detail)`);
     } catch (e) {
-      add("drill", "Drill", "warn", `could not run: ${(e as Error).message}`);
+      add("drill", "Attack replay", "warn", `could not run: ${(e as Error).message}`);
     }
-  } else add("drill", "Drill", "info", dbDamaged ? "not run: the database is damaged (see the Database line)" : "not run: there is no database to replay the attacks against yet");
+  } else add("drill", "Attack replay", "info", dbDamaged ? "not run: the database is damaged (see the Database line)" : "not run: there is no database to replay the attacks against yet");
 
   if (dbOk) {
     // Exposure: reasons the notes are more reachable than the labels suggest. One check, so it costs at most one grade step however many reasons it lists.
@@ -357,7 +417,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
     try {
       const { resolveTokens } = await import("./config.js");
       const open = resolveTokens().filter((t) => t.label !== "primary" && t.max_sensitivity === undefined && t.scope !== "admin");
-      if (open.length && labelledNotes > 0) reasons.push(`${plural(open.length, "app key")} with no limit can read your private notes (${open.map((t) => `"${t.label || "unnamed"}"`).slice(0, 3).join(", ")}; monomem token add <name> --max internal)`);
+      if (open.length && labelledNotes > 0) reasons.push(`${plural(open.length, "app key")} with no limit can read your private notes (${open.map((t) => `"${t.label || "unnamed"}"`).slice(0, 3).join(", ")}; monomem keys add <name> --max internal)`);
     } catch {
       /* tokens unreadable: the other checks say so */
     }
@@ -366,8 +426,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
       try {
         const { detectClients, realEnv } = await import("./setup.js");
         const { PACKAGE_VERSION } = await import("./config.js");
-        const { fileURLToPath } = await import("node:url");
-        const wired = detectClients(realEnv(PACKAGE_VERSION, fileURLToPath(import.meta.url))).filter((c) => {
+        const wired = detectClients(realEnv(PACKAGE_VERSION)).filter((c) => {
           try {
             return c.exists && /"monomem"|\[mcp_servers\.monomem\]/.test(readFileSync(c.file, "utf8")) && !/Authorization/i.test(readFileSync(c.file, "utf8"));
           } catch {
@@ -407,14 +466,30 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
   }
 
   if (dbOk) {
-    add("held", "Held writes", "info", held ? `${held >= 500 ? "500 or more writes" : plural(held, "write")} held for review: the defence working, nothing was stored without you (monomem quarantine list)` : "no writes waiting for review");
-    add("distrust", "Distrusted writers", "info", `${plural(distrust, "distrust rule")}${distrust ? " (their notes are hidden from agents)" : ""}`);
+    add("held", "Held writes", "info", held ? `${held >= 500 ? "500 or more writes" : plural(held, "write")} held for review: the defence working, nothing was stored without you (monomem review held list)` : "no writes waiting for review");
+    // The home whose Claude folder the Hooks line looked at (a test's settingsPath points at a scratch home).
+    const claudeLine = await bridgeLine(o.setupEnv ?? { home: dirname(dirname(settingsPath)), env: o.settingsPath ? {} : process.env, cwd: process.cwd() }, dbPath, claudeHeld).catch(() => null);
+    if (claudeLine) add("claude-memory", "Claude Code memory", "info", claudeLine);
+    add("distrust", "Distrusted writers", "info",`${plural(distrust, "distrust rule")}${distrust ? " (their notes are hidden from agents)" : ""}`);
     if (confirmLines.length) add("confirm", "Confirm rules", "info", confirmLines.join("; "));
     if (backlog) add("confirm-backlog", "Unconfirmed backlog", "warn", `${backlog}: review them with monomem review (the grade is capped at B until they are dealt with)`);
     add("redacted", "Redacted notes", "info", `notes with a [REDACTED:...] marker (secret redaction replaced a credential): ${marked}`);
     add("memory", "Memory size", "ok", meterText);
+    add("hygiene", "Memory hygiene", "info", hygiene);
+    const failed = backupFailure(dbPath);
+    if (failed) add("backup", "Backups", "warn", `the automatic daily backup failed on ${failed.at.slice(0, 16).replace("T", " ")}: ${printable(failed.error, 200)}. Free some disk space or fix the folder ${backupsDir(dbPath)}, or run monomem backup by hand`);
+    else {
+      const age = backupAgeDays(dirname(dbPath), (o.now ?? new Date()).getTime());
+      if (!dailyBackupsOn(process.env, o.dataDir ?? DATA_DIR)) add("backup", "Backups", "info", `automatic daily backups are off (the dashboard's Settings or MONOMEM_AUTO_BACKUP); ${age === null ? "no backup yet" : `last backup ${age < 1 ? "today" : plural(Math.floor(age), "day") + " ago"}`}. Run monomem backup by hand, or switch them back on`);
+      else if (age !== null && age > BACKUP_LATE_DAYS) add("backup", "Backups", "warn", `daily backups are on but the last one is ${plural(Math.floor(age), "day")} old: they are made only while the server runs (monomem start), or run monomem backup by hand`)
+      else add("backup", "Backups", "info", age === null ? `none yet: while the server runs it makes one a day in ${backupsDir(dbPath)} (7 daily + 4 weekly kept)` : `last backup ${age < 1 ? "today" : plural(Math.floor(age), "day") + " ago"}; the server keeps 7 daily + 4 weekly in ${backupsDir(dbPath)}`);
+    }
   }
 
+  const sync = syncProblem(o.dataDir ?? DATA_DIR, o.now ?? new Date());
+  if (sync) add("sync", "Device sync", "warn", sync.text);
+
+  for (let i = 0; i < checks.length; i++) if (checks[i].status === "warn" || checks[i].status === "fail") checks[i] = { ...checks[i], ask: askFor(checks[i]) };
   const grade = gradeOf(checks);
   return { grade, rule: GRADE_RULE, checks, not_covered: NOT_COVERED, date: (o.now ?? new Date()).toISOString().slice(0, 10), exit_code: grade <= "C" ? 0 : 1 };
 }
@@ -430,14 +505,18 @@ export function gradeReason(r: HealthReport): string {
   return `${r.grade}: ${count} (${bad.map((c) => c.label.toLowerCase()).join(", ")})`;
 }
 
-export function renderHealth(r: HealthReport): string {
+/** Quiet by default: only the warn and fail lines, the grade and what is not covered; verbose adds every line and the rule. */
+export function renderHealth(r: HealthReport, verbose = true): string {
+  const rows = verbose ? r.checks : r.checks.filter((c) => c.status === "warn" || c.status === "fail");
+  const quiet = verbose ? [] : [`  ${r.checks.length - rows.length} check(s) fine or for information only (--verbose lists them, with the grade rule).`];
   return [
-    "monomem health\n",
-    ...r.checks.map((c) => `  ${TAG[c.status]} ${c.label}: ${c.text}`),
+    "monomem check\n",
+    ...rows.flatMap((c) => [`  ${TAG[c.status]} ${c.label}: ${c.text}`, ...(c.ask ? [`         Ask your agent: "${c.ask}"`] : [])]),
+    ...quiet,
     "",
     `Grade ${r.grade}`,
     gradeReason(r),
-    `Rule: ${r.rule}`,
+    ...(verbose ? [`Rule: ${r.rule}`] : []),
     r.not_covered,
   ].join("\n");
 }
@@ -464,9 +543,9 @@ export function renderHealthCard(r: HealthReport): string {
   );
 }
 
-export const HEALTH_USAGE = `monomem health [--json] [--card [file.svg]]
+export const HEALTH_USAGE = `monomem check [--verbose] [--json] [--card [file.svg]]   (old name: monomem health)
 
-  One line per check (setup, hook, each weakening security setting, drill, audit chain, held writes, distrusted writers,
+  Without --verbose: only the lines that need a look, then the grade. --verbose: one line per check (setup, hook, each weakening security setting, drill, audit chain, held writes, distrusted writers,
   redacted notes, memory size), then a grade and the reason for it.
   Health opens your store to count things (an older database file is upgraded once, as with any monomem command), and
   drill runs on a copy. It writes one small row noting how long the audit log was, so the next run can see lines removed.
@@ -477,13 +556,15 @@ export const HEALTH_USAGE = `monomem health [--json] [--card [file.svg]]
 
 export async function healthMain(argv: string[], out: (s: string) => void = console.log, opts: HealthOpts = {}): Promise<number> {
   let json = false;
+  let verbose = out !== console.log || !process.stdout.isTTY; // quiet only for a person at a terminal
   let card: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--help" || a === "-h") return out(HEALTH_USAGE), 0;
     if (a === "--json") json = true;
+    else if (a === "--verbose") verbose = true;
     else if (a === "--card") card = argv[i + 1] && !argv[i + 1].startsWith("-") ? argv[++i] : join(opts.dataDir ?? DATA_DIR, "monomem-health.svg");
-    else return console.error(`health: unknown option ${a} (try: monomem health --help)`), 2;
+    else return console.error(`Error: unknown option ${a}. Fix: see monomem check --help`), 2;
   }
   const r = await runHealth(opts);
   if (card) {
@@ -491,6 +572,6 @@ export async function healthMain(argv: string[], out: (s: string) => void = cons
     mkdirSync(dirname(card), { recursive: true });
     writeFileSync(card, renderHealthCard(r));
   }
-  out(json ? JSON.stringify({ ...r, reason: gradeReason(r), ...(card ? { card } : {}) }, null, 2) : renderHealth(r) + (card ? `\nwrote ${card}` : ""));
+  out(json ? JSON.stringify({ ...r, reason: gradeReason(r), ...(card ? { card } : {}) }, null, 2) : renderHealth(r, verbose) + (card ? `\nwrote ${card}` : ""));
   return r.exit_code;
 }

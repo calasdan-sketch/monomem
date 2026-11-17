@@ -4,6 +4,296 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-11-17
+
+A large release: a download that needs no Node, a redesigned dashboard, new tool and command names, daily backups, sync
+between your own computers, and more trust work. **After upgrading, run `monomem setup` again** (the Upgrading section
+below says why, and lists what else behaves differently). The database format did not change (still
+schema v22), so going back to 1.5.0 needs no restore.
+
+### Highlights
+
+- **One download, nothing else to install.** Each release has an archive for Windows (x64), macOS (Apple silicon and
+  Intel) and Linux (x64) that carries its own copy of Node's official runtime, so you do not need Node installed. Setup
+  copies it to a home folder (`%LOCALAPPDATA%\Programs\Monomem`, `~/Applications/Monomem`, `~/.local/share/monomem`), adds a
+  Monomem entry to the Start menu / Applications / the Linux applications menu, and offers to put it on your PATH (one
+  step you say yes to; `setup --undo` takes out exactly that entry). **The download is not code-signed.** Each release
+  has a `SHA256SUMS` file and a GitHub build attestation you can check (`gh attestation verify`). On Windows the program
+  that runs is Node's own `node.exe`, signed by the OpenJS Foundation and named `monomem-node.exe` in the folder (renaming
+  keeps the signature valid; Task Manager's Processes tab still says "Node.js JavaScript Runtime"). Unblock the zip before
+  you unpack it and Windows normally does not stop to ask about `monomem.cmd` (INSTALL.md has the steps). Setup's Start menu entry
+  has the Monomem icon, and the copy setup installs carries no download mark. On a Mac, Gatekeeper may say it "cannot check" the download;
+  INSTALL.md has the two ways to allow it. We have not yet tested the download on a PC with Smart App Control switched on,
+  or on a Mac. npm (`npx monomem setup`, Node 22.16 or newer) still works as before.
+- **`monomem update`.** It downloads the newest release for your computer, checks its SHA-256 against the release's
+  `SHA256SUMS`, swaps it into the same folder (open apps keep working), upgrades the database and restarts the background
+  service if you set one up. It runs only when you type it; nothing updates in the background. `monomem update --check`
+  only asks. An npm install is told the npm command instead. Setup run from the download offers to move apps that still
+  use an npm copy over to the download (asked, with undo), and `monomem check` warns while an app still runs the npm copy.
+- **A redesigned dashboard.** Four tabs (Notes, Review, Held, Activity) and a Settings sheet, one colour scheme and type
+  scale, plain labels instead of internal words, one main button per view, red only for real danger, visible field labels
+  and readable placeholders, dark and light themes, and 44 px touch targets on phones. Each note has a "..." menu,
+  archiving has Undo, and keyboard shortcuts cover the common steps (`/` search, `n` new note, `u` undo, `Ctrl+K` command
+  list, `?` help).
+- **Welcome screen on first run:** connect the apps it found, bring in memories from other tools (it asks before each
+  one), try a first "Save to Monomem: ..." and see it arrive, then choose which automatic behaviours stay on.
+- **One "Needs you" count:** held writes, unconfirmed notes from outside, facts two writers disagree on, a failed backup, a
+  failed device sync, and apps installed later that you could connect or need repair. It shows as the dashboard badge
+  (tab, page title and app icon) and counts only, never note text.
+- **Installable dashboard.** The dashboard has a web app manifest and icons, so your browser can install it as an app
+  with its own window.
+- **New tool and command names, and a much smaller tool list.** The 37 MCP tools of 1.5 are now 16 `memory_*` tools, and
+  7 of them are shown by default (`memory_save`, `memory_search`, `memory_read`, `memory_list`, `memory_archive`,
+  `memory_replace`, `memory_catch_up`). Measured over a local stdio connection, the default 7 cost 6,160 characters of
+  tool descriptions (about 1,540 tokens; 1.5's 9 default tools were 21,114). `MONOMEM_TOOLS=all` over stdio is 13 tools,
+  9,150 characters; with an admin app key over HTTP (or `MONOMEM_STDIO_ADMIN_TOOLS=1`) all 16 tools are 11,792 characters
+  (1.5's 37 tools were 64,501). A test pins these numbers. The short `monomem help` lists about 30 commands, with new
+  names: `check` (was `health`), `check --setup` (was `doctor`), `check --attacks` (was `drill`), `review held` (was
+  `quarantine`), `review duplicates`, `review conflicts`, `review code`, `activity` (was `changes`), `tidy <job>` (was
+  `consolidate`, `rebuild-edges`, `reindex`, `decay`, `scrub`), `keys` (was `token`), `settings` (was `config`), `replace`
+  (was `supersede`). `monomem help --all` lists everything. See Upgrading for how the old names behave.
+- **Automatic daily backups.** While the server runs, it makes one backup a day in `<data folder>/backups` and keeps the 7
+  newest days plus one from each of the 4 weeks before them. The copy runs on a worker thread, so serving barely pauses
+  (a 10,000-note store of 23.7 MB: 324-351 ms before, 19-29 ms after; a 64 MB store: 3.0 s before, 8 ms after). The encryption key is never copied into them. `monomem backup restore
+  <folder>` puts one back (a dry run until you add `--yes`; it copies the current database aside first). Turn them off
+  in Settings or with `MONOMEM_AUTO_BACKUP=off`. A note you delete stays in these backups for up to 5 weeks.
+  `monomem check` no longer lowers the grade just because no backup was made, and it warns when a backup or its clean-up
+  failed.
+- **Use Monomem on your other computers.** `monomem sync setup <shared folder | private git address>` sets up sync between
+  your own computers with no server and no account; every file it puts there is sealed (encrypted). `monomem sync setup
+  --auto on` syncs every 30 minutes while the server runs (off by default). Notes that came from another computer say
+  which one (`from_computer`), at session start and on MCP reads. Settings in the dashboard explains it and can run the setup. docs/file-sync.md lists what never
+  syncs and how conflicts are handled.
+- **Faster hooks.** The prompt hook no longer loads the MCP library. Measured as a whole process (start to exit, as Claude
+  Code runs a hook) on a 10,000-note store on one Windows PC, p50 on quiet runs: the prompt hook takes about 130-141 ms
+  (1.5.0: 393 ms, 531 ms on a noisier run) and session start about 208-252 ms (1.5.0: 526-610 ms). Numbers on that PC
+  moved by about 30 % between rounds; each comparison ran back to back. `monomem bench --scale` now times the prompt hook
+  as a whole process and fails above 250 ms.
+
+### Added
+
+- **What a note touched, and rollback by note.** `monomem why <id> --touched` (and the dashboard's note menu, "What did
+  this touch?") lists what a note may have affected, kept in two groups: **proven** (apps that were handed it, session
+  starts that showed it, notes and tasks saved with `derived_from` naming it, up to 5 steps) and **likely** (notes written
+  by an app after it read the note, within the outside-content window; tasks such an app claimed). Monomem now records
+  which note ids each logged read handed out, to answer this. `monomem rollback --note <id>` undoes the note and what was
+  built on it: it shows the plan first, you confirm once, and it applies all of it or none. Admin tools; for agents with an
+  admin key, `memory_usage` (action `why` with `touched: true`) and `memory_rollback` (`note`), neither shown by default.
+  See docs/what-a-note-touched.md.
+- **Rollback by writer undoes everything that writer did.** Besides its notes, `monomem rollback --writer` now also undoes
+  the writer's replacements, its flags and its task claims (including claims whose lease is still running), pages through
+  all of them (no 500 cap), and keeps each restored note's original author. A rollback run with a key never clears a flag
+  a person raised at this computer.
+- **Overwriting another writer's note is never silent.** When one writer changes a note another writer wrote, the reply
+  carries an overwrite notice, and the writer whose text was replaced is told in its catch-up and at its next session start
+  (and by the prompt step, when that is on). A change made on an out-of-date copy gets an error that names who changed the
+  note, how, the current version and a short diff. REST `PUT /notes/:id` now answers the same way as MCP.
+- **Echo guard.** A new note that closely restates a note its writer was just shown is labelled `[echo of #N]`, keeps the
+  original's unconfirmed status, and does not count as a second source. It is a label only; nothing is refused. Measured on
+  50 hand-written pairs (reported half): precision 1.00 (5 of 5), recall 0.42 (5 of 12). It misses most reworded
+  restatements; docs/trust.md has the details.
+- **New writers are on probation.** A writer Monomem has not seen before (a new app key name, or a local app name that
+  setup did not connect) has its notes shown at once with a `[new writer]` label, but its confirms of other writers' notes do not count and
+  `monomem facts` does not count it as agreeing, until it has 5 notes at least 24 hours old that nobody replaced, archived
+  or flagged, or a person runs `monomem trust confirm-writer <name>`. An admin key's confirm still counts. Only notes the
+  writer created count, not notes it edited. Apps you connected with `monomem setup` or `monomem connect` are not put on
+  probation, and upgrading puts no existing writer on probation.
+  `monomem settings set probation-notes 0` turns it off.
+- **Observed evidence.** `memory_save` takes an optional `evidence` list (a test, a file, a command, a URL or a short
+  output the agent observed). Reads label the note `[observed: ...; cited by the writer, not checked]`, or
+  `[inferred: ...]` when the agent sends an empty list. Monomem does not check the evidence; the label records what the
+  writer says it saw. `monomem settings set facts-need-evidence on` makes an agent's confirm of a fact note without
+  evidence not count.
+- **Claim checks and hashed line citations.** `memory_save` takes optional `claims`: a file holds an exact text, a JSON
+  file lists a dependency, a file exists, or a line range (stored as a SHA-256 hash of those lines). Each claim must hold
+  when the note is written. Claims are checked only against files git tracks, and are refused from connections with no
+  folder of their own (HTTP, REST, OAuth); a refused claim does not say which part failed. When one stops holding, reads and session start label the note "no longer true in code" or
+  "cited code changed"; the note is not hidden or changed. Monomem reads the files only; it never runs a command. See
+  docs/claim-checks.md.
+- **Branch memory and the commit trail.** Notes a local agent saves inside a git repository record the branch. Session
+  start ranks notes from the branch you are on first; notes from another open branch show only when they match your
+  work, labelled with their branch, and count as ordinary notes again once that branch is merged or deleted. `monomem why
+  <id> --commits` lists the commits made in sessions that used a note. `monomem commit-trail on` (per repository, asks
+  first) adds a `Monomem-Notes: #12 #40` line to commit messages. See docs/commits-and-branches.md.
+- **Action guard (opt-in, Claude Code only).** `monomem setup --action-guard` adds a hook that, once a session has read
+  outside content (a web page, another MCP server's answer), asks you before a push, a publish, a web request when any
+  address on a curl or wget line is not on your known-hosts list, reading key and credential files (also a curl `@file`
+  upload and a Grep whose glob picks such a file), or writing `AGENTS.md`, `CLAUDE.md`, Claude Code's settings,
+  `.mcp.json`, `.cursor/hooks.json`, `~/.claude.json`, a GitHub workflow or `known-hosts.json` (also by `cp` or `mv`).
+  The guard can only ask when the automatic memory hooks are installed, so when they are missing `setup --action-guard`
+  adds them in the same change (it shows the change and asks first); if you say no, nothing is changed. `monomem check`
+  shows whether the guard is installed with the hooks it needs, and warns for 7 days after the guard could not check an
+  action and let it through. It matches command text, so it is a speed bump, not a sandbox: docs/action-guard.md lists
+  what it misses.
+- **Known hosts.** One list of web hosts the action guard does not ask about (default: github.com, registry.npmjs.org,
+  localhost), shown with `monomem settings known-hosts`. Adding a host needs a person at a terminal.
+- **AGENTS.md / CLAUDE.md change notice.** With the automatic memory hooks on, session start adds one line when either
+  file in the session folder changed since the last session there, and says whether the Monomem block in it changed. It
+  names the file, never prints its text and never edits it.
+- **Claude Code memory bridge.** `monomem import --claude` now reads only the files that changed since the last import,
+  says when a file it imported from is gone (and deletes nothing), shows one line in `monomem check`, and is offered by
+  setup (it asks). Optional, off by default: while the server runs, it can look every 10 minutes for files Claude Code
+  changed (Settings, or `MONOMEM_CLAUDE_REFRESH=on`).
+- **Imports from Codex and Notion:** `monomem import --from codex` (Codex's local memories) and `monomem import --from
+  notion --path <export.zip>`. Like every import from another tool, these notes are unconfirmed (from outside) until a person confirms them.
+- **17 apps in setup.** Setup and `monomem connect` now also handle Windsurf, Devin, Kiro, Cline CLI, GitHub Copilot CLI,
+  Antigravity, Qwen Code, OpenCode and Kilo Code, besides Claude Code, Claude Desktop, Cursor, Codex CLI, Gemini CLI, Muse,
+  VS Code and Zed. docs/apps.md lists each file and the apps left out, with the reason.
+- **Apps installed later.** While the server runs, it looks once a day (reading files only) for supported apps installed
+  after setup and shows them in Needs you and Settings with **Connect** and **Not this one**; an entry that would no longer
+  start shows **Repair**. Connect and Repair go through setup, with its backup and undo.
+- **Cursor session-start hook.** When you say yes to the start-of-session hook, setup adds a `sessionStart` hook to
+  `~/.cursor/hooks.json`, so Cursor gets your notes at the start of a session too.
+- **`monomem tasks`** lists the task board, shows one task, marks one done and writes a handoff.
+- **`monomem stop`** ends the background server that `monomem open` (or the Start menu entry) started.
+- **Install it with your agent / Fix it with your agent.** docs/install-with-your-agent.md is one sentence to paste to your
+  agent (checksum, attestation, `setup --dry-run`, ask before changing anything). Every warning from `monomem check` ends
+  with a sentence you can paste to your agent, and `memory_usage` has a read-only health action.
+- **Connect claude.ai or ChatGPT over the internet (OAuth), off by default.** Monomem can answer the OAuth sign-in that
+  claude.ai and ChatGPT custom connectors use. Every app needs a pairing code that `monomem oauth pair` prints in your
+  terminal; it gets read or read-and-write access only, never private notes; its notes are marked as from outside; its key
+  lasts one hour and works only on the MCP port; and redirects go only to claude.ai, chatgpt.com or this computer unless
+  you allow another site at a terminal. You need your own HTTPS address that reaches your computer. This feature has had
+  one dedicated security review (its findings are fixed) and no outside review: treat it as a preview. See docs/oauth.md.
+- **Passage pooling for keyword search (opt-in, off by default).** `monomem settings set passage-pooling on` also ranks
+  long notes by their best passage. It stays off because the measurement did not justify it: on the held-out half,
+  LongMemEval-S strict Rall@5 went down 1.2 points and LoCoMo-10 R@5 went up 0.4-0.8; the database grows about 37 %; and a
+  keyword search with common words is about 12 times slower at 10,000 notes. Not available on an encrypted store.
+  docs/BENCHMARK.md has the full tables.
+- **Security scorecard.** docs/security-scorecard.md maps Monomem against OWASP ASI06 (Memory & Context Poisoning)
+  guideline by guideline (8 partly, 1 not at all, none fully) and replays attack text other researchers published
+  (InjecAgent, AgentDojo, MINJA, PoisonedRAG) with every miss listed. Run them yourself with `monomem check --attacks
+  --set <name>`, and `--half a|b` for one fixed half of a set. This is our own check, not an audit by OWASP or anyone else.
+- **New write-check labels.** Two new patterns hold a write for a person: text addressed to the AI reader ("message to
+  the AI") and a password, code or key paired with sending it to an outside address ("credential exfiltration"). Three
+  only warn, because ordinary notes can look the same: "sends data to an outside address", "money transfer" and
+  "security setting turned off". The patterns were written against half a of each outside set; on the held-out half b,
+  InjecAgent went from 0 to 16 of 30 recognised, AgentDojo in its wrapper from 0 to 15 of 15 held, AgentDojo goals without
+  the wrapper from 0 to 7 of 15, and the false-fact sets (MINJA, PoisonedRAG) stay at 0: patterns do not address false
+  facts. Two caveats: AgentDojo's wrapper is one fixed text, so catching it says nothing about a reworded wrapper; and the
+  full InjecAgent and AgentDojo lists were seen before the split, so half b was held out from tuning, not unseen. The
+  false-positive counts did not rise on any of the 4 test corpora.
+- **Prompt step and subagent memory (both off by default).** `MONOMEM_PROMPT_RECALL=on` (or the Settings switch) gives each
+  message up to 3 matching note titles, notices about notes this session was shown that were since replaced or flagged,
+  and known fixes for a command that just failed, with a cost line. `MONOMEM_SUBAGENT_MEMORY=on` gives a Claude Code
+  subagent up to 10 index lines at its start and saves one short note of what it found.
+- **Relative dates in searches:** "two weeks ago", "a month ago", "last Saturday", "past month".
+- **Setup offers meaning search** (`MONOMEM_EMBEDDINGS=auto`) only when a local Ollama already has `nomic-embed-text`
+  (`--no-embeddings` skips the question). `monomem connect` never adds it.
+- **`monomem review duplicates`** also lists empty notes and notes restated but never retired, and groups copies of the same
+  note together instead of listing every pair. `monomem check` shows memory hygiene.
+
+### Changed
+
+- **Session start keeps the project's settled decisions** even when one writer saved thousands of other notes: a short
+  "Project facts" line, notes with facts ranked as decisions, and a cap on lines per writer. Notes from the project's git
+  repository rank first (Monomem records the folder an app's MCP connection names).
+- **Session start says "run `monomem setup`"** when the database is newer than the hook, instead of coming back empty
+  without a word. (Hooks from 1.5.x cannot do this; see Upgrading.)
+- **Quieter `monomem check`** at a terminal: warnings and the verdict only (`--verbose` shows everything). The grade line
+  counts each outcome, for example "24 of 26 known attacks did not reach an agent as trusted content
+  (8 held, 12 blocked, 4 stored with a warning)". Errors use one form: `Error: ...` then `Fix: ...`. The first-run key line
+  prints after the output.
+- **One word per concept** in CLI output, errors, the dashboard and hints (held, replace, app key, duplicate, from
+  outside), checked by a test.
+- **MCP replies are compact by default** (`memory_search`, `memory_list`, `memory_catch_up`, `memory_save`), and the server
+  sends a few lines of instructions once per session (when to save, when to replace, that notes from outside are data).
+- **The main key is never paused by the flood guard**, so the dashboard keeps working after many writes in an hour.
+  When only one of its ports is busy, `monomem start` keeps the other one running and says what failed.
+- **`setup` wires subagent memory only when you chose `MONOMEM_SUBAGENT_MEMORY=on`.**
+
+### Security
+
+- **Held tasks need a person.** Approving, claiming or running a command task that is built from unconfirmed outside
+  content, built on a distrusted writer's note, or flagged is refused until a person confirms it; an admin key's confirm
+  does not count. Revoking always works, and a mark added after approval stops the run.
+  `monomem check --attacks` checks that an admin key cannot approve a command task built from an outside page.
+- **A hard delete takes the note's text out of the sync folder.** The marker file left for other computers keeps no body.
+- **Overwrite notices never show the title of a note kept out of session start** (unconfirmed or flagged).
+- **`monomem update` refuses a release tag that is not exactly a version.**
+- **Notes brought in by `import --claude` are unconfirmed (from outside)** until a person confirms them, like every other import from another
+  tool, and the prompt step never shows notes brought in from Claude Code's own memory files.
+- **An MCP app that names several folders** keeps the folder it was started in for outside-content marks; adopting one of
+  its folders is written to the audit log.
+- **OAuth review fixes** (before the feature was merged): redirects only to claude.ai, chatgpt.com or this computer unless
+  you allow another at a terminal; `monomem oauth off` ends every grant; a consent request ends after 5 wrong pairing
+  codes; OAuth keys are refused on the REST port; a replayed authorization code ends its grant.
+
+### Fixed
+
+- **On a busy computer the project folder an app reports is no longer lost.** Monomem waited only 2 seconds for an app to
+  say which folder it has open (MCP roots); a slow answer kept the launch folder for the whole session. It now waits 30 s.
+- **A write no longer fails with "database is locked"** while other writers keep committing.
+- **An MCP tool with several actions, called without `action`,** returns a clear error (and does nothing) when the action
+  is required or the call carries arguments its first action does not use, instead of silently running that first action.
+- **Failures that used to be silent are visible:** a failing device sync, a failed backup or backup clean-up, a
+  session-start hook that failed, `import --dir` problems, and update undo steps that failed are reported (`monomem
+  check`, Needs you, session start, or the command's own output).
+- **Device sync:** a forget or delete no longer bounces between computers forever; it reaches the other computer as an
+  archive.
+- **The card-number check** no longer flags decimals, version numbers and ids (it needs an issuer prefix, the right length
+  and a valid check digit, grouped or after a card word).
+- **`state_write` with an empty body** but the text in `content`, `text` or `note` is refused instead of saving an empty note.
+- **`monomem update`** skips leftover folders it cannot remove, and `--check` keeps the rollback copy. The dashboard's
+  Update button runs the update outside the server it restarts.
+- **The setup proof step** says "Save to Monomem: ..." (Claude Code's own memory caught the old "Remember: ..." wording).
+- **Session start** shows the restated label on an older note its writer restated. It names notes waiting for the user in
+  one "Needs you" line with one command (`monomem review` for held writes and unconfirmed notes), not twice.
+- **`monomem setup --undo --dry-run`** only shows what it would undo. Before, it undid the last setup (this dates back to
+  1.x). `monomem rollback --dry-run` is accepted too and only shows the plan.
+- **`memory_save` with `evidence`** no longer says the argument was ignored. `claims` and `derived_from` are now listed
+  in its schema, so agents can see them.
+- **`activity --writes`** names the local app that wrote (for example `claude-code`), not "you".
+- **When git does not answer** (a timeout, or git is missing), `why --commits`, `activity --commits` and session start's
+  branch scope say so instead of reporting no commits.
+- **Small fixes:** the Linux service file escapes `%`, the Windows task runs at normal priority, and a PATH undo on Windows
+  puts the value back byte for byte.
+
+### Upgrading
+
+- **Run `monomem setup` again after upgrading.** Apps and hooks set up through `npx` name the exact version
+  (`npx -y monomem@1.5.0 ...`) and keep starting that copy, so your apps and hooks run the 1.5.0 code without the changes
+  above. Setup again points them at 1.6.0 (it shows the change and asks; `setup --undo` reverses it).
+- **Old names.** Every 1.5 MCP tool name still answers for one release, with its old arguments and result shape, and the
+  first call to each in a connection adds one line naming the new tool. `MONOMEM_TOOLS=legacy-1.5` shows the 1.5 tool list
+  instead. Old command names keep working; typed at a terminal, each prints one line naming its new form, at most once per
+  12 hours; piped output is unchanged.
+- **Claude Code permission lists.** If you allowed Monomem's tools by name (`mcp__monomem__state_write` and the other
+  `mcp__monomem__state_*` or `catch_up` names), Claude Code asks again for the new names (`mcp__monomem__memory_save`,
+  `mcp__monomem__memory_search`, ...). Add them, or `mcp__monomem` for all of Monomem's tools.
+- **`monomem connect windsurf` now writes Windsurf's settings file** (`~/.codeium/windsurf/mcp_config.json`, with a backup
+  and undo). In 1.5 it only printed the entry for you to paste.
+- **Notes imported from other tools are now unconfirmed (from outside)** until a person confirms them (`monomem review`,
+  `monomem confirm <id>`): `import --claude` and every `import --from ...`. They stay out of session start until then;
+  reading them does not confirm them. They are saved notes, not held writes (`monomem review held` is for writes that
+  were not saved).
+- **`monomem` with no command prints the help.** In 1.5 it started the server. Use `monomem start`, or `monomem open` for
+  the dashboard.
+- **Going back to 1.5.0** needs no restore: the schema is still v22. 1.6.0 adds a few side tables that 1.5.0 ignores.
+  **If you switched OAuth on, still run `monomem oauth off` before you go back.** 1.5.0 does not know an OAuth key's
+  one-hour expiry or its MCP-only limit. Each OAuth key carries a field that 1.5 refuses, so 1.5 simply does not load
+  it; going back does not turn it into a permanent REST write key.
+  Then install the older version and run `monomem setup` again. docs/upgrading.md lists what else 1.5.0 does not keep up
+  to date while it runs.
+- **Syncing computers:** while one computer still runs 1.5.x, each sync makes one extra commit or file write per archived
+  note until both are upgraded. Nothing in your notes is lost. docs/upgrading.md has the details.
+
+### Not in 1.6.0
+
+Planned or considered, and consciously left for later:
+
+- **Research, not started:** the held-back-note experiment (holding some notes back to measure whether memory helps) and
+  direct sync between computers without a shared folder or git (P2P). Both need a design review first.
+- **Dashboard checks not yet run:** a Lighthouse installability run and a screen-reader pass. Not built yet: an unseen-notes
+  filter (notes from other agents you have not looked at yet), and a live "start with my computer" state in Settings.
+- **Imports and connectors:** no Supermemory importer. OAuth offers registration only, not Client ID Metadata Documents
+  (CIMD), because CIMD makes Monomem fetch a URL during sign-in (docs/oauth.md). `mcp_tool` hooks were checked and not used
+  yet: their only gain is speed (docs/apps.md).
+- **Code structure, after release:** splitting `rec()` (it decodes rows and also adds labels) and one shared
+  side-table helper (each new side table checks for itself and keeps its own cache today).
+- **Field tests:** the download on a PC with Windows Smart App Control switched on, on a Mac, and `monomem update` against
+  a real published release.
+
 ## [1.5.0] - 2026-11-16
 
 This release includes 1.4.0 below, which was never published on its own: the release before it is 1.3.5, and

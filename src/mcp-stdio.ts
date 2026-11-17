@@ -7,6 +7,7 @@
 // visible to the API and vice versa.
 import "./quiet-sqlite.js"; // first: hide the node:sqlite ExperimentalWarning
 import "./legacy-env.js"; // second: read the old CLAUDE_BRIDGE_* variables as MONOMEM_*
+import { fileURLToPath } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { Store } from "./store.js";
 import { createMcpServer, stdioSweep } from "./mcp-server-core.js";
@@ -49,13 +50,37 @@ if (stdioCeiling && !stdioMax) {
   console.error(`[monomem] MONOMEM_STDIO_MAX_SENSITIVITY must be ${SENSITIVITY_HELP} (got ${JSON.stringify(stdioCeiling)}); not starting.`);
   process.exit(1);
 }
-const server = createMcpServer(store, "admin", nsOpts ?? undefined, stdioMax ? { maxSensitivity: stdioMax, local: true, cwd: process.cwd() } : { local: true, cwd: process.cwd() });
+// The connection's folder is read per call, so adopting the client's workspace root (below) applies to later writes.
+const conn: { local: true; cwd: string; maxSensitivity?: NonNullable<typeof stdioMax> } = stdioMax ? { maxSensitivity: stdioMax, local: true, cwd: process.cwd() } : { local: true, cwd: process.cwd() };
+const server = createMcpServer(store, "admin", nsOpts ?? undefined, conn);
 const transport = new StdioServerTransport();
+/** How long to wait for the app to say which folder it has open (MCP roots) before keeping the launch folder. */
+const ROOTS_WAIT_MS = 30_000;
 // The client's own name from the initialize handshake goes to the audit log, labelled as a claim: any program can
 // send any clientInfo. It is never used for written_by or for any access decision.
 server.server.oninitialized = (): void => {
   const c = server.server.getClientVersion();
   audit({ op: "mcp.connect", label: stdio.writer, kind: "connection", detail: `claimed clientInfo: ${printable(c?.name, 60)} ${printable(c?.version, 30)}` });
+  // C18: an app that launches this server outside the project (Cursor's global config, Claude Desktop, Codex) can still say
+  // which workspace it has open (MCP roots). A single file:// root becomes the folder later writes record (notes.writer_cwd),
+  // so session start can rank this project's notes first. No roots, an error or a slow answer: the launch folder stays.
+  // Trust: this folder also matches hook-session taint (live and late, retroTaint) and the echo guard. Like the launch folder
+  // it is the app's own claim (the app is the party that chose the launch folder too; an agent cannot set either). With
+  // SEVERAL roots the agent may work in any of them, so picking one could miss a tainted session in another: the launch
+  // folder stays (a home or app folder matches every session or none; none = the worst case, every open window applies).
+  // Adopting a root is audited, so a person can see the claim.
+  if (!server.server.getClientCapabilities()?.roots) return;
+  // Waiting costs nothing (writes before the answer keep the launch folder), so the wait is long: a 2 s limit lost the
+  // project folder for the whole session on a busy machine (seen on a loaded CI runner, every write ~2 s).
+  server.server
+    .listRoots(undefined, { timeout: ROOTS_WAIT_MS })
+    .then((r) => {
+      const files = r.roots.filter((x) => x.uri.startsWith("file:"));
+      if (files.length !== 1) return;
+      conn.cwd = fileURLToPath(files[0].uri);
+      audit({ op: "mcp.root", label: stdio.writer, kind: "connection", detail: `writer folder from the app's MCP root: ${printable(conn.cwd, 200)}` });
+    })
+    .catch(() => {});
 };
 
 await server.connect(transport);

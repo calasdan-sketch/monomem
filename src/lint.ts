@@ -38,6 +38,7 @@
 import { isIPv4, isIPv6 } from "node:net";
 import { HIGH_ENTROPY_LABEL, normalizeForScan, scanForSecrets } from "./security.js";
 import { configuredTokenValues, sha256Hex } from "./config.js";
+import { scanOutboundDirective, scanOutboundInjection } from "./lint-outbound.js";
 
 export type LintCategory = "secret" | "injection" | "entropy" | "pii" | "directive";
 export type LintAction = "block" | "quarantine" | "warn";
@@ -221,7 +222,7 @@ const INJECTION_PATTERNS: Array<[string, RegExp]> = [
   ],
   [
     "tool-call coercion",
-    /\b(?:call|invoke|run|execute|use)\s+(?:the\s+)?[`'"]?(?:state_delete|state_write|memory_consolidate|memory_quarantine|memory_rebuild_edges)[`'"]?(?:\s+tool)?\s+(?:on\s+(?:every|all)|for\s+(?:every|all)|immediately|now\b|right\s+away)/i,
+    /\b(?:call|invoke|run|execute|use)\s+(?:the\s+)?[`'"]?(?:state_delete|state_write|memory_consolidate|memory_quarantine|memory_rebuild_edges|memory_save|memory_archive|memory_tidy|memory_held|memory_tasks|memory_replace|memory_rollback|memory_history)[`'"]?(?:\s+tool)?\s+(?:on\s+(?:every|all)|for\s+(?:every|all)|immediately|now\b|right\s+away)/i,
   ],
   [
     // A markdown image loads by itself when rendered, so a query string on a
@@ -288,7 +289,7 @@ export function scanForInjection(text: string | undefined): string | null {
     if (re.test(label === "system-prompt marker" ? prose : t)) return label;
     if (unleeted !== prose && label !== "system-prompt marker" && re.test(unleeted)) return label;
   }
-  return null;
+  return scanOutboundInjection(t);
 }
 
 // ---- PII (warn by default) ------------------------------------------------
@@ -372,7 +373,7 @@ export function scanForDirective(text: string | undefined): string | null {
   if (!text) return null;
   const t = normalizeForScan(text);
   for (const [label, re] of DIRECTIVE_PATTERNS) if (re.test(t)) return label;
-  return null;
+  return scanOutboundDirective(t);
 }
 
 export const OWN_TOKEN_LABEL = "Monomem access token";

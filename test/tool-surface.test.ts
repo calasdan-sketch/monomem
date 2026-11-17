@@ -54,9 +54,9 @@ describe("which tools are chosen", () => {
   });
 
   test("a comma list is added to the core set, never replaces it", () => {
-    const got = enabledToolNames({ MONOMEM_TOOLS: "memory_stats,memory_timeline" })!;
-    assert.ok(got.has("memory_stats"));
-    assert.ok(got.has("memory_timeline"));
+    const got = enabledToolNames({ MONOMEM_TOOLS: "memory_usage,memory_sessions" })!;
+    assert.ok(got.has("memory_usage"));
+    assert.ok(got.has("memory_sessions"));
     for (const core of DEFAULT_TOOLS) {
       assert.ok(got.has(core), `${core} must survive: a typo must not leave a server that cannot read or write`);
     }
@@ -64,7 +64,7 @@ describe("which tools are chosen", () => {
 
   test("a nonsense value still leaves a working server", () => {
     const got = enabledToolNames({ MONOMEM_TOOLS: "   " })!;
-    assert.ok(got.has("state_write") && got.has("state_search"));
+    assert.ok(got.has("memory_save") && got.has("memory_search"));
   });
 });
 
@@ -82,7 +82,7 @@ describe("the default tool surface", () => {
     const store = new Store(":memory:");
     try {
       const names = await toolNames(store);
-      for (const n of ["task_put", "task_get", "task_claim", "task_approve", "task_list", "runner_status"]) {
+      for (const n of ["memory_tasks", "task_put", "task_get", "task_claim", "task_approve", "task_list", "runner_status"]) {
         assert.equal(names.includes(n), false, `${n} queues or reports shell commands and must not be in a memory install's default surface`);
       }
     } finally {
@@ -94,7 +94,7 @@ describe("the default tool surface", () => {
     const store = new Store(":memory:");
     try {
       const names = await toolNames(store);
-      for (const n of ["state_write", "state_search", "state_read", "state_delete", "catch_up"]) {
+      for (const n of ["memory_save", "memory_search", "memory_read", "memory_archive", "memory_catch_up"]) {
         assert.ok(names.includes(n), `${n} is needed for memory to function`);
       }
     } finally {
@@ -106,8 +106,7 @@ describe("the default tool surface", () => {
     const store = new Store(":memory:");
     try {
       const names = await toolNames(store);
-      assert.ok(names.includes("memory_supersede_preview"));
-      assert.ok(names.includes("memory_supersede_confirm"));
+      assert.ok(names.includes("memory_replace"), "preview, confirm and undo live in one tool");
     } finally {
       store.close();
     }
@@ -124,7 +123,7 @@ describe("the full surface is still reachable", () => {
     try {
       const names = await toolNames(store, "all");
       assert.ok(names.length > DEFAULT_TOOLS.length, "all means more than core");
-      for (const n of ["memory_stats", "memory_history", "trust_policy", "memory_consolidate"]) {
+      for (const n of ["memory_usage", "memory_history", "memory_trust", "memory_tidy"]) {
         assert.ok(names.includes(n), `${n} must still be available to an operator`);
       }
     } finally {

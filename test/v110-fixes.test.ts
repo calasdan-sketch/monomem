@@ -14,7 +14,7 @@
 // 10  rebuilds are single-flight and never re-insert a changed note's edges.
 // 11  REST POST /rebuild-edges has the confirm gate + single-flight.
 
-import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
+import { slow } from "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -241,32 +241,8 @@ describe("2: edge scoring uses a cached inverted index", () => {
     }
   });
 
-  // 1.1.0-rc measured ~70-110ms per write here (whole-namespace re-select +
-  // re-tokenize); the indexed path is a few ms.
-  test("create/update on a 2,000-note namespace stay under 25ms", () => {
-    const s = new Store(":memory:");
-    const gen = textGen(3, 3000);
-    try {
-      for (let i = 0; i < 2000; i++) s.create({ title: gen(6), body: gen(60) }, { skipEdges: true });
-      s.create({ title: gen(6), body: gen(60) }); // first write builds the index
-      const median = (fn: () => void): number => {
-        const ts: number[] = [];
-        for (let i = 0; i < 7; i++) {
-          const t0 = performance.now();
-          fn();
-          ts.push(performance.now() - t0);
-        }
-        return ts.sort((x, y) => x - y)[3];
-      };
-      const createMs = median(() => s.create({ title: gen(6), body: gen(60) }));
-      let id = 10;
-      const updateMs = median(() => s.update(id++, { body: gen(60) }));
-      assert.ok(createMs < 25, `create median ${createMs.toFixed(1)}ms`);
-      assert.ok(updateMs < 25, `update median ${updateMs.toFixed(1)}ms`);
-    } finally {
-      s.close();
-    }
-  });
+  // "create/update on a 2,000-note namespace stay under 25ms" is a speed gate, not a correctness check: it lives in
+  // bench/write-cost.mjs, which CI runs on the Linux offline job (a loaded Windows/macOS runner measured the runner).
 });
 
 describe("3/4: importNotes", () => {
@@ -287,7 +263,7 @@ describe("3/4: importNotes", () => {
       const [note] = await s.importNotes([{ title, body }]);
       const ms = performance.now() - t0;
       assert.equal(rebuilds, 0, "no full rebuild");
-      assert.ok(ms < 1000, `import took ${ms.toFixed(0)}ms`);
+      assert.ok(ms < slow(1000), `import took ${ms.toFixed(0)}ms`);
       const expected = s.planEdges(
         "default",
         title,
@@ -444,7 +420,7 @@ describe("7: doctor flags a store with notes but no edges", () => {
         stdio: ["ignore", "pipe", "pipe"],
       }) as unknown as string;
     try {
-      assert.match(doctor(), /no similarity edges[\s\S]*rebuild-edges/);
+      assert.match(doctor(), /no similarity edges[\s\S]*tidy edges/);
       await s.rebuildEdgesCooperative();
       assert.doesNotMatch(doctor(), /no similarity edges/);
     } finally {

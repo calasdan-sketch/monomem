@@ -12,7 +12,9 @@ import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { servicePlan, TASK_NAME } from "./service.js";
-import { dataHome, detectClients, hookHosts, readHistory, saveHistory, stamp, undoSession, type HistorySession, type SetupEnv, type SetupIO } from "./setup.js";
+import { serviceLaunch } from "./self.js";
+import { installDir } from "./install.js";
+import { dataHome, detectClients, hookHosts, readHistory, saveHistory, stamp, undoSession, type HistorySession, type SetupEnv, type SetupIO, selfOf } from "./setup.js";
 
 export interface UninstallOptions {
   dryRun: boolean;
@@ -78,7 +80,7 @@ export function dirBytes(dir: string, deadline: number = Date.now() + DIR_BYTES_
  * also holds anything else, so a MONOMEM_HOME pointed at a busy folder never loses files that are not Monomem's.
  */
 const OWN_ENTRY =
-  /^(?:state\.db.*|demo\.db.*|\.token.*|\.key.*|\.attest-key.*|\.sync-key.*|\.last-backup|tokens\.json.*|spaces\.json.*|setup-history\.json.*|setup-hooks-declined|capture\.json.*|capture-spool\.jsonl.*|claude-import-held\.json.*|runner-allow\.json.*|runner-seen\.json.*|runner\.lock|login-code.*|audit\.log.*|server\.log.*|sync-git-seen-[0-9a-f]+\.json.*|monomem-task\.xml|spool|backups|sync-conflicts|\.sync-work-.*|README\.txt)$/;
+  /^(?:state\.db.*|demo\.db.*|\.token.*|\.key.*|\.attest-key.*|\.sync-key.*|\.last-backup|\.backup-key-warned|backup-status\.json.*|ui-settings\.json.*|tokens\.json.*|spaces\.json.*|setup-history\.json.*|setup-hooks-declined|capture\.json.*|capture-spool\.jsonl.*|claude-import-held\.json.*|runner-allow\.json.*|runner-seen\.json.*|runner\.lock|login-code.*|audit\.log.*|server\.log.*|sync-git-seen-[0-9a-f]+\.json.*|monomem-task\.xml|spool|backups|sync-conflicts|\.sync-work-.*|README\.txt)$/;
 
 /** Entries of `dir` that are not Monomem's (empty when it cannot be read). */
 export function foreignEntries(dir: string): string[] {
@@ -141,7 +143,7 @@ async function finalBackup(dir: string, out: string): Promise<void> {
  * data folder and token, so --purge removes it first.
  */
 function installedService(e: SetupEnv, dir: string, taskExists: () => boolean): string {
-  const path = servicePlan({ platform: e.platform, node: e.execPath, cli: e.cliPath, home: e.home, dataDir: dir, env: e.env }).file.path;
+  const path = servicePlan({ ...serviceLaunch(selfOf(e)), platform: e.platform, home: e.home, dataDir: dir, env: e.env }).file.path;
   if (existsSync(path)) return path;
   // The task XML deleted by hand: the task itself would still start Monomem (and recreate the data folder) every 5 minutes.
   return e.platform === "win32" && taskExists() ? `the scheduled task "${TASK_NAME}"` : "";
@@ -159,7 +161,7 @@ function defaultTaskExists(): boolean {
 
 async function defaultRemoveService(e: SetupEnv, dir: string): Promise<number> {
   const { serviceCmd } = await import("./service.js");
-  return serviceCmd("uninstall", false, { platform: e.platform, node: e.execPath, cli: e.cliPath, home: e.home, dataDir: dir, uid: process.getuid?.(), env: e.env });
+  return serviceCmd("uninstall", false, { ...serviceLaunch(selfOf(e)), platform: e.platform, home: e.home, dataDir: dir, uid: process.getuid?.(), env: e.env });
 }
 
 export async function runUninstall(e: SetupEnv, io: SetupIO, opts: UninstallOptions): Promise<number> {
@@ -173,7 +175,10 @@ export async function runUninstall(e: SetupEnv, io: SetupIO, opts: UninstallOpti
   io.out("Monomem uninstall\n");
   io.out("What I will do:");
   let n = 1;
-  for (const s of sessions) for (const c of [...s.changes].reverse()) io.out(`  ${n++}. ${c.label}: ${c.file}: ${describe(c)}`);
+  for (const s of sessions) {
+    if (s.path) io.out(`  ${n++}. ${s.path.where}: take out ${s.path.dir} (setup added it)`);
+    for (const c of [...s.changes].reverse()) io.out(`  ${n++}. ${c.label}: ${c.file}: ${describe(c)}`);
+  }
   if (!sessions.length) io.out("  (setup has not changed any app's configuration on this computer, or it was already undone)");
   const refusal = opts.purge ? purgeRefusal(dir, e.home) : "";
   if (refusal) {
@@ -278,5 +283,8 @@ The background service could not be removed, so I stopped and did NOT delete you
     }
   }
   io.out("\nDone. Restart the apps that had Monomem so they forget it.");
+  // The standalone download's program folder stays: a running program cannot delete its own folder on Windows.
+  const program = installDir(e);
+  if (existsSync(program)) io.out(`The program itself is still in ${program}. To remove it too, close your apps and delete that folder.`);
   return 0;
 }

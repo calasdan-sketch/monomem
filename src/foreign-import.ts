@@ -1,4 +1,4 @@
-// `monomem import --from claude-mem|mem0|basic-memory|mcp-memory`: bring another memory tool's notes into Monomem.
+// `monomem import --from claude-mem|mem0|basic-memory|mcp-memory|codex|notion`: bring another memory tool's notes into Monomem.
 //
 //   * claude-mem   (github.com/thedotmack/claude-mem): its SQLite database, ~/.claude-mem/claude-mem.db by default
 //                  ($CLAUDE_MEM_DATA_DIR/claude-mem.db when set). Opened READ-ONLY. `observations` become rows of kind
@@ -14,11 +14,13 @@
 //                  {"type":"relation","from","to","relationType"}. One entity = one note (observations as a list, its
 //                  relations underneath); the entity name is its id. Its default file sits inside the npx cache (lost
 //                  when that cache is cleaned), so without MEMORY_FILE_PATH or --path the npx caches are searched.
+//   * codex        Codex's local memories (importers/codex.ts).   * notion   a Notion Markdown export (importers/notion.ts).
 //
 // Same rules as `import --claude` (claude-import.ts): local only, a dry run first, anything that looks like a secret is
 // skipped and never shown, every write goes through Store.create (memory linter, quarantine), and the stable id of each item
 // is kept in `source`, so running it again adds only what is new. Everything read is untrusted: claude-mem's rows were written
-// by a model, so they also carry the model-written label (MODEL_WRITTEN_TAG).
+// by a model, so they also carry the model-written label (MODEL_WRITTEN_TAG). Every note is written held (outside: true):
+// it waits, unconfirmed and out of session start, until a person confirms it (r3 security L6).
 
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
@@ -30,8 +32,10 @@ import { lintContent } from "./lint.js";
 import { readClaudeCodeChats, sealedChatNote, type ChatStats } from "./chat-import.js";
 import { LIMITS, printable } from "./security.js";
 import type { SetupEnv, SetupIO } from "./setup.js";
+import { codexHome, readCodexMemories } from "./importers/codex.js";
+import { readNotion } from "./importers/notion.js";
 
-export const FOREIGN_SOURCES = ["claude-mem", "mem0", "basic-memory", "mcp-memory", "claude-code-chats"] as const;
+export const FOREIGN_SOURCES = ["claude-mem", "mem0", "basic-memory", "mcp-memory", "claude-code-chats", "codex", "notion"] as const;
 export type ForeignSource = (typeof FOREIGN_SOURCES)[number];
 
 const MAX_JSON_BYTES = 256 * 1024 * 1024;
@@ -88,6 +92,7 @@ export function defaultPath(from: ForeignSource, e: Pick<SetupEnv, "home" | "env
   if (from === "claude-mem") return join(e.env.CLAUDE_MEM_DATA_DIR || join(e.home, ".claude-mem"), "claude-mem.db");
   if (from === "basic-memory") return join(e.home, "basic-memory");
   if (from === "claude-code-chats") return join(e.env.CLAUDE_CONFIG_DIR || join(e.home, ".claude"), "projects");
+  if (from === "codex") return codexHome(e);
   if (from === "mcp-memory") {
     if (e.env.MEMORY_FILE_PATH) return resolve(e.env.MEMORY_FILE_PATH.replace(/^~(?=$|[\\/])/, e.home));
     const found = findMcpMemoryFiles(e);
@@ -378,7 +383,7 @@ export async function runForeignImport(e: Pick<SetupEnv, "home" | "env" | "cwd">
       );
       return 1;
     }
-    io.err(`Name the mem0 export file: monomem import --from mem0 --path <export.json>`);
+    io.err(from === "notion" ? "Name the Notion export (the .zip, or the folder you unzipped it to): monomem import --from notion --path <export.zip>" : `Name the mem0 export file: monomem import --from mem0 --path <export.json>`);
     return 1;
   }
   if (!existsSync(path)) {
@@ -389,9 +394,10 @@ export async function runForeignImport(e: Pick<SetupEnv, "home" | "env" | "cwd">
   let items: Item[];
   const mcpStats: McpStats = { relations: 0, badLines: 0 };
   const chatStats: ChatStats = { sessions: 0, tooBig: 0, badLines: 0 };
+  const zipStats = { skipped: 0 };
   try {
     items =
-      from === "claude-mem" ? readClaudeMem(path) : from === "mem0" ? readMem0(path) : from === "mcp-memory" ? readMcpMemory(path, mcpStats) : from === "claude-code-chats" ? readClaudeCodeChats(path, chatStats, replyContextIsClean) : readBasicMemory(path);
+      from === "claude-mem" ? readClaudeMem(path) : from === "mem0" ? readMem0(path) : from === "mcp-memory" ? readMcpMemory(path, mcpStats) : from === "claude-code-chats" ? readClaudeCodeChats(path, chatStats, replyContextIsClean) : from === "codex" ? readCodexMemories(path, MAX_FILE_BYTES, zipStats) : from === "notion" ? readNotion(path, MAX_FILE_BYTES, zipStats) : readBasicMemory(path);
   } catch (err) {
     io.err(`Could not read ${path}: ${(err as Error).message}`);
     return 1;
@@ -430,7 +436,9 @@ export async function runForeignImport(e: Pick<SetupEnv, "home" | "env" | "cwd">
     io.out(`\n${t.n} item(s): ${t.c} new, ${t.s} already imported, ${t.x} skipped because they look like a secret.`);
     if (t.x && from === "claude-code-chats") io.out("  These messages contain a secret and were left out (not stored, not shown). The messages around them are kept.");
     else if (t.x) io.out("  Skipped items are not stored and not shown. Take the secret out at the source (or keep it in a password manager) and run again.");
-    if (heldSkipped) io.out(`  ${heldSkipped} item(s) were held by the memory linter on an earlier run and are not queued again (see \`monomem quarantine\`).`);
+    if (heldSkipped) io.out(`  ${heldSkipped} item(s) were held by the memory linter on an earlier run and are not queued again (see \`monomem review held\`).`);
+    if (zipStats.skipped && from === "codex") io.out(`  ${zipStats.skipped} Codex memory file(s) skipped: larger than ${MAX_FILE_BYTES / 1024 / 1024} MiB, or not a plain file.`);
+    else if (zipStats.skipped) io.out(`  ${zipStats.skipped} Markdown file(s) skipped: larger than ${MAX_FILE_BYTES / 1024 / 1024} MiB, encrypted, or packed in a way this reader does not know.`);
     if (opts.dryRun && from === "mcp-memory") previewMcp(io, todo, mcpStats);
     if (from === "claude-code-chats") {
       io.out(`  Read ${chatStats.sessions} conversation file(s).${chatStats.tooBig ? ` ${chatStats.tooBig} skipped: larger than 256 MB.` : ""}${chatStats.badLines ? ` ${chatStats.badLines} damaged line(s) skipped.` : ""}`);
@@ -466,7 +474,7 @@ export async function runForeignImport(e: Pick<SetupEnv, "home" | "env" | "cwd">
       try {
         // ponytail: one write per item, no batching transaction; fine for tens of thousands of rows.
         const note = writer.create(
-          { namespace: opts.namespace || (from === "claude-code-chats" ? CHATS_NAMESPACE : undefined), title: c.title, body: c.body, tags: c.tags, source: c.source, created_at: it.createdAt },
+          { namespace: opts.namespace || (from === "claude-code-chats" ? CHATS_NAMESPACE : undefined), title: c.title, body: c.body, tags: c.tags, source: c.source, created_at: it.createdAt, outside: true },
           { writtenBy: writerFor(from), skipEdges: !!it.kind, ...(it.kind ? { kind: it.kind, sessionId: it.sessionId, obsType: it.obsType ?? "" } : {}) }
         );
         if (it.kind) writer.restoreCaptureLinks(note, it.files);
@@ -480,7 +488,8 @@ export async function runForeignImport(e: Pick<SetupEnv, "home" | "env" | "cwd">
     }
     if (held) writeHeld(opts.dbPath, heldBefore);
     io.out(`\nImported ${created} new note(s). They are tagged "${tagFor(from)}" and written by "${writerFor(from)}".`);
-    if (held) io.out(`${held} item(s) were held by the memory linter (it saw something that reads like an instruction to an AI): see \`monomem quarantine\`.`);
+    if (created) io.out("They are unconfirmed (from outside) until you confirm them; reading them does not confirm them. `monomem review` lists them, `monomem confirm <id>` confirms one.");
+    if (held) io.out(`${held} item(s) were held by the memory linter (it saw something that reads like an instruction to an AI): see \`monomem review held\`.`);
     if (failed) {
       io.err(`${failed} item(s) could not be stored.`);
       return 1;

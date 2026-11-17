@@ -13,7 +13,7 @@ const run = (args: string[]) => spawnSync(process.execPath, [CLI, ...args], { en
 describe("cli help", () => {
   test("default help is short and grouped; --all keeps the full text", () => {
     const short = run(["help"]).stdout;
-    for (const g of ["Get started", "Daily", "Trust", "Maintenance"]) assert.match(short, new RegExp(g));
+    for (const g of ["Get started", "Notes", "Review", "Data and settings"]) assert.match(short, new RegExp(g));
     assert.match(short, /help --all/);
     assert.doesNotMatch(short, /rebuild-edges/);
     assert.match(run(["help", "--all"]).stdout, /rebuild-edges/);
@@ -31,7 +31,7 @@ describe("cli help", () => {
     assert.equal(run(["help", "nosuchcmd"]).stdout, general, "an unknown word falls back to the general help");
     const hook = spawnSync(process.execPath, [CLI, "hook", "--help"], { encoding: "utf8", input: "", env: { ...process.env, NO_COLOR: "1" } });
     assert.equal(hook.status, 0);
-    assert.match(hook.stdout, /hook <session-start\|.*file-context>/);
+    assert.match(hook.stdout, /hook <session-start\|.*file-context\|action-guard>/);
     assert.doesNotMatch(hook.stdout, /hookSpecificOutput/);
     assert.match(run(["export", "--help"]).stdout, /the plain \{"notes": \[\.\.\.\]\} shape older importers read/);
   });

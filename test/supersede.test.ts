@@ -59,7 +59,7 @@ describe("step 1: the preview", () => {
     assert.match(p.warning, /Tags: "infra"/);
     assert.match(p.warning, /WHAT YOU LOSE/);
     assert.match(p.warning, /Nothing is deleted/);
-    assert.match(p.warning, /supersede undo/);
+    assert.match(p.warning, /replace undo/);
     assert.match(p.warning, /works once/);
     assert.equal(p.count, 1);
     assert.equal(p.requires_acknowledgement, false);

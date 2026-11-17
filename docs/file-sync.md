@@ -1,5 +1,70 @@
 # Plain-file sync (Markdown)
 
+## Use Monomem on your other computers (the easy way)
+
+You need one of these, and nothing else:
+
+- a **shared folder** that your computers already keep in step: OneDrive, Dropbox, iCloud Drive, Google Drive, a network share
+  or a USB disk; or
+- a **private git repository** you own (GitHub, GitLab, your own server).
+
+There is no Monomem server and no account. Every file Monomem puts there is sealed (encrypted), so the folder or repository
+holds no readable note, title or computer name.
+
+**On your first computer**
+
+1. Run `monomem sync setup "C:\Users\you\OneDrive\Monomem"` (a folder), or
+   `monomem sync setup git@github.com:you/my-private-memory.git` (a private repository; git must be installed and able to sign
+   in to it). Add `--name "Work laptop"` to choose how this computer is named on the others (the default is a neutral
+   `computer-1a2b`, not your computer's name).
+   The dashboard can do this step too: Settings, "Use Monomem on another computer" (it runs the same command, and only when
+   you opened the dashboard on this computer with `monomem open` or its Start menu entry).
+2. Setup syncs once and prints where your **sync key** is: `.sync-key` in your Monomem data folder.
+3. Copy that key file to your other computer with a USB stick or your password manager. **Never put it in the shared folder or
+   the repository**: anyone with the key and the folder can read your notes.
+
+**On each other computer**
+
+1. Install Monomem and put the copied `.sync-key` in its data folder (`monomem check --setup` shows where that is).
+2. Run the same `monomem sync setup ...` with the same folder (as that computer sees it) or the same address.
+
+**After that**
+
+- Run `monomem sync` when you switch computers, or let it run by itself: `monomem sync setup --auto on` (every 30 minutes while
+  Monomem's server is running; `--every 10` for another interval; restart Monomem once after turning it on). `--auto off` turns
+  it off. It is **off by default**.
+- `monomem show <id>` and `monomem why <id>` say which computer a note came from ("from computer: Work laptop"). Your AI
+  tools see it too: session start adds "(from computer: Work laptop)" to that note's line, and MCP reads carry
+  `from_computer`. A note written on this computer has neither.
+
+**What is never synced:** your sync key, your at-rest encryption key, app keys (`tokens.json`), the database itself, settings,
+backups and logs. Only note files (sealed) and each computer's chosen name (sealed) travel. Notes above
+`MONOMEM_EXPORT_MAX_SENSITIVITY` stay home; without it, notes labelled private do travel (sealed), and sync warns you.
+
+**What happens when ...**
+
+- **you forget (archive) a note on one computer:** it is archived on the others too at their next sync. It is kept, never deleted,
+  and `monomem restore <id>` brings it back. Restoring it on the computer that archived it brings it back everywhere.
+- **you delete a note:** its text leaves the folder; the others empty and archive their copy (a delete never deletes anything on
+  another computer; their history still has the old text until it is purged there).
+- **one computer archived a note that another had just edited:** the edit wins; the note comes back on both, and sync says so.
+- **the same note was edited on two computers:** the newer text is live and the other text is **held** for you
+  (`monomem review`): approve it to use it instead. Nothing is overwritten unseen; a copy is also kept in
+  `<data folder>/sync-conflicts/`.
+- **the folder's sync tool made a conflict copy** (`... (conflicted copy).enc`, `...-PCNAME.enc`): Monomem skips it and names it;
+  nothing in it is read. The real file wins at the next sync.
+- **a computer has no key yet:** sync stops and tells it to copy the key; nothing changes.
+
+**Privacy notes.** A forgotten (archived) note's text stays in the folder or repository (and in git history), marked archived, so
+the other computers learn about the forget: sealed with `sync setup`, readable in a plain folder (`monomem sync <dir>`,
+`export --format md`). A deleted note's file keeps only its title and the archived marker; its earlier text stays in git
+history if the folder is a git repository. A git repository is reached over the network at each sync (`git fetch`/`git push`
+to the address you gave); a shared folder is only read and written locally. Do not run two syncs at once on one computer.
+
+The rest of this page is the manual way and the details.
+
+## Plain files by hand
+
 Your memory as a folder of Markdown files you can read, grep, edit in any
 editor, diff in git, and sync with anything that syncs files.
 
@@ -71,18 +136,38 @@ copying the file to `.conflicts/<name>.overwritten.md`. One file that cannot
 be written (bad path, permissions) is reported and the rest still export.
 
 Export **prunes** only stale copies it can account for: the old file of a
-note this store renamed, and the file of a note this store deleted (its own
-notes, and another machine's notes it imported and then deleted) — and
+note this store renamed, and the earlier file of a note now hidden (a distrusted writer, or above the export ceiling) — and
 only while the file still holds what was last synced. Another machine's file
 this store never imported is never pruned, nor are files without Monomem
 front-matter. `--no-prune` keeps everything.
+
+**Tombstones (archived and deleted notes).** A note this store archived (forgot) after it was synced keeps its file, with the
+body unchanged and two extra lines at the end of the front-matter:
+
+```
+archived_at: "2026-11-16T09:00:00.000Z"
+archived_by: "b48d83f6-2fdc-4df8-899b-98d7bc60bdc5"
+```
+
+`archived_by` is the store that archived it. The content hash does not cover these lines, so an older Monomem (1.5) sees no
+edit and never blanks or deletes its copy; it ignores the lines. A deleted note's file gets the same two lines instead of being
+removed (removing it made the other computer write it back on every sync, forever), and its body is blanked: a delete is how
+you take text (say a pasted secret) out, so it leaves the folder too. A computer importing that file sees an edit to empty text
+and then archives its copy (an older 1.5 computer keeps an empty live note). An archived note that was never synced stays
+out of the folder. A newer Monomem importing a marked file archives its live copy (never deletes it), unless the note was edited
+here since (the edit wins and travels back, and the other computer restores it), it is pinned here, or its namespace needs
+approval here: then it stays live and the report says why (`monomem archive <id>` to match). Each marker is acted on once
+(`_meta.sync_marks`), so restoring the note here is not undone by the next sync. When the marker goes away (the computer that
+archived the note restored it), the note is restored here too.
+
+With an older (1.5) computer in the mix, the older one rewrites a marked file without the marker and the newer one adds it
+back: one commit per sync for each archived note, until both are upgraded. No note is lost either way.
 
 **Deleting an imported note is remembered.** When you delete a note that
 came from another machine, the store keeps its sync identity and merge base
 (table `sync_deleted`), so the next import treats the file as deleted here
 (`skipped`) instead of creating the note again; only a file edited since
-brings it back (`restored`). The other machine still has the note and may
-re-export the file — it stays skipped here until someone edits it.
+brings it back (`restored`). Its file gets the archive marker (above), so the other machine archives its copy.
 
 **Symlinks:** every write, prune and `.conflicts/` copy checks each path
 segment under the sync folder with `lstat` and refuses symlinks, and right
@@ -118,10 +203,11 @@ this store never synced, the file's own `hash` is used.
 | changed | same | `updated` — file wins (compare-and-swap on the note's rev) |
 | same | changed | `skipped` — store is newer; the next export refreshes the file |
 | changed | changed, same content | `unchanged` |
-| changed | changed, different | `conflict` — the **newer** side wins; the loser is written to `.conflicts/` |
+| changed | changed, different | `conflict` — the **newer** side wins; the loser is written to `.conflicts/` and held as an edit of the note (`monomem review`: approve to use it) |
 
 "Newer" compares the store's `updated_at` with the file's front-matter
-`updated_at` (file mtime is ignored: sync tools rewrite it). A hand edit
+`updated_at` (file mtime is ignored: sync tools rewrite it). An applied file edit keeps the file's `updated_at` (never earlier
+than the note's own), so two computers agree on it and stop rewriting the file. A hand edit
 that leaves `updated_at` alone therefore loses a conflict — its text is kept
 in `.conflicts/`. Nothing is silently lost: a
 conflict always leaves the losing version in `.conflicts/` and is listed in
@@ -133,10 +219,10 @@ note's file is rewritten with the restored note's new id so it is restored
 once; another machine's note is re-linked to its origin; an unedited file of
 a deleted note is `skipped`), `quarantined` / `rejected`
 (every import write goes through the [memory linter](./memory-linter.md);
-re-importing content that is already pending in quarantine reports it again
+re-importing content that is already held for review reports it again
 without queuing a duplicate).
-**Import never deletes notes.** Deleting a file does not delete the note; to
-propagate a delete, delete the note in the store and export (prune).
+**Import never deletes notes.** Deleting a file does not delete the note. A forget or a delete reaches the other stores as an
+archive, through the marker above. Files under `.machines/` hold each computer's chosen name (one line); they are not notes.
 
 `--json` prints the full per-file report.
 
@@ -198,10 +284,15 @@ not touched. A push that loses a race with another computer is retried once afte
 - **Remote addresses.** Sync refuses a remote whose address has a password or token inside it (`https://user:pass@host/...`), because git saves that in `.git/config` in plain text; use a credential helper or an SSH key. Any address in text sync prints has its `user:pass@` part replaced by `***`.
 - **Two computers settle.** A note that came from another computer keeps the writer name its file came with (`origin_writer`), so once both computers agree, a sync commits nothing.
 - **While it runs**, the readable notes of a sealed sync exist only in a temporary folder inside the data folder, removed afterwards.
-- **Conflicts.** A note edited on two computers keeps one version and saves the other (under `<data folder>/sync-conflicts/` for a sealed
-  sync, `.conflicts/` otherwise); nothing is lost silently.
-- **Deletes do not propagate** (see Limits): deleting a note removes its file from the repository, but the other computers keep their copy
-  until you delete it there too. A deleted note does not come back on the computer that deleted it.
+- **Conflicts.** A note edited on two computers keeps the newer version live, holds the other as an edit for you to pick
+  (`monomem review`), and saves a copy (under `<data folder>/sync-conflicts/` for a sealed sync, `.conflicts/` otherwise); nothing is
+  lost silently.
+- **Forgets and deletes arrive as archives** (see Tombstones above): the other computers archive their copy and stop committing. A forget keeps the text;
+  a delete blanks it. A deleted note does not come back on the computer that deleted it.
+- **Computer names** travel sealed as `<keyed hash>.mach` files next to the `.enc` notes (older versions ignore them). A sealed file
+  whose name is not one Monomem writes (a sync tool's conflict copy) is skipped and named, never read.
+- **Encrypted database, plain sync:** at-rest encryption covers the database only. `sync --git` without `--encrypt` writes readable
+  files, and says so when your database is encrypted. `monomem sync setup` always seals.
 - Do not run two syncs at once on the same repository.
 
 ### Syncthing / Dropbox / iCloud
@@ -218,7 +309,8 @@ merge them by hand.
   trust and ignores server-side namespace resolution, like the other
   maintenance commands.
 - Conflicts are whole-note, not line-level merges.
-- Deletes do not propagate through files (see above).
+- Deletes travel only as archives (see Tombstones); nothing is ever deleted on another computer.
+- `monomem sync setup` uses its own key (`.sync-key`), never your at-rest key, so copying it does not expose your database.
 
 **Tasks and handoffs.** Import is a local admin command (no token can reach it), so
 notes carrying the reserved `task` / `handoff` / `task.*` tags are restored as
@@ -231,5 +323,5 @@ on stderr and exits with status 1.
 ([trust.md](./trust.md)) and removes their earlier files (pruning is the default; `--no-prune` keeps them), so a vault synced to another
 machine or an editor plugin does not carry the content an agent is told not to trust. `--include-distrusted`
 writes them anyway, with `distrusted: true` in the front matter. A file's `origin_writer` is a claim, not a
-proof; on import it is recorded as `imported_written_by` and added to the note's taint set, so a distrust
-rule on that name hides the imported note. A file that omits `origin_writer` carries no taint.
+proof; on import it is recorded as `imported_written_by` and added to the note's writer set (formerly the taint set), so a distrust
+rule on that name hides the imported note. A file that omits `origin_writer` adds no name to it.

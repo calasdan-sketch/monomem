@@ -20,7 +20,6 @@ import {
 import { homedir } from "node:os";
 import { chmodQuiet, privateDir } from "./private-dir.js";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { resolveTimeZone } from "./time-parse.js";
 import { cleanWriter } from "./actor.js";
@@ -28,22 +27,16 @@ import { didYouMean } from "./suggest.js";
 import { type Sensitivity, parseSensitivity, sensitivityRank, defaultCeilingFromEnv, SENSITIVITY_HELP } from "./sensitivity.js";
 export { chmodQuiet, lockdownArgs, wideAccessGroups, privateDir, type PrivateDirOptions } from "./private-dir.js";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-export const PROJECT_ROOT = join(__dirname, "..", "..");
+// The package root and the version come from self.ts, which knows how this copy is packaged (npm, bundled folder, single exe).
+export { PROJECT_ROOT } from "./self.js";
+import { PROJECT_ROOT, selfVersion } from "./self.js";
 
 /** Where 1.0.x kept its state: inside the package (lost on npm update / npx cache purge). */
 /**
- * The real package version (package.json): reported by `monomem --version`
+ * The real package version (package.json, or the build-time define in the bundled builds): reported by `monomem --version`
  * and the MCP serverInfo so clients see the build they are talking to.
  */
-export const PACKAGE_VERSION: string = (() => {
-  try {
-    const pkg = JSON.parse(readFileSync(join(PROJECT_ROOT, "package.json"), "utf8")) as { version?: unknown };
-    return typeof pkg.version === "string" ? pkg.version : "0.0.0";
-  } catch {
-    return "0.0.0";
-  }
-})();
+export const PACKAGE_VERSION: string = selfVersion();
 
 export const LEGACY_DATA_DIR = join(PROJECT_ROOT, "data");
 
@@ -196,9 +189,14 @@ function withLockFile<T>(lock: string, fn: () => T): T {
 export function migrateLegacyData(from: string, to: string): string[] {
   const oldDb = join(from, "state.db");
   const newDb = join(to, "state.db");
-  if (resolve(from) === resolve(to) || !existsSync(oldDb) || existsSync(newDb)) return [];
+  const lock = join(to, ".migrate.lock");
+  if (resolve(from) === resolve(to) || !existsSync(oldDb)) return [];
+  // state.db alone is not "done": the publisher links it in, then removes its temporary name, then the lock. Opening the
+  // database in between made that removal fail on Windows (SQLite opens without FILE_SHARE_DELETE, and the temporary
+  // name is a second link to the same file), so the publisher exited 1. While a lock is held, wait for it instead.
+  if (existsSync(newDb) && !existsSync(lock)) return [];
   privateDir(to);
-  return withLockFile(join(to, ".migrate.lock"), () => {
+  return withLockFile(lock, () => {
     if (existsSync(newDb)) return []; // another process migrated while we waited
     const tmp = `${newDb}.migrating-${process.pid}`;
     rmSync(tmp, { force: true });
@@ -295,13 +293,34 @@ export function prepareDataDir(): void {
 /** Shortest user-supplied bearer token accepted (generated tokens are 64 hex). */
 export const MIN_TOKEN_LENGTH = 32;
 
+/** The line a first run prints when it made the main app key. */
+export const NEW_KEY_LINE = "[monomem] Made the main app key (first run), saved to ";
+let pendingKeyNotice: (() => void) | null = null;
+/**
+ * Say once that the main app key was made. Commands that start something (start, mcp, setup, open) say it right away;
+ * any other command says it after its own output, so it never lands in the middle of a report.
+ */
+function announceNewKey(file: string): void {
+  // eslint-disable-next-line no-console
+  const say = (): void => console.error(NEW_KEY_LINE + file);
+  if (["start", "serve", "mcp", "mcp:stdio", "setup", "open"].includes(process.argv[2] ?? "")) return say();
+  pendingKeyNotice = say;
+  process.once("exit", () => pendingKeyNotice?.());
+}
+/** True when this process made the main app key; the caller reports it in its own words and the exit line is dropped. */
+export function takeNewKeyNotice(): boolean {
+  const made = pendingKeyNotice !== null;
+  pendingKeyNotice = null;
+  return made;
+}
+
 export function resolveToken(): string {
   if (process.env.MONOMEM_TOKEN && process.env.MONOMEM_TOKEN.trim()) {
     const t = process.env.MONOMEM_TOKEN.trim();
     if (t.length < MIN_TOKEN_LENGTH) {
       throw new Error(
         `monomem: MONOMEM_TOKEN is too short (${t.length} chars); use at least ${MIN_TOKEN_LENGTH}. ` +
-          `Make one with: monomem token new (it only prints a fresh value; nothing is saved)`
+          `Make one with: monomem keys new (it only prints a fresh value; nothing is saved)`
       );
     }
     return t;
@@ -329,8 +348,7 @@ export function resolveToken(): string {
   // Windows Scheduled Task's redirected output, a service manager's logs, or
   // future log-shipping, and the token is a full-access credential valid
   // over the public tunnel. Reference only the file path it was saved to.
-  // eslint-disable-next-line no-console
-  console.error(`[monomem] Generated new bearer token, saved to ${TOKEN_FILE}`);
+  announceNewKey(TOKEN_FILE);
   return token;
 }
 
@@ -383,10 +401,21 @@ export interface TokenEntry {
    * no setting that removes taint.
    */
   reads_outside?: true;
+  /** OAuth keys (src/oauth): the key stops working at this time (ISO 8601). A value that is not a date refuses the key. */
+  expires_at?: string;
+  /** OAuth keys (src/oauth): "mcp" = the key works only on the MCP port (/mcp), not on the REST API. Any other value refuses the key. */
+  audience?: "mcp";
 }
 
 export const sha256Hex = (s: string): string => createHash("sha256").update(s).digest("hex");
 const HASH_RE = /^[0-9a-f]{64}$/i;
+/**
+ * r4 SF-1: every OAuth key in tokens.json carries this field (true). Monomem 1.5.x knows neither expires_at nor audience, so
+ * it would load an OAuth key as a write key that never expires and works on REST too. 1.5.x refuses any entry with an
+ * unknown key that looks like "max_sensitivity" (/sens|ceil/), so this one name makes it ignore OAuth keys after a
+ * downgrade. 1.6 accepts it.
+ */
+export const OAUTH_KEY_MARKER = "sensitivity_needs_monomem_1_6";
 /** The identity of a token entry that is the same whether it is stored as the key or as its hash. */
 export const tokenId = (e: Pick<TokenEntry, "token" | "token_sha256">): string => (e.token_sha256 ?? sha256Hex(e.token ?? "")).toLowerCase();
 
@@ -474,7 +503,9 @@ export function resolveTokens(): TokenEntry[] {
     namespace?: unknown,
     maxSensitivity?: unknown,
     readsOutside?: unknown,
-    hash?: unknown
+    hash?: unknown,
+    expiresAt?: unknown,
+    audience?: unknown
   ): void => {
     const outside = readsOutside === true ? { reads_outside: true as const } : {};
     // 1.5.0: an entry is its key (plain text) or the sha256 of it. Everything below is keyed by that hash, so the same key
@@ -499,7 +530,7 @@ export function resolveTokens(): TokenEntry[] {
       console.error(
         `[monomem] ignoring token ${typeof label === "string" && label ? `"${label}"` : "(unnamed)"}: ` +
           `it is ${plain.length} characters; user-supplied tokens must be at least ${MIN_TOKEN_LENGTH}. ` +
-          `To add an app, let Monomem make the token for you: monomem token add <name>`
+          `To add an app, let Monomem make the token for you: monomem keys add <name>`
       );
       return;
     }
@@ -519,6 +550,17 @@ export function resolveTokens(): TokenEntry[] {
       return;
     }
     const ns = typeof namespace === "string" ? namespace.trim() : undefined;
+    // An expiry is a restriction too: one that is not a date refuses the key rather than making it last for ever.
+    if (expiresAt !== undefined && (typeof expiresAt !== "string" || !Number.isFinite(Date.parse(expiresAt)))) {
+      console.error(`[monomem] ignoring token ${typeof label === "string" && label ? `"${label}"` : "(unnamed)"}: its "expires_at" is not a date. It will not work until fixed.`);
+      refused.add(t);
+      return;
+    }
+    if (audience !== undefined && audience !== "mcp") {
+      console.error(`[monomem] ignoring token ${typeof label === "string" && label ? `"${label}"` : "(unnamed)"}: its "audience" must be "mcp". It will not work until fixed.`);
+      refused.add(t);
+      return;
+    }
     // A sensitivity ceiling is a restriction, so a value that is present but not a label (a typo such as "privte", 5, "")
     // must NOT quietly become "no ceiling": the whole token is refused, loudly, like a bad namespace pin.
     let ceiling: Sensitivity | undefined;
@@ -571,6 +613,8 @@ export function resolveTokens(): TokenEntry[] {
             ...(nextNs !== undefined ? { namespace: nextNs } : {}),
             ...(nextCeil !== undefined ? { max_sensitivity: nextCeil } : {}),
             ...(existing.reads_outside ? { reads_outside: true as const } : {}),
+            ...(existing.expires_at !== undefined ? { expires_at: existing.expires_at } : {}),
+            ...(existing.audience !== undefined ? { audience: existing.audience } : {}),
           });
         } else if (ns !== undefined && existing.namespace !== undefined && ns !== existing.namespace) {
           console.error(
@@ -591,6 +635,8 @@ export function resolveTokens(): TokenEntry[] {
       ...(ns !== undefined ? { namespace: ns } : {}),
       ...(ceiling !== undefined ? { max_sensitivity: ceiling } : {}),
       ...outside,
+      ...(typeof expiresAt === "string" ? { expires_at: expiresAt } : {}),
+      ...(audience === "mcp" ? { audience: "mcp" as const } : {}),
     });
     if (lock) locked.add(t);
   };
@@ -618,9 +664,9 @@ export function resolveTokens(): TokenEntry[] {
       return;
     }
     for (const e of arr) {
-      const o = e as { token?: unknown; token_sha256?: unknown; scope?: unknown; label?: unknown; namespace?: unknown; max_sensitivity?: unknown; reads_outside?: unknown };
+      const o = e as { token?: unknown; token_sha256?: unknown; scope?: unknown; label?: unknown; namespace?: unknown; max_sensitivity?: unknown; reads_outside?: unknown; expires_at?: unknown; audience?: unknown };
       // A misspelt ceiling key ("maxSensitivity", "max_sensitivty") would otherwise be ignored and leave the token unrestricted.
-      const lookalikes = o && typeof o === "object" ? Object.keys(o).filter((k) => k !== "max_sensitivity" && /sens|ceil/i.test(k)) : [];
+      const lookalikes = o && typeof o === "object" ? Object.keys(o).filter((k) => k !== "max_sensitivity" && k !== OAUTH_KEY_MARKER && /sens|ceil/i.test(k)) : [];
       if (lookalikes.length) {
         console.error(
           `[monomem] ignoring token ${typeof o.label === "string" && o.label ? `"${o.label}"` : "(unnamed)"}: unknown key ${lookalikes.map((k) => JSON.stringify(k)).join(", ")} looks like "max_sensitivity". ` +
@@ -639,11 +685,11 @@ export function resolveTokens(): TokenEntry[] {
       }
       // "primary" is the main key's name: another key carrying it would be treated as the unrestricted main key.
       if (typeof o?.label === "string" && o.label.trim().toLowerCase() === "primary" && typeof o.token === "string" && !locked.has(sha256Hex(o.token.trim()))) {
-        console.error(`[monomem] ignoring a token in ${where}: the name "primary" is reserved for the main key. Rename it (monomem token add <name> makes a new one).`);
+        console.error(`[monomem] ignoring a token in ${where}: the name "primary" is reserved for the main key. Rename it (monomem keys add <name> makes a new one).`);
         refused.add(sha256Hex(o.token.trim()));
         continue;
       }
-      add(o?.token, o?.scope, o?.label, false, o?.namespace, o?.max_sensitivity, o?.reads_outside, o?.token_sha256);
+      add(o?.token, o?.scope, o?.label, false, o?.namespace, o?.max_sensitivity, o?.reads_outside, o?.token_sha256, o?.expires_at, o?.audience);
     }
   };
 
@@ -665,7 +711,7 @@ export function resolveTokens(): TokenEntry[] {
   }
   for (const [k, ts] of byLabel) {
     if (ts.length < 2) continue;
-    console.error(`[monomem] ignoring ${ts.length} tokens that share the name ${k ? `"${k}"` : "(unnamed)"}: their writes would carry the same writer. Give each its own name in MONOMEM_TOKENS / tokens.json (or remove one: monomem token list); they will not work until then.`);
+    console.error(`[monomem] ignoring ${ts.length} tokens that share the name ${k ? `"${k}"` : "(unnamed)"}: their writes would carry the same writer. Give each its own name in MONOMEM_TOKENS / tokens.json (or remove one: monomem keys list); they will not work until then.`);
     for (const t of ts) if (!locked.has(t)) refused.add(t);
   }
   for (const t of refused) if (!locked.has(t)) byToken.delete(t);

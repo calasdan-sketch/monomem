@@ -2,7 +2,7 @@
 // starvation and quota, lease rules, approval key in backups, the real writer
 // in the change feed (v12), markdown restore of reserved tags, purge-aware
 // markers, audit rotation under concurrency, watch signals, claim/due checks.
-import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
+import { slow } from "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -218,7 +218,7 @@ describe("backup and the approval key", () => {
       const env = { ...process.env, MONOMEM_HOME: dir, MONOMEM_DB_PATH: db };
       const c1 = spawnSync(process.execPath, [CLI, "backup", "--out", join(dir, "b3")], { env, encoding: "utf8" });
       assert.equal(c1.status, 0, c1.stderr);
-      assert.match(c1.stdout, /NOT copied/);
+      assert.match(c1.stdout, /left out on purpose; README.txt/); // the detail is in README.txt (checked above)
       const c2 = spawnSync(process.execPath, [CLI, "backup", "--out", join(dir, "b4"), "--include-approval-key"], { env, encoding: "utf8" });
       assert.equal(c2.status, 0, c2.stderr);
       assert.match(c2.stdout, /Included the command-task approval key/);
@@ -442,7 +442,7 @@ describe("monomem watch stops on signals", () => {
       waitSeconds: 1,
       exec: ["whatever"],
       signal: ac.signal,
-      retryMs: 5000,
+      retryMs: slow(5000), // the retry pause stays longer than the bound below, on any runner
       log: () => {},
       run: async (_a, _i, _e, sig) => {
         got = sig;
@@ -451,7 +451,7 @@ describe("monomem watch stops on signals", () => {
       },
     });
     assert.equal(got, ac.signal);
-    assert.ok(Date.now() - t0 < 3000, "no 5s retry pause after an abort");
+    assert.ok(Date.now() - t0 < slow(3000), "no 5s retry pause after an abort");
     assert.equal(batches, 0);
     s.close();
   });

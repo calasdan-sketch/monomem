@@ -1,0 +1,161 @@
+name: Standalone download
+
+# The no-Node download: the OFFICIAL signed Node runtime from nodejs.org (checksum-checked, never modified) plus Monomem's
+# code, one folder/archive per platform (scripts/build-bundle.mjs). Built natively on each runner, smoke-tested in a scratch
+# home, summed (SHA256SUMS) and given GitHub build attestations. A v* tag does NOT start this file: publish.yml calls it
+# (upload: true) after its one full CI run (ci.yml) passed, and publishes to npm only after this upload succeeded, so one
+# CI flake can never put a version on npm without its download, or the download up without npm. The files go to the
+# tag's GitHub release (a DRAFT is created when none exists: publishing it stays a person's click; files on a published
+# release are never replaced). By hand (workflow_dispatch) or on a pull request it only builds.
+# A single-file SEA build runs too, as an artifact only: it is unsigned, and Windows Smart App Control blocks unsigned
+# exes with no override. Shipping it signed needs a signing step here AND three code changes: setup.ts (copy to the
+# permanent home + Start-menu entry run only in "bundle" mode), install.ts shortcutPlan (hard-codes runtime/node +
+# dist/src/cli.js) and update.ts (SEA mode says it cannot update itself yet).
+on:
+  workflow_call:
+    inputs:
+      upload:
+        description: "Upload the files to the tag's GitHub release (publish.yml, after its CI run passed)"
+        type: boolean
+        default: false
+  workflow_dispatch:
+  # A pull request that touches the code builds and smoke-tests the download (no checksums, no release): breakage that only
+  # shows in the bundled build (an import.meta.url file read, an esbuild-incompatible dependency, hook text) can come from
+  # anywhere in src/, not only from the download's own files.
+  pull_request:
+    branches: [main]
+    paths:
+      - src/**
+      - package.json
+      - package-lock.json
+      - scripts/build-bundle.mjs
+      - scripts/smoke-bundle.mjs
+      - installer/**
+      - .github/workflows/bundle.yml
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: win-x64, os: windows-latest }
+          - { target: darwin-arm64, os: macos-latest }
+          - { target: darwin-x64, os: macos-15-intel }
+          - { target: linux-x64, os: ubuntu-latest }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+      - run: npm ci
+      - run: npm run build
+      - name: Tag must match package.json version
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          v=$(node -p "require('./package.json').version")
+          [ "v$v" = "${GITHUB_REF_NAME}" ] || { echo "tag ${GITHUB_REF_NAME} != package.json $v"; exit 1; }
+      - name: Build the folder and archive
+        run: node scripts/build-bundle.mjs --target ${{ matrix.target }} --out build/bundle
+      - name: Smoke test (--version, doctor, MCP initialize, session-start hook, setup --dry-run)
+        shell: bash
+        run: node scripts/smoke-bundle.mjs build/bundle/${{ matrix.target }}/Monomem "$(node -p "require('./package.json').version")"
+      - name: The bundled monomem-node.exe (Node's node.exe, renamed) still carries the OpenJS Foundation signature
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $s = Get-AuthenticodeSignature build/bundle/win-x64/Monomem/runtime/monomem-node.exe
+          "$($s.Status) $($s.SignerCertificate.Subject)"
+          if ($s.Status -ne 'Valid') { exit 1 }
+      - name: The bundled node still carries its Developer ID signature
+        if: runner.os == 'macOS'
+        run: codesign --verify --strict --verbose=2 build/bundle/${{ matrix.target }}/Monomem/runtime/node
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bundle-${{ matrix.target }}
+          path: build/bundle/monomem-*
+          if-no-files-found: error
+
+  sea:
+    # Built and smoke-tested, never published (see the header).
+    name: single-file exe (win-x64, not published)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          # --build-sea with an ESM main needs Node 25.7+; the same line the folder download embeds.
+          node-version: "26.13.1"
+      - run: npm ci
+      - run: npm run build
+      - run: node scripts/build-bundle.mjs --target win-x64 --out build/bundle --no-archive
+      - name: Build monomem.exe
+        shell: bash
+        run: |
+          mkdir -p build/sea
+          echo '{"main":"build/bundle/win-x64/Monomem/dist/src/monomem-bundle.js","mainFormat":"module","output":"build/sea/monomem.exe","disableExperimentalSEAWarning":true}' > build/sea/sea-config.json
+          node --build-sea build/sea/sea-config.json
+      - name: Smoke test the exe
+        shell: bash
+        run: |
+          v=$(node -p "require('./package.json').version")
+          out=$(./build/sea/monomem.exe --version)
+          [ "$out" = "$v" ] || { echo "monomem.exe --version said '$out', expected $v"; exit 1; }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sea-win-x64-unsigned
+          path: build/sea/monomem.exe
+          if-no-files-found: error
+
+  # The CI gate is the caller's: publish.yml runs ci.yml once and calls this file only after it passed (`monomem update`
+  # installs whatever the latest release holds). A hand run or pull request never uploads.
+  release:
+    name: checksums, attestations, release upload
+    needs: [build]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # upload to the release
+      id-token: write # attestations
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: bundle-*
+          path: out
+          merge-multiple: true
+      - name: SHA256SUMS
+        working-directory: out
+        run: |
+          sha256sum monomem-* > SHA256SUMS
+          cat SHA256SUMS
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: "out/monomem-*"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: standalone-release-files
+          path: out/*
+      - name: Upload to the tag's GitHub release (a draft is created if none exists; a published one is never overwritten)
+        if: inputs.upload && github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --draft --verify-tag --title "$tag" --notes "Standalone downloads: see INSTALL.md (Download)."
+          fi
+          if [ "$(gh release view "$tag" --json isDraft -q .isDraft)" = "true" ]; then
+            gh release upload "$tag" out/monomem-* out/SHA256SUMS --clobber
+          else
+            # Already published: people may have downloaded these files and checked their SHA-256. Add, never replace
+            # (gh fails when a file of the same name is there; make a new tag instead).
+            gh release upload "$tag" out/monomem-* out/SHA256SUMS
+          fi

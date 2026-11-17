@@ -32,18 +32,20 @@ export interface Health {
 
 /** points per finding, cap per category */
 const RULES: Array<{ category: string; type?: QualityType; each: number; cap: number; what: string }> = [
-  { category: "duplicates", type: "duplicate", each: 2, cap: 15, what: "near-identical note pairs" },
-  { category: "stale twins", type: "stale_twin", each: 1, cap: 10, what: "old notes with a newer note on the same subject" },
-  { category: "quarantined", type: "quarantined", each: 3, cap: 15, what: "writes held for review" },
+  { category: "duplicates", type: "duplicate", each: 2, cap: 15, what: "groups of near-identical notes" },
+  { category: "older duplicates", type: "stale_twin", each: 1, cap: 10, what: "old notes with a newer note on the same subject" },
+  { category: "held writes", type: "quarantined", each: 3, cap: 15, what: "writes held for review" },
   { category: "lint", type: "lint", each: 3, cap: 15, what: "notes the safety scan flags" },
   { category: "personal data suggestions", type: "pii", each: 1, cap: 15, what: "notes that look like personal data and are not private" },
+  { category: "empty notes", type: "empty", each: 2, cap: 10, what: "notes with a title and no text" },
+  { category: "restated, not retired", type: "restated", each: 1, cap: 10, what: "old notes their own writer restated in a newer note without retiring them" },
 ];
 
 export const HEALTH_FORMULA = [
   "Start at 100. Take off points per finding, each category has its own cap:",
   ...RULES.map((r) => `  ${r.category}: ${r.each} per finding (${r.what}), at most ${r.cap}`),
   "  keys without a limit: 5 per key that is not an administrator and sees everything, at most 15",
-  "  backup: 10 if none was found or it is over 30 days old, 5 if over 7 days old (not counted while the store has no notes)",
+  "  backup: 10 if the last one is over 30 days old, 5 if over 7 days old (none yet costs nothing: the server makes one every day)",
   "The score never goes below 0.",
 ];
 
@@ -54,10 +56,11 @@ export function computeHealth(i: HealthInput): Health {
     if (n > 0) deductions.push({ category: r.category, points: Math.min(r.cap, n * r.each), cap: r.cap, detail: `${r.what} (${n})` });
   }
   if (i.tokensWithoutCeiling > 0) deductions.push({ category: "keys without a limit", points: Math.min(15, i.tokensWithoutCeiling * 5), cap: 15, detail: `${i.tokensWithoutCeiling} key(s) that see everything` });
-  if (i.noteCount === 0) {
-    /* a brand-new store: a first run should not read "81 / 100" */
-  } else if (i.backupAgeDays === null) deductions.push({ category: "backup", points: 10, cap: 10, detail: "no backup found" });
-  else if (i.backupAgeDays > 30) deductions.push({ category: "backup", points: 10, cap: 10, detail: `last backup ${Math.floor(i.backupAgeDays)} days ago` });
+  // No backup yet costs nothing (1.6.0): the server backs up every day by itself (backup-schedule.ts), so a new store is not
+  // punished for something it is about to get. An OLD last backup still counts: the daily copies have stopped.
+  if (i.noteCount === 0 || i.backupAgeDays === null) {
+    /* nothing to count */
+  } else if (i.backupAgeDays > 30) deductions.push({ category: "backup", points: 10, cap: 10, detail: `last backup ${Math.floor(i.backupAgeDays)} days ago` });
   else if (i.backupAgeDays > 7) deductions.push({ category: "backup", points: 5, cap: 10, detail: `last backup ${Math.floor(i.backupAgeDays)} days ago` });
   const score = Math.max(0, 100 - deductions.reduce((a, d) => a + d.points, 0));
   return { score, deductions, formula: HEALTH_FORMULA };
@@ -108,14 +111,19 @@ export interface Digest {
 }
 
 const TYPE_WORDS: Record<QualityType, [string, string]> = {
-  duplicate: ["pair of notes looks the same", "pairs of notes look the same"],
+  duplicate: ["group of notes says the same thing", "groups of notes say the same thing"],
   stale_twin: ["old note has a newer one on the same subject", "old notes have newer ones on the same subject"],
   quarantined: ["write is waiting for your review", "writes are waiting for your review"],
   lint: ["note was flagged by the safety scan", "notes were flagged by the safety scan"],
   decay: ["captured item is about to be archived", "captured items are about to be archived"],
   pii: ["note may hold personal data", "notes may hold personal data"],
   contradiction: ["pair of notes may disagree", "pairs of notes may disagree"],
+  empty: ["note has a title and no text", "notes have a title and no text"],
+  restated: ["old note was restated but never retired", "old notes were restated but never retired"],
 };
+
+/** The command that lists and fixes each kind of issue (held writes and disagreements have their own). */
+const TYPE_COMMAND = (t: QualityType): string => (t === "quarantined" ? "monomem review held" : t === "contradiction" ? "monomem review conflicts" : "monomem review duplicates");
 
 /** "yesterday" = since local midnight yesterday; otherwise what the change feed accepts (24h, 7d, an ISO time, last). */
 export function resolveSince(s: string, now = new Date()): string {
@@ -149,7 +157,7 @@ export async function buildDigest(store: Store, since: string, opts: { namespace
     .filter((x) => x.n > 0)
     .sort((a, b) => b.n - a.n || a.i - b.i)
     .slice(0, 3)
-    .map((x) => `${x.n} ${TYPE_WORDS[x.t][x.n === 1 ? 0 : 1]}`);
+    .map((x) => `${x.n} ${TYPE_WORDS[x.t][x.n === 1 ? 0 : 1]} (${TYPE_COMMAND(x.t)})`);
   return { since: first.since, until: first.until, counts: { created: first.counts.created, updated: first.counts.updated, deleted: first.counts.deleted }, byWriter, topIssues };
 }
 
@@ -164,6 +172,5 @@ export function renderDigest(d: Digest): string {
   if (!writers.length) lines.push("  Nothing changed.");
   lines.push(d.topIssues.length ? "Worth a look:" : "Nothing needs your attention.");
   d.topIssues.forEach((t, i) => lines.push(`  ${i + 1}. ${t}`));
-  if (d.topIssues.length) lines.push("  Details and the command for each: monomem quality");
   return lines.join("\n");
 }

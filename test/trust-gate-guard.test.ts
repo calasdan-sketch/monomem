@@ -3,6 +3,7 @@
 // that nobody has classified, so a future route cannot quietly bypass the gate (the 1.4.0 review found
 // four such routes: tags-only update echo, task replay, the janitor and the vault export).
 import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
+import { NEW_TOOLS } from "../src/mcp/tool-names.js";
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
@@ -20,6 +21,14 @@ import { putTask, writeHandoff } from "../src/tasks.js";
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "src");
 const as = <T>(label: string, fn: () => T): T => actorStore.run({ label, authed: true }, fn);
 const read = (f: string): string => readFileSync(join(SRC, f), "utf8");
+/**
+ * Large files were split into folders (Phase 0: src/mcp/, src/api/, src/doctor/ ...). Their reviewed call sites are still
+ * listed under the original file name, so a move between them is not a new site; a new one still fails.
+ */
+const SPLIT_FROM: Array<[string, string]> = [["mcp/", "mcp-server-core.ts"], ["api/", "api.ts"], ["doctor/", "cli.ts"], ["cli/", "cli.ts"]];
+const group = (f: string): string => SPLIT_FROM.find(([dir]) => f.startsWith(dir))?.[1] ?? f;
+/** A split file and its folder, as one text (the route and tool scans below). */
+const readGroup = (main: string): string => [main, ...srcFiles().filter((f) => group(f) === main && f !== main)].map(read).join("\n");
 
 /**
  * The gate itself: store.ts and the modules split out of it (src/store/**) may read notes and query the gated tables
@@ -87,16 +96,31 @@ const EXPECTED_SITES: Record<string, string[]> = {
     "the vault export skips hidden notes itself (hiddenIds) unless --include-distrusted",
     "existence check only (deleted here?)",
     "import merge-base lookup: compares hashes, returns nothing to a caller",
+    // conflict hold: re-reads the note sync just wrote to hold this computer's text; nothing goes to a caller
+    "local operator path, nothing returned to a caller",
   ],
+  // tombstone apply: reads the note to compare its hash with the marked file before archiving/restoring it; returns nothing
+  "sync/marks.ts": ["file sync is the local operator's path; nothing is returned to a caller"],
   "extract.ts": ["the capture writer re-reads its own summary note"],
   "facts.ts": ["local CLI, full trust like every command"],
   "health.ts": ["operator CLI, counts redaction markers only; no note content is returned or printed"],
   "llm.ts": ["the capture writer re-reads its own summary note"],
   "phase-b-cli.ts": ["local command, full local trust"],
   "progressive.ts": ["access probe: readVisible decides before anything is returned"],
+  // C23: what a note touched. The CLI (operator) reads every note; REST/MCP callers get readVisible plus their namespaces.
+  "blast-radius.ts": ["operator path is the CLI; others go through the trust gate"],
+  "rollback-note.ts": [
+    "operator rollback (admin), confined to the caller's namespaces just below",
+    "operator rollback (admin), within the caller's namespaces (noteTouched)",
+    "operator rollback (admin), within the caller's namespaces (noteTouched)",
+    "operator rollback (admin), within the caller's namespaces (noteTouched)",
+  ],
   "rollback.ts": [
     "operator rollback (admin), confined to the caller's namespaces by rollbackCandidates",
     "re-embed what the operator just restored; nothing is returned",
+    "operator rollback side effects (admin), confined to the caller's namespaces by the query",
+    "operator rollback side effects (admin), confined to the caller's namespaces by the query",
+    "operator rollback side effects, the planned task re-read under the write lock",
     "operator rollback, only the writer name is used",
   ],
   "tasks.ts": [
@@ -106,6 +130,7 @@ const EXPECTED_SITES: Record<string, string[]> = {
     "claimTask: distrusted tasks are refused on the next line",
     "approveTask: distrusted tasks are refused on the next line",
     "finishCommandTask: runner-internal, writes a result, returns nothing",
+    "approveOrHold: the task this call just created; only its held flags are read, nothing is returned",
   ],
 };
 
@@ -142,18 +167,34 @@ const INTERNAL_OPT_IN: Record<string, number> = {
 const GATED_SQL_RE = /\b(?:FROM|JOIN|UPDATE|INTO)\s+(notes|note_history|quarantine|trust_distrust|trust_attesters|trust_log|_meta|confirmations|note_links|note_flags|note_client_keys|code_anchors)\b/gi;
 /** Files outside the gate that touch a gated table directly, with the tables, each reviewed. */
 const SQL_ALLOWED: Record<string, string[]> = {
-  // backup.ts counts the notes of the COPY it just made and strips local-only _meta keys from that copy.
-  "backup.ts": ["_meta", "notes"],
+  // backup-worker.ts (moved out of backup.ts) counts the notes of the COPY it just made and strips local-only _meta keys from that copy.
+  "backup-worker.ts": ["_meta", "notes"],
   // bench/monomem-adapter.ts clears the copied key-id marker (_meta) of the throwaway drill copy of a database it just made.
   "bench/monomem-adapter.ts": ["_meta"],
   // bench/scale.ts counts sealed bodies (body_enc IS NOT NULL, a COUNT only) in the synthetic temp-folder store it just built.
   "bench/scale.ts": ["notes"],
+  // claims.ts (claim checks, review code): ids of live notes that carry claims, confined to the caller's namespaces in the
+  // query; every note is re-read through Store.readVisible before anything is shown. Ids only.
+  "claims.ts": ["notes"],
+  // git-trail.ts (branch scope + commit trail): note ids, folders, sessions and times only (writer_cwd, session_id,
+  // archived_at), for ids that came through the store's filters or to list a session's note ids; titles are read via Store.
+  "git-trail.ts": ["notes"],
   // drill.ts forgets the copied key-id marker (_meta attest_key_id) in its own temp-folder COPY of the database, as the bench adapter does.
   "drill.ts": ["_meta"],
   // health.ts keeps its own "audit lines seen" marker in _meta (health_audit_seen); it reads no trust setting.
   "health.ts": ["_meta"],
   // restore.ts counts (and checks for encryption) the BACKUP FILE it is about to put in place, before any store opens it.
   "restore.ts": ["_meta", "notes"],
+  // rollback.ts (admin-only writer rollback): finds the writer's open flags and its still-live replacements by id, confined to the
+  // caller's namespaces in the query; clears those flags in the confirm transaction. Ids only; every note is re-read via Store.
+  "rollback.ts": ["note_flags", "notes"],
+  // blast-radius.ts (C23, read-only): note ids and times only (derived_from links, a reader's later creates and history rows,
+  // still-in-force replacements); every note it names is re-read through visibleTo (Store.read for the CLI, readVisible + the
+  // caller's namespaces otherwise), so nothing outside the gate is returned.
+  "blast-radius.ts": ["note_history", "note_links", "notes"],
+  // rollback-note.ts (admin-only rollback by note): the note's own open flags by id, cleared in the confirm transaction; a flag
+  // raised at this computer is left for the CLI (r3 S1), as in rollback.ts.
+  "rollback-note.ts": ["note_flags"],
   // why.ts is a local shell command (the operator owns the database file): held-write and confirmation history for one id.
   "why.ts": ["confirmations", "quarantine"],
 };
@@ -182,7 +223,7 @@ describe("B: one gate for reading a note", () => {
       for (const [n, line] of rawSites(read(f))) {
         const i = line.indexOf(GATE_OK);
         if (i < 0) unmarked.push(`${f}:${n}  ${line.trim().slice(0, 100)}`);
-        else (seen[f] ??= []).push(line.slice(i + GATE_OK.length).trim());
+        else (seen[group(f)] ??= []).push(line.slice(i + GATE_OK.length).trim());
       }
     }
     assert.deepEqual(unmarked, [], "raw read without a `// gate-ok: <reason>` marker: route it through store.readVisible / filterVisible (or the SQL predicate), or mark it and list it in EXPECTED_SITES");
@@ -199,9 +240,9 @@ describe("B: one gate for reading a note", () => {
       const t = read(f);
       const code = t.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
       const tables = new Set([...code.matchAll(GATED_SQL_RE)].map((m) => m[1]));
-      if (tables.size) sql[f] = [...tables].sort();
+      if (tables.size) sql[group(f)] = [...new Set([...(sql[group(f)] ?? []), ...tables])].sort();
       const n = t.split("\n").filter((l) => /includeDistrusted: ?true/.test(l) && !/\? \{ includeDistrusted: true \} : \{\}/.test(l) && !/^\s*\/\//.test(l)).length;
-      if (n) optIn[f] = n;
+      if (n) optIn[group(f)] = (optIn[group(f)] ?? 0) + n;
     }
     assert.deepEqual(sql, SQL_ALLOWED, "SQL on a gated table belongs in store.ts / src/store/, behind the gate: route it through the Store, or review it and list it in SQL_ALLOWED");
     assert.deepEqual(optIn, INTERNAL_OPT_IN, "an unconditional includeDistrusted: true was added or removed: review it, then update INTERNAL_OPT_IN");
@@ -215,7 +256,7 @@ describe("B: one gate for reading a note", () => {
   });
 
   test("every HTTP GET route and every MCP tool is classified", () => {
-    const api = read("api.ts");
+    const api = readGroup("api.ts");
     const routes = new Set<string>();
     for (const m of api.matchAll(/req\.method === "GET" && \(?path === "([^"]+)"/g)) routes.add(m[1]);
     if (/req\.method === "GET" && idMatch/.test(api)) routes.add("/notes/:id");
@@ -223,12 +264,12 @@ describe("B: one gate for reading a note", () => {
     if (/req\.method === "GET" && SIGN_PAGES\[path\]/.test(api)) routes.add("(sign pages)");
     if (/req\.method === "GET" && sessMatch/.test(api)) routes.add("/sessions/:id");
     if (/req\.method === "GET" && qCtxMatch/.test(api)) routes.add("/quarantine/:id/context");
-    const NOTE_ROUTES = ["/notes", "/notes/:id", "/search", "/stats", "/changes", "/tasks", "/tasks/:id", "/handoffs", "/catch-up", "/export", "/index", "/timeline", "/sessions", "/sessions/:id", "/files/timeline", "/quality", "/quarantine", "/quarantine/:id/context"];
+    const NOTE_ROUTES = ["/notes", "/notes/:id", "/search", "/stats", "/changes", "/tasks", "/tasks/:id", "/handoffs", "/catch-up", "/export", "/index", "/timeline", "/sessions", "/sessions/:id", "/files/timeline", "/quality", "/quarantine", "/quarantine/:id/context", "/ui/review"];
     // /access: the read access log holds writer labels and redacted query previews, never note text.
-    const NO_NOTE_CONTENT = ["/health", "/proof", "/status", "/ready", "/", "/dashboard.js", "/favicon.ico", "(sign pages)", "/runner/status", "/trust", "/access", "/whoami", "/audit", "/insights", "/tokens"];
+    const NO_NOTE_CONTENT = ["/health", "/proof", "/status", "/ready", "/", "/dashboard.js", "/favicon.ico", "(sign pages)", "/runner/status", "/trust", "/access", "/whoami", "/audit", "/insights", "/tokens", "/ui/state", "/ui/needs-you", "/ui/apps", "/ui/sync", "/ui/update/log"];
     assert.deepEqual([...routes].sort(), [...NOTE_ROUTES, ...NO_NOTE_CONTENT].sort(), "a GET route was added: add it to NOTE_ROUTES (and to the canary test below) or NO_NOTE_CONTENT");
 
-    const mcp = read("mcp-server-core.ts");
+    const mcp = readGroup("mcp-server-core.ts");
     const tools = new Set<string>([...mcp.matchAll(/server\.registerTool\(\s*"([a-z_]+)"/g)].map((m) => m[1]));
     const NOTE_TOOLS = ["state_read", "state_search", "state_relevant", "state_list", "memory_stats", "memory_receipt", "memory_why", "memory_consolidation_candidates", "memory_since", "task_get", "task_list", "catch_up", "memory_ack", "memory_history", "memory_index", "memory_timeline", "memory_get", "session_list"];
     const OTHER_TOOLS = ["state_write", "state_delete", "memory_consolidate", "memory_rebuild_edges", "task_put", "task_claim", "task_approve", "session_handoff", "memory_quarantine", "runner_status", "trust_policy", "memory_supersede_preview", "memory_supersede_confirm", "memory_supersede_undo", "memory_restore_version", "memory_history_purge", "memory_rollback", "memory_confirm", "memory_flag"];
@@ -287,6 +328,7 @@ describe("B: the canary never reaches a non-admin reader through any classified 
         ["/quality", 403, ""], // admin only: it lists every writer's titles
         ["/quarantine", 403, ""], // admin only: held writes carry their full text
         ["/quarantine/1/context", 403, ""], // admin only: lists other writers' titles next to a held write
+        ["/ui/review", 403, ""], // the main key only: the review list names other writers' notes
       ];
       for (const [p, status, must] of routes) {
         const r = await fetch(base + p, { headers: { Authorization: `Bearer ${TOKEN}` } });
@@ -369,9 +411,9 @@ describe("B: the canary never reaches a non-admin reader through any classified 
 
 describe("docs name every MCP tool", () => {
   test("SKILL.md frontmatter and docs/architecture.md list every registered tool", () => {
-    const mcp = read("mcp-server-core.ts");
-    const tools = [...mcp.matchAll(/server\.registerTool\(\s*"([a-z_]+)"/g)].map((m) => m[1]);
-    assert.ok(tools.length >= 20);
+    // 1.6: the tools a client is shown are the 16 memory_* tools; the 1.5 names are hidden aliases (tool-names.ts).
+    const tools = [...NEW_TOOLS];
+    assert.ok(tools.length >= 14);
     const root = join(SRC, "..");
     const skill = readFileSync(join(root, "SKILL.md"), "utf8");
     const front = skill.slice(0, skill.indexOf("\n---", 4));

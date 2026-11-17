@@ -33,17 +33,20 @@ name below is one line of that report:
 | **Sources** | No | The `source` a writer claims for a note, and the source named when confirming one |
 | Access counters | No | Ranking input; not sensitive |
 | **Old versions** (`note_history`) | Body: yes, when a key exists | Earlier versions of an edited note. The body is sealed like a note body; the old title and tags stay plain |
-| **Held writes** (`quarantine`) | Yes, when a key exists | Title, body and tags of a write waiting for approval are all sealed, bound to their queue row |
+| **Held writes** (table `quarantine`) | Yes, when a key exists | Title, body and tags of a write waiting for approval are all sealed, bound to their queue row |
 | **Embeddings** (`note_vectors`) | No | Vectors are stored unencrypted, and with `MONOMEM_EMBEDDINGS=on` the **decrypted body is sent to your embeddings endpoint** when a note is embedded. Leave semantic search off if that matters |
 | **Captured prompts and tool output** (`capture_events`) | Yes, when a key exists | The raw events the capture hooks record (kept 7 days). Events recorded before the key existed are sealed by `encrypt enable` |
 | **Captured titles and tags** (automatic capture) | Kept out of them (1.5.0) | With a key present, a captured note gets a fixed title ("Decision (sealed)", "Session 2026-11-14"), the sentence it was built from goes into the sealed body, and no `obs.concept:<word>` tags are made. Notes captured **before** the key existed, or by a version before 1.5.0, keep their old titles and tags: `encrypt enable` seals bodies, it does not rewrite titles |
 | **Captured file paths and folders** (`note_files.path`, `sessions.cwd`) | No | The files a session edited or read, and the folder it ran in, are kept as plain paths so "what does memory know about this file" works. A secret in a file or folder name stays readable |
-| **Code anchors** (`code_anchors`, 1.5.0) | No | The files a note says it is about (`files` on `state_write` / `POST /notes`): the repository folder, each file path and git's ids for the file and commit. Kept plain because every read compares them with git. They are names, not note text, but a file name can say what a note is about (`src/payroll-export.ts`), so leave `files` out of a note whose subject must stay private |
+| **Code anchors** (`code_anchors`, 1.5.0) | No | The files a note says it is about (`files` on `memory_save` / `POST /notes`): the repository folder, each file path and git's ids for the file and commit. Kept plain because every read compares them with git. They are names, not note text, but a file name can say what a note is about (`src/payroll-export.ts`), so leave `files` out of a note whose subject must stay private |
+| **Claim checks** (`code_claims`) | No | A note's `claims` on `memory_save`: the repository folder, file paths, the check text (`contains` text, a package name) and hashes of cited lines. Kept plain because reads re-check them ([claim-checks.md](./claim-checks.md)) |
 | **Capture spool** (`capture-spool.jsonl` in the data folder) | Yes, when a key exists (1.5.0) | Each waiting hook event is sealed and bound to its line id. Lines spooled before 1.5.0 or before the key existed stay plain JSON until the next hook takes them in |
 | Captured tool names, event times, the model name | No | Needed to list sessions; not your text |
 | **Search index** (FTS) | No — and **sealed bodies are not indexed on disk** | It holds every title and tag, and the body of any note still stored plain. See below |
 | **Body search index** (in memory, 1.5.0) | Not on disk | While encryption is on, each Monomem process that searches (the servers build it at start) holds an index of every body's words, decrypted, in RAM only. Monomem never writes it to the database, the WAL or a temp file. The operating system **can** page it to swap or a hibernation file, and a crash dump can contain it. The session-start hook never builds the body index; it uses a running Monomem server's index for this store if there is one, else it matches titles and tags. `MONOMEM_BODY_INDEX=off` turns it off. See below |
-| **Change feed log** (`change_log`) | No | The titles of recent changes, kept for the change feed (`monomem changes`) and pruned after its retention period |
+| **Passage index** (`passages_fts`, 1.6, off by default) | No — and never built with a key | With `passage_pooling` on, the words of each plain note body, cut into passages, for search. Pooling never runs on a store with a key, and `encrypt enable` drops this index in the same transaction that seals the bodies. Built with FTS5 secure-delete, so a deleted note's words leave it at once; `monomem scrub` rebuilds it |
+| **Change feed log** (`change_log`) | No | The titles of recent changes, kept for the change feed (`monomem activity`) and pruned after its retention period |
+| **Observed evidence** (`note_evidence`, 1.6) | Yes, when a key exists | What a writer said it observed for a note (`evidence` on `memory_save`): kinds and references such as `src/a.ts:12`, a command or a URL, after the secret redactor. Evidence saved before the key stays plain. Removed when its note is deleted |
 | **Access log** | Yes, when a key exists | The redacted, 120-character preview of what each read asked for ([access-log.md](./access-log.md)) |
 | **Audit log** (`audit.log`) | No note text | Operations, ids, namespaces and byte counts only, by design |
 | **Server log** (`server.log`, `start --log`) | No note text | Paths, ports and error messages; Monomem writes no note text there, but the file itself is plain |
@@ -79,7 +82,10 @@ Since 1.5.0, body search still works on an encrypted store, from a second index 
   search there covers titles and tags only, and the CLI search says so. Any search that runs on titles and tags only
   while bodies are sealed (over the cap, a search inside a write before the index is built, or a failed build) says so in
   its reply: a `body_search` field on REST `/search` and `/relevant` and on MCP replies. Each is counted; `GET /status`
-  (admin) and `monomem doctor` show the count and the last reason.
+  (admin) and `monomem check --setup` show the count and the last reason.
+- **Automatic backups keep it longer.** A deleted or purged note stays in the daily backups (`<data folder>/backups/`, 7 daily
+  plus 4 weekly copies) until they rotate out, up to about 5 weeks. To remove it now, delete the `backups/` folder (or the dated
+  folders made since the note was written).
 - **After a purge.** A purged note leaves the index at once, so search cannot return it. Its words can still sit in the
   server's in-memory index (search no longer finds them, but its stored data is not rewritten at once) until that server restarts; restart the servers after a purge you care
   about. A store that was over the 100,000 cap and is purged back under it gets its index again after the server restarts.
@@ -130,7 +136,7 @@ in addition to, not instead of, this.
 
 ### Export
 
-`GET /export` returns **decrypted** bodies (it requires an admin token).
+`GET /export` returns **decrypted** bodies (it requires an admin key).
 An export is therefore plaintext; store it accordingly. Re-importing into
 an encrypted store re-encrypts.
 
@@ -229,10 +235,10 @@ quietly degrades retrieval fails CI.
 
 It exercises **both** retrieval paths, because an agent has both:
 
-- `state_search` — keyword, **AND**-conjunction of prefix tokens. Precise,
+- `memory_search` (formerly `state_search`) — keyword, **AND**-conjunction of prefix tokens. Precise,
   but a natural-language question ("what did we ship in standup") matches
   nothing, because common words like "what"/"we"/"did" are not in the note.
-- `state_relevant` — **OR** semantics with keyword extraction, built
+- `memory_search` with `mode: "relevant"` (formerly `state_relevant`) — **OR** semantics with keyword extraction, built
   exactly for vague messages.
 
 The gate is measured **best-of-both-paths** (what a user experiences), and

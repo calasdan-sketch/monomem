@@ -121,7 +121,7 @@ describe("1.7.1 an empty config file is not replaced", () => {
     assert.equal(await runSetup(s2.e, makeIO(), opts({ yes: true, noTestNote: true })), 0);
   });
   test("the CLI passes --force-empty through", () => {
-    const src = readFileSync(join(dirname(CLI), "..", "..", "src", "cli.ts"), "utf8");
+    const src = readFileSync(join(dirname(CLI), "..", "..", "src", "cli", "connect.ts"), "utf8"); // setupCmd
     assert.match(src, /forceEmpty: flags\["force-empty"\] === true/);
   });
 });

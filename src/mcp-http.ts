@@ -16,6 +16,7 @@ import "./legacy-env.js"; // second: read the old CLAUDE_BRIDGE_* variables as M
 import { createServer, IncomingMessage, Server, ServerResponse } from "node:http";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { isSea } from "./self.js";
 import { resolve } from "node:path";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { Store } from "./store.js";
@@ -26,6 +27,7 @@ import { originAllowed, hostAllowed, hostRefusal, RateLimiter, AuthTarpit, clien
 import { type TokenEntry, tokenId } from "./config.js";
 import { type ServerNamespaceOpts, resolveRequestNamespace } from "./namespace.js";
 import { PayloadTooLargeError, readBody, normalizeTokens, exitOnListenError, applyServerLimits, healthBody } from "./http-common.js";
+import { handleOAuth, oauthChallenge } from "./oauth/routes.js";
 
 // Small JSON writer that never writes to an already-finished response.
 function sendJson(res: ServerResponse, status: number, payload: unknown): void {
@@ -79,6 +81,9 @@ export function createMcpHttpServer(
       sendJson(res, 403, hostRefusal(req));
       return;
     }
+    // OAuth (off by default: its routes answer 404 until `monomem oauth on`). Before the Origin check: the consent form
+    // posts from the public origin, and /authorize checks Origin itself.
+    if (await handleOAuth(req, res, url, tokens)) return;
     if (!originAllowed(req)) {
       sendJson(res, 403, { error: "origin not allowed" });
       return;
@@ -88,12 +93,16 @@ export function createMcpHttpServer(
       return;
     }
 
-    const principal = authenticateEntry(req, tokens);
+    const principal = authenticateEntry(req, tokens, "mcp");
     if (!principal) {
       const ckey = clientKey(req);
       const proceed = await tarpit.failed(ckey);
       if (!proceed || !authFailures.check(ckey)) sendJson(res, 429, { error: "rate limit exceeded" });
-      else sendJson(res, 401, { error: "unauthorized", hint: "Send your key as the header  Authorization: Bearer <key>.  Your keys: monomem token list." });
+      else {
+        const challenge = oauthChallenge();
+        if (challenge) res.setHeader("WWW-Authenticate", challenge);
+        sendJson(res, 401, { error: "unauthorized", hint: "Send your key as the header  Authorization: Bearer <key>.  Your keys: monomem keys list." });
+      }
       return;
     }
     if (!perToken.check(tokenKey(tokenId(principal)))) {
@@ -209,8 +218,10 @@ async function runStandalone(): Promise<void> {
 // Compare real (symlink-resolved) paths, case-insensitively on Windows, so a
 // drive-letter-case or bin-shim difference doesn't make the standalone entry
 // silently fail to start.
+// In a one-file build (the single executable) every module shares one URL, so the comparison below would be true
+// inside `start` too: a second listener, EADDRINUSE, exit. Only the separate-file build can be run as mcp-http.js.
 function invokedDirectly(): boolean {
-  if (!process.argv[1]) return false;
+  if (!process.argv[1] || isSea() || !/[\\/]mcp-http\.js$/.test(fileURLToPath(import.meta.url))) return false;
   try {
     const norm = (p: string): string => {
       let r: string;

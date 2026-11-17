@@ -567,7 +567,9 @@ export function scopeAllows(have: Scope, need: Scope): boolean {
  */
 export function authenticateEntry(
   req: IncomingMessage,
-  tokens: TokenEntry[]
+  tokens: TokenEntry[],
+  /** The front door asking: "mcp" from the MCP port. A key with an audience matches only there (OAuth keys: MCP only). */
+  audience?: "mcp"
 ): TokenEntry | null {
   const header = req.headers["authorization"];
   if (!header || Array.isArray(header)) return null;
@@ -578,7 +580,8 @@ export function authenticateEntry(
   const providedHash = sha256Hex(provided); // 1.5.0: a hashed entry (tokens.json) is compared on the hash, a plain one on the key
   for (const t of tokens) {
     const hit = t.token_sha256 !== undefined ? constantTimeEqual(providedHash, t.token_sha256.toLowerCase()) : constantTimeEqual(provided, t.token ?? "");
-    if (hit) found = t;
+    // An expired OAuth key is no key, and neither is a key presented at a front door it was not issued for.
+    if (hit && !(t.expires_at !== undefined && !(Date.parse(t.expires_at) > Date.now())) && (t.audience === undefined || t.audience === audience)) found = t;
   }
   return found;
 }
@@ -957,7 +960,7 @@ export function verifyAuditChain(
 
 /** The refusal for a call that needs the admin scope (state_delete, a forget date on someone else's note). */
 export const ADMIN_SCOPE_NEEDED =
-  "this token lacks the required 'admin' scope. Deleting and managing need an administrator key (the person can make one with: monomem token add <name> --admin).";
+  "this token lacks the required 'admin' scope. Deleting and managing need an administrator key (the person can make one with: monomem keys add <name> --admin).";
 
 const ROTATING_MARKER = ".audit-rotating";
 const ROTATING_STALE_MS = 5000;

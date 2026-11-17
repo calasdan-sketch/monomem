@@ -1,5 +1,5 @@
 // A search longer than 4096 characters or 64 words is refused with a clear message on every route, and the FTS builder cuts it anyway.
-import "./setup-env.js";
+import { slow } from "./setup-env.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
@@ -22,10 +22,10 @@ test("a 1 MB search is refused at once on search and relevant; the store itself 
   let t = Date.now();
   await assert.rejects(runSearch(s, big), ValidationError);
   await assert.rejects(runRelevantSearch(s, big), ValidationError);
-  assert.ok(Date.now() - t < 500);
+  assert.ok(Date.now() - t < slow(500));
   t = Date.now();
   assert.ok(s.searchRanked(big, { anyTerm: true }).length > 0, "the cut query still searches");
-  assert.ok(Date.now() - t < 2000, `took ${Date.now() - t} ms`);
+  assert.ok(Date.now() - t < slow(2000), `took ${Date.now() - t} ms`);
   s.close();
 });
 

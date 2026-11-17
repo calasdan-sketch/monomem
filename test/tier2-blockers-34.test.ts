@@ -2,7 +2,7 @@
 // contention; edge scoring moved outside the write transaction; batched
 // access bumps) and BLOCKER 4 (authorization gate before access tracking)
 // plus S-LOW-2 (memory_consolidate uniform errors under ns resolution).
-import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
+import { slow } from "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -42,7 +42,7 @@ describe("blocker 3: touch() is best-effort under write contention", () => {
       store.touch(note.id); // must not throw SQLITE_BUSY...
       const elapsed = Date.now() - start;
       // ...and must not sit out the 5s busy_timeout: contention fails fast.
-      assert.ok(elapsed < 2000, `touch() took ${elapsed}ms under contention`);
+      assert.ok(elapsed < slow(2000), `touch() took ${elapsed}ms under contention`);
 
       // The read path survives: SELECT works under WAL while the lock is held.
       const fetched = store.read(note.id, { trackAccess: true });
@@ -52,7 +52,7 @@ describe("blocker 3: touch() is best-effort under write contention", () => {
       // keeps the counts instead of erroring or losing them.
       const t1 = Date.now();
       store.flushAccess();
-      assert.ok(Date.now() - t1 < 2000, "flush fails fast under contention");
+      assert.ok(Date.now() - t1 < slow(2000), "flush fails fast under contention");
       assert.equal(store.read(note.id)!.access_count, 2);
 
       blocker.exec("ROLLBACK;");

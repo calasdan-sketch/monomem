@@ -4,7 +4,7 @@
 import "./setup-env.js";
 import { test, describe, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
@@ -37,12 +37,12 @@ const REST_PROBES: Record<string, RestProbe> = {
   "POST /get": (c, n) => c("POST", "/get", { ids: [n] }),
   "GET /tasks": (c) => c("GET", "/tasks"),
   "GET /tasks/:id": (c, _n, t) => c("GET", `/tasks/${t}`),
-  "POST /tasks/:id/claim": (c, _n, t) => c("POST", `/tasks/${t}/claim`, { owner: "B" }),
   "PUT /tasks/:id": (c, _n, t) => c("PUT", `/tasks/${t}`, { owner: "B2" }),
   "GET /catch-up": (c) => c("GET", "/catch-up?consumer=zz"),
 };
 /** Routes with no probe, each with the reason it cannot hand a token an unconfirmed note it did not write itself. */
 const REST_EXEMPT: Record<string, string> = {
+  "POST /tasks/:id/claim": "A1: refuses a task that needs a person (unconfirmed outside content) and returns none of it; a claimable task is never unconfirmed (test/taint-reply-register.test.ts)",
   "GET /changes": "titles and ids only; the payload has no unconfirmed flag, so nothing registers (MCP memory_since probes the ids itself). Known gap, not a content leak",
   "GET /notes/:id/history": "admin only",
   "GET /health": "no note content",
@@ -90,10 +90,29 @@ const REST_EXEMPT: Record<string, string> = {
   "GET /export": "admin backup",
   "POST /import": "admin",
   "GET /trust": "no note content",
+  // routes-ui.ts: every /ui/ route needs the main (admin) key with no pin and no limit.
+  "GET /ui/state": "main key only; settings and version, no note content",
+  "GET /ui/needs-you": "main key only; counts and plain sentences, no note content",
+  "GET /ui/review": "main key only (like monomem review); ids and titles, no unconfirmed flag in the payload",
+  "POST /ui/review/:id/keep": "main key plus a person session; replies counts",
+  "PUT /ui/settings": "main key plus a local sign-in; replies settings",
+  "GET /ui/apps": "main key plus a local sign-in; app names, no note content",
+  "POST /ui/apps/connect": "main key plus a local sign-in; replies command output",
+  "POST /ui/update": "main key plus a local sign-in; check replies command output, update starts in the background",
+  "GET /ui/update/log": "main key plus a local sign-in; the update's own output, no note content",
+  "POST /ui/remove": "main key plus a local sign-in; replies command output",
+  "POST /ui/service": "main key plus a local sign-in; replies command output",
+  "POST /ui/backup": "main key plus a local sign-in; replies the backup folder",
+  "GET /ui/sync": "main key plus a local sign-in; sync kind, folder or scrubbed address, no note content",
+  "POST /ui/sync/setup": "main key plus a local sign-in; replies command output",
+  "POST /ui/sync/now": "main key plus a local sign-in; replies command output",
 };
 
 function restRoutesInSource(): string[] {
-  const api = readFileSync(join(SRC, "api.ts"), "utf8");
+  // api.ts and the route files split out of it (src/api/).
+  const api = [join(SRC, "api.ts"), ...readdirSync(join(SRC, "api")).filter((f) => f.endsWith(".ts")).sort().map((f) => join(SRC, "api", f))]
+    .map((p) => readFileSync(p, "utf8"))
+    .join("\n");
   const found = new Set<string>();
   const named: Record<string, string> = {
     idMatch: "/notes/:id",
@@ -109,6 +128,7 @@ function restRoutesInSource(): string[] {
     qCtxMatch: "/quarantine/:id/context",
     qMatch: "/quarantine/:id",
     del: "/tokens/:label",
+    keep: "/ui/review/:id/keep",
   };
   for (const m of api.matchAll(/req\.method === "([A-Z]+)" && (?:\(?path === "([^"]+)"|\(?(\w+)|\/\^)/g)) {
     const [, method, lit, v] = m;
@@ -174,7 +194,6 @@ const MCP_PROBES: Record<string, (n: number, t: number) => Record<string, unknow
   catch_up: () => ({ consumer: "zz" }),
   task_get: (_n, t) => ({ id: t }),
   task_list: () => ({}),
-  task_claim: (_n, t) => ({ id: t, owner: "me" }),
   task_put: (_n, t) => ({ id: t, owner: "me2" }),
 };
 /** Replies that carry ids and titles but no unconfirmed flag; the connection marks them by probing the ids (ID_PROBE_TOOLS). */
@@ -193,6 +212,7 @@ const MCP_EXEMPT: Record<string, string> = {
   session_handoff: "creating tool (own handoff)",
   session_list: "session rows, no note text",
   task_approve: "admin",
+  task_claim: "A1: refuses a task that needs a person (unconfirmed outside content) and returns none of it; a claimable task is never unconfirmed (test/taint-reply-register.test.ts)",
   memory_quarantine: "admin",
   runner_status: "no note content",
   trust_policy: "no note content",
@@ -207,7 +227,7 @@ const MCP_EXEMPT: Record<string, string> = {
 };
 
 async function mcp(store: Store, conn: Record<string, unknown> = { local: true }) {
-  const server = createMcpServer(store, "admin", { tools: "all" }, conn);
+  const server = createMcpServer(store, "admin", {}, conn); // legacy-1.5,all (setup-env): the 1.5 tools; each 1.6 tool calls one of them
   const [c, s] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "t", version: "1.0.0" });
   await Promise.all([client.connect(c), server.connect(s)]);
