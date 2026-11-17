@@ -119,6 +119,7 @@ import * as surfaceOps from "./store/surfaces.js";
 import * as clientKeyOps from "./store/client-keys.js";
 import * as flagOps from "./store/flags.js";
 import * as codeAnchorOps from "./store/code-anchors.js";
+import * as claimOps from "./claims.js";
 import type { CodeChange, CodeChangedItem } from "./store/code-anchors.js";
 export type { CodeChange, CodeChangedItem };
 import type { FlaggedItem, NoteFlag } from "./store/flags.js";
@@ -803,6 +804,9 @@ export interface NoteRecord {
   /** 1.5.0 (R2-03): files this note is about that changed in git since it was written (store/code-anchors.ts); with its label. */
   code_changed?: CodeChange[];
   code_changed_label?: string;
+  /** PLAN I: claims (memory_save claims, src/claims.ts) that no longer hold in the files; with its label. */
+  claims_failed?: claimOps.ClaimFailure[];
+  claims_label?: string;
 }
 
 /** The re-confirmation expiry settings (_meta; Store.confirmSettings). `set_at`: when the mode was last changed. */
@@ -2472,6 +2476,8 @@ export class Store {
       clientKey?: string;
       /** R2-03: files the note is about, as the request named them (checkFilesInput); anchored in the writer's git repository. */
       files?: string[];
+      /** PLAN I: claim checks and line citations, as the request gave them (src/claims.ts checks them now, before the lock). */
+      claims?: unknown;
     } & LintOpts = {}
   ): NoteRecord {
     if (!opts.bulkImport) this.floodGate(opts.lint ?? "full");
@@ -2495,6 +2501,7 @@ export class Store {
     // R2-03: the git calls run here, before the write lock; a path outside the repository is refused before anything is stored.
     // ponytail: a held create (quarantine) does not keep its anchors; carry them in the hold if asked.
     const anchors = codeAnchorOps.prepareAnchors(opts.files);
+    const claims = claimOps.prepareClaims(opts.claims);
     const taint = [
       ...new Set([
         ...this.taintFor(input.outside, opts.bulkImport || opts.writtenBy !== undefined ? null : currentWriter()),
@@ -2624,6 +2631,7 @@ export class Store {
       if (opts.clientKey !== undefined) clientKeyOps.recordClientKey(this, id, writer, opts.clientKey, now);
       this.addLinks(id, derived, writer, now);
       codeAnchorOps.setAnchors(this, id, anchors, now);
+      claimOps.setClaims(this, id, claims, now);
       this.stampCliTerminal(id, writer);
       // An archived (restored-as-forgotten) note stays out of the edge graph.
       if (!archivedAt) this.noteWritten(namespace, id, { rev: startRev, title: input.title, body });
@@ -2902,7 +2910,7 @@ export class Store {
       r.access_count += p.n;
       if (!r.last_accessed || p.at > r.last_accessed) r.last_accessed = p.at;
     }
-    return codeAnchorOps.annotateCodeChanged(this, row, flagOps.annotateFlags(this, row, this.annotateConfirmRules(row, annotateRetention(row, r))));
+    return claimOps.annotateClaims(this, row, codeAnchorOps.annotateCodeChanged(this, row, flagOps.annotateFlags(this, row, this.annotateConfirmRules(row, annotateRetention(row, r)))));
   }
 
   /**

@@ -2177,9 +2177,14 @@ async function main(): Promise<void> {
       const store = new Store(DB_PATH);
       try {
         const list = store.codeChangedList(ns !== undefined ? [ns] : undefined);
-        if (flags.json === true) console.log(JSON.stringify({ code_changed: list }, null, 2));
-        else if (!list.length) console.log("No note is about code that changed since it was written.");
-        else (await import("./cli/trust.js")).printCodeChanged(list);
+        const claims = await import("./claims.js"); // PLAN I: the claims pass (checks and cited lines against the files)
+        const checked = claims.claimsReview(store, ns !== undefined ? [ns] : undefined);
+        if (flags.json === true) console.log(JSON.stringify({ code_changed: list, claims_failed: checked.failed, claims_holding: checked.holding }, null, 2));
+        else {
+          if (!list.length) console.log("No note is about code that changed since it was written.");
+          else (await import("./cli/trust.js")).printCodeChanged(list);
+          claims.printClaimsReview(checked);
+        }
       } finally {
         store.close();
       }

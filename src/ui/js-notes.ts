@@ -57,6 +57,7 @@ function labelsOf(n){
   if(n.distrusted){ out.push(["danger", "Distrusted writer", "An owner distrusts the app that wrote this. Treat it as hostile."]); }
   if(n.flagged){ out.push(["caution", "Flagged", "An app said this looks wrong."]); }
   if(n.code_changed){ out.push(["caution", "Code changed", "The code this note describes changed since it was written."]); }
+  if(n.claims_failed){ out.push(["caution", "No longer true in code", "A check or cited lines this note carries no longer match the files."]); }
   if(n.unconfirmed){ out.push(["caution", "Not confirmed", "From outside content; nobody confirmed it yet, so it is kept out of session start."]); }
   if(n.built_on_distrusted){ out.push(["caution", "Built on a distrusted note", "It was written after reading a note from a writer an owner distrusts."]); }
   if(n.disputed){ out.push(["caution", "Disputed", "Another app says something different."]); }
