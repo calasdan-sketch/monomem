@@ -28,8 +28,10 @@ one extra commit (or file write) per archived note** until both are upgraded. No
 only noise in the repository history. Upgrade every computer that syncs to stop it.
 
 **Going back to 1.5.** This release did not change the database format (it is still schema v22), so 1.5.x opens a
-database 1.6 used, with no restore. 1.6 adds one small table (`session_notices`) that 1.5 ignores, and 1.5 does not show
-the new labels (echoes and the other 1.6 labels). Install the older version (`npm i -g monomem@1.5`) and run
+database 1.6 used, with no restore. 1.6 adds a few side tables, each made the first time a feature needs it
+(`session_notices`, `note_reads`, `writer_probation`, `note_evidence`, `code_claims`, `note_branches`,
+`rules_file_watch`, and `passages_fts` when passage pooling is on); 1.5 ignores them, and 1.5 does not show the new
+labels (echoes and the other 1.6 labels). Install the older version (`npm i -g monomem@1.5`) and run
 `monomem setup` again so your apps point at it. The sync note above applies while the two versions run side by side.
 
 **Claude Code permission lists.** If you allowed Monomem's 1.5 tools by name in Claude Code's permission settings

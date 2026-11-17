@@ -187,7 +187,7 @@ similarity edges, v5 `_meta` + gated FTS trigger, v6 edge indexes, v7
 `quarantine.written_by`; see [provenance.md](./provenance.md)), v14 (1.4.0) `notes.attested_writer` / `attested_by` /
 `merged_from_writers` (+ the matching `change_log.note_*` columns) and three tables: `trust_distrust` (the distrust
 rules, per namespace), `trust_attesters` (trusted export signers: key, pinned `server_id`, `label`, optional
-`not_after`) and `trust_log` (who changed the policy; newest 1000 rows kept); see [trust.md](./trust.md), v15 (1.6.0) `notes.confidence` /
+`not_after`) and `trust_log` (who changed the policy; newest 1000 rows kept); see [trust.md](./trust.md), v15 (OneMemory 1.6.0) `notes.confidence` /
 `confidence_by` / `superseded_by` / `superseded_at` / `superseded_by_writer` and tables `note_history` (earlier versions, bounded per note),
 `supersede_used` (single-use confirmation codes) and `supersede_log`; see [replacing-memories.md](./replacing-memories.md), v17
 `access_log` (the read access log) and `write_rate` (the flood guard's per-writer counter); see [access-log.md](./access-log.md), v18
