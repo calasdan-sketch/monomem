@@ -86,7 +86,8 @@ function noteMenu(n){
   var l = LVL_OPT[n.sensitivity] ? n.sensitivity : "internal";
   items.push("<hr><div class='cap'>Who can see this</div>" + ["public","internal","private"].map(function(o){
     return "<button role='menuitemradio' aria-checked='"+(o === l)+"' onclick='setLabel("+id+",&quot;"+o+"&quot;)'>"+LVL_OPT[o]+"</button>"; }).join(""));
-  if(IS_ADMIN){ items.push("<hr><button role='menuitem' aria-label='archive note #"+id+"' onclick='archiveNote("+id+")'>Archive</button>"); }
+  if(IS_ADMIN){ items.push("<hr><button role='menuitem' onclick='touchedNote("+id+")'>What did this touch?</button>"); }
+  if(IS_ADMIN){ items.push("<button role='menuitem' aria-label='archive note #"+id+"' onclick='archiveNote("+id+")'>Archive</button>"); }
   return "<details class='menu'><summary aria-label='More for note #"+id+"' title='More'>&middot;&middot;&middot;</summary><div class='pop' role='menu'>"+items.join("")+"</div></details>";
 }
 function noteCard(n, extra){
@@ -152,6 +153,23 @@ function archiveNote(id){
 }
 function restoreNote(id){
   api("/notes/" + id + "/restore", { method:"POST" }).then(function(){ refreshView(); toast("Restored."); }).catch(fail);
+}
+// "What did this touch?": who read the note and what was built on it (proven apart from likely), then an optional rollback by
+// note: the server's plan first, one confirm, all or nothing. Likely items are only listed, never undone from here.
+function touchedPre(t){ return "<pre class='t-foot' style='white-space:pre-wrap;margin:8px 0 0'>"+esc(t)+"</pre>"; }
+function touchedNote(id){
+  closeMenus();
+  api("/notes/" + Number(id) + "/touched").then(function(t){
+    ask("Note #" + Number(id) + ": who read it and what was built on it.", "Undo it and what was built on it", function(){
+      api("/rollback/preview", { method:"POST", body: JSON.stringify({ note: Number(id) }) }).then(function(p){
+        if(!p.actions || !p.actions.length){ toast("Nothing to undo."); return; }
+        ask("The plan, nothing changed yet:", "Undo", function(){
+          api("/rollback/confirm", { method:"POST", body: JSON.stringify({ note: Number(id), token: p.token }) })
+            .then(function(r){ refreshView(); loadNeeds(); toast(r && r.message ? r.message : "Undone."); }).catch(fail);
+        }, touchedPre(p.warning || ""));
+      }).catch(fail);
+    }, touchedPre(t.text || ""));
+  }).catch(fail);
 }
 function refreshView(){ var f = { list: load, review: loadReview, held: loadHeld, archived: loadArchived, quality: loadQuality }[VIEW]; if(f){ f(); } }
 
