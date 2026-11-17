@@ -371,6 +371,17 @@ describe("monomem update", () => {
     assert.match(t.all(), /Could not reach github\.com to look for an update \(fetch failed.*\)\. Nothing was changed/);
   });
 
+  test("a release tag that is not exactly a version is refused before any folder is touched (r3 security L1)", async () => {
+    const root = fakeBundle(scratch(), "1.6.0");
+    mkdirSync(join(root, "victim"), { recursive: true });
+    writeFileSync(join(root, "victim", "keep.txt"), "x");
+    const t = deps(root, { ...release(), tag_name: "v1.7.0/../victim" });
+    assert.equal(await runUpdate({ check: false }, t.d), 1);
+    assert.match(t.all(), /no version number I understand/);
+    assert.ok(existsSync(join(root, "victim", "keep.txt")), "nothing outside the update folder was removed");
+    assert.equal(readFileSync(join(root, "runtime", "node"), "utf8"), "node for 1.6.0");
+  });
+
   test("a new copy that does not start is never swapped in", async () => {
     const root = fakeBundle(scratch(), "1.6.0");
     const t = deps(root, release(), { run: () => ({ status: 1, stdout: "" }) });
