@@ -288,6 +288,9 @@ export async function runHook(eventArg: string, stdinText: string, opts: HookOpt
       return "";
     }
   }
+  // Cursor's sessionStart (cursor.com/docs/hooks): its stdin names the folder as workspace_roots[0], not cwd, and it reads
+  // {"additional_context": "..."} back. Same notes and the same capture as session-start; only the envelope differs.
+  if (eventArg === "cursor-session-start") return cursorSessionStart(parsePayload(stdinText), opts);
   // SubagentStart (MONOMEM_SUBAGENT_MEMORY=on): a short memory pack for the subagent. Not a capture event.
   if (eventArg === "subagent-start") return subagentStartHook(parsePayload(stdinText), opts.env ?? process.env, opts);
   // The detached child spawnLlmSummary starts: rewrite one session's summary with the local model.
@@ -346,4 +349,20 @@ export async function runHook(eventArg: string, stdinText: string, opts: HookOpt
     process.stderr.write(`monomem hook session-start: no notes this time (${(e as Error)?.message ?? String(e)})\n`);
     return '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":""}}';
   }
+}
+
+/** `hook cursor-session-start`: session-start for Cursor, answered in Cursor's shape. Fail-open: "{}" when nothing to add. */
+export async function cursorSessionStart(payload: Record<string, unknown>, opts: HookOptions = {}): Promise<string> {
+  const roots = Array.isArray(payload.workspace_roots) ? payload.workspace_roots : [];
+  const cwd = typeof payload.cwd === "string" ? payload.cwd : typeof roots[0] === "string" ? roots[0] : undefined;
+  const inner = { ...payload, ...(cwd ? { cwd } : {}), hook_event_name: "SessionStart" };
+  let text = "";
+  try {
+    const out = await runHook("session-start", JSON.stringify(inner), opts);
+    const ctx = (parsePayload(out).hookSpecificOutput as { additionalContext?: unknown } | undefined)?.additionalContext;
+    text = typeof ctx === "string" ? ctx : "";
+  } catch (e) {
+    process.stderr.write(`monomem hook cursor-session-start: no notes this time (${(e as Error)?.message ?? String(e)})\n`);
+  }
+  return text ? JSON.stringify({ additional_context: text }) : "{}";
 }

@@ -26,6 +26,7 @@ import { EMBEDDINGS_OFFER_ENV, embeddingsOfferLine } from "./embeddings-offer.js
 import { privateDir } from "./private-dir.js";
 import { addToPath, installDir, pathPlan, removeFromPath, samePath, windowsUserPath, type PathEntry } from "./install.js";
 import { subagentMemoryOn } from "./prompt/switches.js";
+import { planCursorHook } from "./setup/cursor-hook.js";
 import { EXTRA_CLIENT_IDS, EXTRA_TARGETS, extraFound, extraTarget, shapeEntry, stdView } from "./setup/targets.js";
 import { SELF_CLI, quoteShellArg, selfCommand, selfFacts, selfShellLine, type SelfFacts, type SelfMode } from "./self.js";
 
@@ -1235,6 +1236,8 @@ export interface HookHost {
   events: ReadonlyArray<CaptureHook>;
   /** Extra plan lines (notes). */
   notes?: string[];
+  /** "cursor": ~/.cursor/hooks.json's own shape, start-of-session only (setup/cursor-hook.ts). */
+  format?: "cursor";
 }
 
 /**
@@ -1304,6 +1307,7 @@ export function hookHosts(e: SetupEnv): HookHost[] {
         return { on, event, async: false };
       }),
     },
+    { client: "cursor", label: "Cursor hook", agent: "Cursor", file: join(e.home, ".cursor", "hooks.json"), start: { on: "sessionStart" }, events: [], format: "cursor" },
   ];
 }
 
@@ -1315,6 +1319,7 @@ export function hookHosts(e: SetupEnv): HookHost[] {
  * `upgradeOnly` (with capture): only rewrite capture hooks of the old package / another npx version, add none.
  */
 export function planHooks(e: SetupEnv, opts: SetupOptions, dbForHook: string | undefined, want: { recall: boolean; capture: boolean; upgradeOnly?: boolean }, host: HookHost = hookHosts(e)[0]): { change: FileChange | null; already: boolean; conflict?: string } {
+  if (host.format === "cursor") return want.recall && !want.upgradeOnly ? planCursorHook(e, opts, dbForHook, host) : { change: null, already: true };
   const file = host.file;
   const text = readTextFile(file);
   if (text === "" && !opts.forceEmpty) return { change: null, already: false, conflict: EMPTY_FILE_MSG(file) };
