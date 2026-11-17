@@ -10,56 +10,20 @@
 // session-start also prints the start-of-session context (recall.ts / context-inject.ts), exactly like `monomem recall`.
 // user-prompt prints one title line per note other writers saved since the previous prompt (nothing when there are none).
 // file-context (PreToolUse on Read) prints what memory knows about the file about to be read (file-context.ts); advisory only.
+// taint-gate (PreToolUse, opt-in) asks the person before a listed action once the session read outside content (taint-gate.ts).
+// session-start also adds one line when AGENTS.md / CLAUDE.md changed since the last session (rules-watch.ts).
 import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { loadKey } from "./crypto.js";
 import { spawn } from "node:child_process";
 import { selfCommand } from "./self.js";
+import { parsePayload } from "./hook-stdin.js";
 import { HOOK_EVENTS, type HookEvent, captureSettings, normalizeHookInput, shouldCapture, recordEvent, spoolEvent, drainSpool, type CaptureEvent } from "./capture.js";
 
-/** stdin is read up to this much; the rest is ignored (a hook payload past 1 MiB is a tool output we only keep 4 KB of). */
-export const STDIN_MAX = 1024 * 1024;
-/** Give up on a stdin that never closes (a hook started by hand in a terminal) after this long. */
-const STDIN_WAIT_MS = 2000;
+export { STDIN_MAX, readStdin, parsePayload } from "./hook-stdin.js";
 /** Lock wait for the hook's database open: a busy database means "spool it", never "make the agent wait". */
 const HOOK_BUSY_MS = 250;
 const REST_TIMEOUT_MS = 2000;
-
-export async function readStdin(stream: NodeJS.ReadableStream & { isTTY?: boolean } = process.stdin, max = STDIN_MAX): Promise<string> {
-  if (stream.isTTY) return "";
-  return new Promise((resolve) => {
-    const chunks: Buffer[] = [];
-    let size = 0;
-    let done = false;
-    const finish = (): void => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      stream.removeAllListeners?.("data");
-      resolve(Buffer.concat(chunks).toString("utf8"));
-      (stream as { pause?: () => void }).pause?.();
-    };
-    const timer = setTimeout(finish, STDIN_WAIT_MS);
-    (timer as unknown as { unref?: () => void }).unref?.();
-    stream.on("data", (c: Buffer | string) => {
-      const b = typeof c === "string" ? Buffer.from(c) : c;
-      if (size < max) chunks.push(b.subarray(0, max - size));
-      size += b.length;
-      if (size >= max) finish();
-    });
-    stream.on("end", finish);
-    stream.on("error", finish);
-  });
-}
-
-export function parsePayload(text: string): Record<string, unknown> {
-  try {
-    const v = JSON.parse(text) as unknown;
-    return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
-  } catch {
-    return {};
-  }
-}
 
 export interface HookOptions {
   dbPath?: string;
@@ -275,6 +239,19 @@ async function subagentStopNote(store: import("./store.js").Store, payload: Reco
   subagentTrail(store, sid, agentKind(payload.agent_type), message, res.kind === "resolved" ? res.namespace : undefined);
 }
 
+/** Monomem's own line after the session-start context (outside the notes' untrusted block); the output unchanged if it is not hook JSON. */
+export function withContextLine(out: string, line: string): string {
+  try {
+    const o = JSON.parse(out) as { hookSpecificOutput?: { additionalContext?: unknown } };
+    const h = o.hookSpecificOutput;
+    if (!h || typeof h !== "object") return out;
+    h.additionalContext = (typeof h.additionalContext === "string" && h.additionalContext ? h.additionalContext + "\n\n" : "") + line;
+    return JSON.stringify(o);
+  } catch {
+    return out;
+  }
+}
+
 /**
  * The whole hook: returns the text to print on stdout ("" = print nothing). Never throws.
  */
@@ -284,6 +261,14 @@ export async function runHook(eventArg: string, stdinText: string, opts: HookOpt
     try {
       const { fileContextHook } = await import("./file-context.js");
       return await fileContextHook(parsePayload(stdinText), opts);
+    } catch {
+      return "";
+    }
+  }
+  // PreToolUse taint gate (opt-in, taint-gate.ts): "ask" before a listed action once the session read outside content.
+  if (eventArg === "taint-gate") {
+    try {
+      return await (await import("./taint-gate.js")).taintGateHook(parsePayload(stdinText), opts);
     } catch {
       return "";
     }
@@ -313,7 +298,7 @@ export async function runHook(eventArg: string, stdinText: string, opts: HookOpt
   }
   const event = (HOOK_EVENTS as readonly string[]).includes(eventArg) ? (eventArg as HookEvent) : null;
   if (!event) {
-    process.stderr.write(`monomem hook: unknown event "${eventArg}" (one of ${[...HOOK_EVENTS, "file-context", "subagent-start"].join(", ")}); ignored\n`);
+    process.stderr.write(`monomem hook: unknown event "${eventArg}" (one of ${[...HOOK_EVENTS, "file-context", "subagent-start", "taint-gate"].join(", ")}); ignored\n`);
     return "";
   }
   const raw = parsePayload(stdinText);
@@ -324,8 +309,13 @@ export async function runHook(eventArg: string, stdinText: string, opts: HookOpt
   // C17: the prompt step runs on the store capture opened (one open per prompt); when capture did not open one (capture
   // off, a busy or missing database), it opens its own.
   let prompted: string | null = null;
+  let rulesLine = "";
   const after =
-    event === "user-prompt"
+    event === "session-start"
+      ? async (store: import("./store.js").Store): Promise<void> => {
+          if (typeof payload.cwd === "string" && payload.cwd) rulesLine = (await import("./rules-watch.js")).rulesWatchLine(store.captureDb(), payload.cwd);
+        }
+      : event === "user-prompt"
       ? async (store: import("./store.js").Store): Promise<void> => void (prompted = await newNotesHook(payload, env, opts, store))
       : event === "subagent-stop"
         ? async (store: import("./store.js").Store): Promise<void> => subagentStopNote(store, payload, env)
@@ -341,7 +331,8 @@ export async function runHook(eventArg: string, stdinText: string, opts: HookOpt
     const { runRecall } = await import("./recall.js");
     const cwd = typeof payload.cwd === "string" ? payload.cwd : undefined;
     const sessionId = typeof payload.session_id === "string" ? payload.session_id.slice(0, 200) : undefined;
-    return await runRecall({ ...(opts.dbPath ? { dbPath: opts.dbPath } : {}), ...(cwd ? { cwd } : {}), ...(sessionId ? { sessionId } : {}) });
+    const out = await runRecall({ ...(opts.dbPath ? { dbPath: opts.dbPath } : {}), ...(cwd ? { cwd } : {}), ...(sessionId ? { sessionId } : {}) });
+    return rulesLine ? withContextLine(out, rulesLine) : out;
   } catch (e) {
     process.stderr.write(`monomem hook session-start: no notes this time (${(e as Error)?.message ?? String(e)})\n`);
     return '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":""}}';

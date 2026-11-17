@@ -116,6 +116,8 @@ export interface SetupOptions {
   embeddings?: boolean;
   /** Bundle mode: put the install folder on PATH. "ask" (default: part of the plan you say y to; --yes leaves it out), "yes" (--path), "no" (--no-path). */
   path?: "ask" | "yes" | "no";
+  /** `--taint-gate`: only add the opt-in taint gate hook to Claude Code (taint-gate-setup.ts), nothing else. */
+  taintGate?: boolean;
 }
 
 export const DEFAULT_OPTIONS: SetupOptions = { dryRun: false, yes: false, undo: false, hook: "ask", project: false, noTestNote: false, noDoctor: false, command: "auto", forceEmpty: false };
@@ -1826,6 +1828,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
     return 1;
   }
   if (opts.undo) return undoLast(e, io);
+  if (opts.taintGate) return (await import("./taint-gate-setup.js")).runTaintGateSetup(e, io, opts);
   // The standalone download: app settings and hooks must name the folder's permanent home (install.ts), not the folder it
   // was unpacked in (Downloads, a temp copy of a zip). Everything below plans with the home's paths; the copy is a listed step.
   let placement: { from: string; to: string } | null = null;

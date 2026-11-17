@@ -208,10 +208,13 @@ async function hookCmd(): Promise<void> {
   const event = process.argv[3] ?? "";
   let out = "";
   try {
-    const { runHook, readStdin } = await import("./hook.js");
     const args = process.argv.slice(4);
     const i = args.indexOf("--db");
-    out = await runHook(event, await readStdin(), i >= 0 && args[i + 1] ? { dbPath: args[i + 1] } : {});
+    const opts = i >= 0 && args[i + 1] ? { dbPath: args[i + 1] } : {};
+    // The taint gate runs before every listed tool call: it skips hook.ts (capture, crypto) to stay quick.
+    const io = await import("./hook-stdin.js");
+    if (event === "taint-gate") out = await (await import("./taint-gate.js")).taintGateHook(io.parsePayload(await io.readStdin()), opts);
+    else out = await (await import("./hook.js")).runHook(event, await io.readStdin(), opts);
   } catch (e) {
     console.error(`monomem hook: ${(e as Error).message}`);
     out = event === "session-start" ? '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":""}}' : "";
@@ -1425,6 +1428,7 @@ async function projectRulesCmd(args: string[]): Promise<void> {
   const tmp = `${path}.monomem-${process.pid}.tmp`;
   writeFileSync(tmp, plan.after);
   renameSync(tmp, path);
+  await (await import("./cli/known-hosts-cmd.js")).recordRulesWrite(path); // so the next session start does not report our own block
   console.log(`Wrote the Monomem block in ${path}. Text outside the block is unchanged. Run it again after confirming or changing notes.`);
 }
 
@@ -1455,7 +1459,7 @@ async function taintCmd(args: string[]): Promise<void> {
 }
 
 async function configCmd(args: string[]): Promise<void> {
-  const usage = "Usage: monomem settings [get | set confirm-days <n> | set confirm-mode off|label|enforce]";
+  const usage = "Usage: monomem settings [get | set confirm-days <n> | set confirm-mode off|label|enforce | known-hosts [add|remove <host>]]";
   const [verb = "get", key, value, ...extra] = args;
   if (extra.length || (verb !== "get" && verb !== "set") || (verb === "get" && key !== undefined) || (verb === "set" && (value === undefined || (key !== "confirm-days" && key !== "confirm-mode")))) {
     console.error(usage);
@@ -2189,7 +2193,8 @@ async function main(): Promise<void> {
       await taintCmd(process.argv.slice(3));
       break;
     case "config":
-      await configCmd(process.argv.slice(3));
+      if (process.argv[3] === "known-hosts") await (await import("./cli/known-hosts-cmd.js")).knownHostsCmd(process.argv.slice(4));
+      else await configCmd(process.argv.slice(3));
       break;
     case "access":
       await accessCmd();

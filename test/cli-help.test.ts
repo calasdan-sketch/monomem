@@ -31,7 +31,7 @@ describe("cli help", () => {
     assert.equal(run(["help", "nosuchcmd"]).stdout, general, "an unknown word falls back to the general help");
     const hook = spawnSync(process.execPath, [CLI, "hook", "--help"], { encoding: "utf8", input: "", env: { ...process.env, NO_COLOR: "1" } });
     assert.equal(hook.status, 0);
-    assert.match(hook.stdout, /hook <session-start\|.*file-context>/);
+    assert.match(hook.stdout, /hook <session-start\|.*file-context\|taint-gate>/);
     assert.doesNotMatch(hook.stdout, /hookSpecificOutput/);
     assert.match(run(["export", "--help"]).stdout, /the plain \{"notes": \[\.\.\.\]\} shape older importers read/);
   });
