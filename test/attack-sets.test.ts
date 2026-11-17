@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../src/store.js";
 import { drillMain, runDrill, renderDrill } from "../src/drill.js";
-import { ATTACK_SETS, fetchChecked, findSet, renderAttackSet, runAttackSet, sampleVerdict } from "../src/attack-sets/index.js";
+import { ATTACK_SETS, attackHalf, fetchChecked, findSet, renderAttackSet, runAttackSet, sampleVerdict } from "../src/attack-sets/index.js";
 
 // Private temp root, so the leftover check is not confused by other test files running at the same time.
 const privateTmp = mkdtempSync(join(tmpdir(), "attacksets-tmproot-"));
@@ -84,6 +84,35 @@ describe("outside attack sets", () => {
       assert.ok(readFileSync(db).equals(bytes), "the real database file is unchanged");
       assert.deepEqual(leftovers(), []);
     } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
+  });
+
+  test("CLI: --half a|b runs one fixed half; a bad or lone --half is refused", async () => {
+    const { dir, db } = makeStore(3);
+    const prev = process.env.MONOMEM_DB_PATH;
+    process.env.MONOMEM_DB_PATH = db;
+    const lines: string[] = [];
+    const origErr = console.error;
+    const errors: string[] = [];
+    console.error = (s: string) => void errors.push(s);
+    try {
+      const all = await findSet("injecagent")!.samples();
+      const a = all.filter((s) => attackHalf(s.id) === "a").map((s) => s.id);
+      assert.ok(a.length > 0 && a.length < all.length);
+      assert.equal(await drillMain(["--set", "injecagent", "--half", "a", "--json"], (s) => lines.push(s)), 0);
+      const r = JSON.parse(lines.at(-1)!) as { half: string; rows: Array<{ id: string }> };
+      assert.equal(r.half, "a");
+      assert.deepEqual(r.rows.map((x) => x.id), a);
+      assert.equal(await drillMain(["--set=agentdojo", "--half=b"], (s) => lines.push(s)), 0);
+      assert.match(lines.at(-1)!, /half b only: held out, never tuned on/);
+      assert.equal(await drillMain(["--set", "injecagent", "--half", "c"], (s) => lines.push(s)), 2);
+      assert.equal(await drillMain(["--half", "a"], (s) => lines.push(s)), 2);
+      assert.match(errors.join("\n"), /--half needs a or b[\s\S]*--half works only with --set/);
+    } finally {
+      console.error = origErr;
+      if (prev === undefined) delete process.env.MONOMEM_DB_PATH;
+      else process.env.MONOMEM_DB_PATH = prev;
       rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
   });

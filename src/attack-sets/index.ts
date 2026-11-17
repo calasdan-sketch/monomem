@@ -13,6 +13,16 @@ import { INJECAGENT, INJECAGENT_ENHANCED_PREFIX } from "./data-injecagent.js";
 import { MINJA } from "./data-minja.js";
 import { POISONEDRAG_NQ_SHA256, POISONEDRAG_NQ_URL, POISONEDRAG_SAMPLE } from "./data-poisonedrag.js";
 
+export type Half = "a" | "b";
+
+/**
+ * Fixed tuning (a) / held-out (b) halves: the parity of the last byte of sha256(sample id), as `bench --split` does for
+ * LongMemEval. Linter patterns are tuned on half a only; half b is the reported result.
+ */
+export function attackHalf(id: string): Half {
+  return (createHash("sha256").update(id).digest()[31] & 1) === 0 ? "a" : "b";
+}
+
 export interface AttackSample {
   id: string;
   text: string;
@@ -128,6 +138,8 @@ export interface SetReport {
   samples: number;
   counts: Record<Verdict, number>;
   rows: SetRow[];
+  /** Set when only one half ran (`--half a|b`): a = the half the linter patterns were tuned on, b = held out. */
+  half?: Half;
   approve_first: boolean;
   elapsed_ms: number;
 }
@@ -146,9 +158,10 @@ export function sampleVerdict(write: OpResult, found: boolean): { verdict: Verdi
  * Write every sample as an ordinary note from an app key with write access (not declared as outside text: the harder case),
  * then search for it as a reader. Runs on a copy of `dbPath`; the real store is only read.
  */
-export async function runAttackSet(opts: { dbPath: string; set: AttackSet; samples?: AttackSample[] }): Promise<SetReport> {
+export async function runAttackSet(opts: { dbPath: string; set: AttackSet; samples?: AttackSample[]; half?: Half }): Promise<SetReport> {
   const started = Date.now();
-  const samples = opts.samples ?? (await opts.set.samples()); // download (if any) happens before the copy is made
+  const all = opts.samples ?? (await opts.set.samples()); // download (if any) happens before the copy is made
+  const samples = opts.half ? all.filter((s) => attackHalf(s.id) === opts.half) : all;
   return withStoreCopy(opts.dbPath, async (copy) => {
     const { notes, approveFirst } = copyFacts(copy);
     const adapter = new MonomemAdapter(copy);
@@ -181,6 +194,7 @@ export async function runAttackSet(opts: { dbPath: string; set: AttackSet; sampl
         samples: rows.length,
         counts,
         rows,
+        ...(opts.half ? { half: opts.half } : {}),
         approve_first: approveFirst,
         elapsed_ms: Date.now() - started,
       };
@@ -193,7 +207,7 @@ export async function runAttackSet(opts: { dbPath: string; set: AttackSet; sampl
 export function renderAttackSet(r: SetReport): string {
   const mark: Record<Verdict, string> = { held: "held   ", blocked: "blocked", warned: "warned ", reached: "REACHED" };
   const lines = [
-    `Replayed ${r.samples} samples of "${r.set}" (${r.title}) on a copy of your store (${r.notes} notes). Your store was not changed.`,
+    `Replayed ${r.samples} samples of "${r.set}" (${r.title}${r.half ? `, half ${r.half} only: ${r.half === "a" ? "the half the linter was tuned on" : "held out, never tuned on"}` : ""}) on a copy of your store (${r.notes} notes). Your store was not changed.`,
     `Source: ${r.source}, licence ${r.licence}.${r.downloaded ? " Downloaded for this run and checked against a pinned SHA-256." : " Shipped with Monomem; no network call."}`,
     "",
   ];
@@ -201,7 +215,7 @@ export function renderAttackSet(r: SetReport): string {
   const c = r.counts;
   lines.push("", `Held ${c.held}, blocked otherwise ${c.blocked}, warned ${c.warned}, REACHED ${c.reached} of ${r.samples} (Monomem ${r.version}, ${r.date}).`);
   lines.push("REACHED means a reader's search returned the note with no warning. It does not mean an agent would act on it.");
-  lines.push("These samples were written for other systems; Monomem's linter was not tuned on them.");
+  lines.push("These samples were written for other systems. Since 2026-11-17 some linter patterns were tuned on half a of them; half b (--half b) was never tuned on.");
   if (r.approve_first) lines.push(APPROVE_FIRST_NOTE);
   return lines.join("\n");
 }

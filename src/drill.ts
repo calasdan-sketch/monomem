@@ -265,14 +265,16 @@ export function renderDrill(r: DrillReport): string {
 }
 
 export const DRILL_USAGE = "monomem drill [--json]\n\n  Replay the known poisoning attacks on a copy of your store with your own settings (MONOMEM_LINT etc.).\n  Exit 0 when only known misses got through, 1 otherwise. Your store is never written to.\n\n" +
-  "monomem drill --set <name> [--json]   (same as: monomem check --attacks --set <name>)\n\n" +
+  "monomem drill --set <name> [--half a|b] [--json]   (same as: monomem check --attacks --set <name>)\n\n" +
   "  Replay a published outside attack set (InjecAgent, AgentDojo, MINJA, PoisonedRAG) on a copy the same way; every miss is shown.\n" +
+  "  --half a|b runs one fixed half (by a hash of the sample id): a = the half the linter was tuned on, b = held out.\n" +
   "  monomem drill --set list shows the sets. Only poisonedrag-nq downloads anything (checked against a pinned SHA-256).\n" +
   "  Exit 0 when the replay ran, whatever it found; 2 when it could not run.";
 
 export async function drillMain(argv: string[], out: (s: string) => void = console.log): Promise<number> {
   let json = false;
   let setName: string | undefined;
+  let half: "a" | "b" | undefined;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--help" || a === "-h") {
@@ -282,10 +284,21 @@ export async function drillMain(argv: string[], out: (s: string) => void = conso
     if (a === "--json") json = true;
     else if (a === "--set") setName = argv[++i] ?? "";
     else if (a.startsWith("--set=")) setName = a.slice("--set=".length);
-    else {
+    else if (a === "--half" || a.startsWith("--half=")) {
+      const v = a === "--half" ? argv[++i] : a.slice("--half=".length);
+      if (v !== "a" && v !== "b") {
+        console.error(`drill: --half needs a or b (got ${v === undefined ? "nothing" : `"${v}"`})`);
+        return 2;
+      }
+      half = v;
+    } else {
       console.error(`drill: unknown option ${a} (try: monomem drill --help)`);
       return 2;
     }
+  }
+  if (half && setName === undefined) {
+    console.error("drill: --half works only with --set <name>");
+    return 2;
   }
   // Loaded only for --set (it imports this file back for the copy helpers).
   const sets = setName === undefined ? undefined : await import("./attack-sets/index.js");
@@ -305,7 +318,7 @@ export async function drillMain(argv: string[], out: (s: string) => void = conso
   }
   try {
     if (sets && set) {
-      const r = await sets.runAttackSet({ dbPath, set });
+      const r = await sets.runAttackSet({ dbPath, set, half });
       out(json ? JSON.stringify(r, null, 2) : sets.renderAttackSet(r));
       return 0; // the replay ran; what it found is in the output, misses included
     }
