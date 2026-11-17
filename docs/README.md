@@ -34,6 +34,7 @@ Pick by what you want to do. Everything here is also linked from the main [READM
 | what is measured, and what is not | [BENCHMARK.md](./BENCHMARK.md) |
 | what it costs in tokens and disk | [footprint.md](./footprint.md) |
 | what it does not protect against | [SECURITY.md](../SECURITY.md) |
+| how it maps to OWASP ASI06, and what published attacks get through | [security-scorecard.md](./security-scorecard.md) |
 
 ## Look this up
 

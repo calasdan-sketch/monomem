@@ -11,6 +11,7 @@ claimed or run by any app key, admin keys included, until a person confirms it a
 
 To check your own setup, run `monomem check --attacks` (replays 26 known memory-poisoning attacks on a copy of your store; 2 of them are known
 misses) and `monomem check` (turns that and your security settings into one A to F grade, with the rule printed).
+How this maps to OWASP ASI06 (Memory & Context Poisoning), and results on published outside attack sets with every miss: [docs/security-scorecard.md](./docs/security-scorecard.md).
 
 ## Controls
 
