@@ -38,7 +38,7 @@ export async function recordRulesWrite(path: string): Promise<void> {
     const { Store } = await import("../store.js");
     const store = new Store(DB_PATH);
     try {
-      (await import("../rules-watch.js")).recordRulesFile(store.captureDb(), path);
+      (await import("../rules-watch.js")).recordRulesFile(store.captureDb(), path, new Date(), true);
     } finally {
       store.close();
     }
