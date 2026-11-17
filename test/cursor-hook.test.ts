@@ -48,6 +48,14 @@ describe("Cursor session-start hook", () => {
     assert.equal(existsSync(file), false);
   });
 
+  test("with automatic memory on too, Cursor still gets exactly one hook", async () => {
+    const s = sandbox();
+    assert.equal(await runSetup(s.e, io(), opts(s, { capture: "yes" })), 0);
+    const v = JSON.parse(readFileSync(join(s.home, ".cursor", "hooks.json"), "utf8")) as { hooks: Record<string, unknown[]> };
+    assert.deepEqual(Object.keys(v.hooks), ["sessionStart"]);
+    assert.equal(v.hooks.sessionStart.length, 1);
+  });
+
   test("--no-hook leaves hooks.json alone; existing hooks are kept and undo restores the exact bytes", async () => {
     const s = sandbox();
     const file = join(s.home, ".cursor", "hooks.json");
