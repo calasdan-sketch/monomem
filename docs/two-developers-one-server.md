@@ -1,7 +1,7 @@
 # Two developers, one Monomem server
 
 Goal: two people share one Monomem, each with their own key, and anything one marks `private` stays out of the other's reach.
-This uses Docker for the server, a key per person, and sensitivity limits. Read [Known limits](../README.md#known-limits) first.
+This uses Docker for the server, a key per person, and sensitivity limits. Read [Known limits](./known-limits.md) first.
 
 ## 1. Start the server
 
