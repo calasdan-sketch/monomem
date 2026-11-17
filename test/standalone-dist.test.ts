@@ -205,6 +205,39 @@ describe("setup from the unpacked download", () => {
     assert.deepEqual(JSON.parse(readFileSync(join(s.home, ".claude.json"), "utf8")), JSON.parse(cfg));
   });
 
+  test("over an npm install: Cursor's start-of-session hook and this repository's commit line hook move too; check names them first", async () => {
+    const s = sandbox();
+    const npmCli = join(s.root, "npm", "node_modules", "monomem", "dist", "src", "cli.js");
+    put(npmCli, "// monomem 1.5.0 from npm");
+    const cursorFile = join(s.home, ".cursor", "hooks.json");
+    const cursorText = JSON.stringify({ version: 1, hooks: { sessionStart: [{ command: "echo mine" }, { command: `node "${npmCli.replace(/\\/g, "/")}" hook cursor-session-start` }] } }, null, 2) + "\n";
+    put(cursorFile, cursorText);
+    const repo = join(s.root, "repo");
+    mkdirSync(repo, { recursive: true });
+    assert.equal(spawnSync("git", ["init", "-q"], { cwd: repo }).status, 0);
+    const { hookScript, isStale } = await import("../src/cli/commit-trail.js");
+    const gitHook = join(repo, ".git", "hooks", "prepare-commit-msg");
+    const npmFacts = { mode: "npm" as const, execPath: process.execPath, cliPath: npmCli, platform: s.e.platform };
+    put(gitHook, hookScript(npmFacts));
+    const e = { ...s.e, cwd: repo };
+    const { appEntryProblems } = await import("../src/setup.js");
+    assert.match(appEntryProblems(e).join("\n"), /Cursor hook: a Monomem hook runs another Monomem copy/);
+    assert.equal(await runSetup(e, makeIO(["y", "y", "y", "y"]), { ...o, hook: "yes", only: ["cursor"] }), 0);
+    const hooks = JSON.parse(readFileSync(cursorFile, "utf8")).hooks.sessionStart as Array<{ command: string }>;
+    assert.equal(hooks.length, 2);
+    assert.equal(hooks[0].command, "echo mine");
+    assert.match(hooks[1].command, /runtime\/node" ".*share\/monomem\/dist\/src\/cli\.js" hook cursor-session-start$/);
+    assert.deepEqual(appEntryProblems(e), []);
+    const installed = { mode: "bundle" as const, execPath: join(s.inst, "runtime", "node"), cliPath: join(s.inst, "dist", "src", "cli.js"), platform: s.e.platform };
+    assert.equal(isStale(gitHook, npmFacts), true, "the git hook no longer runs the npm copy");
+    assert.equal(readFileSync(gitHook, "utf8"), hookScript(installed), "the git hook runs the installed download");
+    // The git hook is its own setup session (like the commit line offer): the first undo puts it back, the next one Cursor's.
+    assert.equal(await runSetup(e, makeIO(), { ...o, undo: true }), 0);
+    assert.equal(readFileSync(gitHook, "utf8"), hookScript(npmFacts), "undo puts the old git hook back");
+    assert.equal(await runSetup(e, makeIO(), { ...o, undo: true }), 0);
+    assert.equal(readFileSync(cursorFile, "utf8"), cursorText);
+  });
+
   test("an older copy at home is replaced (rename-aside), not merged", () => {
     const root = scratch();
     const home = fakeBundle(join(root, "home"), "1.6.0");
@@ -586,12 +619,40 @@ describe("monomem update", () => {
       assert.equal(await restartServerAfterUpdate(77, false, fake({ up: false }).r, (l) => void lines.push(l)), false);
       assert.match(lines.join("\n"), /did not stop.*monomem open[\s\S]*did not start.*monomem open/);
     });
+    test("Linux with the service: update.log gets its end line BEFORE systemctl restart (which ends this update too)", async () => {
+      const { finishUpdate, UPDATE_END } = await import("../src/update.js");
+      for (const platform of ["linux", "win32", "darwin"] as const) {
+        const log: string[] = [];
+        const run = (_c: string, a: string[]) => {
+          log.push(`run ${a.slice(-2).join(" ")}`);
+          return { status: 0, stdout: "" };
+        };
+        assert.equal(await finishUpdate("1.5.0", (l) => void log.push(l), run, 77, fake().r, platform), 0);
+        const end = log.indexOf(UPDATE_END(0));
+        const install = log.indexOf("run service install");
+        assert.ok(install > 0, log.join("\n"));
+        if (platform === "linux") {
+          assert.ok(end >= 0 && end < install, `end line first on Linux:\n${log.join("\n")}`);
+          assert.ok(log.slice(0, end).some((l) => /^Updated from 1\.5\.0 to /.test(l)), "the closing words come with it");
+        } else assert.equal(end, -1, `${platform}: the update command itself writes the end line`);
+      }
+    });
   });
 
-  test("the release upload waits for the full CI, never replaces a published file; every src/ PR builds the download", () => {
+  test("one CI run on the tag gates both the download upload and npm; a published file is never replaced; every src/ PR builds the download", () => {
     const wf = readFileSync(join(REPO, ".github", "workflows", "bundle.yml"), "utf8");
-    assert.match(wf, /verify:\n(?:\s+.*\n)*?\s+uses: \.\/\.github\/workflows\/ci\.yml/);
-    assert.match(wf, /release:\n(?:\s+.*\n)*?\s+needs: \[build, verify\]/);
+    const pub = readFileSync(join(REPO, ".github", "workflows", "publish.yml"), "utf8");
+    // bundle.yml: no tag trigger and no CI of its own (a second CI run on the tag could flake alone and split the release).
+    const on = /\non:\n((?:[ #].*\n|\n)*?)(?=\S)/.exec(wf)![1];
+    assert.doesNotMatch(on, /tags:/, "a tag must not start bundle.yml by itself");
+    assert.match(on, /workflow_call:\n\s+inputs:\n\s+upload:/);
+    assert.doesNotMatch(wf, /uses: \.\/\.github\/workflows\/ci\.yml/);
+    assert.match(wf, /if: inputs\.upload && github\.ref_type == 'tag'/, "only the caller's upload: true uploads (never a hand run)");
+    // publish.yml: CI once; the download (built, smoke-tested, uploaded) after it; npm only after the upload succeeded.
+    assert.equal(pub.match(/uses: \.\/\.github\/workflows\/ci\.yml/g)?.length, 1, "CI runs once per tag");
+    assert.match(pub, /\n  bundle:\n    needs: \[verify\]\n    uses: \.\/\.github\/workflows\/bundle\.yml\n    with:\n      upload: true\n/);
+    assert.match(pub, /\n  publish:\n    needs: \[verify, bundle\]\n/);
+    assert.match(pub, /\n  bundle:\n(?:    .*\n|      .*\n)*?    permissions:\n      contents: write.*\n      id-token: write.*\n      attestations: write\n/, "the called upload gets the rights it needs");
     assert.match(wf, /isDraft[\s\S]*--clobber[\s\S]*else[\s\S]*gh release upload "\$tag" out\/monomem-\* out\/SHA256SUMS\n/);
     assert.match(wf, /paths:\n\s+- src\/\*\*\n/);
     const smoke = readFileSync(join(REPO, "scripts", "smoke-bundle.mjs"), "utf8");

@@ -366,7 +366,7 @@ function realRestartDeps(): RestartDeps {
 }
 
 /** `update --finish <old>`, run by the NEW copy right after the swap: migrate the database, restart the service. */
-export async function finishUpdate(oldVersion: string, out: (l: string) => void, run: UpdateDeps["run"], serverPid?: number, restart: RestartDeps = realRestartDeps()): Promise<number> {
+export async function finishUpdate(oldVersion: string, out: (l: string) => void, run: UpdateDeps["run"], serverPid?: number, restart: RestartDeps = realRestartDeps(), platform: NodeJS.Platform = process.platform): Promise<number> {
   const { DB_PATH } = await import("./config.js");
   if (existsSync(DB_PATH)) {
     const { Store, SCHEMA_VERSION } = await import("./store.js");
@@ -380,12 +380,21 @@ export async function finishUpdate(oldVersion: string, out: (l: string) => void,
   const service = run(c, a, false).status === 0;
   // From the dashboard: its server stops first, so a service restart below never ends the process running this update.
   if (serverPid) await restartServerAfterUpdate(serverPid, service, restart, out); // it prints what to do if it fails
+  const done = `Updated from ${oldVersion} to ${selfVersion()}. Restart Claude Code, Cursor and any other app that was open, so they use the new version.`;
+  // Linux, from the dashboard: `systemctl --user restart` ends every process in the service's group, and this update runs
+  // in it (the server started it; setsid does not leave the group). So update.log gets its closing lines first; the page
+  // then waits for the new version on /health.
+  const endsFirst = !!serverPid && service && platform === "linux";
+  if (endsFirst) {
+    out(done);
+    out(UPDATE_END(0));
+  }
   if (service) {
     out("Restarting the background service with the new version:");
     const [c2, a2] = self(["service", "install"]);
     if (run(c2, a2, true).status !== 0) out("  The service did not restart (above). Start it again with:  monomem service install");
   }
-  out(`Updated from ${oldVersion} to ${selfVersion()}. Restart Claude Code, Cursor and any other app that was open, so they use the new version.`);
+  if (!endsFirst) out(done);
   return 0;
 }
 

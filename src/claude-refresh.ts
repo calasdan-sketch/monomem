@@ -50,7 +50,9 @@ export function readBridgeState(dbPath: string): BridgeState {
       }
     }
     return { ...(typeof j.last_import === "string" ? { last_import: j.last_import } : {}), files };
-  } catch {
+  } catch (err) {
+    // Damaged (not missing): every file then looks new and is imported again (held; the source key stops duplicates).
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") console.error(`[monomem] ${statePath(dbPath)} could not be read (${(err as Error).message}); the next Claude Code memory refresh treats every file as new.`);
     return { files: {} };
   }
 }

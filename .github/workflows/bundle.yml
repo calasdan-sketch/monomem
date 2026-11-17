@@ -2,16 +2,22 @@ name: Standalone download
 
 # The no-Node download: the OFFICIAL signed Node runtime from nodejs.org (checksum-checked, never modified) plus Monomem's
 # code, one folder/archive per platform (scripts/build-bundle.mjs). Built natively on each runner, smoke-tested in a scratch
-# home, summed (SHA256SUMS) and given GitHub build attestations. On a v* tag, once the full CI matrix (ci.yml) passes, the
-# files go to that tag's GitHub release (a DRAFT is created when none exists: publishing it stays a person's click; files
-# on a published release are never replaced). By hand (workflow_dispatch) it only builds.
+# home, summed (SHA256SUMS) and given GitHub build attestations. A v* tag does NOT start this file: publish.yml calls it
+# (upload: true) after its one full CI run (ci.yml) passed, and publishes to npm only after this upload succeeded, so one
+# CI flake can never put a version on npm without its download, or the download up without npm. The files go to the
+# tag's GitHub release (a DRAFT is created when none exists: publishing it stays a person's click; files on a published
+# release are never replaced). By hand (workflow_dispatch) or on a pull request it only builds.
 # A single-file SEA build runs too, as an artifact only: it is unsigned, and Windows Smart App Control blocks unsigned
 # exes with no override. Shipping it signed needs a signing step here AND three code changes: setup.ts (copy to the
 # permanent home + Start-menu entry run only in "bundle" mode), install.ts shortcutPlan (hard-codes runtime/node +
 # dist/src/cli.js) and update.ts (SEA mode says it cannot update itself yet).
 on:
-  push:
-    tags: ["v*"]
+  workflow_call:
+    inputs:
+      upload:
+        description: "Upload the files to the tag's GitHub release (publish.yml, after its CI run passed)"
+        type: boolean
+        default: false
   workflow_dispatch:
   # A pull request that touches the code builds and smoke-tests the download (no checksums, no release): breakage that only
   # shows in the bundled build (an import.meta.url file read, an esbuild-incompatible dependency, hook text) can come from
@@ -107,19 +113,12 @@ jobs:
           path: build/sea/monomem.exe
           if-no-files-found: error
 
-  # On a tag, literally the CI workflow (full matrix) must pass before anything reaches the release, like publish.yml does
-  # for npm: `monomem update` installs whatever the latest release holds.
-  verify:
-    if: github.ref_type == 'tag'
-    uses: ./.github/workflows/ci.yml
-    permissions:
-      contents: read
-
+  # The CI gate is the caller's: publish.yml runs ci.yml once and calls this file only after it passed (`monomem update`
+  # installs whatever the latest release holds). A hand run or pull request never uploads.
   release:
     name: checksums, attestations, release upload
-    needs: [build, verify]
-    # verify runs on tags only; a hand-run build (no tag, nothing uploaded) goes on without it.
-    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.build.result == 'success' && (needs.verify.result == 'success' || (github.ref_type != 'tag' && needs.verify.result == 'skipped')) }}
+    needs: [build]
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: write # upload to the release
@@ -144,7 +143,7 @@ jobs:
           name: standalone-release-files
           path: out/*
       - name: Upload to the tag's GitHub release (a draft is created if none exists; a published one is never overwritten)
-        if: github.ref_type == 'tag'
+        if: inputs.upload && github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}

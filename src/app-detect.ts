@@ -28,13 +28,16 @@ export interface AppDetectState {
   repair: AppItem[];
 }
 
-export function readAppDetect(dataDir: string): AppDetectState | null {
+/** The saved state, or null. `log` (the server's daily check) is told when the file is there but damaged. */
+export function readAppDetect(dataDir: string, log?: (line: string) => void): AppDetectState | null {
   try {
     const v = JSON.parse(readFileSync(join(dataDir, APP_DETECT_FILE), "utf8")) as Partial<AppDetectState>;
-    if (typeof v.checked_at !== "string" || !Array.isArray(v.baseline)) return null;
+    if (typeof v.checked_at !== "string" || !Array.isArray(v.baseline)) throw new Error("not the expected shape");
     const items = (x: unknown): AppItem[] => (Array.isArray(x) ? x.filter((i): i is AppItem => !!i && typeof i.id === "string" && typeof i.label === "string") : []);
     return { checked_at: v.checked_at, baseline: v.baseline.filter((x): x is string => typeof x === "string"), new: items(v.new), repair: items(v.repair) };
-  } catch {
+  } catch (err) {
+    // Damaged (not missing): the next daily check starts over and may name apps as new again.
+    if (log && (err as NodeJS.ErrnoException).code !== "ENOENT") log(`[monomem] ${join(dataDir, APP_DETECT_FILE)} could not be read (${(err as Error).message}); the next app check starts over.`);
     return null;
   }
 }
@@ -65,8 +68,8 @@ export async function checkApps(e: SetupEnv, dataDir: string, now: Date = new Da
 }
 
 /** The server timer's call: checks when the last check is a day old (or there is none); otherwise does nothing. */
-export async function maybeCheckApps(e: SetupEnv, dataDir: string, now: Date = new Date()): Promise<AppDetectState | null> {
-  const prev = readAppDetect(dataDir);
+export async function maybeCheckApps(e: SetupEnv, dataDir: string, now: Date = new Date(), log: (line: string) => void = console.error): Promise<AppDetectState | null> {
+  const prev = readAppDetect(dataDir, log);
   if (prev && now.getTime() - Date.parse(prev.checked_at) < APP_CHECK_EVERY_MS) return null;
   return checkApps(e, dataDir, now);
 }

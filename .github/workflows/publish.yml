@@ -49,13 +49,29 @@ jobs:
   # npm was the only one that never executed the floor the release was about.
   # A tag pushed before (or without) a green CI run must not reach npm, and
   # reuse is what makes that true instead of asserted.
+  #
+  # The one release run: CI runs ONCE on the tag, and both the download and npm wait for that one result. bundle.yml has
+  # no tag trigger of its own; this file calls it after verify, and npm is published only after its upload succeeded.
+  # Two separate CI runs on the same tag (as before) shared one concurrency group and doubled the flake chance, so one
+  # flake could put the version on npm without its download, or the reverse. The upload goes to a DRAFT release and npm
+  # is staged: both still wait for the owner's click.
   verify:
     uses: ./.github/workflows/ci.yml
     permissions:
       contents: read
 
-  publish:
+  bundle:
     needs: [verify]
+    uses: ./.github/workflows/bundle.yml
+    with:
+      upload: true
+    permissions:
+      contents: write # upload to the release
+      id-token: write # attestations
+      attestations: write
+
+  publish:
+    needs: [verify, bundle]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

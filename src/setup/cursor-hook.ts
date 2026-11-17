@@ -4,7 +4,7 @@
 // `monomem hook cursor-session-start` (hook.ts), which prints the same notes as Claude Code's session-start hook.
 // Only this one hook: Cursor's other events are not wired (see docs/apps.md).
 import { getPath, parseDoc, type Op } from "../jsonc-edit.js";
-import { buildCaptureCommand, readTextFile, type FileChange, type HookHost, type SetupEnv, type SetupOptions } from "../setup.js";
+import { buildCaptureCommand, moveHookCommand, otherCopyHooks, readTextFile, type FileChange, type HookHost, type SetupEnv, type SetupOptions } from "../setup.js";
 
 export const CURSOR_START_EVENT = "cursor-session-start";
 const MARKER = `hook ${CURSOR_START_EVENT}`;
@@ -14,6 +14,23 @@ export function planCursorHook(e: SetupEnv, opts: SetupOptions, dbForHook: strin
   if (text === "" && !opts.forceEmpty) return { change: null, already: false, conflict: `${host.file} exists but is completely empty (0 bytes); run setup again with --force-empty if you are sure` };
   const doc = text && text.trim() ? parseDoc(text) : null;
   const arr = doc ? getPath(doc, ["hooks", "sessionStart"]) : undefined;
+  // The download over an npm install: our hook that runs the npm copy moves to this download (same place, same entry).
+  const moved = arr ? otherCopyHooks(e, text!, host, [host.start.on]).find((m) => String(m.item.command).includes(MARKER)) : undefined;
+  if (moved) {
+    const value = { ...moved.item, command: moveHookCommand(e, String(moved.item.command), moved.cli) };
+    return {
+      change: {
+        client: host.client,
+        label: host.label,
+        file: host.file,
+        before: text,
+        ops: [{ op: "unappend", path: ["hooks"], key: host.start.on, marker: moved.cli }, { op: "append", path: ["hooks"], key: host.start.on, value }],
+        lines: [`move ${host.agent}'s Monomem hook to this download, same place and settings: it ${moved.problem}`],
+        inverse: [{ op: "unappend", path: ["hooks"], key: host.start.on, marker: MARKER }, { op: "append", path: ["hooks"], key: host.start.on, value: moved.item }],
+      },
+      already: false,
+    };
+  }
   if (arr && text!.slice(arr.start, arr.end).includes(MARKER)) return { change: null, already: true };
   const ops: Op[] = [];
   const inverse: Op[] = [];

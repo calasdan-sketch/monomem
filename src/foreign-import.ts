@@ -397,7 +397,7 @@ export async function runForeignImport(e: Pick<SetupEnv, "home" | "env" | "cwd">
   const zipStats = { skipped: 0 };
   try {
     items =
-      from === "claude-mem" ? readClaudeMem(path) : from === "mem0" ? readMem0(path) : from === "mcp-memory" ? readMcpMemory(path, mcpStats) : from === "claude-code-chats" ? readClaudeCodeChats(path, chatStats, replyContextIsClean) : from === "codex" ? readCodexMemories(path, MAX_FILE_BYTES) : from === "notion" ? readNotion(path, MAX_FILE_BYTES, zipStats) : readBasicMemory(path);
+      from === "claude-mem" ? readClaudeMem(path) : from === "mem0" ? readMem0(path) : from === "mcp-memory" ? readMcpMemory(path, mcpStats) : from === "claude-code-chats" ? readClaudeCodeChats(path, chatStats, replyContextIsClean) : from === "codex" ? readCodexMemories(path, MAX_FILE_BYTES, zipStats) : from === "notion" ? readNotion(path, MAX_FILE_BYTES, zipStats) : readBasicMemory(path);
   } catch (err) {
     io.err(`Could not read ${path}: ${(err as Error).message}`);
     return 1;
@@ -437,7 +437,8 @@ export async function runForeignImport(e: Pick<SetupEnv, "home" | "env" | "cwd">
     if (t.x && from === "claude-code-chats") io.out("  These messages contain a secret and were left out (not stored, not shown). The messages around them are kept.");
     else if (t.x) io.out("  Skipped items are not stored and not shown. Take the secret out at the source (or keep it in a password manager) and run again.");
     if (heldSkipped) io.out(`  ${heldSkipped} item(s) were held by the memory linter on an earlier run and are not queued again (see \`monomem review held\`).`);
-    if (zipStats.skipped) io.out(`  ${zipStats.skipped} Markdown file(s) skipped: larger than ${MAX_FILE_BYTES / 1024 / 1024} MiB, encrypted, or packed in a way this reader does not know.`);
+    if (zipStats.skipped && from === "codex") io.out(`  ${zipStats.skipped} Codex memory file(s) skipped: larger than ${MAX_FILE_BYTES / 1024 / 1024} MiB, or not a plain file.`);
+    else if (zipStats.skipped) io.out(`  ${zipStats.skipped} Markdown file(s) skipped: larger than ${MAX_FILE_BYTES / 1024 / 1024} MiB, encrypted, or packed in a way this reader does not know.`);
     if (opts.dryRun && from === "mcp-memory") previewMcp(io, todo, mcpStats);
     if (from === "claude-code-chats") {
       io.out(`  Read ${chatStats.sessions} conversation file(s).${chatStats.tooBig ? ` ${chatStats.tooBig} skipped: larger than 256 MB.` : ""}${chatStats.badLines ? ` ${chatStats.badLines} damaged line(s) skipped.` : ""}`);

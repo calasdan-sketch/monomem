@@ -18,8 +18,11 @@ const h = (s: string): string => createHash("sha256").update(s).digest("hex").sl
 
 export const codexHome = (e: { home: string; env: NodeJS.ProcessEnv }): string => e.env.CODEX_HOME || join(e.home, ".codex");
 
-/** The memory files under a Codex home (or a memories folder given directly). Links are not followed. */
-export function findCodexMemoryFiles(root: string, maxFile: number): string[] {
+/**
+ * The memory files under a Codex home (or a memories folder given directly). Links are not followed. A file that is there
+ * but larger than `maxFile`, or not a plain file, is counted in `stats.skipped` (the import says how many).
+ */
+export function findCodexMemoryFiles(root: string, maxFile: number, stats: { skipped: number } = { skipped: 0 }): string[] {
   const out: string[] = [];
   for (const dir of ["", ...CODEX_DIRS]) {
     for (const f of CODEX_FILES) {
@@ -27,6 +30,7 @@ export function findCodexMemoryFiles(root: string, maxFile: number): string[] {
       try {
         const st = lstatSync(p);
         if (st.isFile() && st.size > 0 && st.size <= maxFile) out.push(p);
+        else if (st.size > 0) stats.skipped++;
       } catch {
         /* not there */
       }
@@ -35,8 +39,9 @@ export function findCodexMemoryFiles(root: string, maxFile: number): string[] {
   return out;
 }
 
-export function readCodexMemories(root: string, maxFile: number): Item[] {
-  const files = findCodexMemoryFiles(root, maxFile);
+export function readCodexMemories(root: string, maxFile: number, stats: { skipped: number } = { skipped: 0 }): Item[] {
+  const files = findCodexMemoryFiles(root, maxFile, stats);
+  if (!files.length && stats.skipped) throw new Error(`${stats.skipped} Codex memory file(s) here are larger than ${maxFile / 1024 / 1024} MiB (or not plain files) and were not read`);
   if (!files.length) throw new Error(`no Codex memory files here (looked for ${CODEX_DIRS.map((d) => `${d}/MEMORY.md`).join(" and ")}, and memory_summary.md). Codex writes them only after its memories feature is switched on`);
   const items: Item[] = [];
   const seen = new Set<string>();
