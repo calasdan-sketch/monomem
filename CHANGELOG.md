@@ -114,9 +114,15 @@ schema v22), so going back to 1.5.0 needs no restore.
   <id> --commits` lists the commits made in sessions that used a note. `monomem commit-trail on` (per repository, asks
   first) adds a `Monomem-Notes: #12 #40` line to commit messages. See docs/commits-and-branches.md.
 - **Action guard (opt-in, Claude Code only).** `monomem setup --action-guard` adds a hook that, once a session has read
-  outside content (a web page, another MCP server's answer), asks you before a push, a publish, a web request to a host
-  not on your known-hosts list, reading key and credential files, or writing `AGENTS.md`, `CLAUDE.md` or Claude Code's
-  settings. It matches command text, so it is a speed bump, not a sandbox: docs/action-guard.md lists what it misses.
+  outside content (a web page, another MCP server's answer), asks you before a push, a publish, a web request when any
+  address on a curl or wget line is not on your known-hosts list, reading key and credential files (also a curl `@file`
+  upload and a Grep whose glob picks such a file), or writing `AGENTS.md`, `CLAUDE.md`, Claude Code's settings,
+  `.mcp.json`, `.cursor/hooks.json`, `~/.claude.json`, a GitHub workflow or `known-hosts.json` (also by `cp` or `mv`).
+  The guard can only ask when the automatic memory hooks are installed, so when they are missing `setup --action-guard`
+  adds them in the same change (it shows the change and asks first); if you say no, nothing is changed. `monomem check`
+  shows whether the guard is installed with the hooks it needs, and warns for 7 days after the guard could not check an
+  action and let it through. It matches command text, so it is a speed bump, not a sandbox: docs/action-guard.md lists
+  what it misses.
 - **Known hosts.** One list of web hosts the action guard does not ask about (default: github.com, registry.npmjs.org,
   localhost), shown with `monomem settings known-hosts`. Adding a host needs a person at a terminal.
 - **AGENTS.md / CLAUDE.md change notice.** With the automatic memory hooks on, session start adds one line when either
@@ -260,8 +266,9 @@ schema v22), so going back to 1.5.0 needs no restore.
 - **`monomem` with no command prints the help.** In 1.5 it started the server. Use `monomem start`, or `monomem open` for
   the dashboard.
 - **Going back to 1.5.0** needs no restore: the schema is still v22. 1.6.0 adds a few side tables that 1.5.0 ignores.
-  **If you switched OAuth on, run `monomem oauth off` before you go back**: 1.5.0 does not know an OAuth key's one-hour
-  expiry or its MCP-only limit, so a key left in `tokens.json` would keep working there as a write key, on both ports.
+  **If you switched OAuth on, still run `monomem oauth off` before you go back.** 1.5.0 does not know an OAuth key's
+  one-hour expiry or its MCP-only limit. Each OAuth key carries a field that 1.5 refuses, so 1.5 simply does not load
+  it; going back does not turn it into a permanent REST write key.
   Then install the older version and run `monomem setup` again. docs/upgrading.md lists what else 1.5.0 does not keep up
   to date while it runs.
 - **Syncing computers:** while one computer still runs 1.5.x, each sync makes one extra commit or file write per archived

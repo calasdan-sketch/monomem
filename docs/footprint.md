@@ -34,7 +34,8 @@ folder). `monomem check --setup` prints which one, and its size.
 | `setup-history.json` | each `setup` that changed a file (what `--undo` / `uninstall` replay) | `uninstall --purge` |
 | `claude-import-held.json` | `import --claude` (files you chose to hold back) | `uninstall --purge` |
 | `claude-import-state.json` (beside the database) | `import --claude` and the optional Claude Code refresh (1.6.0): per imported file, the hash of its text and the ids of the notes it became, so the next run reads only changed files; no note text | `uninstall --purge` |
-| `oauth.json` | `monomem oauth on` (1.6.0, off by default): the switch, your public address, the connected apps and SHA-256 hashes of their refresh tokens, never a key (mode 0600). Approved apps also add `oauth:<name>` keys (hashed) to `tokens.json` | `monomem oauth off` ends every app; delete the file and remove the `oauth:` keys to remove every trace; `uninstall --purge` |
+| `oauth.json` | `monomem oauth on` (1.6.0, off by default): the switch, your public address, the connected apps and SHA-256 hashes of their refresh tokens, never a key (mode 0600). It also lists every OAuth app name already given out (`issued_labels`), so a name is never reused. Approved apps also add `oauth:<name>` keys (hashed) to `tokens.json` | `monomem oauth off` ends every app; delete the file and remove the `oauth:` keys to remove every trace; `uninstall --purge` |
+| `action-guard-error.json` | the opt-in action guard (1.6.0), only when it could not check an action and let it through: the time and the reason (mode 0600); `monomem check` shows it for 7 days | `uninstall --purge` |
 | `app-detect.json` | a running server, once a day (1.6.0): which supported apps it found, which are new since the first check and which entries need repair; app names only | `uninstall --purge` |
 | `old-names-seen.json` | an old command name typed at a terminal (1.6.0): when each one last printed its "now called" line, so it prints at most once per 12 hours | `uninstall --purge` |
 | `.sync-work-*`, `sync-conflicts/<time>/` | `sync --git --encrypt` (work folder, removed after); the losing side of an edit conflict | `uninstall --purge` |
@@ -98,6 +99,7 @@ leaves it running. On Windows the task is found by its `monomem-task.xml` in the
 |---|---|
 | `setup --project` | `./.mcp.json` |
 | `commit-trail on` (1.6.0, asks first) | `.git/hooks/prepare-commit-msg` in that repository, which adds a `Monomem-Notes: #12 #40` line to commit messages. Not written when the repository uses a hook manager (`core.hooksPath`). `monomem commit-trail off` removes it (only Monomem's own hook) |
+| `monomem setup` from the download, in the repository it runs in | `<repo>/.git/hooks/prepare-commit-msg.monomem-backup-<time>`: a copy of a commit line hook that still runs another Monomem copy (for example an npm install), saved before setup moves the hook to the download (it asks first). `monomem setup --undo` puts the old hook back from it (when the hook was not changed since) and leaves the copy in place; `uninstall --purge` deletes it unless that setup was already undone |
 | `export --format md --dir <d>` / `export --format json --out <f>` | that folder / file |
 | `backup [--out <d>]` | `<d>`, default `~/monomem-backup-<time>`, or next to the data folder when `MONOMEM_HOME` is set (never the current folder: a backup and its key must not land in a repo) |
 | `uninstall --purge` | the final backup, `~/monomem-final-backup-<time>` (unless `--no-backup`) |

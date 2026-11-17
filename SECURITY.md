@@ -154,7 +154,10 @@ notes over the internet. Full details: [docs/oauth.md](./docs/oauth.md).
 - **MCP-only, short-lived keys.** Each approved app becomes an ordinary app key (`oauth:<app name>`) that lasts one hour,
   works only on the MCP port (`audience: "mcp"`; refused on the REST API and the dashboard) and is renewed with a
   one-use refresh token. Keys and refresh tokens are stored as SHA-256 hashes only.
-- **Redirects** go only to claude.ai, chatgpt.com or this computer unless you allow another site at a terminal.
+- **Redirects** go only to claude.ai or chatgpt.com (https, on the default port only) or this computer, unless you allow
+  another site at a terminal.
+- **An app's name is never reused.** Each approved app gets a name no earlier app had (`oauth.json` keeps every name given
+  out). An app you approve again after it was ended is a new writer, so it starts on probation.
 - **You provide the HTTPS address** (Tailscale Funnel or a Cloudflare Tunnel); Monomem itself stays bound to `127.0.0.1`.
 - **Review status:** one dedicated security review (its findings are fixed), no outside review. Treat it as a preview.
 
@@ -165,17 +168,20 @@ Known limits, stated plainly:
 - **The terminal checks are speed bumps.** The `yes` that `oauth on` and `allow-redirect` ask for, and the terminal check on
   `oauth pair`, stop an agent that runs commands in a shell. A program running as you can still write `oauth.json` or
   `tokens.json` directly, as with every other Monomem key.
-- **Before going back to 1.5.0, run `monomem oauth off`.** 1.5.0 does not know an OAuth key's expiry or its MCP-only limit,
-  so a key left in `tokens.json` would work there as a write key with no expiry, on both ports.
+- **Before going back to 1.5.0, run `monomem oauth off`.** 1.5.0 does not know an OAuth key's expiry or its MCP-only limit.
+  Each OAuth key in `tokens.json` carries a field that Monomem 1.5 refuses, so 1.5 does not load it, and going back does
+  not turn it into a permanent REST write key. Still run `monomem oauth off` first: it ends every connected app and removes its keys.
 
 ## Guards and labels added in Monomem 1.6.0
 
-- **Action guard (opt-in, Claude Code only).** `monomem setup --action-guard` adds a hook that asks you before a push, a
-  publish, a web request to a host not on your known hosts, reading key and credential files, or writing `AGENTS.md`,
-  `CLAUDE.md` or Claude Code's settings, once the session has read outside content. It matches command text, so **it is
-  a speed bump, not a sandbox**: an alias, a script file or a tool it does not know goes by without a question, and it
-  lets the action through when it cannot decide (a missing or busy database). What it misses:
-  [docs/action-guard.md](./docs/action-guard.md).
+- **Action guard (opt-in, Claude Code only).** `monomem setup --action-guard` adds a hook that asks you before risky
+  actions once the session has read outside content. It matches command text, so **it is a speed bump, not a sandbox**.
+  It asks before: a push or a publish; a web request when any address on a curl or wget line is not on your known hosts;
+  reading key and credential files (also a curl `@file` upload and a Grep whose glob picks such a file); or writing
+  `AGENTS.md`, `CLAUDE.md`, Claude Code's settings, `.mcp.json`, `.cursor/hooks.json`, `~/.claude.json`, a GitHub
+  workflow or `known-hosts.json` (also by `cp` or `mv`). An alias, a script file or a tool it does not know goes by
+  without a question, and it lets the action through when it cannot decide (a missing or busy database); `monomem check`
+  then warns for 7 days. What it misses: [docs/action-guard.md](./docs/action-guard.md).
 - **Known hosts.** The web hosts the action guard does not ask about (default: github.com, registry.npmjs.org,
   localhost), in `<data folder>/known-hosts.json`. Adding a host needs a person at a terminal
   (`monomem settings known-hosts add`); no REST, MCP or dashboard route writes it.

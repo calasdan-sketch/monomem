@@ -34,9 +34,10 @@ database 1.6 used, with no restore. 1.6 adds a few side tables, each made the fi
 labels (echoes and the other 1.6 labels). Install the older version (`npm i -g monomem@1.5`) and run
 `monomem setup` again so your apps point at it. The sync note above applies while the two versions run side by side.
 
-- **If you switched OAuth on, run `monomem oauth off` first.** 1.5 does not know an OAuth key's one-hour expiry or its
-  MCP-only limit (`expires_at`, `audience`), so a key claude.ai or ChatGPT still holds would work under 1.5 as a write key
-  that never expires, on the REST API too. `oauth off` removes every OAuth key.
+- **If you switched OAuth on, still run `monomem oauth off` first.** 1.5 does not know an OAuth key's one-hour expiry or
+  its MCP-only limit (`expires_at`, `audience`). Each OAuth key also carries a field that 1.5 refuses, so 1.5 simply does
+  not load it: a key claude.ai or ChatGPT still holds does not become a write key that never expires. `oauth off` removes
+  every OAuth key, so nothing is left behind for later.
 - **What 1.5 does not keep up to date while it runs**, and how 1.6 catches up when you come back:
   - Branch memory: a note edited under 1.5 keeps the branch it had in 1.6 until 1.6 writes it again. This affects ranking
     only.

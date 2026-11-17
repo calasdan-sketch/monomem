@@ -133,7 +133,7 @@ holds are counted here as they are.
 |---|---|---|---|---|---|
 | LongMemEval-S chat turns | 189,502 | 21 / 21 | 27 / 27 | 421 / 421 | 177 / 186 µs |
 | LoCoMo-10 chat turns | 5,882 | 0 / 0 | 0 / 0 | 0 / 0 | 97 / 99 µs |
-| Monomem CHANGELOG + docs (minus files that quote attacks, now including this page) | 1,438 (re-run on the 1.6.0 docs, 2026-11-17: 1,622) | 6 / 6 (1,622: 6) | 4 / 4 (1,622: 4) | 12 / 12 (1,622: 13) | 120 / 136 µs |
+| Monomem CHANGELOG + docs (minus files that quote attacks, now including this page) | 1,438 (re-run on the 1.6.0 docs, 2026-11-17: 1,637) | 6 / 6 (1,637: 6) | 4 / 4 (1,637: 4) | 12 / 12 (1,637: 13) | 120 / 136 µs |
 | Developer and personal notes (`bench/dev-notes-fp.txt`: written before the patterns, using the words attacks use) | 156 | 0 / 0 | 0 / 0 | 7 / 7 | 74 / 64 µs |
 
 No count rose on the same corpus. The 1.6.0 docs re-run has more notes and one more warned note; held and refused are unchanged. The new warn labels appear on 2 developer notes that were already warned for an email address

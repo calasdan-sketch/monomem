@@ -134,7 +134,7 @@ describe("upgrading.md, trust.md, scorecard", () => {
   test("security-scorecard false-positive row is the 1.6.0 re-run", () => {
     const s = read("docs/security-scorecard.md");
     const row = s.split("\n").find((l) => l.startsWith("| Monomem CHANGELOG + docs"))!;
-    assert.match(row, /1,622/);
+    assert.match(row, /1,637/);
     assert.match(row, /\b13\b/);
   });
   test("README's demo recording is labelled as older than the redesign, or gone", () => {
