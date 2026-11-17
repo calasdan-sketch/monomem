@@ -28,7 +28,7 @@ Setup finds your apps (Claude Code, Claude Desktop, Cursor, Codex, Gemini CLI, V
 - For apps connected on your computer, the writer name comes from that app's config file. It tells your apps apart; it is not proof.
 - Keyword search finds words, not meaning, unless you run a local embedding model (Ollama).
 - The download is not code-signed yet, and it has not been tested with Windows Smart App Control switched on or on a Mac.
-- claude.ai and the Claude and ChatGPT phone apps cannot connect yet: they need an OAuth sign-in Monomem does not have.
+- claude.ai and ChatGPT can connect only through OAuth, which is off by default and a preview (one internal security review, no outside review). You need your own HTTPS address that reaches your computer: [docs/oauth.md](./docs/oauth.md).
 
 More: [install it with your agent](./docs/install-with-your-agent.md) · [what it does, in detail](./docs/features.md) · [how it compares](./docs/comparison.md) · [all tools and commands](./docs/tools.md) · [backups](./docs/backups.md) · [known limits](#known-limits) · [security](./SECURITY.md)
 
@@ -36,7 +36,7 @@ More: [install it with your agent](./docs/install-with-your-agent.md) · [what i
 
 ![A write that matches a known attack pattern is held, a second agent's search never sees it, and the dashboard rejects it](https://raw.githubusercontent.com/calasdan-sketch/monomem/main/docs/monomem-demo.gif)
 
-*Recorded from a real run against a throwaway store ([transcript](https://github.com/calasdan-sketch/monomem/blob/main/docs/brand/demo-transcript.txt)): a write containing an injected instruction is held and never reaches the other agent's search, then rejected from the real dashboard. The two terminal panes are drawn from the real REST responses; the dashboard is a screen recording. Nothing sped up.*
+*Recorded 2026-11-05 on 1.5.0, before the dashboard redesign, from a real run against a throwaway store ([transcript](https://github.com/calasdan-sketch/monomem/blob/main/docs/brand/demo-transcript.txt)): a write containing an injected instruction is held and never reaches the other agent's search, then rejected from the real dashboard. The two terminal panes are drawn from the real REST responses; the dashboard is a screen recording. Nothing sped up.*
 
 Want to see it before you set anything up? `monomem demo` (or `npx monomem demo`) runs a short tour on a throwaway store that is deleted at the end; it never touches your notes.
 
