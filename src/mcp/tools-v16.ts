@@ -261,6 +261,22 @@ export function v16Result(r: unknown, opts: { compact: boolean; query?: string; 
   return { ...res, content: [first, ...res!.content!.slice(1)] };
 }
 
+/**
+ * A multi-action tool called without `action`: the first action runs only when the tool allows that (`action` optional)
+ * and every argument given is one that action uses. Otherwise a clear error, never a silent change of meaning (a flag
+ * turned into a confirm, a distrust into a list). Returns the error text, or null to go on with the first action.
+ */
+function missingAction(s: Spec, actionNames: string[], rest: Record<string, unknown>, firstSchema: z.ZodType | undefined): string | null {
+  const choices = `one of: ${actionNames.join(", ")}`;
+  const field = s.shape.action as z.ZodType | undefined;
+  if (!field || !field.safeParse(undefined).success) return `${s.name} needs an action (${choices}). Nothing was done.`;
+  // The 1.5 tool behind memory_held / memory_trust serves every action, so its schema says nothing about the first one.
+  const used = PASS_ACTION.has(s.name) ? new Set<string>() : new Set(Object.keys((firstSchema as { shape?: object } | undefined)?.shape ?? {}));
+  const extra = Object.keys(rest).filter((k) => rest[k] !== undefined && !used.has(s.renames?.[k] ?? k));
+  if (!extra.length) return null;
+  return `${s.name} needs an action (${choices}) with ${extra.join(", ")}: without one it would run "${actionNames[0]}", which does not use ${extra.length === 1 ? "it" : "them"}. Nothing was done.`;
+}
+
 export function registerV16Tools(c: McpCtx): void {
   const { registerRaw, oldTools, profile, enabled, nsActive } = c;
   for (const s of specs(nsActive)) {
@@ -274,6 +290,10 @@ export function registerV16Tools(c: McpCtx): void {
       { title: s.title, description: s.description, inputSchema: z.looseObject(s.shape), ...(s.annotations ? { annotations: s.annotations } : {}) },
       async (args: Record<string, unknown>, extra: unknown) => {
         const { action: given, detail: want, ...rest } = args;
+        if (!single && typeof given !== "string") {
+          const why = missingAction(s, actionNames, rest, oldTools.get(s.actions[actionNames[0]])?.schema);
+          if (why) return errorResult(why);
+        }
         const action = single ? actionNames[0] : typeof given === "string" ? given : actionNames[0];
         const oldName = s.actions[action];
         const old = oldName ? oldTools.get(oldName) : undefined;
