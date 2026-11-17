@@ -67,7 +67,7 @@ export const PAGE_HTML = `<!doctype html>
   <div class="gcard">
     <div class="ghead"><img src="/icon.svg" alt="" width="64" height="64"><h1>Monomem</h1><p>by Calas Automations</p></div>
     <div class="gbody">
-      <p>Open Monomem from its Start menu entry, or run <code>monomem open</code> on this computer. It signs you in here.</p>
+      <p>Open Monomem from <span id="gate_where">its Start menu entry</span>, or run <code>monomem open</code> on this computer. It signs you in here.</p>
       <details>
         <summary class="muted">Use an app key instead</summary>
         <label class="field" style="margin-top:12px"><span>App key</span><input id="tok" type="password" autocomplete="off" placeholder="Paste the key" onkeydown="if(event.key==='Enter')saveTok()"></label>

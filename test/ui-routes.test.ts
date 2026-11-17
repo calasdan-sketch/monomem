@@ -12,7 +12,7 @@ import { DB_PATH } from "../src/config.js";
 import { Store } from "../src/store.js";
 import { actorStore } from "../src/actor.js";
 import { createApiServer } from "../src/api.js";
-import { setUiRunner, setUiStarter } from "../src/api/routes-ui.js";
+import { launcherWhere, setUiRunner, setUiStarter } from "../src/api/routes-ui.js";
 import { needsYou } from "../src/ui/needs-you.js";
 import { readUiSettings, updateUiSettings, uiSettingOn, writeBackupStatus } from "../src/ui/settings.js";
 import { mintLoginCode } from "../src/login-code.js";
@@ -215,5 +215,30 @@ describe("Welcome and Settings state", () => {
     assert.equal(readUiSettings(dir).welcome_done, true);
     assert.equal(uiSettingOn("prompt_recall", dir), true);
     assert.deepEqual(readUiSettings(dir).declined_apps, ["zed"]);
+  });
+});
+
+describe("round 3 design fixes (server side)", () => {
+  test("the local sign-in message names this computer's launcher", () => {
+    assert.equal(launcherWhere("win32"), "its Start menu entry");
+    assert.equal(launcherWhere("darwin"), "your Applications folder");
+    assert.equal(launcherWhere("linux"), "your app launcher");
+  });
+  test("GET /ui/apps says whether there is a connect to undo (Settings hides Undo the last connect otherwise)", async () => {
+    const hist = join(process.env.MONOMEM_HOME!, "setup-history.json");
+    try {
+      await withServer(async (base) => {
+        const h = { "X-Monomem-Local": (await signIn(base)).local };
+        const canUndo = async () => ((await (await call(base, "/ui/apps", ADMIN, { headers: h })).json()) as { can_undo: boolean }).can_undo;
+        rmSync(hist, { force: true });
+        assert.equal(await canUndo(), false, "no setup history");
+        writeFileSync(hist, JSON.stringify([{ id: "1", at: "2026-11-16T10:00:00Z", version: "1.6.0", changes: [] }]));
+        assert.equal(await canUndo(), true);
+        writeFileSync(hist, JSON.stringify([{ id: "1", at: "2026-11-16T10:00:00Z", version: "1.6.0", changes: [], undone: true }]));
+        assert.equal(await canUndo(), false, "already undone");
+      });
+    } finally {
+      rmSync(hist, { force: true });
+    }
   });
 });

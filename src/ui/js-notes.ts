@@ -50,17 +50,18 @@ function load(){
   api(path).then(function(j){ render(j.results || j.notes || []); }).catch(function(e){ incRefused(e); failList(e); });
 }
 
-// Labels on a card, most important first; at most two show, the rest are listed in the card's menu.
+// Labels on a card, most important first; at most two show, the rest are listed in the card's menu. Plain sentences only:
+// the server's *_label fields ("[unconfirmed - from outside content]") are written for agents and never shown here.
 function labelsOf(n){
   var out = [];
   if(n.distrusted){ out.push(["danger", "Distrusted writer", "An owner distrusts the app that wrote this. Treat it as hostile."]); }
-  if(n.flagged){ out.push(["caution", "Flagged", n.flagged_label || "An app said this looks wrong."]); }
-  if(n.code_changed){ out.push(["caution", "Code changed", n.code_changed_label || "The code this note describes changed since it was written."]); }
-  if(n.unconfirmed){ out.push(["caution", "Not confirmed", n.unconfirmed_label || "From outside content; nobody confirmed it yet, so it is kept out of session start."]); }
-  if(n.built_on_distrusted){ out.push(["caution", "Built on a distrusted note", n.built_on_distrusted_label || ""]); }
-  if(n.disputed){ out.push(["caution", "Disputed", n.disputed_label || "Another app says something different."]); }
-  if(n.expired){ out.push(["", "Check again", n.expired_label || "Not re-confirmed in time: check it is still true."]); }
-  if(n.restated_by){ out.push(["", "Said again", n.restated_label || ""]); }
+  if(n.flagged){ out.push(["caution", "Flagged", "An app said this looks wrong."]); }
+  if(n.code_changed){ out.push(["caution", "Code changed", "The code this note describes changed since it was written."]); }
+  if(n.unconfirmed){ out.push(["caution", "Not confirmed", "From outside content; nobody confirmed it yet, so it is kept out of session start."]); }
+  if(n.built_on_distrusted){ out.push(["caution", "Built on a distrusted note", "It was written after reading a note from a writer an owner distrusts."]); }
+  if(n.disputed){ out.push(["caution", "Disputed", "Another app says something different."]); }
+  if(n.expired){ out.push(["", "Check again", "Not re-confirmed in time: check it is still true."]); }
+  if(n.restated_by){ out.push(["", "Said again", "An app said this again. That is not a second source."]); }
   if(n.pinned){ out.push(["brand", "Pinned", "Shown first at every session start. Apps cannot change it."]); }
   if((n.tags||[]).indexOf("never-show") >= 0){ out.push(["", "Not shown at start", "Kept out of session start; still searchable."]); }
   return out;

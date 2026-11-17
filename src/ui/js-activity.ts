@@ -100,6 +100,8 @@ function loadMeter(){
       return "<tr><td>"+when(r.updated_at)+"</td><td>"+(r.namespace ? esc(r.namespace) : "<span class='muted'>(none)</span>")+"</td><td class='n'>"+num(r.injected_tokens)+"</td><td class='n'>"+num(r.saved_tokens)+"</td></tr>";
     }).join("");
     function stat(big, text){ return "<div class='stat'><b>"+big+"</b><span>"+text+"</span></div>"; }
+    // Before the first session: only the empty card, not a row of zeros.
+    if(!Number(t.sessions) && !rows){ $("list").innerHTML = empty("Nothing measured yet", "The numbers start with the next session an app opens."); return; }
     $("list").innerHTML = "<article class='card'><div class='stats'>"+
       stat(num(t.injected_tokens), "tokens of notes added at session start (" + plural(t.injections || 0, "time", "times") + ")")+
       stat(num(t.saved_tokens), "tokens saved, an estimate: the full text of the notes shown, minus the tokens injected")+
@@ -117,12 +119,12 @@ function loadApps(){
     var apps = j.apps || [];
     $("count").textContent = plural(apps.length, "app can connect", "apps can connect");
     var rows = apps.map(function(a){
-      var lim = a.max_sensitivity ? ("up to " + esc(a.max_sensitivity)) : "<b>NO LIMIT</b>" + (a.scope === "admin" ? " (sees everything)" : "");
+      var lim = a.max_sensitivity ? ("up to " + esc(a.max_sensitivity)) : "No limit" + (a.scope === "admin" ? " (sees everything)" : "");
       var rm = (a.source === "file") ? "<button class='destructive' data-label='"+esc(a.label)+"' aria-label='Remove app "+esc(a.label)+"' onclick='var x=this;arm(x,function(){removeApp(x.getAttribute(&quot;data-label&quot;))})'>Remove</button>" : "<span class='muted'>set outside the dashboard</span>";
       return "<tr><td>"+esc(shownWriter(a.label))+"</td><td>"+esc(a.scope === "read" ? "read only" : a.scope === "admin" ? "everything" : "read and write")+"</td><td>"+esc(a.namespace || "all")+"</td><td>"+lim+"</td><td>"+(a.last_used ? esc(ago(a.last_used)) : "not since Monomem started")+"</td><td>"+rm+"</td></tr>";
     }).join("");
     $("list").innerHTML =
-      "<article class='card'><table class='apps'><tr><th>App</th><th>May</th><th>Project</th><th>Sees</th><th>Last used</th><th></th></tr>"+rows+"</table>"+
+      "<article class='card'><table class='apps'><tr><th>App</th><th>May</th><th>Project</th><th>Sees</th><th>Last used</th><th><span class='sr'>Remove</span></th></tr>"+rows+"</table>"+
       "<p class='meta'>Removing an app cuts it off at once.</p></article>"+
       "<h3 class='section t-title'>Add an app</h3><article class='card'>"+
       "<label class='field'><span>Name</span><input id='ap_label' placeholder='For example: cursor'></label>"+
