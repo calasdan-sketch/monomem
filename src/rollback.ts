@@ -52,6 +52,8 @@ export interface RollbackItem {
   pinned?: true;
   /** Applied although another writer changed the note later (include_conflicts). */
   conflict?: true;
+  /** Rollback by note only: the note itself, or how it is tied to it (blast-radius.ts). */
+  basis?: "the note" | "proven" | "likely";
 }
 
 export interface RollbackSkip {
@@ -61,6 +63,7 @@ export interface RollbackSkip {
   reason: "conflict" | "cannot_fully_undo" | "operator_only" | "replaced" | "archived";
   detail: string;
   pinned?: true;
+  basis?: RollbackItem["basis"];
 }
 
 export interface RollbackPlan {
@@ -109,26 +112,45 @@ export function planRollback(store: Store, writer: string, since: string, includ
   for (const id of store.rollbackCandidates(writer, family, since, namespaces)) {
     const n = store.read(id); // gate-ok: operator rollback (admin), confined to the caller's namespaces by rollbackCandidates
     if (!n) continue;
-    const base = { id, namespace: n.namespace, title: n.title, ...(n.pinned ? { pinned: true as const } : {}) };
-    const step = decide(store, n, isW, since);
-    if (!step) continue;
-    if ("skip" in step) {
-      skipped.push({ ...base, reason: step.skip, detail: step.detail });
-      continue;
-    }
-    if (step.conflict && !includeConflicts) {
-      skipped.push({ ...base, reason: "conflict", detail: step.conflict });
-      continue;
-    }
-    if (!operator && (n.pinned || store.isApproveFirst(n.namespace))) {
-      const why = n.pinned ? "the note is pinned" : `namespace "${n.namespace}" is approve-first`;
-      skipped.push({ ...base, reason: "operator_only", detail: `${why}: only the monomem CLI can roll it back` });
-      continue;
-    }
-    actions.push({ ...base, rev: n.rev, action: step.action, ...(step.version ? { restore_version: step.version } : {}), ...(step.conflict ? { conflict: true as const } : {}) });
+    planNote(store, n, isW, since, includeConflicts, operator, actions, skipped);
   }
   planSideEffects(store, { writer, family, since, namespaces, operator }, actions, skipped);
   return { writer, since, include_conflicts: includeConflicts, actions, skipped };
+}
+
+/** One note's step (archive or restore) or skip, for the changes `isW` made to it since `since`. Pushes onto the lists. */
+export function planNote(
+  store: Store,
+  n: NoteRecord,
+  isW: (v: unknown) => boolean,
+  since: string,
+  includeConflicts: boolean,
+  operator: boolean,
+  actions: RollbackItem[],
+  skipped: RollbackSkip[],
+  extra: { basis?: RollbackItem["basis"] } = {}
+): void {
+  const base = { id: n.id, namespace: n.namespace, title: n.title, ...(n.pinned ? { pinned: true as const } : {}), ...extra };
+  const step = decide(store, n, isW, since);
+  if (!step) return;
+  if ("skip" in step) {
+    skipped.push({ ...base, reason: step.skip, detail: step.detail });
+    return;
+  }
+  if (step.conflict && !includeConflicts) {
+    skipped.push({ ...base, reason: "conflict", detail: step.conflict });
+    return;
+  }
+  if (operatorOnlySkip(store, n, operator, skipped, extra)) return;
+  actions.push({ ...base, rev: n.rev, action: step.action, ...(step.version ? { restore_version: step.version } : {}), ...(step.conflict ? { conflict: true as const } : {}) });
+}
+
+/** Pinned notes and approve-first namespaces: only the local CLI may roll them back. True (and listed as skipped) when refused. */
+export function operatorOnlySkip(store: Store, n: NoteRecord, operator: boolean, skipped: RollbackSkip[], extra: { basis?: RollbackItem["basis"] } = {}): boolean {
+  if (operator || !(n.pinned || store.isApproveFirst(n.namespace))) return false;
+  const why = n.pinned ? "the note is pinned" : `namespace "${n.namespace}" is approve-first`;
+  skipped.push({ id: n.id, namespace: n.namespace, title: n.title, ...(n.pinned ? { pinned: true as const } : {}), ...extra, reason: "operator_only", detail: `${why}: only the monomem CLI can roll it back` });
+  return true;
 }
 
 /** Replacements, flags and task claims the writer made since `since` that are still in force (see the header). */
@@ -230,14 +252,14 @@ function decide(store: Store, n: NoteRecord, isW: (v: unknown) => boolean, since
   return { action: "restore", version: first.version, ...(who.length ? { conflict: `changed later by ${who.map((w) => `"${safe(w, 40)}"`).join(", ")}` } : {}) };
 }
 
-function planHash(p: RollbackPlan): string {
+export function planHash(p: RollbackPlan): string {
   return createHash("sha256")
     .update(JSON.stringify(p.actions.map((a) => [a.id, a.rev, a.action, a.restore_version ?? 0, a.replaced_by ?? 0, a.flags ?? 0, a.back_to ?? ""])))
     .digest("hex")
     .slice(0, 32);
 }
 
-function gate(caller: Caller): string[] | undefined {
+export function gate(caller: Caller): string[] | undefined {
   if (!scopeAllows(caller.scope, "admin")) throw new SupersedeError("rolling back a writer is for administrators", 403);
   return caller.ownNamespace !== undefined ? [caller.ownNamespace] : undefined;
 }
@@ -329,7 +351,7 @@ export interface RollbackResult {
 }
 
 /** Apply one unreplace / unflag / release step inside the confirm transaction. False for a note action (archive, restore). */
-function applySideEffect(store: Store, a: RollbackItem, writer: string, since: string, done: { unreplaced: number[]; unflagged: number[]; released: number[] }): boolean {
+export function applySideEffect(store: Store, a: RollbackItem, writer: string, since: string, done: { unreplaced: number[]; unflagged: number[]; released: number[] }): boolean {
   if (a.action === "unreplace") {
     if (!store.supersedeUndo(a.id, `rollback:${writer}`)) throw new StaleWriteError(`note ${a.id} is no longer replaced; nothing was changed`);
     done.unreplaced.push(a.id);
@@ -353,6 +375,22 @@ function applySideEffect(store: Store, a: RollbackItem, writer: string, since: s
     return true;
   }
   return false;
+}
+
+/** Apply one archive / restore step inside the confirm transaction. */
+export function applyNoteStep(store: Store, a: RollbackItem, archived: number[], restored: RollbackResult["restored"]): void {
+  // R2-08: counted against the note's writer as it stands before the rollback (a family name like "stdio" is not a writer).
+  store.recordWriterEvent(store.read(a.id)?.written_by ?? "", "rolled_back", a.id); // gate-ok: operator rollback, only the writer name is used
+  if (a.action === "archive") {
+    store.archive(a.id);
+    archived.push(a.id);
+    return;
+  }
+  // The text goes back with its own author (who restored it is in the change log and the history reason).
+  const author = store.historyVersion(a.id, a.restore_version as number)?.written_by ?? "";
+  const back = store.restoreVersion(a.id, a.restore_version as number, { ifRev: a.rev, reason: "rollback", noFloodCount: true, ...(author ? { writtenBy: author } : {}) });
+  if (!back) throw new StaleWriteError(`note ${a.id} is gone; nothing was changed`);
+  restored.push({ id: a.id, version: a.restore_version as number, now_rev: back.rev });
 }
 
 /** Recompute the embeddings of the notes a rollback restored (their text changed). Best effort, like every write path. */
@@ -386,18 +424,7 @@ export function rollbackConfirm(store: Store, caller: Caller, req: { token: unkn
     const done = { unreplaced: [] as number[], unflagged: [] as number[], released: [] as number[] };
     for (const a of plan.actions) {
       if (applySideEffect(store, a, writer, since, done)) continue;
-      // R2-08: counted against the note's writer as it stands before the rollback (a family name like "stdio" is not a writer).
-      store.recordWriterEvent(store.read(a.id)?.written_by ?? "", "rolled_back", a.id); // gate-ok: operator rollback, only the writer name is used
-      if (a.action === "archive") {
-        store.archive(a.id);
-        archived.push(a.id);
-      } else {
-        // The text goes back with its own author (who restored it is in the change log and the history reason).
-        const author = store.historyVersion(a.id, a.restore_version as number)?.written_by ?? "";
-        const back = store.restoreVersion(a.id, a.restore_version as number, { ifRev: a.rev, reason: "rollback", noFloodCount: true, ...(author ? { writtenBy: author } : {}) });
-        if (!back) throw new StaleWriteError(`note ${a.id} is gone; nothing was changed`);
-        restored.push({ id: a.id, version: a.restore_version as number, now_rev: back.rev });
-      }
+      applyNoteStep(store, a, archived, restored);
     }
     return { archived, restored, ...done, skipped: plan.skipped };
   });
