@@ -67,7 +67,11 @@ undoes a restored text. The message at the end lists both.
 - Monomem only sees reads through its own tools and hooks. It cannot see what an app did with a note somewhere else,
   for example a file it edited or a message it sent.
 - An app that wrote a note based on this one without passing `derived_from` shows up as "likely" at best.
+- Only reads by apps are recorded: app keys and local apps (`stdio:<app>`). Your own reads are not: the dashboard (it uses
+  your main key) and the `monomem` command at the terminal. Opening your own dashboard never counts as an app reading a note.
 - One read records at most 200 note ids. Reads of held writes record nothing, because those ids are not note ids.
+- Each recorded id takes about 144 bytes. Heavy use measured about 43 MB over 30 days; rows older than the access log
+  period are removed.
 - The read rows hold note ids, reader names, tool names and times. They never hold note text or titles. They are stored in
   a separate table (`note_reads`) in the same database, which Monomem creates the first time it needs it. The schema
   version does not change, so 1.5.0 still opens the database.

@@ -214,12 +214,17 @@ test("REST: a read through the API is recorded; GET /notes/:id/touched and rollb
   const { createApiServer } = await import("../src/api.js");
   const store = new Store(":memory:");
   const bad = as("evil", () => store.create({ title: "bad", body: "b" }));
-  const server = createApiServer(store, "tok-admin-1234567890");
+  // F4 (design SF-D): the owner's main key is not a recorded reader, so the read goes through an app key.
+  const server = createApiServer(store, [
+    { token: "tok-admin-1234567890", scope: "admin", label: "primary" },
+    { token: "tok-app-12345678901234", scope: "write", label: "agent-x" },
+  ]);
   await new Promise<void>((r) => server.listen(0, r));
   const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
   const H = { Authorization: "Bearer tok-admin-1234567890", "Content-Type": "application/json" };
   try {
-    assert.equal((await fetch(`${base}/notes/${bad.id}`, { headers: H })).status, 200);
+    assert.equal((await fetch(`${base}/notes/${bad.id}`, { headers: { Authorization: "Bearer tok-app-12345678901234" } })).status, 200);
+    assert.equal((await fetch(`${base}/notes/${bad.id}`, { headers: H })).status, 200, "the owner's own read: not recorded");
     const t = (await (await fetch(`${base}/notes/${bad.id}/touched`, { headers: H })).json()) as { reads_total: number; text: string };
     assert.equal(t.reads_total, 1);
     assert.match(t.text, /What note/);
@@ -271,6 +276,64 @@ test("MCP: memory_why touched needs admin; memory_rollback takes note (one tool,
     assert.ok(store.read(child.id)!.archived_at);
     await admin.close();
   } finally {
+    store.close();
+  }
+});
+
+test("F4 perf SF1: one read's note ids are written with ONE statement; the owner's own reads are not recorded", () => {
+  const store = new Store(":memory:");
+  try {
+    const ids = Array.from({ length: 50 }, (_, i) => as("alice", () => store.create({ title: `n${i}`, body: "x" })).id);
+    const payload = { results: ids.map((id) => ({ id, namespace: "default" })) };
+    // Count the statements that touch note_reads: wrap the connection's prepare.
+    let stmts = 0;
+    const db = store.db as unknown as { prepare: (sql: string) => { run: (...a: unknown[]) => unknown } };
+    const orig = db.prepare.bind(db);
+    db.prepare = (sql: string) => {
+      const st = orig(sql);
+      if (!/INSERT INTO note_reads/.test(sql)) return st;
+      return new Proxy(st, { get: (t, k) => (k === "run" ? (...a: unknown[]) => (stmts++, t.run(...a)) : (Reflect.get(t, k) as unknown)) }) as typeof st;
+    };
+    try {
+      as("agent-a", () => store.logAccess({ tool: "memory_list", payload }));
+    } finally {
+      db.prepare = orig;
+    }
+    assert.equal(stmts, 1, "one INSERT for the whole read");
+    const n = (w: string) => Number((store.db.prepare("SELECT COUNT(*) AS c FROM note_reads WHERE writer = ?").get(w) as { c: number }).c);
+    assert.equal(n("agent-a"), 50, "every id recorded");
+    // The owner: the dashboard's main key, the person at the terminal. Their page loads are not "proven reads".
+    as("primary", () => store.logAccess({ tool: "GET /notes", payload }));
+    setProcessWriter("cli");
+    store.logAccess({ tool: "list", payload });
+    setProcessWriter("stdio:claude-code");
+    store.logAccess({ tool: "memory_search", payload });
+    assert.equal(n("primary"), 0, "the dashboard's main key is not recorded");
+    assert.equal(n("cli"), 0, "the person at the terminal is not recorded");
+    assert.equal(n("stdio:claude-code"), 50, "a local agent is recorded");
+    assert.equal(store.accessLog({ writer: "primary" }).length, 1, "the access log still counts the owner's read");
+  } finally {
+    store.close();
+  }
+});
+
+test("F4 silent L3: a note_reads write that fails is said once, and the access log row stays", () => {
+  const store = new Store(":memory:");
+  const errs: string[] = [];
+  const orig = console.error;
+  const origW = process.stderr.write;
+  console.error = (m: unknown) => void errs.push(String(m));
+  process.stderr.write = ((m: unknown) => (errs.push(String(m)), true)) as typeof process.stderr.write;
+  try {
+    const n = as("alice", () => store.create({ title: "n", body: "x" }));
+    store.db.exec("CREATE TABLE IF NOT EXISTS note_reads (x); CREATE TRIGGER nr_fail BEFORE INSERT ON note_reads BEGIN SELECT RAISE(FAIL, 'disk I/O error'); END;");
+    for (let i = 0; i < 3; i++) as("agent-a", () => store.logAccess({ tool: "memory_read", payload: { note: { id: n.id, namespace: "default" } } }));
+    const said = errs.filter((e) => /which notes a read handed out/.test(e));
+    assert.equal(said.length, 1, errs.join("\n"));
+    assert.equal(store.accessLog({ writer: "agent-a" }).length, 3);
+  } finally {
+    console.error = orig;
+    process.stderr.write = origW;
     store.close();
   }
 });
