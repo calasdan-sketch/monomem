@@ -82,8 +82,9 @@ export function mcpContext(store: Store, scope: Scope, opts: ServerNamespaceOpts
     const seen = renameHintsShown.get(taintedReads) ?? new Set<string>();
     renameHintsShown.set(taintedReads, seen);
     const withHint = (r: unknown): unknown => {
-      const res = r as { content?: unknown[] } | null;
-      if (seen.has(name as string) || !res || !Array.isArray(res.content)) return r;
+      const res = r as { content?: unknown[]; isError?: boolean } | null;
+      // Never on an error: a hidden note and a missing one must answer byte for byte the same (no oracle).
+      if (seen.has(name as string) || !res || !Array.isArray(res.content) || res.isError) return r;
       seen.add(name as string);
       return { ...res, content: [...res.content, { type: "text", text: line }] };
     };

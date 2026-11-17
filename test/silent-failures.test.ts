@@ -118,6 +118,10 @@ describe("backups that quietly stop", () => {
 
   test("daily backups on but none for more than 2 days: check warns", async () => {
     const w = scratch();
+    // The backup age also counts `monomem backup` folders in the home folder: point home at the scratch dir so real
+    // backups on this computer cannot make the scratch store look freshly backed up.
+    const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+    process.env.HOME = process.env.USERPROFILE = w.dir;
     try {
       new Store(w.db).close();
       writeFileSync(join(w.dir, ".last-backup"), "2026-11-10T09:00:00.000Z\n");
@@ -128,6 +132,7 @@ describe("backups that quietly stop", () => {
       const fresh = await health(w.dir, w.db, new Date("2026-11-11T09:00:00Z"));
       assert.equal(fresh.checks.find((c) => c.id === "backup")?.status, "info");
     } finally {
+      for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k]; else process.env[k] = v;
       w.done();
     }
   });

@@ -69,7 +69,7 @@ describe("drill and health make no network call", () => {
     }) as typeof fetch;
     try {
       const d = await runDrill({ dbPath: db });
-      assert.match(renderDrill(d), /Embeddings off for the drill/);
+      assert.match(renderDrill(d), /Embeddings (?:were )?off for the (?:drill|replay)/);
       assert.equal(process.env.MONOMEM_EMBEDDINGS, "on", "the setting is restored");
       await runHealth({ dbPath: db, auditPath: join(dir, "audit.log"), settingsPath: join(dir, "none.json"), pluginsPath: join(dir, "none2.json") });
     } finally {

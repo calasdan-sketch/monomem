@@ -224,11 +224,12 @@ describe("local sign-in vs person session (routes-ui.ts header)", () => {
 
   test("a local session adds nothing to a lesser key, and a non-terminal sign-in cannot keep a flagged note", async () => {
     const { createApiServer } = await import("../src/api.js");
-    const { setUiRunner } = await import("../src/api/routes-ui.js");
+    const { setUiRunner, setUiStarter } = await import("../src/api/routes-ui.js");
     const { mintLoginCode } = await import("../src/login-code.js");
     const ADMIN = "a".repeat(40), WRITE = "w".repeat(40);
     let ran = 0;
     setUiRunner(async () => (ran++, { code: 0, output: "" }));
+    setUiStarter(() => void ran++); // never start a real `monomem update` from a test
     const s = new Store(":memory:");
     const server = createApiServer(s, [{ token: ADMIN, scope: "admin", label: "primary" }, { token: WRITE, scope: "write", label: "cursor" }]);
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
@@ -240,12 +241,13 @@ describe("local sign-in vs person session (routes-ui.ts header)", () => {
       for (const [m, p] of [["POST", "/ui/update"], ["POST", "/ui/remove"], ["PUT", "/ui/settings"], ["POST", "/ui/backup"]] as const) {
         assert.equal((await fetch(base + p, { method: m, headers: h(WRITE), body: "{}" })).status, 403, `app key + local session: ${p}`);
       }
-      assert.equal((await fetch(base + "/ui/update", { method: "POST", headers: { Authorization: `Bearer ${ADMIN}`, "X-Monomem-Local": login.local_session } , body: "{}" })).status, 200, "main key + local session: allowed");
+      assert.equal((await fetch(base + "/ui/update", { method: "POST", headers: { Authorization: `Bearer ${ADMIN}`, "X-Monomem-Local": login.local_session } , body: "{}" })).status, 202, "main key + local session: allowed (the update starts detached)");
       assert.equal((await fetch(base + "/ui/update", { method: "POST", headers: { "X-Monomem-Local": login.local_session }, body: "{}" })).status, 401, "a local session is never a key");
       assert.equal((await fetch(base + "/ui/review/1/keep", { method: "POST", headers: h(ADMIN) })).status, 403, "keep needs the terminal (person) session");
       assert.equal(ran, 1);
     } finally {
       setUiRunner(null);
+      setUiStarter(null);
       await new Promise<void>((r) => server.close(() => r()));
       s.close();
     }

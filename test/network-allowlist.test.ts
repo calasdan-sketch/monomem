@@ -17,7 +17,9 @@ const ALLOWED = new Map([
   ["src/doctor/server.ts", 2], // `monomem doctor`: the local server's version, and its /status body-index line (127.0.0.1 only)
   ["src/local-server.ts", 1], // session start proves a local server holds this store's main key (GET /proof, loopback only)
   ["src/recall.ts", 1], // the recall hook asks that proven local server for body matches (POST /relevant)
-  ["src/update.ts", 2], // `monomem update` (typed only, never in hooks): the latest release from api.github.com, then its archive + SHA256SUMS
+  ["src/update.ts", 3], // `monomem update` (typed only, never in hooks): the latest release from api.github.com, then its archive + SHA256SUMS; after a dashboard update, is the restarted server up? (127.0.0.1 only)
+  ["src/cli/stop.ts", 1], // `monomem stop`: does the server `monomem open` started still answer? (127.0.0.1 only)
+  ["src/ui/js-settings.ts", 1], // dashboard Update: polls /health on the server that served the page until the new version answers
 ]);
 const CALL = /\bfetch\(|\bhttps?\.(?:request|get)\(|new WebSocket\(|\bnet\.connect\(|\btls\.connect\(/g;
 

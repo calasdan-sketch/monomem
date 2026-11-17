@@ -104,6 +104,8 @@ leaves it running. On Windows the task is found by its `monomem-task.xml` in the
 | Capture hook posting to a server (`src/hook.ts`) | `MONOMEM_HOOK_URL` and `MONOMEM_HOOK_TOKEN` | your own Monomem server |
 | Runner `--post` (`src/runner-sign.ts`) | `MONOMEM_URL` and `MONOMEM_TOKEN` | your own Monomem server |
 | Dashboard page (`src/ui/js-core.ts`, served by `src/dashboard.ts`) | opening the dashboard | the Monomem server that served the page (API calls, and the one-time sign-in code that `monomem open` hands over). Its Settings "Check for updates" and "Update now" buttons run `monomem update` only when pressed |
+| `monomem stop` (`src/cli/stop.ts`) | running the command | `http://127.0.0.1:<port>/health` on the port `monomem open` recorded, to be sure it is still your server before stopping it |
+| Dashboard Update (`src/ui/js-settings.ts`, `src/update.ts`) | pressing "Update now" | the server that served the page (`/health`), and after the swap `http://127.0.0.1:<api port>/health`, to see the new version is up |
 | `monomem open` (`src/cli/connect.ts`) | running the command | `http://127.0.0.1:<api port>/health`, to see whether your own server is up |
 | `monomem backup restore` (`src/cli.ts`) | running the command | `http://127.0.0.1:<api port>/health`, only to print a hint when something answers there (whether the database is in use is judged by its lock) |
 | `monomem setup` (`src/embeddings-offer.ts`) | running the command (not `--no-embeddings`, `--undo`, or with `MONOMEM_EMBEDDINGS` / `MONOMEM_EMBED_URL` already set) | `http://127.0.0.1:11434/api/tags`, to see whether a local Ollama has `nomic-embed-text`; if so, new app entries get `MONOMEM_EMBEDDINGS=auto` (0.8 s timeout) |
