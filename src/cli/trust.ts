@@ -509,9 +509,9 @@ export async function reviewCmd(args: string[]): Promise<void> {
     const store = new Store(DB_PATH);
     try {
       const n = store.keepFlagged(id);
-      const moved = store.refreshCodeAnchors(id); // R2-03
+      const moved = store.refreshCodeAnchors(id) + (await import("../claims.js")).keepClaims(store, id); // R2-03, PLAN I claims
       if (n) console.log(`Kept #${id}: cleared ${n} flag${n === 1 ? "" : "s"}. It is back in session start unless something else holds it.`);
-      if (moved) console.log(`Kept #${id}: ${moved} changed file${moved === 1 ? "" : "s"} now count as checked against the current commit.`);
+      if (moved) console.log(`Kept #${id}: ${moved} changed file${moved === 1 ? "" : "s"} or claim${moved === 1 ? "" : "s"} now count as checked against the code as it is now.`);
       if (!n && !moved) console.log(`#${id} has no flags on its current version and no changed files. Nothing changed.`);
     } finally {
       store.close();
@@ -536,7 +536,7 @@ export async function reviewCmd(args: string[]): Promise<void> {
       // --step walks the review list only; flagged and code-changed notes are named here, so it never gives a false all-clear.
       const scope = ns !== undefined ? [ns] : undefined;
       const nFlagged = store.flaggedList(scope).length;
-      const nCode = store.codeChangedList(scope).length;
+      const nCode = store.codeChangedList(scope).length + (await import("../claims.js")).claimsReview(store, scope).failed.length;
       const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
       if (nFlagged) console.log(`${plural(nFlagged, "flagged note waits", "flagged notes wait")}: monomem review`);
       if (nCode) console.log(`${plural(nCode, "note waits", "notes wait")} because the code it describes changed: monomem review`);
@@ -557,21 +557,25 @@ export async function reviewCmd(args: string[]): Promise<void> {
     }
     const flagged = store.flaggedList(ns !== undefined ? [ns] : undefined);
     const codeChanged = store.codeChangedList(ns !== undefined ? [ns] : undefined);
+    const claims = await import("../claims.js");
+    const claimsFailed = claims.claimsReview(store, ns !== undefined ? [ns] : undefined).failed;
     if (flags.json === true) {
-      console.log(JSON.stringify({ notes: items, flagged, code_changed: codeChanged, held_writes: held }, null, 2));
+      console.log(JSON.stringify({ notes: items, flagged, code_changed: codeChanged, claims_failed: claimsFailed, held_writes: held }, null, 2));
       if (flags["confirm-all"] !== true) return;
-    } else if (!items.length && !flagged.length && !codeChanged.length) {
+    } else if (!items.length && !flagged.length && !codeChanged.length && !claimsFailed.length) {
       console.log(heldLine || "Nothing waits for review.");
       return;
     } else if (!items.length) {
       if (heldLine) console.log(heldLine);
       if (flagged.length) printFlagged(flagged);
       if (codeChanged.length) printCodeChanged(codeChanged);
+      if (claimsFailed.length) claims.printClaimsReview({ failed: claimsFailed, holding: 0 });
       return;
     } else {
       if (heldLine) console.log(heldLine);
       if (flagged.length) printFlagged(flagged);
       if (codeChanged.length) printCodeChanged(codeChanged);
+      if (claimsFailed.length) claims.printClaimsReview({ failed: claimsFailed, holding: 0 });
       console.log(`${items.length} note${items.length === 1 ? "" : "s"} wait for a person:`);
       for (const r of items) {
         console.log(`  #${r.id} [${printable(r.namespace, 100)}] ${printable(r.title, 120)} (by ${printable(r.writer || "unknown", 100)})`);

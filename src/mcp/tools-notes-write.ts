@@ -112,9 +112,21 @@ export function registerNotesWriteTools(c: McpCtx): void {
           .max(20)
           .optional()
           .describe("When creating: the files in this git repository the note is about (at most 20, e.g. [\"src/auth.ts\"], tracked by git). When one of them changes in a later commit, reads label the note `[code changed since this was written: ...]` until a person checks it."),
+        claims: z
+          .array(
+            z.union([
+              z.string(),
+              z.object({ file: z.string(), contains: z.string().optional(), dependency: z.string().optional(), exists: z.literal(true).optional(), lines: z.string().optional() }).strict(),
+            ])
+          )
+          .max(20)
+          .optional()
+          .describe(
+            "When creating: checks against files in this git repository that must stay true (at most 20). Each is { file, contains: \"exact text\" }, { file: \"package.json\", dependency: \"name\" }, { file, exists: true }, or a line citation \"src/a.ts:10-20\" (its lines are hashed). Each must hold now. Files are only read, never run. When one stops holding, reads label the note `[no longer true in code: ...]` or `[cited code changed: ...]` until a person checks it."
+          ),
       },
     },
-    async ({ id, namespace, title: givenTitle, body, tags: plainTags, facts, source, if_rev, forget_after, confidence, sensitivity, outside, derived_from, client_key, files }) => {
+    async ({ id, namespace, title: givenTitle, body, tags: plainTags, facts, source, if_rev, forget_after, confidence, sensitivity, outside, derived_from, client_key, files, claims }) => {
       const warnings: LintFinding[] = [];
       let title = givenTitle;
       let tags = plainTags;
@@ -133,6 +145,7 @@ export function registerNotesWriteTools(c: McpCtx): void {
         }
         if (id !== undefined && client_key !== undefined) return errorResult("client_key applies to creating a note; use if_rev to guard an update");
         if (id !== undefined && files !== undefined) return errorResult("files applies to creating a note; a person refreshes an existing note's files with monomem review keep <id>");
+        if (id !== undefined && claims !== undefined) return errorResult("claims applies to creating a note; replace the note to change its claims");
         const anchorFiles = checkFilesInput(files);
         if (id !== undefined) {
           // When namespace resolution is active the model-supplied namespace
@@ -176,7 +189,7 @@ export function registerNotesWriteTools(c: McpCtx): void {
             ? { namespace: ownNs, title, body, tags, source, forget_after, sensitivity, outside, derived_from, ...(typeof confidence === "number" ? { confidence } : {}) }
             : { namespace, title, body, tags, source, forget_after, sensitivity, outside, derived_from, ...(typeof confidence === "number" ? { confidence } : {}) },
           client_key,
-          { lintWarnings: warnings, ...(anchorFiles ? { files: anchorFiles } : {}) }
+          { lintWarnings: warnings, ...(anchorFiles ? { files: anchorFiles } : {}), ...(claims ? { claims } : {}) }
         );
         const receipt = withReceipt();
         // R2-04: a retry with a known key wrote nothing; the reply is the note the first write made.

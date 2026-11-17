@@ -37,6 +37,7 @@ export function exclusionReason(store: Store, n: NoteRecord, enforce: boolean): 
   if (n.sensitivity === "private") return "private";
   if (n.flagged?.length) return "flagged by an agent";
   if (n.code_changed?.length) return "its code changed since";
+  if (n.claims_failed?.length) return "a claim no longer true in code";
   if (n.built_on_distrusted || n.unconfirmed || heldFromSessionStart(n, enforce)) return "held back from session start";
   if (disputeFields(store, n).disputed) return "disputed";
   if (lintContent({ body: ruleLine(n) }).length) return "the linter flags its text";
