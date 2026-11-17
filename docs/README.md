@@ -14,6 +14,7 @@ Pick by what you want to do. Everything here is also linked from the main [READM
 | keep one app inside one folder of notes | [token-namespaces.md](./token-namespaces.md) |
 | reach Monomem from my phone or the web | [INFRA.md](../INFRA.md) |
 | have Claude Code recall notes at the start of a session | [sessionstart-hook.md](./sessionstart-hook.md) |
+| bring in Claude Code's own memory, Codex memories, a Notion export or another memory tool (held until I confirm) | [switching.md](./switching.md) |
 | move notes in or out, or keep them in git | [file-sync.md](./file-sync.md), [switching.md](./switching.md) |
 | replace a wrong note, or undo an edit | [replacing-memories.md](./replacing-memories.md) |
 | see what a bad note touched, and undo it with what was built on it | [what-a-note-touched.md](./what-a-note-touched.md) |

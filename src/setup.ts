@@ -2306,6 +2306,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   // proof would then pass without Monomem.
   io.out('\n  Why "Save to Monomem" and not just "remember": some assistants, Claude Code among them, keep a memory of');
   io.out("  their own, and a plain \"remember\" can land there instead, where your other apps cannot see it.");
+  await (await import("./claude-refresh.js")).offerClaudeMemoryImport(e, io, !!opts.yes, primaryDb);
   await offerClaudeMemPreview(e, io, opts, primaryDb);
   await offerServerMemoryPreview(e, io, opts, primaryDb);
   await (await import("./cli/commit-trail.js")).offerCommitTrail(e, io, opts); // PLAN I: per repository, asks first

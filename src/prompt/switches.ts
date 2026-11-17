@@ -12,7 +12,7 @@ export function subagentMemoryOn(env: NodeJS.ProcessEnv = process.env): boolean 
  * One switch from the dashboard's <data dir>/ui-settings.json (ui/settings.ts writes it): "on", "off", or undefined when
  * the file is missing, unreadable, hand-broken or does not say, so the caller's default applies.
  */
-export function uiSwitch(dataDir: string, key: "prompt_recall" | "daily_backups"): "on" | "off" | undefined {
+export function uiSwitch(dataDir: string, key: "prompt_recall" | "daily_backups" | "claude_refresh"): "on" | "off" | undefined {
   try {
     const v = JSON.parse(readFileSync(join(dataDir, "ui-settings.json"), "utf8")) as Record<string, unknown> | null;
     const x = v && typeof v === "object" ? v[key] : undefined;

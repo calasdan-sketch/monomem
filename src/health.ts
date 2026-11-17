@@ -20,6 +20,7 @@ import { qualityReport } from "./quality.js";
 import { backupFailure, backupsDir, dailyBackupsOn } from "./backup-schedule.js";
 import { backupAgeDays } from "./digest.js";
 import { syncProblem } from "./sync/device.js";
+import { bridgeLine, heldImports } from "./claude-refresh.js";
 
 /** Daily backups on, but none for this many days: check warns (the server was not running, or every copy failed). */
 const BACKUP_LATE_DAYS = 2;
@@ -284,7 +285,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
   const nodeOk = nodeIsOk(process.versions.node) && sqliteHasFts5();
   add("node", "Node", nodeOk ? "ok" : "fail", nodeOk ? `Node ${process.versions.node} with SQLite FTS5` : `Node ${process.versions.node} needs >= ${MIN_NODE_TEXT} with SQLite FTS5, or search fails`);
 
-  let notes = 0, held = 0, distrust = 0, marked = 0, dbOk = false;
+  let notes = 0, held = 0, distrust = 0, marked = 0, claudeHeld = 0, dbOk = false;
   let meterText = "meter unavailable";
   let piiNotes = 0, privateNotes = 0, labelledNotes = 0;
   let hygiene = "";
@@ -322,6 +323,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
           notes = s.countAll();
           step("held", "Held writes", () => void (held = s.listQuarantine({ limit: 500 }).length));
           step("distrust", "Distrusted writers", () => void (distrust = s.distrustRules().length));
+          step("claude-memory", "Claude Code memory", () => void (claudeHeld = heldImports(s)));
           step("confirm", "Confirm rules", () => void (confirmLines = s.confirmRuleLines()));
           step("confirm-backlog", "Unconfirmed backlog", () => {
             const b = s.confirmBacklog();
@@ -461,7 +463,10 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
 
   if (dbOk) {
     add("held", "Held writes", "info", held ? `${held >= 500 ? "500 or more writes" : plural(held, "write")} held for review: the defence working, nothing was stored without you (monomem review held list)` : "no writes waiting for review");
-    add("distrust", "Distrusted writers", "info", `${plural(distrust, "distrust rule")}${distrust ? " (their notes are hidden from agents)" : ""}`);
+    // The home whose Claude folder the Hooks line looked at (a test's settingsPath points at a scratch home).
+    const claudeLine = await bridgeLine(o.setupEnv ?? { home: dirname(dirname(settingsPath)), env: o.settingsPath ? {} : process.env, cwd: process.cwd() }, dbPath, claudeHeld).catch(() => null);
+    if (claudeLine) add("claude-memory", "Claude Code memory", "info", claudeLine);
+    add("distrust", "Distrusted writers", "info",`${plural(distrust, "distrust rule")}${distrust ? " (their notes are hidden from agents)" : ""}`);
     if (confirmLines.length) add("confirm", "Confirm rules", "info", confirmLines.join("; "));
     if (backlog) add("confirm-backlog", "Unconfirmed backlog", "warn", `${backlog}: review them with monomem review (the grade is capped at B until they are dealt with)`);
     add("redacted", "Redacted notes", "info", `notes with a [REDACTED:...] marker (secret redaction replaced a credential): ${marked}`);

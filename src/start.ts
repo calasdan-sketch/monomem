@@ -26,6 +26,7 @@ import {
   prepareDataDir,
   TOKEN_FILE,
   isLoopback,
+  PACKAGE_VERSION,
 } from "./config.js";
 import { autoConsolidateCooperative, AUTO_MERGE_SCORE } from "./consolidate.js";
 import { resolveStartupNamespace } from "./namespace.js";
@@ -235,6 +236,21 @@ const backupNow = (): void => {
 const backupTimer = autoBackupOn() ? setInterval(backupNow, 3_600_000) : undefined;
 backupTimer?.unref();
 if (backupTimer) setTimeout(backupNow, 60_000).unref();
+
+// Claude Code memory bridge (claude-refresh.ts): off unless MONOMEM_CLAUDE_REFRESH=on or the Settings switch; every 10 minutes
+// it reads only Claude Code's memory files that changed and brings them in held. The switch is read on every tick.
+let bridgeRunning = false;
+const bridgeTimer = setInterval(() => {
+  if (bridgeRunning) return;
+  bridgeRunning = true;
+  void Promise.all([import("./claude-refresh.js"), import("./setup.js")])
+    .then(([b, s]) => b.bridgeTick(s.realEnv(PACKAGE_VERSION), DB_PATH, DATA_DIR, (l) => console.error(l)))
+    .catch((e: Error) => console.error(`[monomem] Claude Code memory refresh failed: ${e.message}`))
+    .finally(() => {
+      bridgeRunning = false;
+    });
+}, 10 * 60_000);
+bridgeTimer.unref();
 
 // Device sync on a timer: only after `monomem sync setup --auto on` (off by default; it talks to your git remote).
 void Promise.all([import("./sync/device.js"), import("./self.js")])

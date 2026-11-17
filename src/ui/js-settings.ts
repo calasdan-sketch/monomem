@@ -13,13 +13,14 @@ function autoSwitches(s){
   s = s || {};
   return onOffSwitch("sw_backups", "Back up my notes every day", "A copy of your notes in your Monomem folder each day. Your encryption key is never copied.", s.daily_backups !== "off", "setSetting(&quot;daily_backups&quot;,this.checked)")+
     onOffSwitch("sw_recall", "Add matching notes to each prompt", "At each prompt, up to 3 notes that match it are added for your app. Off by default.", s.prompt_recall === "on", "setSetting(&quot;prompt_recall&quot;,this.checked)")+
+    onOffSwitch("sw_claude", "Bring in Claude Code's memory as it changes", "While Monomem runs, files Claude Code changed are copied in every 10 minutes, held until you confirm them. Off by default.", s.claude_refresh === "on", "setSetting(&quot;claude_refresh&quot;,this.checked)")+
     "<div class='switch'><span><span>Start Monomem with my computer</span><span class='help' style='display:block'>Keeps this page and backups available. Your apps start Monomem themselves either way.</span></span>"+
     "<span class='row'><button onclick='setService(true)'>Turn on</button><button class='plain' onclick='setService(false)'>Turn off</button></span></div>";
 }
 function setSetting(key, on){
   var b = {}; b[key] = on ? "on" : "off";
   api("/ui/settings", { method:"PUT", body: JSON.stringify(b) }).then(function(j){ STATE.settings = j.settings; toast(on ? "Turned on." : "Turned off."); })
-    .catch(function(e){ say(e.message, true); var el = $(key === "daily_backups" ? "sw_backups" : "sw_recall"); if(el){ el.checked = !on; } });
+    .catch(function(e){ say(e.message, true); var el = $({ daily_backups:"sw_backups", prompt_recall:"sw_recall", claude_refresh:"sw_claude" }[key]); if(el){ el.checked = !on; } });
 }
 function setService(on){
   toast(on ? "Setting up..." : "Turning off...");
@@ -192,9 +193,12 @@ function showWelcome(n){
   var w = $("welcome");
   if(n === 0){
     w.innerHTML = wcard(0, "Welcome to Monomem", "<p>Monomem gives your AI apps one shared memory. Connect the apps you use:</p><div id='wl_apps'><p class='muted'>Looking for apps...</p></div>"+
-      "<p class='help'>Monomem adds one entry to each app's settings and keeps a copy of every file it changes. Changed your mind? Settings, then Undo the last connect, puts it back.</p>",
+      "<p class='help'>Monomem adds one entry to each app's settings and keeps a copy of every file it changes. Changed your mind? Settings, then Undo the last connect, puts it back.</p>"+
+      "<p style='margin-top:16px'><b>Bring in memories</b> from other tools on this computer (optional):</p><div id='wl_mem'><p class='muted'>Looking...</p></div>"+
+      "<p class='help'>Each note comes in held: your apps do not get it at session start until you confirm it. A Notion export or a mem0 file: <code>monomem import --from notion --path &lt;export.zip&gt;</code> (or <code>--from mem0</code>).</p>",
       "<button class='plain' onclick='finishWelcome()'>Skip</button><button class='primary' onclick='showWelcome(1)'>Next</button>");
     loadApps2("wl_apps", true);
+    loadMemSources();
   } else if(n === 1){
     TRY_SINCE = new Date().toISOString();
     w.innerHTML = wcard(1, "Try it", "<p>In one of your connected apps, type:</p><p class='say' id='wl_say'>Save to Monomem: we deploy with pnpm</p>"+
@@ -210,6 +214,23 @@ function showWelcome(n){
       (INSTALL_EVT ? "<div class='acts'><button onclick='installApp()'>Install as an app</button></div>" : ""),
       "<button class='plain' onclick='showWelcome(1)'>Back</button><button class='primary' onclick='finishWelcome()'>Open my notes</button>");
   }
+}
+// Other memory tools found on this computer: one "Bring in" each, asked first, then the ordinary import runs.
+function loadMemSources(){
+  api("/ui/import").then(function(j){
+    var box = $("wl_mem"); if(!box){ return; }
+    var list = j.sources || [];
+    box.innerHTML = list.length ? list.map(function(s){
+      return "<div class='app'><div><b>"+esc(s.label)+"</b><div class='help'>"+esc(s.where)+"</div></div><button onclick='bringIn(&quot;"+esc(s.id)+"&quot;,&quot;"+esc(s.label)+"&quot;)'>Bring in</button></div>";
+    }).join("") : "<p class='muted'>No other memory tools found here.</p>";
+  }).catch(function(e){ var box = $("wl_mem"); if(box){ box.innerHTML = "<p class='muted'>" + (localMissing(e) ? "To look for them, open Monomem from " + whereEntry() + ", or run monomem open on this computer." : esc(e.message)) + "</p>"; } });
+}
+function bringIn(id, label){
+  ask("Copy " + label + " into Monomem? Nothing leaves this computer. Anything that looks like a secret is skipped, and every note is held until you confirm it (the Review tab).", "Bring in", function(){
+    toast("Bringing in...");
+    api("/ui/import", { method:"POST", body: JSON.stringify({ id: id }) }).then(function(r){ showOut("wl_out", r); toast(r.ok ? "Done. The notes wait in Review." : "That did not finish; see the details."); loadMemSources(); loadNeeds(); })
+      .catch(function(e){ say(e.message, true); });
+  });
 }
 function trySeen(){
   api("/changes?since=" + encodeURIComponent(TRY_SINCE) + "&limit=5").then(function(j){

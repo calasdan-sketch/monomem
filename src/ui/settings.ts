@@ -4,6 +4,8 @@
 //   welcome_done      the Welcome screen was finished (the dashboard opens on Notes after that)
 //   prompt_recall     "on" | "off": notes added at each prompt (prompt/switches.ts; MONOMEM_PROMPT_RECALL wins when set)
 //   daily_backups     "on" | "off": automatic daily copies (backup-schedule.ts; MONOMEM_AUTO_BACKUP wins when set)
+//   claude_refresh     "on" | "off": bring in Claude Code's changed memory files while the server runs (claude-refresh.ts;
+//                     MONOMEM_CLAUDE_REFRESH wins when set). Default off.
 //   declined_apps     app ids the person answered "Not this one" for (never offered again unless they ask)
 // Also <data dir>/backup-status.json: the last automatic or manual backup ({ ok, at, dir?, error? }); a failed one counts
 // toward "Needs you".
@@ -17,9 +19,10 @@ export interface UiSettings {
   welcome_done: boolean;
   prompt_recall: OnOff;
   daily_backups: OnOff;
+  claude_refresh: OnOff;
   declined_apps: string[];
 }
-export const UI_DEFAULTS: UiSettings = { welcome_done: false, prompt_recall: "off", daily_backups: "on", declined_apps: [] };
+export const UI_DEFAULTS: UiSettings = { welcome_done: false, prompt_recall: "off", daily_backups: "on", claude_refresh: "off", declined_apps: [] };
 
 const settingsFile = (dir: string): string => join(dir, "ui-settings.json");
 const statusFile = (dir: string): string => join(dir, "backup-status.json");
@@ -47,6 +50,7 @@ export function readUiSettings(dir: string = DATA_DIR): UiSettings {
     welcome_done: raw.welcome_done === true,
     prompt_recall: onOff(raw.prompt_recall, UI_DEFAULTS.prompt_recall),
     daily_backups: onOff(raw.daily_backups, UI_DEFAULTS.daily_backups),
+    claude_refresh: onOff(raw.claude_refresh, UI_DEFAULTS.claude_refresh),
     declined_apps: [...new Set(declined)].slice(0, 50),
   };
 }
@@ -57,7 +61,7 @@ export function updateUiSettings(patch: Record<string, unknown>, dir: string = D
   const next: UiSettings = { ...cur, declined_apps: [...cur.declined_apps] };
   for (const [k, v] of Object.entries(patch)) {
     if (k === "welcome_done" && typeof v === "boolean") next.welcome_done = v;
-    else if ((k === "prompt_recall" || k === "daily_backups") && (v === "on" || v === "off")) next[k] = v;
+    else if ((k === "prompt_recall" || k === "daily_backups" || k === "claude_refresh") && (v === "on" || v === "off")) next[k] = v;
     else if (k === "declined_apps" && Array.isArray(v) && v.every((x) => typeof x === "string" && /^[a-z-]{1,40}$/.test(x))) next.declined_apps = [...new Set(v as string[])].slice(0, 50);
     else throw new Error(`Unknown setting or value: ${k.slice(0, 40)}`);
   }
@@ -66,7 +70,7 @@ export function updateUiSettings(patch: Record<string, unknown>, dir: string = D
 }
 
 /** A switch as the hooks and the backup timer read it: the saved value, else its default (prompt_recall off, daily_backups on). */
-export function uiSettingOn(key: "prompt_recall" | "daily_backups", dir: string = DATA_DIR): boolean {
+export function uiSettingOn(key: "prompt_recall" | "daily_backups" | "claude_refresh", dir: string = DATA_DIR): boolean {
   return (uiSwitch(dir, key) ?? UI_DEFAULTS[key]) === "on"; // the same reader the hooks use (prompt/switches.ts)
 }
 
