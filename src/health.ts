@@ -19,6 +19,10 @@ import { scanPii } from "./pii.js";
 import { qualityReport } from "./quality.js";
 import { backupFailure, backupsDir, dailyBackupsOn } from "./backup-schedule.js";
 import { backupAgeDays } from "./digest.js";
+import { syncProblem } from "./sync/device.js";
+
+/** Daily backups on, but none for this many days: check warns (the server was not running, or every copy failed). */
+const BACKUP_LATE_DAYS = 2;
 
 /** info: a fact worth showing that never lowers the grade. */
 export type Status = "ok" | "warn" | "fail" | "info";
@@ -428,11 +432,15 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
     const failed = backupFailure(dbPath);
     if (failed) add("backup", "Backups", "warn", `the automatic daily backup failed on ${failed.at.slice(0, 16).replace("T", " ")}: ${printable(failed.error, 200)}. Free some disk space or fix the folder ${backupsDir(dbPath)}, or run monomem backup by hand`);
     else {
-      const age = backupAgeDays(dirname(dbPath));
+      const age = backupAgeDays(dirname(dbPath), (o.now ?? new Date()).getTime());
       if (!dailyBackupsOn(process.env, o.dataDir ?? DATA_DIR)) add("backup", "Backups", "info", `automatic daily backups are off (the dashboard's Settings or MONOMEM_AUTO_BACKUP); ${age === null ? "no backup yet" : `last backup ${age < 1 ? "today" : plural(Math.floor(age), "day") + " ago"}`}. Run monomem backup by hand, or switch them back on`);
+      else if (age !== null && age > BACKUP_LATE_DAYS) add("backup", "Backups", "warn", `daily backups are on but the last one is ${plural(Math.floor(age), "day")} old: they are made only while the server runs (monomem start), or run monomem backup by hand`)
       else add("backup", "Backups", "info", age === null ? `none yet: while the server runs it makes one a day in ${backupsDir(dbPath)} (7 daily + 4 weekly kept)` : `last backup ${age < 1 ? "today" : plural(Math.floor(age), "day") + " ago"}; the server keeps 7 daily + 4 weekly in ${backupsDir(dbPath)}`);
     }
   }
+
+  const sync = syncProblem(o.dataDir ?? DATA_DIR, o.now ?? new Date());
+  if (sync) add("sync", "Device sync", "warn", sync.text);
 
   const grade = gradeOf(checks);
   return { grade, rule: GRADE_RULE, checks, not_covered: NOT_COVERED, date: (o.now ?? new Date()).toISOString().slice(0, 10), exit_code: grade <= "C" ? 0 : 1 };

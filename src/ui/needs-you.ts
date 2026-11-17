@@ -4,14 +4,16 @@
 //   unconfirmed notes from outside content that nobody confirmed (kept out of session start)
 //   conflicts   facts two writers disagree on (fact tier only: the "possible" tier is a guess, not a question for you)
 //   backup      the last backup failed
+//   sync        the last device sync failed (sync-status.json; a sync that is only late shows in monomem check)
 // Counts only, never note text. Silent (count 0) when nothing waits.
 import type { Store } from "../store.js";
 import { findConflicts, groupConflicts } from "../conflicts.js";
 import { readBackupStatus } from "./settings.js";
-import { DB_PATH } from "../config.js";
+import { DATA_DIR, DB_PATH } from "../config.js";
+import { syncProblem } from "../sync/device.js";
 import { dirname } from "node:path";
 
-export type NeedKind = "held" | "unconfirmed" | "conflicts" | "backup";
+export type NeedKind = "held" | "unconfirmed" | "conflicts" | "backup" | "sync";
 export interface NeedItem {
   kind: NeedKind;
   count: number;
@@ -30,7 +32,7 @@ const plural = (n: number, one: string, many: string): string => `${n} ${n === 1
 
 /**
  * `conflicts: false` skips the conflict scan (it reads every note), for callers on a tight time budget such as a hook.
- * `dataDir` is where backup-status.json lives: the database's folder (tests pass their own).
+ * `dataDir` is where backup-status.json and sync-status.json live: the database's folder (tests pass their own).
  */
 export function needsYou(store: Store, opts: { namespaces?: string[]; conflicts?: boolean; dataDir?: string } = {}): NeedsYou {
   const items: NeedItem[] = [];
@@ -44,6 +46,8 @@ export function needsYou(store: Store, opts: { namespaces?: string[]; conflicts?
   }
   const b = readBackupStatus(opts.dataDir ?? dirname(DB_PATH)); // backup-status.json sits next to the database (backup-schedule.ts)
   if (b && !b.ok) items.push({ kind: "backup", count: 1, view: "settings", text: `The last backup failed (${b.at.slice(0, 16).replace("T", " ")}).` });
+  const sync = syncProblem(opts.dataDir ?? DATA_DIR);
+  if (sync?.kind === "failed") items.push({ kind: "sync", count: 1, view: "settings", text: `The last sync with your other computers failed (${sync.at.slice(0, 16).replace("T", " ")}). Run monomem sync to see why.` });
   return { count: items.reduce((n, i) => n + i.count, 0), items };
 }
 
@@ -52,6 +56,7 @@ const SHORT: Record<NeedKind, [string, string]> = {
   unconfirmed: ["unconfirmed note", "unconfirmed notes"],
   conflicts: ["disputed fact", "disputed facts"],
   backup: ["failed backup", "failed backups"],
+  sync: ["failed sync", "failed syncs"],
 };
 /**
  * Session start's one line (recall.ts): counts only, never note text; "" when nothing waits. Skips the conflict scan
