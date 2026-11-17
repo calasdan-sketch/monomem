@@ -58,3 +58,25 @@ test("ease N4: memory_save lists claims and derived_from in tools/list, and deri
     s.close();
   }
 });
+
+test("ease N5: an import says unconfirmed (from outside), not held, and never 'until you read them'", async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { runForeignImport } = await import("../src/foreign-import.js");
+  const root = mkdtempSync(join(tmpdir(), "om-f4-n5-"));
+  try {
+    const p = join(root, "mem0.json");
+    writeFileSync(p, JSON.stringify({ results: [{ id: "a1", memory: "Prefers dark mode", user_id: "avery" }] }));
+    const lines: string[] = [];
+    const io = { interactive: false, out: (l: string) => void lines.push(l), err: (l: string) => void lines.push(l), ask: async () => "" };
+    const e = { home: root, env: {} as NodeJS.ProcessEnv, cwd: root };
+    assert.equal(await runForeignImport(e, io, { from: "mem0", path: p, dryRun: false, yes: true, dbPath: join(root, "db", "state.db") }), 0);
+    const out = lines.join("\n");
+    assert.match(out, /unconfirmed \(from outside\) until you confirm them/);
+    assert.match(out, /monomem confirm <id>/);
+    assert.doesNotMatch(out, /\bheld \(marked|until you read them/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

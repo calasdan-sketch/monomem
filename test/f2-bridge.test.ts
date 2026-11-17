@@ -132,7 +132,7 @@ describe("C16: the check line, the switch and the server refresh", () => {
     const held = withStore(f.db, (s) => heldImports(s));
     assert.equal(held, 3, "every imported section is held until a person confirms it");
     const line = (await bridgeLine(f.e, f.db, held))!;
-    assert.match(line, /last import .*; 0 file\(s\) new or changed since; 3 imported note\(s\) held until you confirm them/);
+    assert.match(line, /last import .*; 0 file\(s\) new or changed since; 3 imported note\(s\) unconfirmed \(from outside\) until you confirm them \(monomem review; monomem confirm <id>\)/);
     assert.doesNotMatch(line, /auto dream/i);
     const empty = mkdtempSync(join(tmpdir(), "om-f2b-empty-"));
     roots.push(empty);
@@ -268,7 +268,7 @@ describe("I: Notion exports", () => {
     writeFileSync(join(f.root, "export.zip"), zip([["Launch plan 89abcdef0123456789abcdef01234567.md", page]]));
     const y = io();
     assert.equal(await runForeignImport(f.e, y, { from: "notion", path: join(f.root, "export.zip"), dryRun: false, yes: true, dbPath: f.db }), 0);
-    assert.match(y.all(), /held \(marked as from outside\)/);
+    assert.match(y.all(), /unconfirmed \(from outside\) until you confirm them/);
     const n = notes(f.db);
     assert.deepEqual([n.length, n[0].title, n[0].written_by], [1, "Launch plan", "import:notion"]);
     assert.equal(withStore(f.db, (s) => s.unconfirmedRows().length), 1);
@@ -319,7 +319,8 @@ describe("I: the dashboard's Bring in memories", () => {
     const js = SETTINGS_JS;
     assert.match(js, /Bring in memories/);
     assert.match(js, /ask\("Copy/);
-    assert.match(js, /held until you confirm/);
+    assert.match(js, /unconfirmed \(from outside\) until you confirm/);
+    assert.doesNotMatch(js, /held until you confirm/);
   });
 });
 

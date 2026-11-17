@@ -3,9 +3,10 @@
 `monomem import --from <tool>` copies another memory tool's notes into Monomem. It works the same way as
 `import --claude`:
 
-- Every imported note is **held**: it is marked as from outside, kept out of session start, and listed in `monomem review`
-  until a person confirms it (`monomem confirm <id>`). Another app's memory is text any program on this computer could
-  have written, so it is not trusted on arrival.
+- Every imported note is saved as **unconfirmed (from outside)**: it is kept out of session start, labeled in search and
+  `monomem ls`, and listed in `monomem review` until a person confirms it (`monomem confirm <id>`). Reading a note does not
+  confirm it. Another app's memory is text any program on this computer could have written, so it is not trusted on
+  arrival. (These notes are not in `monomem review held`: that queue is for writes that were not saved.)
 
 - It runs only on this computer and sends nothing anywhere. It **reads** the other tool's data and never changes or deletes it.
 - Start with `--dry-run`. It shows what would be imported and writes nothing. It does not even create the Monomem data folder.
@@ -42,16 +43,16 @@ monomem import --claude --update      # also refresh notes whose file text chang
 monomem import --claude --no-project  # leave out the CLAUDE.md files of the current folder
 ```
 
-- Notes are held until you confirm them (see above).
+- Notes stay unconfirmed (from outside) until you confirm them (see above).
 - Monomem remembers what it imported (`claude-import-state.json` in the data folder). Running it again reads only the files
-  whose text changed. A changed section is listed as "changed since"; `--update` refreshes it in place, held again.
+  whose text changed. A changed section is listed as "changed since"; `--update` refreshes it in place, unconfirmed again.
 - When a file Claude Code had is gone (removed or renamed), the next run says so and lists the notes Monomem still keeps
   from it. Nothing in Monomem is deleted because a file went away.
 - `monomem check` shows one line: when you last imported, how many files changed since, and how many imported notes are
-  still held.
+  still unconfirmed (`monomem review`).
 - `monomem setup` offers the import when it finds these files (it asks; it never imports without a yes).
 - **Keep it in step (optional, off by default).** While Monomem's server runs, it can look every 10 minutes for files
-  Claude Code changed and bring them in, held the same way. Turn it on in the dashboard's Settings ("Bring in Claude Code's
+  Claude Code changed and bring them in, unconfirmed the same way. Turn it on in the dashboard's Settings ("Bring in Claude Code's
   memory as it changes"), or set `MONOMEM_CLAUDE_REFRESH=on` (which wins over the switch). It never runs from a hook and
   never when the server is not running.
 
