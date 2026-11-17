@@ -12,6 +12,7 @@ const MAX_LINES: Record<string, number> = {
   "src/cli.ts": 2430, // 2395 after help text moved to src/cli/help.ts
   "src/api.ts": 370, // 353
   "src/mcp-server-core.ts": 80, // 72
+  "src/setup.ts": 2440, // 2424 after F2 moved new app targets to src/setup/targets.ts and the Cursor hook to src/setup/cursor-hook.ts
 };
 
 test("the split files do not grow back past their post-split size", () => {
