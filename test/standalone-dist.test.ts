@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { assetName, cleanupOld, isNewer, parseSums, runUpdate, swapIn, targetOf, type UpdateDeps } from "../src/update.js";
-import { bundleRoot, copyToInstall, defaultCommand, installDir, samePath, shortcutPlan } from "../src/install.js";
+import { bundleRoot, copyToInstall, installDir, samePath, shortcutPlan } from "../src/install.js";
 import { DEFAULT_OPTIONS, readHistory, runSetup, type SetupEnv, type SetupIO } from "../src/setup.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -403,11 +403,18 @@ describe("monomem update", () => {
 });
 
 describe("no command", () => {
-  test("a terminal gets the help; a launch with no terminal (Start menu, Explorer, Finder) opens the dashboard", () => {
-    assert.equal(defaultCommand(true, true), "help");
-    assert.equal(defaultCommand(false, false), "open");
-    assert.equal(defaultCommand(true, false), "open");
-    // The CLI uses it (cli.ts runs main() on import, so it is checked in the source, not spawned: open would start a server).
-    assert.match(readFileSync(join(REPO, "src", "cli.ts"), "utf8"), /process\.argv\[2\] \|\| \(await import\("\.\/install\.js"\)\)\.defaultCommand\(/);
+  test("bare monomem prints the help even with no terminal (an agent, a pipe, cron); only an explicit open starts a server", () => {
+    // r3 SF-3: the launchers (monomem.cmd's double-click check, the Start-menu .lnk, the .app, the .desktop) all pass `open`.
+    assert.match(readFileSync(join(REPO, "src", "cli.ts"), "utf8"), /const cmd = process\.argv\[2\] \|\| "help";/);
+    // Safe to spawn only once the line above holds (before, it started a server and opened a browser).
+    const home = scratch();
+    const r = spawnSync(process.execPath, [CLI], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, HOME: home, USERPROFILE: home, MONOMEM_HOME: join(home, "data"), NO_COLOR: "1" },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /monomem <command>/);
+    assert.doesNotMatch(r.stdout + r.stderr, /Starting Monomem|Opened the dashboard/);
   });
 });
