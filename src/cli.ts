@@ -1104,7 +1104,7 @@ async function importCmd(): Promise<void> {
   const { importMarkdown } = await import("./sync.js");
   const { flags, rest: importRest } = parseFlags(process.argv.slice(3), {
     values: ["dir", "file", "project", "namespace", "from", "path"],
-    bools: ["dry-run", "json", "allow-move", "dedupe", "no-dedupe", "require-attestation", "claude", "rules", "yes", "update", "include-index"],
+    bools: ["dry-run", "json", "allow-move", "dedupe", "no-dedupe", "require-attestation", "claude", "rules", "yes", "update", "include-index", "no-project"],
   });
   if (str(flags.from)) {
     const { runForeignImport, FOREIGN_SOURCES } = await import("./foreign-import.js");
@@ -1148,6 +1148,7 @@ async function importCmd(): Promise<void> {
       projects: (str(flags.project) ?? "").split(",").map((x) => x.trim()).filter(Boolean),
       namespace: str(flags.namespace),
       includeIndex: flags["include-index"] === true,
+      noProject: flags["no-project"] === true,
       dbPath: DB_PATH,
     });
     return;

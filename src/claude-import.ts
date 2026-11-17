@@ -10,6 +10,9 @@
 // project, and carries a stable key in `source`, so running the import again adds only what is new. Anything the
 // secret linter flags is skipped, counted, and never printed or stored. Symlinks that lead somewhere other than a
 // Markdown file are not followed, and `@imports` inside a file are not followed (they are counted).
+// Every note is written held (outside: true) until a person confirms it. What was imported is recorded in
+// claude-import-state.json (claude-refresh.ts): a second run reads only the files whose text changed, and a file that is gone
+// is reported with the notes Monomem keeps from it.
 
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
@@ -18,8 +21,9 @@ import { lintContent } from "./lint.js";
 import { LIMITS } from "./security.js";
 import type { SetupEnv, SetupIO } from "./setup.js";
 import { claudeDir } from "./setup.js";
+import { IMPORT_TAG, fileHash, readBridgeState, vanishedFiles, writeBridgeState, type BridgeState, type FileState } from "./claude-refresh.js";
 
-export const IMPORT_TAG = "claude-import";
+export { IMPORT_TAG };
 export const IMPORT_WRITER = "import:claude";
 export const MAX_FILE_BYTES = 1024 * 1024; // a CLAUDE.md over 1 MiB is not instructions; skip it
 
@@ -84,7 +88,7 @@ function acceptFile(path: string, mustBeInside: string | null): { real: string }
   return { real };
 }
 
-export function discoverSources(e: Pick<SetupEnv, "home" | "env" | "cwd">, opts: { projects?: string[]; includeIndex?: boolean } = {}): DiscoverResult {
+export function discoverSources(e: Pick<SetupEnv, "home" | "env" | "cwd">, opts: { projects?: string[]; includeIndex?: boolean; noProject?: boolean } = {}): DiscoverResult {
   const files: SourceFile[] = [];
   const skipped: DiscoverResult["skipped"] = [];
   const seen = new Set<string>();
@@ -101,7 +105,7 @@ export function discoverSources(e: Pick<SetupEnv, "home" | "env" | "cwd">, opts:
   };
   const cdir = claudeDir({ ...(e as SetupEnv) });
   add("user-claude-md", join(cdir, "CLAUDE.md"), "CLAUDE.md", "user", "user", null);
-  for (const dir of (opts.projects && opts.projects.length ? opts.projects : [e.cwd]).map((d) => resolve(e.cwd, d))) {
+  for (const dir of (opts.projects && opts.projects.length ? opts.projects : opts.noProject ? [] : [e.cwd]).map((d) => resolve(e.cwd, d))) {
     let id = dir;
     try {
       id = realpathSync(dir);
@@ -400,6 +404,8 @@ export interface ClaudeImportOptions {
   projects: string[];
   namespace?: string;
   includeIndex: boolean;
+  /** Leave out the CLAUDE.md files of the current folder (the server's refresh and the dashboard: their folder is not a project). */
+  noProject?: boolean;
   dbPath: string;
 }
 
@@ -424,15 +430,16 @@ function table(io: SetupIO, rows: Row[]): void {
 }
 
 export async function runClaudeImport(e: Pick<SetupEnv, "home" | "env" | "cwd">, io: SetupIO, opts: ClaudeImportOptions): Promise<number> {
-  const { files, skipped } = discoverSources(e, { projects: opts.projects, includeIndex: opts.includeIndex });
+  const { files, skipped } = discoverSources(e, { projects: opts.projects, includeIndex: opts.includeIndex, noProject: opts.noProject });
+  const state = readBridgeState(opts.dbPath);
+  const gone = vanishedFiles(state);
   io.out("Reading Claude Code's memory files on this computer (nothing leaves it):");
   if (files.length === 0) {
     io.out("  I found no CLAUDE.md or auto-memory files. Looked in the Claude folder, this folder and its .claude folder.");
     io.out("  Use --project <folder>[,<folder>] to name a project folder.");
     for (const s of skipped) io.out(`  skipped ${s.display}: ${s.why}`);
-    return 0;
+    if (!gone.length) return 0;
   }
-  const { candidates, imports, unreadable } = buildCandidates(files);
   const { Store, SCHEMA_VERSION } = await import("./store.js");
 
   // What is already in the store (archived notes count: archiving is how you say "keep it out of the way").
@@ -452,6 +459,13 @@ export async function runClaudeImport(e: Pick<SetupEnv, "home" | "env" | "cwd">,
       }
       if (page.notes.length < 500) break;
     }
+    // A file whose text is the same as at the last import, with every note it became still here, is not read again.
+    const hashes = new Map(files.map((f) => [f, fileHash(f.real)]));
+    const unchanged = files.filter((f) => {
+      const was = state.files[f.real];
+      return !!was && was.locs.length > 0 && was.hash === hashes.get(f) && was.locs.every((l) => known.has(l));
+    });
+    const { candidates, imports, unreadable } = buildCandidates(files.filter((f) => !unchanged.includes(f)));
     const heldBefore = readHeld(opts.dbPath);
     let heldSkipped = 0;
     const perFile = new Map<SourceFile, Row>();
@@ -481,6 +495,11 @@ export async function runClaudeImport(e: Pick<SetupEnv, "home" | "env" | "cwd">,
         if (opts.update) todo.push({ c, action: "refresh", id: k.id });
       }
     }
+    for (const f of unchanged) {
+      const { locs, held: linterHeld = 0 } = state.files[f.real];
+      heldSkipped += linterHeld;
+      perFile.set(f, { label: f.display, project: f.project, sections: locs.length + linterHeld, create: 0, same: locs.length, changed: 0, secrets: 0 });
+    }
     const rows = [...perFile.values()];
     io.out("");
     table(io, rows);
@@ -492,12 +511,27 @@ export async function runClaudeImport(e: Pick<SetupEnv, "home" | "env" | "cwd">,
     if (imports) io.out(`  ${imports} "@file" import line(s) were not followed (the imported file is read only if it is one of the files above).`);
     for (const s of skipped) io.out(`  skipped ${s.display}: ${s.why}`);
     for (const u of unreadable) io.out(`  could not read ${u}`);
+    reportGone(io, gone, known);
+    // The new state: a file is recorded once all its sections are here (a changed one left for --update stays as it was).
+    const save = (): void => {
+      const next: BridgeState = { last_import: new Date().toISOString(), files: { ...state.files } };
+      for (const [real] of gone) delete next.files[real];
+      for (const f of files) {
+        const mine = candidates.filter((c) => c.file === f);
+        if (unchanged.includes(f) || mine.some((c) => !c.secret && !heldBefore.has(c.source) && known.get(c.loc)?.content !== c.content)) continue;
+        const hash = hashes.get(f);
+        const linterHeld = mine.filter((c) => !c.secret && !known.has(c.loc) && heldBefore.has(c.source)).length;
+        if (hash) next.files[f.real] = { display: f.display, hash, locs: mine.filter((c) => known.has(c.loc)).map((c) => c.loc), ...(linterHeld ? { held: linterHeld } : {}) };
+      }
+      writeBridgeState(opts.dbPath, next);
+    };
     if (opts.dryRun) {
       io.out("\nDry run: nothing was written.");
       return 0;
     }
     if (todo.length === 0) {
       io.out("\nNothing to import.");
+      save();
       return 0;
     }
     if (!opts.yes && !io.interactive) {
@@ -521,12 +555,13 @@ export async function runClaudeImport(e: Pick<SetupEnv, "home" | "env" | "cwd">,
       try {
         if (t.action === "create") {
           // Held, not trusted (r3 security L6): text from files any app on this computer can write waits for a person's confirm.
-          target.create({ namespace: opts.namespace, title: t.c.title, body: t.c.body, tags: t.c.tags, source: t.c.source, outside: true }, { writtenBy: IMPORT_WRITER, skipEdges: false });
+          t.id = target.create({ namespace: opts.namespace, title: t.c.title, body: t.c.body, tags: t.c.tags, source: t.c.source, outside: true }, { writtenBy: IMPORT_WRITER, skipEdges: false }).id;
           created++;
         } else {
           target.update(t.id!, { title: t.c.title, body: t.c.body, source: t.c.source, outside: true }, { writtenBy: IMPORT_WRITER });
           refreshed++;
         }
+        known.set(t.c.loc, { id: t.id ?? 0, content: t.c.content });
       } catch (err) {
         if ((err as Error).constructor.name === "QuarantinedError") {
           held++;
@@ -543,9 +578,18 @@ export async function runClaudeImport(e: Pick<SetupEnv, "home" | "env" | "cwd">,
       io.err(`${failed} section(s) could not be stored.`);
       return 1;
     }
+    save();
     return 0;
   } finally {
     writer?.close();
     if (store && store !== writer) store.close();
+  }
+}
+
+/** A file Claude Code had and no longer has: say so, with the notes Monomem keeps from it. Its record is dropped after a real run. */
+function reportGone(io: SetupIO, gone: Array<[string, FileState]>, known: Map<string, { id: number; content: string }>): void {
+  for (const [, f] of gone) {
+    const ids = f.locs.map((l) => known.get(l)?.id).filter((x): x is number => !!x);
+    io.out(`  Claude Code's memory file ${f.display} is gone since the last import (removed or renamed). Monomem still has ${ids.length ? `its ${ids.length} note(s): ${ids.slice(0, 20).map((i) => `#${i}`).join(", ")}` : "nothing from it"}.`);
   }
 }
