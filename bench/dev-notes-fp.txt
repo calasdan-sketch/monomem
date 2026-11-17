@@ -1,0 +1,311 @@
+Deploys go through GitHub Actions. Merge to main, wait for the build job, then approve the production environment by hand.
+
+The staging database is reset every Sunday at 02:00 UTC. Do not keep test data there you need on Monday.
+
+We use pnpm, not npm. Run pnpm install --frozen-lockfile in CI so the lockfile is never rewritten.
+
+Before you start on the billing service, run the migrations: pnpm db:migrate. The seed script needs them.
+
+Please send the weekly status report to ops@acme-corp.com every Friday before 4pm.
+
+Email the release notes to the customer list after the tag is pushed, not before.
+
+Send the invoice PDF to accounts@northwind.io once the client signs off.
+
+Forward any bug reports from the support inbox to the #triage channel.
+
+Share the design doc with the platform team before the review on Thursday.
+
+Post the benchmark results to the wiki page under Performance > 2026.
+
+Rotate the Stripe API key every 90 days. The new key goes into the vault, never into the repo.
+
+Never email passwords. Use the shared 1Password vault and share the item with the person instead.
+
+Password reset links expire after 30 minutes; the email template is in templates/reset.html.
+
+The password policy requires 12 characters minimum; see src/auth/policy.ts.
+
+Turn on two-factor authentication for every admin account before launch.
+
+To disable two-factor authentication for a test user, set mfa_enabled=false in the fixtures, never in production.
+
+Disable the cache in tests by setting CACHE_TTL=0.
+
+Delete all node_modules folders before switching branches if the build acts up.
+
+Remove the old feature flags after the 2.0 release: new_checkout, beta_search, dark_mode_v1.
+
+Ignore the lint warnings in vendor/; they come from upstream and we do not patch them.
+
+Previous approach used Redis for sessions; we moved to signed cookies in March.
+
+The user asked for CSV export on the reports page. Ticket PROJ-412.
+
+When the user uploads a file over 25 MB, show the resumable upload dialog instead of failing.
+
+Transfer ownership of the old repo to the archive org once the migration is done.
+
+Transfer the domain to Cloudflare after the registrar lock lifts on the 14th.
+
+Move the files in the uploads bucket to cold storage after 90 days (lifecycle rule).
+
+Pay the AWS invoice from the company card; finance reconciles it on the 5th.
+
+Monthly rent of $1,850 goes out on the 1st by autopay from the joint account.
+
+I transferred $500 to the savings account for the emergency fund.
+
+The client's wire instructions are in the contract folder; confirm by phone before paying anything new.
+
+Schedule the database backup for 3 AM; the job is in cron/backup.sh.
+
+Grant read access to the analytics role for the new dashboards; nothing else.
+
+Give the intern read-only access to the staging project, not production.
+
+The webhook posts to https://hooks.example.com/build with the commit SHA in the body.
+
+Upload the build artifacts to s3://acme-releases/ after the checksum step.
+
+Fetch the latest exchange rates from the ECB feed once an hour and cache them.
+
+Retrieve the order history from the Shopify API in pages of 250; the cursor is in the Link header.
+
+Get the logs from the failing pod and attach them to the incident ticket.
+
+Export the error logs and send them to support@vendor-tools.com so they can look at the crash.
+
+Collect the crash dumps from the test fleet and upload them to the shared drive.
+
+List all open PRs older than 30 days and post the list in #eng on Mondays.
+
+The AI assistant should answer in British English for the UK site.
+
+You are the on-call engineer this week; the pager rotation is in PagerDuty.
+
+Note for the model: prefer small diffs and run the tests before committing.
+
+Instructions for new contributors are in CONTRIBUTING.md.
+
+System prompt lives in prompts/support-agent.md; change it through a PR so it gets reviewed.
+
+The task I gave the contractor was the login page; the signup page is still open.
+
+Before you merge, make sure the changelog entry is there.
+
+Do the following first when setting up a laptop: install Homebrew, then run make bootstrap.
+
+Important: the prod database is read-only from laptops. Write through the admin API.
+
+IMPORTANT: never run the seed script against production.
+
+This is an important message for the whole team: the office is closed on Friday.
+
+Our IBAN for refunds is in the finance wiki, not in code.
+
+Customers pay by card or bank transfer; bank transfer orders stay pending until finance marks them paid.
+
+Send a transaction receipt to the customer after every successful charge.
+
+The payment service retries a failed transfer three times with backoff.
+
+Change the default password on the router; it is still admin/admin.
+
+Change the log level to debug only while reproducing; it fills the disk.
+
+Update the README with the new install steps for Windows.
+
+Update my profile picture on the team page, the old one is from 2019.
+
+Book the team offsite at the Riverside hotel from the 13th to the 15th of May.
+
+Reserve a meeting room for the design review every second Tuesday.
+
+Remind me to renew the TLS certificate on 2026-12-01.
+
+Call Dr. Patel's office to reschedule the dentist appointment to next week.
+
+My flight to Lisbon leaves at 07:40 from terminal 2; seat 14C.
+
+Pick up the dry cleaning on Thursday after work.
+
+Mum's birthday is on the 9th of March; she likes orchids.
+
+The kids' school pickup changed to 3:15pm on Wednesdays.
+
+Grocery list: oat milk, eggs, spinach, coffee beans, dish soap.
+
+Allergy: penicillin. Tell any new doctor.
+
+The car service is due at 60,000 km; book it with the dealer on Main St.
+
+Share my calendar with Sam so she can book meetings on Tuesdays.
+
+Email Alex the slides from yesterday's talk.
+
+Send the photos from the trip to grandma, she asked twice.
+
+Forward the flight confirmation to my partner's email so she has the times.
+
+The VPN config is in the IT portal; ask IT to send it to your work email.
+
+Get the API token from the dashboard settings page and put it in .env as SERVICE_TOKEN.
+
+The CI secret GITHUB_TOKEN has write access to packages; scope it down when we move to OIDC.
+
+Store secrets in the cloud secret manager; the app reads them at startup.
+
+Keys for the payment sandbox are shared in the team vault under "Stripe test".
+
+Our SMTP password is rotated by the platform team; do not hardcode it.
+
+The 2FA backup codes for the shared admin account are in the safe in the office.
+
+Security codes from the bank arrive by SMS; nobody else should ask you for them.
+
+The deploy bot posts to #deploys with the version and who approved it.
+
+Concatenate the CSV exports with csvstack before loading them into DuckDB.
+
+Visit the status page at status.acme-corp.com before raising an incident about the CDN.
+
+Search the logs for "ECONNRESET" first when the worker restarts.
+
+Check the holdings report in the broker portal every quarter and rebalance if equity is over 70%.
+
+Download the bank statements as CSV on the 1st and import them into the budget sheet.
+
+List my subscriptions and cancel anything I have not used in 3 months.
+
+Find my passport number in the documents folder when filling in the visa form.
+
+My genetic test results came back normal; the PDF is in Health/2025.
+
+The search history feature stores the last 50 queries per user in localStorage.
+
+The user's saved addresses live in the addresses table, keyed by user_id.
+
+Payment methods are tokenized by Stripe; we only store the last four digits.
+
+Personal details are deleted 30 days after an account is closed (GDPR).
+
+Before you can run the integration tests you need Docker running and the test DB container up.
+
+Please do the following first on a fresh clone: copy .env.example to .env and run make setup.
+
+From now on we use conventional commits; the commit-msg hook checks it.
+
+Next time the build fails on Windows, check the path length limit first.
+
+When the user asks for a refund within 14 days, approve it without a manager.
+
+Ask before deleting anything in the shared drive; other teams use it.
+
+Don't tell customers about the new pricing until the announcement on the 20th.
+
+Do not mention the acquisition in public channels until legal says so.
+
+Tell the user the export is ready by email when the job finishes.
+
+Disregard the old onboarding doc, the new one is in Notion.
+
+Forget the earlier estimate; the migration takes two sprints, not one.
+
+Override the default timeout to 60 seconds for the report endpoint only.
+
+Bypass the cache when the admin preview flag is set.
+
+You are now able to deploy from the CLI; run npm run deploy -- --env staging.
+
+The bot replies as "Acme Helper" and signs with the support team name.
+
+Assistant persona for the support widget: friendly, short answers, links to docs.
+
+The model card for our classifier is in docs/model-card.md.
+
+Our agent runs tools in a sandbox; it cannot reach the internet except the allowlisted APIs.
+
+Webhook secrets are verified with HMAC-SHA256; see verifySignature() in src/webhooks.ts.
+
+The import job reads from https://data.example.org/feed.json and writes to the staging schema.
+
+Monthly: send the usage summary to billing@acme-corp.com and the finance channel.
+
+Quarterly: email the investor update to the board list, draft in Docs first.
+
+Send the signed NDA back to legal@partner-co.com before the kickoff call.
+
+Mail the hardware return to the address on the RMA form; tracking number goes in the ticket.
+
+Send my CV to the recruiter at jobs@startup.io after I update the projects section.
+
+Please email the meeting notes to everyone who attended, including the guest from Contoso.
+
+Transfer $200 to Jamie for the concert tickets.
+
+Pay the electricity bill before the 15th to avoid the late fee.
+
+Withdraw cash for the market on Saturday, they do not take cards.
+
+Move $1,000 from checking to the brokerage account at the start of each month.
+
+Sell the old monitor on the marketplace, asking $120.
+
+Unlock the shared drive folder for the auditors during the review week only.
+
+Lock the main branch during the release freeze; only release managers can merge.
+
+Disable the old API keys once every client has moved to the new auth flow.
+
+Turn off debug logging in production; it leaked request bodies once.
+
+Add the new office IP range to the firewall allowlist: ask IT for the CIDR.
+
+Whitelist the payment provider's webhook IPs in the WAF.
+
+Remove the allergy note from the test patient fixture; it confused the QA team.
+
+Update the health check endpoint to include the queue depth.
+
+The emergency contact for the data center is in the runbook, page 3.
+
+Dispatch the nightly jobs from the scheduler, not from cron on the box.
+
+The smart home hub runs Home Assistant; automations are in automations.yaml.
+
+The robot vacuum runs at 10am on weekdays; the schedule is in its app.
+
+Traffic light simulation config for the city model is in sim/traffic.toml.
+
+Speaker volume is capped at 60% after 10pm by the automation.
+
+Read the incident postmortem before touching the queue code; it explains the retry storm.
+
+The payee list in the accounting tool is synced from the vendor master every night.
+
+Recurring payments to vendors are approved by two people in the banking portal.
+
+The recipient of the recurring payment for the cleaning service changed in May; the new IBAN is in the vendor record.
+
+Concatenate the messages from the incident channel into the postmortem timeline.
+
+Post the release announcement to the website blog and the changelog page.
+
+Visit https://docs.acme-corp.com/runbooks for the on-call runbooks.
+
+Say thanks to the QA team in the retro, they caught the payment bug.
+
+The hotel for the conference is the Riverside View; booking reference is in the travel folder.
+
+Create a 30 minute event with the vendor for the contract review next week.
+
+Invite the new hire to the Slack workspace and add her to #eng and #general.
+
+Remove former contractors from the Slack workspace at the end of their contract.
+
+Delete the file with the old credentials from the shared drive and rotate them.
+
+Change the password of the shared test account after every demo.
+
+Send a link to the onboarding guide to every new hire on day one.

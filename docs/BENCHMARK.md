@@ -865,6 +865,9 @@ Both are expected to reach the agent and are reported as such, not as passes.
 
 The same attacks, with their expected outcomes, are exported to `evals/poisoning-corpus.json` (see `evals/README.md`).
 
+`monomem check --attacks --set <name>` replays a published outside attack set (InjecAgent, AgentDojo, MINJA, PoisonedRAG)
+the same way, on a copy, and lists every miss; `--set list` names the sets. Results and method: [security-scorecard.md](./security-scorecard.md).
+
 ## `monomem check`: one grade over the checks you already have
 
 `monomem check [--json] [--card [file.svg]]` (formerly `monomem health`) prints one line per check, then a grade from A to F: Node and SQLite, the database,
