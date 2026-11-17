@@ -1857,7 +1857,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
     );
     return 1;
   }
-  if (opts.undo) return undoLast(e, io);
+  if (opts.undo) return opts.dryRun ? (await import("./setup/undo-preview.js")).undoPreview(e, io) : undoLast(e, io);
   if (opts.actionGuard) return (await import("./action-guard-setup.js")).runActionGuardSetup(e, io, opts);
   // The standalone download: app settings and hooks must name the folder's permanent home (install.ts), not the folder it
   // was unpacked in (Downloads, a temp copy of a zip). Everything below plans with the home's paths; the copy is a listed step.
