@@ -38,6 +38,7 @@
 import { isIPv4, isIPv6 } from "node:net";
 import { HIGH_ENTROPY_LABEL, normalizeForScan, scanForSecrets } from "./security.js";
 import { configuredTokenValues, sha256Hex } from "./config.js";
+import { scanOutboundDirective, scanOutboundInjection } from "./lint-outbound.js";
 
 export type LintCategory = "secret" | "injection" | "entropy" | "pii" | "directive";
 export type LintAction = "block" | "quarantine" | "warn";
@@ -288,7 +289,7 @@ export function scanForInjection(text: string | undefined): string | null {
     if (re.test(label === "system-prompt marker" ? prose : t)) return label;
     if (unleeted !== prose && label !== "system-prompt marker" && re.test(unleeted)) return label;
   }
-  return null;
+  return scanOutboundInjection(t);
 }
 
 // ---- PII (warn by default) ------------------------------------------------
@@ -372,7 +373,7 @@ export function scanForDirective(text: string | undefined): string | null {
   if (!text) return null;
   const t = normalizeForScan(text);
   for (const [label, re] of DIRECTIVE_PATTERNS) if (re.test(t)) return label;
-  return null;
+  return scanOutboundDirective(t);
 }
 
 export const OWN_TOKEN_LABEL = "Monomem access token";
