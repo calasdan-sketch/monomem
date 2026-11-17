@@ -1798,7 +1798,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
     io.out("What I found:");
     for (const t of found) {
       if (t.id === "project" && !t.exists) continue;
-      io.out(`  ${t.label.padEnd(26)} ${(t.exists ? "found" : t.present ? "installed, no config file yet" : "not found").padEnd(30)}${t.present ? t.file : ""}`.trimEnd());
+      io.out(`  ${t.label.padEnd(26)} ${(t.exists ? "found" : t.present ? "installed, no config file yet" : "not found").padEnd(30)}  ${t.present ? t.file : ""}`.trimEnd());
     }
     io.out("");
   }
