@@ -27,6 +27,18 @@ its copy (never deletes it); see "Tombstones" in [file-sync.md](./file-sync.md#l
 one extra commit (or file write) per archived note** until both are upgraded. Nothing is lost or changed in your notes; it is
 only noise in the repository history. Upgrade every computer that syncs to stop it.
 
+**Going back to 1.5.** This release did not change the database format (it is still schema v22), so 1.5.x opens a
+database 1.6 used, with no restore. 1.6 adds one small table (`session_notices`) that 1.5 ignores, and 1.5 does not show
+the new labels (echoes and the other 1.6 labels). Install the older version (`npm i -g monomem@1.5`) and run
+`monomem setup` again so your apps point at it. The sync note above applies while the two versions run side by side.
+
+**Claude Code permission lists.** If you allowed Monomem's 1.5 tools by name in Claude Code's permission settings
+(`mcp__monomem__state_write`, `mcp__monomem__state_search` and the other `mcp__monomem__state_*` or `catch_up` names),
+Claude Code will ask again for the 1.6 tools, because they have new names: `mcp__monomem__memory_save`,
+`mcp__monomem__memory_search`, `mcp__monomem__memory_read`, `mcp__monomem__memory_list`, `mcp__monomem__memory_archive`,
+`mcp__monomem__memory_replace` and `mcp__monomem__memory_catch_up` by default. Add those names (or `mcp__monomem` for all
+of Monomem's tools) to the same list.
+
 ## Monomem 1.4.0 and 1.5.0 (database schema v19 to v22)
 
 Applies to Monomem 1.3.x (and to a development build that already made the store v20 or v21). A fresh install needs none of this.

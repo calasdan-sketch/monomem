@@ -83,7 +83,9 @@ Why shown, in {}: files = linked to files you changed, kw = matches your branch,
   app started outside the project that offers no roots records the wrong folder.
 - **After an upgrade:** if a newer Monomem has already upgraded the database,
   an older hook cannot read it. Session start then says so in one line ("no
-  memory loaded ... run `monomem setup`") instead of an empty context.
+  memory loaded ... run `monomem setup`") instead of an empty context. Only
+  hooks from 1.6.0 on can do that: a 1.5.x hook still returns an empty context,
+  which is why every upgrade ends with `monomem setup` ([upgrading.md](./upgrading.md)).
 - The "Showing X of N memories" line counts the store's notes up to 2,000;
   above that it says "2,000+" (for example "Showing 12 of 2,000+
   memories"), so a very large store does not slow session start down.

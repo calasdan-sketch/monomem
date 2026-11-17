@@ -71,7 +71,8 @@
     "CHANGELOG.md",
     "docs/*.md",
     "bench/scenarios/*.json",
-    "!docs/RUNNER.md"
+    "!docs/RUNNER.md",
+    "!docs/LAUNCH.md"
   ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
