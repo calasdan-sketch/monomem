@@ -47,14 +47,25 @@ export function parseSums(text: string): Map<string, string> {
 /** a > b for x.y.z versions; a pre-release (1.6.0-rc.1) sorts before its release. */
 export function isNewer(a: string, b: string): boolean {
   const parse = (v: string): [number[], string] => {
-    const [core, pre = ""] = v.replace(/^v/, "").split("-", 2);
+    const s = v.replace(/^v/, "").replace(/\+.*$/, ""); // build metadata (+...) never counts
+    const dash = s.indexOf("-");
+    const [core, pre] = dash < 0 ? [s, ""] : [s.slice(0, dash), s.slice(dash + 1)]; // rc.1-x keeps its hyphen
     return [core.split(".").map((n) => Number(n) || 0), pre];
   };
   const [ac, ap] = parse(a);
   const [bc, bp] = parse(b);
   for (let i = 0; i < 3; i++) if ((ac[i] ?? 0) !== (bc[i] ?? 0)) return (ac[i] ?? 0) > (bc[i] ?? 0);
   if (ap === bp) return false;
-  return ap === "" ? true : bp === "" ? false : ap > bp;
+  if (ap === "" || bp === "") return ap === "";
+  // semver: dot parts left to right; numbers compare as numbers and sort before words; more parts win when all match.
+  const as = ap.split("."), bs = bp.split(".");
+  for (let i = 0; i < Math.min(as.length, bs.length); i++) {
+    if (as[i] === bs[i]) continue;
+    const an = /^\d+$/.test(as[i]), bn = /^\d+$/.test(bs[i]);
+    if (an && bn) return Number(as[i]) > Number(bs[i]);
+    return an !== bn ? bn : as[i] > bs[i];
+  }
+  return as.length > bs.length;
 }
 
 /** The rename the swap uses; injectable so a test can make one fail. */

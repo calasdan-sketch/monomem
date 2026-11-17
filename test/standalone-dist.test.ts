@@ -59,6 +59,10 @@ describe("names and versions", () => {
     assert.ok(isNewer("1.6.0", "1.5.9") && isNewer("1.10.0", "1.9.0") && isNewer("v2.0.0", "1.99.99"));
     assert.ok(!isNewer("1.6.0", "1.6.0") && !isNewer("1.5.0", "1.6.0"));
     assert.ok(isNewer("1.6.0", "1.6.0-rc.1") && !isNewer("1.6.0-rc.1", "1.6.0"));
+    // semver: numeric pre-release parts compare as numbers, numbers sort before words, more parts sort after fewer
+    assert.ok(isNewer("1.6.0-rc.10", "1.6.0-rc.9") && !isNewer("1.6.0-rc.9", "1.6.0-rc.10"));
+    assert.ok(isNewer("1.6.0-rc.1", "1.6.0-beta.2") && isNewer("1.6.0-alpha", "1.6.0-1") && isNewer("1.6.0-rc.1.1", "1.6.0-rc.1"));
+    assert.ok(!isNewer("1.6.0-rc.1", "1.6.0-rc.1"));
   });
 });
 
