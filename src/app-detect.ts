@@ -51,8 +51,10 @@ export async function checkApps(e: SetupEnv, dataDir: string, now: Date = new Da
   const fresh = ids.filter((id) => !baseline.includes(id) && !connected.has(label.get(id)!)).map((id) => ({ id, label: label.get(id)! }));
   const repair: AppItem[] = [];
   for (const line of appEntryProblems(e)) {
-    const id = [...label].find(([, l]) => line.startsWith(l + ":"))?.[0];
-    if (id && !repair.some((r) => r.id === id)) repair.push({ id, label: label.get(id)!, problem: line.slice(label.get(id)!.length + 1).trim() });
+    // appEntryProblems names the raw label ("Claude Desktop (Microsoft Store)"); match that too.
+    const m = /^(.+?)(?: \(Microsoft Store\))?: (.*)$/.exec(line);
+    const id = m ? [...label].find(([, l]) => l === m[1])?.[0] : undefined;
+    if (id && !repair.some((r) => r.id === id)) repair.push({ id, label: label.get(id)!, problem: m![2].trim() });
   }
   const state: AppDetectState = { checked_at: now.toISOString(), baseline, new: fresh, repair };
   mkdirSync(dataDir, { recursive: true });

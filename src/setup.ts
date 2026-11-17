@@ -402,7 +402,7 @@ function pickLegacyKeepers(
   const groups = new Map<string, Array<{ s: Found; db: string; notes: number; bridgeDb: boolean }>>();
   for (const s of servers) {
     const entry = safeParseEntry(base, s);
-    if (!entry || classifyEntry(s.name, entry) !== "legacy") continue;
+    if (!entry || classifyEntry(s.name, stdView(entry)) !== "legacy") continue;
     // A claude-bridge entry with its own database is judged (and named in the hint) by THAT database, never by --db.
     const own = isBridge(s.name, entry) ? migrateEntry(e, opts, entry, withType).db : null;
     const db = own !== null ? resolve(own) : dbOf(entry);
@@ -719,7 +719,7 @@ export function connectedApps(e: SetupEnv): { found: string[]; connected: string
       continue;
     }
     try {
-      if (findServers(text, c.id === "claude-code", serversKey(c.id, text)).some((s) => classifyEntry(s.name, safeParseEntry(text, s)) === "monomem")) connected.add(c.label);
+      if (findServers(text, c.id === "claude-code", serversKey(c.id, text)).some((s) => classifyEntry(s.name, stdView(safeParseEntry(text, s) ?? {})) === "monomem")) connected.add(c.label);
     } catch {
       /* a config that cannot be read: not connected as far as doctor can tell */
     }
@@ -918,7 +918,7 @@ export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, 
   const withType = target.id === "claude-code" || target.id === "project" || target.id === "vscode";
   const servers = base.trim() === "" ? [] : findServers(base, target.id === "claude-code", key);
   const top = servers.filter((s) => s.path[0] !== "projects");
-  const hasOneTop = top.some((s) => classifyEntry(s.name, safeParseEntry(base, s) ?? {}) === "monomem");
+  const hasOneTop = top.some((s) => classifyEntry(s.name, stdView(safeParseEntry(base, s) ?? {})) === "monomem");
   let migrated = 0;
   let labelled = 0;
   let replaced = 0;
@@ -937,7 +937,7 @@ export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, 
       );
       continue;
     }
-    const kind = classifyEntry(s.name, entry);
+    const kind = classifyEntry(s.name, stdView(entry));
     const where = s.path[0] !== "projects" ? "" : ` (project ${s.path[1]})`;
     if (replacedMono.has(s)) continue; // an empty "monomem" that an old entry with notes replaces (below)
     if (kind === "monomem" && opts.httpEntry) {
@@ -962,7 +962,7 @@ export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, 
     if (kind === "monomem" && shaped && shaped.shape !== "std" && shaped.shape !== "copilot") {
       // OpenCode / Kilo write the command as one array: read it back as command + args, rewrite only a stale entry.
       const std = stdView(entry);
-      const problem = typeof std.command === "string" && std.command ? entryProblem(std, e.version, existsSync, e) : null;
+      const problem = typeof std.command === "string" && std.command ? entryProblem(std, e.version, existsSync, e) : "names no program to start";
       if (!problem) {
         already.push(`${target.label}: "${s.name}" is already set up`);
         continue;
@@ -1319,7 +1319,8 @@ export function hookHosts(e: SetupEnv): HookHost[] {
  * `upgradeOnly` (with capture): only rewrite capture hooks of the old package / another npx version, add none.
  */
 export function planHooks(e: SetupEnv, opts: SetupOptions, dbForHook: string | undefined, want: { recall: boolean; capture: boolean; upgradeOnly?: boolean }, host: HookHost = hookHosts(e)[0]): { change: FileChange | null; already: boolean; conflict?: string } {
-  if (host.format === "cursor") return want.recall && !want.upgradeOnly ? planCursorHook(e, opts, dbForHook, host) : { change: null, already: true };
+  // Cursor gets the start-of-session hook only (no capture hooks), so a capture-only plan has nothing to add or report.
+  if (host.format === "cursor") return want.recall && !want.upgradeOnly ? planCursorHook(e, opts, dbForHook, host) : { change: null, already: false };
   const file = host.file;
   const text = readTextFile(file);
   if (text === "" && !opts.forceEmpty) return { change: null, already: false, conflict: EMPTY_FILE_MSG(file) };
@@ -1995,7 +1996,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
       }
     }
     // Automatic memory builds on the start-of-session hook: with --no-hook it is only added when asked for by name (--capture).
-    if (capture !== "no" && !(capture === "ask" && opts.hook === "no")) {
+    if (h.format !== "cursor" && capture !== "no" && !(capture === "ask" && opts.hook === "no")) {
       const pc = planHooks(e, opts, hookDb, { recall: opts.hook !== "no", capture: true }, h);
       if (pc.conflict) plan.conflicts.push(pc.conflict);
       else if (pc.already) plan.already.push(`${who}: the automatic memory hooks are already installed`);
