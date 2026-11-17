@@ -90,9 +90,9 @@ function redirect(res: ServerResponse, to: string, params: Record<string, string
 
 const loopbackHost = (h: string): boolean => h === "localhost" || isLoopback(h.replace(/^\[|\]$/g, ""));
 
-/** A known destination: claude.ai, chatgpt.com (https) or this computer. */
+/** A known destination: claude.ai, chatgpt.com (https, default port only: r4 N3) or this computer. */
 function knownRedirect(u: URL): boolean {
-  return loopbackHost(u.hostname) || (u.protocol === "https:" && KNOWN_REDIRECT_HOSTS.includes(u.hostname));
+  return loopbackHost(u.hostname) || (u.protocol === "https:" && u.port === "" && KNOWN_REDIRECT_HOSTS.includes(u.hostname));
 }
 
 /**
@@ -158,13 +158,19 @@ function metadata(issuer: string, path: string): unknown {
   return { resource: resourceOf(issuer), authorization_servers: [issuer], scopes_supported: ["read", "write"], bearer_methods_supported: ["header"], resource_name: "Monomem" };
 }
 
-/** "oauth:<client name>", made unique. A colon cannot appear in a `monomem keys add` name, so no other key can pose as one. */
+/**
+ * "oauth:<client name>", made unique, and never one issued before (r4 N1: an ended grant's label is not reused, so a new
+ * grant starts as a new writer). Picked and recorded in one oauth.json update. A colon cannot appear in a `monomem keys add`
+ * name, so no other key can pose as one.
+ */
 function grantLabel(clientName: string): string {
   const base = "oauth:" + (clientName.replace(/[^\w .-]/g, "").replace(/\s+/g, " ").trim().slice(0, 32) || "app");
-  const taken = takenLabels();
-  let label = base;
-  for (let n = 2; taken.has(label.toLowerCase()); n++) label = `${base}-${n}`;
-  return label;
+  return updateState((s) => {
+    const taken = new Set([...takenLabels(), ...(s.issued_labels ?? [])]);
+    let label = base;
+    for (let n = 2; taken.has(label.toLowerCase()); n++) label = `${base}-${n}`;
+    return { next: { ...s, issued_labels: [...(s.issued_labels ?? []), label.toLowerCase()] }, result: label };
+  });
 }
 
 function setLive(tokens: TokenEntry[], label: string, entry: TokenEntry | null): void {

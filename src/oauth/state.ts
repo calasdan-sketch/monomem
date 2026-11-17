@@ -53,6 +53,12 @@ export interface OAuthState {
   extra_redirect_origins?: string[];
   clients: OAuthClient[];
   grants: OAuthGrant[];
+  /**
+   * r4 N1: every grant label ever issued, lower case. A label is never given out twice: writer probation, confirmations and
+   * the distrust list are keyed on it, so a new app calling itself "Claude" must not inherit an ended grant's record.
+   * ponytail: grows by one per approved grant (each needs the person's pairing code); kept across oauth off/on.
+   */
+  issued_labels?: string[];
 }
 
 export const statePath = (): string => join(DATA_DIR, "oauth.json");
@@ -75,7 +81,7 @@ export function readState(): OAuthState {
   let state = EMPTY();
   try {
     const raw = JSON.parse(readFileSync(f, "utf8")) as Partial<OAuthState>;
-    state = { enabled: raw.enabled === true, issuer: typeof raw.issuer === "string" ? raw.issuer : undefined, pair: raw.pair, extra_redirect_origins: Array.isArray(raw.extra_redirect_origins) ? raw.extra_redirect_origins.filter((o): o is string => typeof o === "string") : [], clients: Array.isArray(raw.clients) ? raw.clients : [], grants: Array.isArray(raw.grants) ? raw.grants : [] };
+    state = { enabled: raw.enabled === true, issuer: typeof raw.issuer === "string" ? raw.issuer : undefined, pair: raw.pair, extra_redirect_origins: Array.isArray(raw.extra_redirect_origins) ? raw.extra_redirect_origins.filter((o): o is string => typeof o === "string") : [], clients: Array.isArray(raw.clients) ? raw.clients : [], grants: Array.isArray(raw.grants) ? raw.grants : [], issued_labels: Array.isArray(raw.issued_labels) ? raw.issued_labels.filter((l): l is string => typeof l === "string") : [] };
   } catch {
     console.error(`[monomem] ${f} is not valid JSON, so OAuth stays off. Run: monomem oauth off, then monomem oauth on <url>`);
   }
