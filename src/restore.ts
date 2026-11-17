@@ -57,7 +57,7 @@ export function inspectBackup(input: string): RestorePlan {
 
 /** The message for a database another program has open. */
 export const BUSY_MESSAGE =
-  "Monomem looks like it is running (or an app is using the database). Close Claude Code, Claude Desktop and any other app that uses Monomem, stop the server, then run this again. Nothing was changed.";
+  "Monomem looks like it is running (or an app is using the database). Close Claude Code, Claude Desktop and any other app that uses Monomem, stop the server (monomem stop), then run this again. Nothing was changed.";
 
 /** SQLITE_BUSY (5) or SQLITE_LOCKED (6), by code or by wording. */
 export function isBusyError(e: unknown): boolean {
