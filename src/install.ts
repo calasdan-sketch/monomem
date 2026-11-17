@@ -146,8 +146,10 @@ export function createShortcut(p: ShortcutPlan, platform: NodeJS.Platform): stri
 
 /** The Windows per-user Path value. Injected in tests: they never touch the real registry or PATH. */
 export interface UserPathIO {
-  get(): string;
-  set(value: string): void;
+  /** null: there is no Path value at all (not even an empty one). */
+  get(): string | null;
+  /** null removes the value. */
+  set(value: string | null): void;
 }
 
 export interface PathEntry {
@@ -158,6 +160,8 @@ export interface PathEntry {
   /** rc: the file and the exact line added. */
   file?: string;
   line?: string;
+  /** registry, recorded when added: the value did not exist ("none"), or ended in ";" ("trailing"); undo restores that. */
+  before?: "none" | "trailing";
 }
 
 const RC_MARK = "# added by monomem setup";
@@ -172,7 +176,7 @@ export function pathPlan(e: PlaceEnv, dir: string, reg?: UserPathIO): PathEntry 
     (v ?? "").split(win ? ";" : ":").some((p) => p.trim() !== "" && samePath(win ? expandWin(p.trim(), e.env) : p.trim(), dir, e.platform));
   if (has(e.env.PATH ?? e.env.Path)) return null;
   if (win) {
-    if (!reg || has(reg.get())) return null;
+    if (!reg || has(reg.get() ?? undefined)) return null;
     return { kind: "registry", dir, where: "your user PATH (HKCU\\Environment)" };
   }
   const shell = (e.env.SHELL ?? "").split("/").pop();
@@ -186,27 +190,32 @@ export function pathPlan(e: PlaceEnv, dir: string, reg?: UserPathIO): PathEntry 
   return { kind: "rc", dir, where: file, file, line };
 }
 
-export function addToPath(p: PathEntry, reg?: UserPathIO): void {
+/** Add the entry; returns the step to record (for the user Path value: what it looked like, so undo is exact). */
+export function addToPath(p: PathEntry, reg?: UserPathIO): PathEntry {
   if (p.kind === "registry") {
     if (!reg) throw new Error("no access to the user PATH");
-    const cur = reg.get().replace(/;+$/, "");
+    const was = reg.get();
+    const cur = (was ?? "").replace(/;+$/, "");
     reg.set(cur ? `${cur};${p.dir}` : p.dir);
-    return;
+    return was === null ? { ...p, before: "none" } : /;$/.test(was) ? { ...p, before: "trailing" } : p;
   }
   const cur = existsSync(p.file!) ? readFileSync(p.file!, "utf8") : "";
   mkdirSync(dirname(p.file!), { recursive: true });
   writeFileSync(p.file!, `${cur}${cur && !cur.endsWith("\n") ? "\n" : ""}${p.line}\n`);
+  return p;
 }
 
 /** Take out exactly the entry `addToPath` added (the last one equal to it). False when it is not there any more. */
 export function removeFromPath(p: PathEntry, reg?: UserPathIO): boolean {
   if (p.kind === "registry") {
     if (!reg) throw new Error("no access to the user PATH");
-    const parts = reg.get().split(";");
+    const parts = (reg.get() ?? "").split(";");
     const i = parts.map((x) => x.trim().toLowerCase()).lastIndexOf(p.dir.toLowerCase());
     if (i < 0) return false;
     parts.splice(i, 1);
-    reg.set(parts.join(";"));
+    // Ours was last and the value ended in ";" before: that ";" comes back. A value setup created goes again when empty.
+    const next = parts.join(";") + (p.before === "trailing" && i === parts.length && i > 0 ? ";" : "");
+    reg.set(p.before === "none" && next === "" ? null : next);
     return true;
   }
   if (!existsSync(p.file!)) return false;
@@ -220,11 +229,11 @@ export function removeFromPath(p: PathEntry, reg?: UserPathIO): boolean {
 
 const PS_READ =
   "[Console]::OutputEncoding=[Text.Encoding]::UTF8;$k=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment');" +
-  "if($k){[Console]::Out.Write($k.GetValue('Path','',[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames))}";
+  "if($k -and ($k.GetValueNames() -contains 'Path')){[Console]::Out.Write('='+$k.GetValue('Path','',[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames))}";
 const PS_WRITE =
   "$k=[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment');$t=[Microsoft.Win32.RegistryValueKind]::ExpandString;" +
   "if($k.GetValueNames() -contains 'Path' -and $k.GetValueKind('Path') -eq [Microsoft.Win32.RegistryValueKind]::String){$t=[Microsoft.Win32.RegistryValueKind]::String};" +
-  "$k.SetValue('Path',$env:MM_PATH,$t);$k.Close();" +
+  "if($env:MM_PATH_DELETE -eq '1'){$k.DeleteValue('Path',$false)}else{$k.SetValue('Path',$env:MM_PATH,$t)};$k.Close();" +
   "Add-Type -Namespace MM -Name W -MemberDefinition '[DllImport(\"user32.dll\",CharSet=CharSet.Unicode)] public static extern IntPtr SendMessageTimeout(IntPtr h,uint m,UIntPtr w,string l,uint f,uint t,out UIntPtr r);';" +
   "$r=[UIntPtr]::Zero;[void][MM.W]::SendMessageTimeout([IntPtr]0xffff,0x1A,[UIntPtr]::Zero,'Environment',2,5000,[ref]$r)";
 
@@ -232,5 +241,12 @@ const PS_WRITE =
 export function windowsUserPath(): UserPathIO {
   const ps = (script: string, env: NodeJS.ProcessEnv = {}): string =>
     execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { env: { ...process.env, ...env }, encoding: "utf8", windowsHide: true, timeout: 30_000, stdio: ["ignore", "pipe", "pipe"] });
-  return { get: () => ps(PS_READ), set: (v) => void ps(PS_WRITE, { MM_PATH: v }) };
+  // The read prints "=" before the value, so an empty value and no value at all differ.
+  return {
+    get: () => {
+      const out = ps(PS_READ);
+      return out.startsWith("=") ? out.slice(1) : null;
+    },
+    set: (v) => void ps(PS_WRITE, v === null ? { MM_PATH_DELETE: "1" } : { MM_PATH: v, MM_PATH_DELETE: "" }),
+  };
 }

@@ -274,6 +274,24 @@ describe("setup puts the launcher folder on PATH (asked, recorded, undone exactl
     assert.equal(s.reg.v, "C:\Tools;%USERPROFILE%\bin;D:\Later");
   });
 
+  test("Windows: undo is byte-exact (a trailing ';' stays; a Path value setup created is removed again)", async () => {
+    const { addToPath, removeFromPath } = await import("../src/install.js");
+    const dir = "C:\\Users\\a\\AppData\\Local\\Programs\\Monomem";
+    const fake = (v: string | null) => ({ v, get(): string | null { return this.v; }, set(x: string | null): void { this.v = x; } });
+    for (const start of ["C:\\a;C:\\b;", "C:\\a;C:\\b", "", "%USERPROFILE%\\bin"]) {
+      const reg = fake(start);
+      const added = addToPath({ kind: "registry", dir, where: "PATH" }, reg);
+      assert.ok(reg.v!.endsWith(dir));
+      assert.equal(removeFromPath(JSON.parse(JSON.stringify(added)), reg), true); // the step as kept in the history file
+      assert.equal(reg.v, start, JSON.stringify(start));
+    }
+    const none = fake(null);
+    const added = addToPath({ kind: "registry", dir, where: "PATH" }, none);
+    assert.equal(none.v, dir);
+    removeFromPath(added, none);
+    assert.equal(none.v, null, "no Path value before: none after");
+  });
+
   test("--yes alone does not change PATH (it says how); --path adds it; already on PATH: not offered", async () => {
     const s = sandbox("win32", { Path: "C:\Windows" });
     const io = makeIO();

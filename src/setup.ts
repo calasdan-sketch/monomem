@@ -2206,8 +2206,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   let pathAdded: PathEntry | undefined;
   if (pathStep) {
     try {
-      addToPath(pathStep, pathStep.kind === "registry" ? (e.userPath ?? windowsUserPath()) : undefined);
-      pathAdded = pathStep;
+      pathAdded = addToPath(pathStep, pathStep.kind === "registry" ? (e.userPath ?? windowsUserPath()) : undefined);
       io.out(`Added ${pathStep.dir} to ${pathStep.where}. Open a new terminal to use \`monomem\` there.`);
     } catch (err) {
       io.err(`Could not add ${pathStep.dir} to ${pathStep.where} (${(err as Error).message}). Everything else is done.`);
