@@ -42,7 +42,7 @@ export function flagNote(s: Store, id: number, reason: unknown): { note_id: numb
   if (!why) throw new ValidationError("reason is required: say in one line what looks wrong");
   if (why.length > MAX_FLAG_REASON) throw new ValidationError(`reason is at most ${MAX_FLAG_REASON} characters`);
   const w = currentWriter();
-  if (w !== "" && n.written_by === w) throw new ValidationError("this is your own note: change it (state_write with its id) instead of flagging it");
+  if (w !== "" && n.written_by === w) throw new ValidationError("this is your own note: change it (memory_save with its id) instead of flagging it");
   const at = new Date().toISOString();
   const today = Number((s.db.prepare("SELECT COUNT(*) AS c FROM note_flags WHERE flagged_by = ? AND at >= ?").get(w, new Date(Date.now() - DAY_MS).toISOString()) as { c: number }).c);
   if (today >= MAX_FLAGS_PER_DAY) throw new ValidationError(`at most ${MAX_FLAGS_PER_DAY} flags per writer per day; ask the user instead`);

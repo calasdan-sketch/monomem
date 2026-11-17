@@ -14,26 +14,30 @@ import { ADMIN_SCOPE_NEEDED, scopeAllows, UNTRUSTED_BANNER } from "../security.j
 import { runSearch, runRelevantSearch, roundRobin, type SearchOpts, type RelevantOpts } from "../search-service.js";
 import { type ServerNamespaceOpts, canRead, readableNamespaces } from "../namespace.js";
 import { withWhenBase, WriterFilterArgs, splitIgnored, ignoredRefusal, withFields, withIgnored, errorResult, ConnectionCtx, OPERATOR_ONLY_TOOLS, READ_TOOLS, ID_PROBE_TOOLS, CREATING_TOOLS, noteIdsIn, STDIO_ADMIN_HINT, stdioAdminToolsAllowed } from "./shared.js";
-import { enabledToolNames } from "./tool-names.js";
+import { toolProfile, newName, NEW_TOOLS, type ToolProfile } from "./tool-names.js";
+import { SERVER_INSTRUCTIONS } from "./instructions.js";
 import { withComputer } from "../sync/marks.js";
 
 export function mcpContext(store: Store, scope: Scope, opts: ServerNamespaceOpts, conn: ConnectionCtx) {
-  const server = new McpServer({
-    name: "monomem",
-    version: PACKAGE_VERSION,
-  });
+  const server = new McpServer({ name: "monomem", version: PACKAGE_VERSION }, { instructions: SERVER_INSTRUCTIONS });
 
   // Stamp the connection's label on every write a tool makes (change_log.actor),
   // by running each tool handler inside the actor context.
-  const enabled =
-    opts.tools === "all" ? null : opts.tools ? new Set(opts.tools) : enabledToolNames();
+  const profile: ToolProfile =
+    opts.tools === "all" ? { legacy: false, visible: null } : opts.tools ? { legacy: false, visible: new Set(opts.tools.map(newName)) } : toolProfile();
+  const enabled = profile.visible;
+  /** Whether a 1.5 tool answers on this server: as itself (legacy-1.5), or as the hidden alias of a shown 1.6 tool. */
+  const oldCallable = (name: string): boolean => !enabled || enabled.has(profile.legacy ? name : newName(name));
+  /** The 1.5 tools as registered (their wrapped handler and argument schema), for the 1.6 tools to call. */
+  const oldTools = new Map<string, { schema?: z.ZodType; cb: (...a: unknown[]) => unknown }>();
+  const newNames = new Set(NEW_TOOLS);
   const localGuard = conn.local === true && !stdioAdminToolsAllowed();
   // 1.4.0: unconfirmed notes this connection has read. The stdio server is one process = one agent: its own set. An
   // HTTP connection gets a new server per request, so mcp-http.ts passes the token writer's set from its registry.
   const taintedReads: ReadTaint = conn.taintedReads ?? new ReadTaint();
   const connTaint = (): string[] => (conn.readsOutside ? [ORIGIN_DECLARED] : []); // read-taint (via:memory) is decided by the Store from taintedReads
   /** Whether a tool is offered on this server: descriptions name only tools the model was actually given. */
-  const has = (name: string): boolean => !enabled || enabled.has(name);
+  const has = (name: string): boolean => oldCallable(name);
   /** A note for a read reply: staleness, a readable date and (R2-01) the dispute marker, computed inside the caller's request. */
   // Device sync: a note that came from another computer says which one (from_computer), on every MCP read.
   const withWhen = (n: NoteRecord) => withComputer(store, withDisputes(store, withWhenBase(n) as NoteRecord));
@@ -44,14 +48,14 @@ export function mcpContext(store: Store, scope: Scope, opts: ServerNamespaceOpts
     // all 32 made the first measurable effect of installing Monomem a bigger
     // context bill, and gave the model a long menu to pick the wrong item from
     // (several hosts also cap how many tools they will accept).
-    if (enabled && !enabled.has(name as string)) return undefined;
+    if (!oldCallable(name as string)) return undefined;
     if (localGuard && OPERATOR_ONLY_TOOLS.includes(name as string)) return undefined;
     // A raw shape is parsed loosely so an argument the tool does not have reaches here and is reported back
     // (ignored_arguments) instead of being dropped without a word. It is removed before the tool sees the call.
     const c = cfg as { inputSchema?: unknown };
     const shape = c.inputSchema && !(c.inputSchema instanceof z.ZodType) ? (c.inputSchema as z.ZodRawShape) : undefined;
     const looseCfg = shape ? { ...c, inputSchema: z.looseObject(shape) } : cfg;
-    return registerRaw(name, looseCfg, (...rawArgs: unknown[]) => {
+    const cb = (...rawArgs: unknown[]): unknown => {
       const known = shape ? splitIgnored(rawArgs[0], shape) : { args: rawArgs[0], ignored: [] };
       const args = [known.args, ...rawArgs.slice(1)];
       if (known.ignored.length) {
@@ -61,7 +65,11 @@ export function mcpContext(store: Store, scope: Scope, opts: ServerNamespaceOpts
         return out instanceof Promise ? out.then((r) => withIgnored(r, name as string, known.ignored, shape!)) : withIgnored(out, name as string, known.ignored, shape!);
       }
       return runTool(name as string, handler, args);
-    });
+    };
+    oldTools.set(name as string, { schema: (looseCfg as { inputSchema?: z.ZodType }).inputSchema, cb });
+    // A 1.6 tool with the same name (memory_history) answers for it, except under legacy-1.5. memory_rollback is both.
+    if (!profile.legacy && newNames.has(name as string) && name !== "memory_rollback") return undefined;
+    return registerRaw(name, looseCfg, cb);
   };
 
   const runTool = (name: string, handler: unknown, args: unknown[]): unknown => {
@@ -291,7 +299,7 @@ export function mcpContext(store: Store, scope: Scope, opts: ServerNamespaceOpts
   const ownConsumer = (consumer: string | undefined): string | undefined =>
     consumer ?? ((conn.label || currentWriter()).replace(/[^A-Za-z0-9._@-]/g, "_").slice(0, 64) || undefined);
 
-  return { server, store, scope, opts, conn, enabled, localGuard, taintedReads, connTaint, has, withWhen, registerRaw, runTool, markReads, logRead, denyIfUnder, nsActive, ownNs, grants, readable, trustedHint, searchReadable, relevantReadable, listReadable, archivedMessage, isArchivedVisible, noNote, readOne, readScope, writeScope, ownConsumer };
+  return { server, store, scope, opts, conn, enabled, profile, oldTools, oldCallable, localGuard, taintedReads, connTaint, has, withWhen, registerRaw, runTool, markReads, logRead, denyIfUnder, nsActive, ownNs, grants, readable, trustedHint, searchReadable, relevantReadable, listReadable, archivedMessage, isArchivedVisible, noNote, readOne, readScope, writeScope, ownConsumer };
 }
 
 export type McpCtx = ReturnType<typeof mcpContext>;

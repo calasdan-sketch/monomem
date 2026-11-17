@@ -221,12 +221,12 @@ describe("5. health's audit check", () => {
 });
 
 describe("6. session-start recall", () => {
-  test("the footer names state_read id= by default; state_read takes ids as an alias", async () => {
+  test("the footer names memory_read id= by default; state_read takes ids as an alias", async () => {
     const s = new Store(":memory:");
     try {
       for (let i = 0; i < 3; i++) s.create({ title: `deploy note ${i}`, body: "how we deploy" });
       const text = await withEnv({ MONOMEM_TOOLS: undefined }, () => injectContext(s, { signals: {} }));
-      assert.match(text, /Open any with state_read id=N$/);
+      assert.match(text, /Open any with memory_read id=N$/);
       const client = await mcp(s);
       const r = toolJson(await client.callTool({ name: "state_read", arguments: { ids: [1] } }));
       assert.equal((r.note as { id: number }).id, 1);

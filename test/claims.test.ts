@@ -24,7 +24,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { MIN_NODE_TEXT } from "../src/setup.js";
-import { DEFAULT_TOOLS } from "../src/mcp-server-core.js";
+import { DEFAULT_TOOLS, NEW_TOOLS, OLD_TOOL_ALIASES } from "../src/mcp-server-core.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
@@ -60,11 +60,14 @@ describe("the Node floor is stated identically everywhere", () => {
 
 describe("tool-surface claims match the registered tools", () => {
   const core = readMcp();
-  const registered = [...core.matchAll(/server\.registerTool\(\s*"([a-z_]+)"/g)].map((m) => m[1]);
+  // 1.6: the shown tools are the 16 memory_* tools (tools-v16.ts); the 1.5 tools behind them are hidden aliases.
+  const legacy = [...core.matchAll(/server\.registerTool\(\s*"([a-z_]+)"/g)].map((m) => m[1]);
+  const registered = [...NEW_TOOLS];
 
   test("the docs' tool count is the real tool count", () => {
-    assert.ok(registered.length >= 20, "sanity: the regex should find the tools");
-    const words: Record<number, string> = { 28: "twenty-eight", 30: "thirty", 32: "thirty-two", 33: "thirty-three", 34: "thirty-four", 35: "thirty-five", 36: "thirty-six", 37: "thirty-seven" };
+    assert.equal(legacy.length, Object.keys(OLD_TOOL_ALIASES).length, "every 1.5 tool has an alias entry");
+    for (const n of NEW_TOOLS) assert.match(core, new RegExp(`"${n}"`), `${n} is registered`);
+    const words: Record<number, string> = { 14: "fourteen", 15: "fifteen", 16: "sixteen", 17: "seventeen" };
     const arch = read("docs/architecture.md");
     const claimed = Object.entries(words).find(([, w]) => arch.includes(`with ${w} tools`));
     assert.ok(claimed, "docs/architecture.md should state the tool count in words");
@@ -82,7 +85,7 @@ describe("tool-surface claims match the registered tools", () => {
   });
 
   test("docs that name the default count agree with DEFAULT_TOOLS", () => {
-    const words: Record<number, string> = { 9: "nine", 10: "ten", 11: "eleven", 12: "twelve" };
+    const words: Record<number, string> = { 6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten", 11: "eleven", 12: "twelve" };
     const word = words[DEFAULT_TOOLS.length];
     assert.ok(word, `add ${DEFAULT_TOOLS.length} to the number words above`);
     for (const f of ["README.md", "docs/configuration.md"]) {
@@ -103,13 +106,13 @@ describe("shipped skills only promise tools the reader can actually call", () =>
   // on a plain install and calls a tool that does not exist.
   const skills = ["SKILL.md", "skills/monomem-mem/SKILL.md"];
   const core = readMcp();
-  const registered = new Set([...core.matchAll(/server\.registerTool\(\s*"([a-z_]+)"/g)].map((m) => m[1]));
+  const registered = new Set([...NEW_TOOLS, ...Object.keys(OLD_TOOL_ALIASES), ...[...core.matchAll(/server\.registerTool\(\s*"([a-z_]+)"/g)].map((m) => m[1])]);
 
   for (const f of skills) {
     test(`${f} declares the MONOMEM_TOOLS requirement if it uses a non-default tool`, () => {
       const text = read(f);
       const used = [...text.matchAll(/\b(memory_[a-z_]+|task_[a-z_]+|session_[a-z_]+|runner_status|trust_policy)\b/g)].map((m) => m[1]);
-      const nonDefault = [...new Set(used)].filter((t) => registered.has(t) && !DEFAULT_TOOLS.includes(t));
+      const nonDefault = [...new Set(used)].filter((t) => registered.has(t) && !DEFAULT_TOOLS.includes(t) && !DEFAULT_TOOLS.includes(OLD_TOOL_ALIASES[t] ?? ""));
       if (nonDefault.length === 0) return;
       assert.match(
         text,

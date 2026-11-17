@@ -79,6 +79,11 @@ const profiles = {
   "all-namespaced": await listTools("all", "admin", { namespace: "work", readsFrom: { work: ["shared"] } }, {}),
   "all-local-stdio": await listTools("all", "admin", {}, { local: true }),
   "list-explicit": await listTools("memory_history,task_put", "admin", {}, {}),
+  // 1.6: the 1.5 names. "legacy-1.5" must equal 1.5's "default" byte for byte, "legacy-1.5,all" 1.5's "all".
+  "legacy-1.5": await listTools("legacy-1.5", "admin", {}, {}),
+  "legacy-1.5-all": await listTools("legacy-1.5,all", "admin", {}, {}),
+  "legacy-1.5-all-local-stdio": await listTools("legacy-1.5,all", "admin", {}, { local: true }),
+  "legacy-1.5-list-explicit": await listTools("legacy-1.5,memory_history,task_put", "admin", {}, {}),
 };
 writeFileSync(join(out, "mcp-tools.json"), JSON.stringify(profiles, null, 2) + "\n");
 

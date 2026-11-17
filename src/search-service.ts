@@ -402,7 +402,7 @@ function demoteTwins(
 /** What a restated note carries: the newer note's id and a fixed label (no note text). */
 export type RestatedNote = NoteRecord & { restated_by?: number; restated_label?: string };
 export const restatedLabel = (id: number): string =>
-  `[restated by newer note #${id} from the same writer; not replaced: memory_supersede_preview retires this one]`;
+  `[restated by newer note #${id} from the same writer; not replaced: memory_replace retires this one]`;
 const withRestated = (n: NoteRecord, by: number | undefined): RestatedNote =>
   by === undefined ? n : { ...n, restated_by: by, restated_label: restatedLabel(by) };
 /** The label for a CLI result line (" [restated by ...]"), or "". */
@@ -613,7 +613,7 @@ function finalizeExplained(
     const explanation =
       describeBreakdown(partial) +
       (behindId !== undefined ? ` Kept behind the newer note #${behindId} on the same topic.` : "") +
-      (restatedBy !== undefined ? ` Kept behind #${restatedBy}, a newer note by the same writer on the same subject. Not replaced: to retire this one, use memory_supersede_preview.` : "");
+      (restatedBy !== undefined ? ` Kept behind #${restatedBy}, a newer note by the same writer on the same subject. Not replaced: to retire this one, use memory_replace.` : "");
     return { note: withRestated(h.note, restatedBy), breakdown: { ...partial, explanation } };
   });
 }

@@ -29,10 +29,10 @@ describe("agent-facing text names only default tools", () => {
     const names = [...SNIPPET_BODY.matchAll(/`([a-z]+_[a-z_]+)`/g)].map((m) => m[1]);
     assert.ok(names.length >= 3, names.join());
     for (const n of names) assert.ok(DEFAULT_TOOLS.includes(n), `${n} is not in DEFAULT_TOOLS`);
-    assert.match(SNIPPET_BODY, /`state_search` \(add mode: "relevant" to pass the whole question\)/);
+    assert.match(SNIPPET_BODY, /`memory_search`; add mode: "relevant" to pass the whole question/);
   });
 
-  test("file-context with default tools says state_read id=N and never names memory_get", async () => {
+  test("file-context with default tools says memory_read id=N and never names memory_get", async () => {
     const dir = mkdtempSync(join(tmpdir(), "om-r1-fctx-"));
     try {
       const db = join(dir, "state.db");
@@ -43,7 +43,7 @@ describe("agent-facing text names only default tools", () => {
       const payload = JSON.stringify({ session_id: "s1", cwd: "C:/work/app", tool_name: "Read", tool_input: { file_path: "C:/work/app/src/tax.ts" } });
       const out = await withTools(undefined, () => runHook("file-context", payload, { dbPath: db, dataDir: dir, env: {} }));
       const ctx = JSON.parse(out).hookSpecificOutput.additionalContext as string;
-      assert.match(ctx, /Open any with state_read id=N/);
+      assert.match(ctx, /Open any with memory_read id=N/);
       assert.doesNotMatch(ctx, /memory_get/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -63,10 +63,10 @@ describe("agent-facing text names only default tools", () => {
         store.close();
         return d;
       });
-    const dflt = await describe(undefined);
+    const dflt = await describe("legacy-1.5");
     assert.doesNotMatch(dflt, /task_get|memory_since|memory_ack/);
     assert.match(dflt, /ack_token` back \(on your next catch_up\)/);
-    const all = await describe("all");
+    const all = await describe("legacy-1.5,all");
     assert.match(all, /task_get for the rest/);
     assert.match(all, /next catch_up, memory_since or memory_ack/);
   });

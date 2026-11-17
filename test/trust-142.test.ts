@@ -61,7 +61,7 @@ describe("the harness is hermetic", () => {
     const deliberate = new Set(["MONOMEM_HOME", "MONOMEM_TOOLS", "MONOMEM_FLOOD_WRITES_PER_HOUR", "MONOMEM_SCAN_CACHE_SECONDS", "MONOMEM_NO_SERVER_PROBE", "MONOMEM_RECALL_TIMEOUT_MS", "MONOMEM_TEST_TIME_SCALE"]); // NO_SERVER_PROBE: doctor never probes a real server from a test; RECALL_TIMEOUT: a loaded CI runner must not trip the 5 s session-start cap; TEST_TIME_SCALE: CI widens wall-clock bounds (read by test/setup-env.ts only, never by src)
     const left = Object.keys(process.env).filter((k) => k.startsWith("MONOMEM_") && !deliberate.has(k));
     assert.deepEqual(left, []);
-    assert.equal(process.env.MONOMEM_TOOLS, "all", "the suite runs against the full tool surface");
+    assert.equal(process.env.MONOMEM_TOOLS, "legacy-1.5,all", "the suite runs against the full tool surface");
     assert.ok(process.env.MONOMEM_HOME?.includes("monomem-test-home-"), "the data directory is a throwaway one");
   });
 

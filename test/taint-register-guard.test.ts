@@ -225,7 +225,7 @@ const MCP_EXEMPT: Record<string, string> = {
 };
 
 async function mcp(store: Store, conn: Record<string, unknown> = { local: true }) {
-  const server = createMcpServer(store, "admin", { tools: "all" }, conn);
+  const server = createMcpServer(store, "admin", {}, conn); // legacy-1.5,all (setup-env): the 1.5 tools; each 1.6 tool calls one of them
   const [c, s] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "t", version: "1.0.0" });
   await Promise.all([client.connect(c), server.connect(s)]);

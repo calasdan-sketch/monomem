@@ -23,7 +23,9 @@ process.env.XDG_CONFIG_HOME = join(home, ".config");
 // install no longer registers by default (see DEFAULT_TOOLS in
 // mcp-server-core.ts). test/tool-surface.test.ts owns the assertions about
 // what the DEFAULT surface is, and sets this variable itself.
-process.env.MONOMEM_TOOLS = "all";
+// 1.6: "legacy-1.5,all" lists the 37 1.5 tools the suite was written against (the 1.6 tools call them and answer too);
+// test/tool-surface-16.test.ts owns the 1.6 surface.
+process.env.MONOMEM_TOOLS = "legacy-1.5,all";
 // Bulk tests write thousands of notes as one agent label in seconds; the flood guard would pause them.
 // test/access-log-flood.test.ts owns the flood-guard assertions and sets this variable itself.
 process.env.MONOMEM_FLOOD_WRITES_PER_HOUR = "0";

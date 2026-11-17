@@ -10,7 +10,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Store } from "../src/store.js";
 import { createMcpServer, OPERATOR_ONLY_TOOLS } from "../src/mcp-server-core.js";
 
-async function connect(store: Store, conn = {}, opts: any = { tools: "all" }) {
+async function connect(store: Store, conn = {}, opts: any = {} /* MONOMEM_TOOLS from setup-env: legacy-1.5,all */) {
   const server = createMcpServer(store, "admin", opts, conn);
   const [c, s] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "t", version: "1.0.0" });
