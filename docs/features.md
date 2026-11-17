@@ -255,3 +255,13 @@ app's config, with a backup beside it. Nothing lands in your projects unless you
 block), and every retry has a limit. `monomem uninstall` takes it out
 of every app (byte for byte where it can), `--purge` also deletes the data after a final backup. Every file, and how to
 remove it: [docs/footprint.md](./footprint.md).
+
+## Credits
+
+Several ideas were adapted from other open projects, with thanks:
+
+- **[llmem](https://github.com/netrixone/llmem)**: consolidation candidates, the similarity-edge graph, access-count
+  importance, `#status` staleness, and the context/relevant split with keyword extraction.
+- **lontar** (rymanalu, described in *"One memory across AI agents: what it actually takes"* on dev.to): the fail-silent
+  SessionStart recall hook, server-side namespace resolution from the working directory, and one-directional `reads_from` grants.
+- **[lossless-memory](https://github.com/aru-labs/lossless-memory)**: natural-language time phrases as a first-class query filter.

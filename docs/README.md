@@ -30,6 +30,7 @@ Pick by what you want to do. Everything here is also linked from the main [READM
 | I want to know... | Read |
 |---|---|
 | everything Monomem does, in detail | [features.md](./features.md) |
+| what it does not do, every limit we know of | [known-limits.md](./known-limits.md) |
 | how it compares with other memory tools | [comparison.md](./comparison.md) |
 | how the pieces fit together | [architecture.md](./architecture.md) |
 | who wrote a note, and what can be trusted | [provenance.md](./provenance.md), [trust.md](./trust.md) |
