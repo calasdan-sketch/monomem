@@ -30,6 +30,7 @@ export const OLD_COMMANDS: Readonly<Record<string, string>> = {
   forget: "archive",
   relevant: "search",
   init: "connect <app> --print",
+  taint: "settings outside-window",
 };
 
 const CHECK_FLAGS: Record<string, string> = { "--setup": "doctor", "--attacks": "drill", "--usage": "meter", "--report": "safety-report" };
@@ -80,6 +81,7 @@ export function translateVerb(args: readonly string[]): string[] | null {
     return flag === "--writes" && !left.some((a) => a.startsWith("--")) ? ["audit", "--since", "24h", ...left] : [ACTIVITY_FLAGS[flag], ...left];
   }
   if (cmd === "tidy") return rest[0] && Object.hasOwn(TIDY_JOBS, rest[0]) ? [TIDY_JOBS[rest[0]], ...rest.slice(1)] : ["tidy"];
+  if (cmd === "settings" && rest[0] === "outside-window") return ["taint", ...rest.slice(1)];
   if (cmd !== undefined && Object.hasOwn(RENAMES, cmd)) return [RENAMES[cmd], ...rest];
   return null;
 }

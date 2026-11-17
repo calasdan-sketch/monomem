@@ -4,6 +4,7 @@ import "./legacy-env.js"; // second: read the old CLAUDE_BRIDGE_* variables as M
 import readline from "node:readline";
 import { SELF_CLI, serviceLaunch } from "./self.js";
 import { parseFlags, str, terminalIO, errorLine } from "./cli/shared.js";
+import { OLD_COMMANDS } from "./cli/verbs.js";
 import { gatePinned, gateOutside, requireOperator } from "./operator-gate.js";
 import { actorStore, setProcessWriter } from "./actor.js";
 import type { RestatedNote } from "./search-service.js";
@@ -46,12 +47,12 @@ const VERB_HINTS: Record<string, string> = {
     "There is no 'undo' command. What do you want to undo?",
     "  An edit to one note:            monomem history <id>, then  monomem history restore <id> <version>",
     "  Everything one agent did:       monomem rollback --writer <writer> --since 1h   (shows the plan first)",
-    "  A replacement (supersede):      monomem supersede undo <id>",
+    "  A replacement:                  monomem replace undo <id>",
     "  A forgotten note:               monomem restore <id>",
     "  The last setup run:             monomem setup --undo",
   ].join("\n"),
-  approve: "There is no 'approve' command. To approve a held write: monomem quarantine approve <id>   (see them: monomem quarantine list)",
-  reject: "There is no 'reject' command. To reject a held write: monomem quarantine reject <id>   (see them: monomem quarantine list)",
+  approve: "There is no 'approve' command. To approve a held write: monomem review held approve <id>   (see them: monomem review held list)",
+  reject: "There is no 'reject' command. To reject a held write: monomem review held reject <id>   (see them: monomem review held list)",
   distrust:
     "There is no 'distrust' command. To leave a writer's notes out of every read: monomem trust distrust <writer> --namespace '*'\n" +
     "  A local app's notes are written by stdio:<app> (for example stdio:cursor); monomem show <id> prints a note's writer.",
@@ -148,7 +149,7 @@ function usage(all = false): void {
       "  safety-report = check --report, quarantine = review held, quality = review duplicates, conflicts = review conflicts,",
       "  stale --code = review code, changes = activity, watch = activity --follow, access = activity --reads,",
       "  digest = activity --summary, consolidate = tidy merge, rebuild-edges = tidy edges, decay / reindex / scrub = tidy <same>,",
-      "  token = keys, config = settings, supersede = replace, forget = archive, relevant = search. Their options follow.",
+      "  token = keys, config = settings, taint = settings outside-window, supersede = replace, forget = archive, relevant = search. Their options follow.",
       "",
       "  start     Start the API + dashboard AND MCP-over-HTTP.",
       "            When: always-on. Local by default (127.0.0.1); to reach it from a phone or claude.ai,",
@@ -280,10 +281,10 @@ function usage(all = false): void {
       "         | export-key --out file | rotate] [--json]   (monomem trust --help)",
       "            The trust policy: writers whose notes are left out of every read (and never run),",
       "            and the other servers whose signed exports an import will believe. See docs/trust.md.",
-      "  token add --label <name> --scope read|write|admin [--namespace ns] [--max public|internal|private] [--no-limit] | token list | token remove <label>",
-      "            Make a random access token for an app and save it in tokens.json (shown once; restart a running server after).",
-      "            list shows labels and scopes only. Commands that lower protection (token add, trust undistrust/attester-add/",
-      "            attester-unrevoke, quarantine approve/keep-history, unpin, approve-first off, resume) need a real terminal and a typed yes.",
+      "  keys add --label <name> --scope read|write|admin [--namespace ns] [--max public|internal|private] [--no-limit] | keys list | keys remove <label>",
+      "            Make a random app key for an app and save it in tokens.json (shown once; restart a running server after).",
+      "            list shows names and scopes only. Commands that lower protection (keys add, trust undistrust/attester-add/",
+      "            attester-unrevoke, review held approve/keep-history, unpin, approve-first off, resume) need a real terminal and a typed yes.",
       "  sync setup <private git address | shared folder> [--auto on|off] [--every min] [--name label]  |  sync",
       "            Use Monomem on your other computers: set up once, then `monomem sync` (or --auto on: every 30 min while the",
       "            server runs). Files are always sealed; copy the key (.sync-key) to the other computer yourself. docs/file-sync.md",
@@ -317,26 +318,26 @@ function usage(all = false): void {
       "            notes not re-confirmed within confirm-days. --confirm-all confirms every listed note as you, after one typed yes.",
       "            Also lists notes agents flagged and notes whose files changed in git; review keep <id> keeps one as it is.",
       "  stale --code [--ns <namespace>] [--json]",
-      "            Notes written about files (state_write files) that a later commit changed, with the files and the commit",
+      "            Notes written about files (memory_save files) that a later commit changed, with the files and the commit",
       "            each note was written against. Compares with the committed code (HEAD), on this computer only.",
       "  project-rules [--file AGENTS.md|CLAUDE.md] [--ns <namespace>] [--dry-run]",
       "            Copy the notes a person confirmed or pinned into a fenced block of this repository's AGENTS.md (or",
       "            CLAUDE.md), for apps that read only rules files. Left out: anything unconfirmed, admin- or agent-confirmed,",
       "            distrusted, disputed, flagged, about changed code, private, or flagged by the linter. Shows the change and asks",
       "            you to type yes at a terminal; only the block is ever written. Monomem never writes these files otherwise.",
-      "  taint clear [--all | --session <id> | --here]",
+      "  settings outside-window clear [--all | --session <id> | --here]",
       "            Ends the open outside-content windows (a hooked session read the web: local apps' notes written meanwhile are",
       "            marked). Run it in a terminal and type yes. Marks already written stay; nothing is deleted.",
-      "  config [get | set confirm-days <n> | set confirm-mode off|label|enforce]",
+      "  settings [get | set confirm-days <n> | set confirm-mode off|label|enforce]",
       "            Re-confirmation expiry. label (default): a note not changed or confirmed for confirm-days (default 30) is",
       "            labelled in search. enforce: it is also kept out of session start. off: nothing. Nothing is ever deleted.",
       "            Turning a mode on starts every note's clock then. Lowering protection (enforce to label or off) asks you to type yes.",
-      "  quarantine [list | show <id> | approve <id> | keep-history <id> [--by <note id>] | reject <id>]",
+      "  review held [list | show <id> | approve <id> | keep-history <id> [--by <note id>] | reject <id>]",
       "            Review writes the memory linter held (MONOMEM_LINT) or an approve-first namespace held. show lists what was",
       "            saved on the same topic since; approve keeps the time it was written; keep-history stores it as replaced by",
       "            that newer note.",
       "  approve-first [<namespace> on|off | --all on|off]",
-      "            Hold every agent write to a namespace in the quarantine queue until you approve it.",
+      "            Hold every agent write to a namespace until you approve it (review held).",
       "            --all on|off: the same for every namespace, including ones created later. No arguments: list the namespaces with it on, and the --all switch. Writes from monomem commands are not held.",
       "  access [--since 24h|ISO] [--writer label] [--limit 100] [--json]",
       "            Who read memory: time, writer label, tool or route, result count, namespaces and a short",
@@ -345,11 +346,11 @@ function usage(all = false): void {
       "            Writers the flood guard paused (more than MONOMEM_FLOOD_WRITES_PER_HOUR writes, default 500,",
       "            in an hour) / let one write again. Local stdio apps all share the label \"stdio\".",
       "  quality [--json] [--namespace ns]",
-      "            What is worth a look: near-duplicates, stale notes with a newer twin, quarantined writes, notes",
+      "            What is worth a look: near-duplicates, stale notes with a newer duplicate, held writes, notes",
       "            the linter flags, and captured rows about to decay. Each comes with the command that fixes it.",
       "  conflicts [--json] [--namespace ns]",
       "            Live notes from different writers that give different values for the same key (deploy target, package",
-      "            manager, a version, a URL). Flag only: you choose supersede, pin, distrust, or remove just the fact.",
+      "            manager, a version, a URL). Flag only: you choose replace, pin, distrust, or remove just the fact.",
       "  facts [--namespace ns] [--json] [--as-of <ISO|7d|2h>] [--check]",
       "            The decisions agents recorded as facts: key, current value(s), writers, since. Marks disputed keys and keys",
       "            two or more writers agree on. --check prints one line and exits 1 if any fact is disputed (0 if none): for CI.",
@@ -365,7 +366,7 @@ function usage(all = false): void {
       "            Put a backup back as your database. Refuses while Monomem or an app is using it; copies the current database aside first",
       "            (state.db.before-restore-<time>; it prints the command that undoes the restore), removes the stale -wal/-shm files and checks the result. Also works with state.db.pre-vNN-backup.",
       "  add \"text\" [--title T] [--ns work] [--tag a,b] [--private | --sens public|internal|private]",
-      "            Save a note from the shell (\"-\" reads a pipe). Same linter, secret refusal and quarantine as any other writer; written as \"cli\".",
+      "            Save a note from the shell (\"-\" reads a pipe). Same linter, secret refusal and holds as any other writer; written as \"cli\".",
       "  show <id> | ls [--ns x] [--limit 20] [--archived] [--include-distrusted] | edit <id> [- | --editor] | forget <id>",
       "            Read, list, change (in $EDITOR, refused if the note changed meanwhile) or archive a note. The CLI is you, the owner: sensitivity limits apply to apps, not to it.",
       "            edit <id> - reads the new text from a pipe (first line the title); without a terminal edit needs - or --editor.",
@@ -404,12 +405,12 @@ function usage(all = false): void {
       "            disable  Decrypt every body and remove the key file.",
       "            When: running Monomem as a shared / multi-agent store.",
       "            See: docs/encryption-retention.md for the real tradeoffs.",
-      "  supersede --old <ids> (--title T --body B [--tags a,b] [--confidence 0-1] | --new-id N)",
+      "  replace --old <ids> (--title T --body B [--tags a,b] [--confidence 0-1] | --new-id N)",
       "            Replace one or more notes with a newer one, SAFELY. It first shows exactly what would stop appearing in",
       "            search and what is not lost, then asks you to type the number of notes (or yes). Nothing is ever deleted:",
       "            the old note is kept, marked replaced, and can be brought back. From a script it only previews and prints a",
       "            one-time code: run again with --confirm-token <code> (same --title/--body) to go ahead.",
-      "  supersede undo <id>",
+      "  replace undo <id>",
       "            Bring a replaced note back exactly as it was (recorded).",
       "  history <id> [--json] [--include-distrusted] | history restore <id> <version> [--if-rev n] | history purge <id> [--yes]",
       "            A note's earlier versions: list them, put one back (as a new version, nothing is overwritten), or forget them.",
@@ -433,7 +434,7 @@ function usage(all = false): void {
       "            Replay known memory-poisoning attacks on a copy of your store and your settings; your data is not changed.",
       "            With no store yet it says so (run setup first).",
       "  health [--json] [--card [file.svg]]",
-      "            One grade A-F with the reason: setup, settings, drill, audit chain, held writes. Rule: monomem health --help",
+      "            One grade A-F with the reason: setup, settings, drill, audit chain, held writes. Rule: monomem check --help",
       "  help      Show this help",
       "",
     ].join("\n")
@@ -1311,7 +1312,7 @@ async function changes(): Promise<void> {
     const c = page.counts;
     console.log(
       `Changes ${page.since} -> ${page.until}: ${c.created} created, ${c.updated} updated, ${c.deleted} deleted` +
-        (page.quarantined ? `, ${page.quarantined} quarantined` : "")
+        (page.quarantined ? `, ${page.quarantined} held` : "")
     );
     // Grouped by who the server stamped as the writer, not by the source a writer claims for itself (any app can claim one).
     for (const [w, n] of Object.entries(page.byWriter)) {
@@ -1555,9 +1556,9 @@ async function importCmd(): Promise<void> {
     console.log(
       `${flags["dry-run"] ? "[dry run] " : ""}Imported from ${r.dir}: ${c.created} created, ${c.updated} updated, ` +
         `${c.restored} restored, ${c.unchanged} unchanged, ${c.skipped} skipped, ${c.conflict} conflict(s), ` +
-        `${c.quarantined} quarantined, ${c.rejected} rejected.`
+        `${c.quarantined} held, ${c.rejected} rejected.`
     );
-    if (r.foreignHeld > 0) console.log(`${r.foreignHeld} note(s) from other machines held for review (monomem quarantine list).`);
+    if (r.foreignHeld > 0) console.log(`${r.foreignHeld} note(s) from other machines held for review (monomem review held list).`);
     if (c.rejected > 0) {
       console.error(
         `\n!!! ${c.rejected} FILE(S) WERE REJECTED AND NOT IMPORTED (see the "rejected" lines above). ` +
@@ -1682,7 +1683,7 @@ async function importJsonFile(file: string, dedupe: boolean, json: boolean, requ
           (imported + (skipped || 0) > 0 || handled > 0
             ? "Nothing is rolled back. Fix the cause and run the SAME command again: notes already imported are skipped (recognised by title, body and created_at, which every export carries) rather than duplicated."
             : "Nothing was written.") +
-          (deferred ? " Run `monomem rebuild-edges` afterwards." : "")
+          (deferred ? " Run `monomem tidy edges` afterwards." : "")
       );
       process.exit(1);
     }
@@ -1704,8 +1705,8 @@ async function importJsonFile(file: string, dedupe: boolean, json: boolean, requ
         console.log(`  key ${printable(k.key_id)} (server ${printable(k.server_id)}) signed ${k.notes} note(s) but is not trusted. To trust it you must get its public key from that server's admin (monomem trust identity there).`);
       }
     }
-    if (deferred) console.log("The similarity graph was not rebuilt for this large import: run `monomem rebuild-edges` when convenient.");
-    if (total.quarantined.length) console.log(`${total.quarantined.length} note(s) held by the linter (monomem quarantine).`);
+    if (deferred) console.log("The similarity graph was not rebuilt for this large import: run `monomem tidy edges` when convenient.");
+    if (total.quarantined.length) console.log(`${total.quarantined.length} note(s) held by the linter (monomem review held).`);
     if (total.rejected.length) {
       console.error(`${total.rejected.length} note(s) rejected:`);
       for (const r of total.rejected.slice(0, 200)) console.error(`  ${printable(r.title)}: ${printable(r.error)}`);
@@ -1807,14 +1808,14 @@ async function projectRulesCmd(args: string[]): Promise<void> {
  * Stamps already written stay; nothing is deleted.
  */
 async function taintCmd(args: string[]): Promise<void> {
-  const usage = "Usage: monomem taint clear [--all | --session <id> | --here]";
+  const usage = "Usage: monomem settings outside-window clear [--all | --session <id> | --here]";
   const [verb, flag, val, ...extra] = args;
   const ok = verb === "clear" && !extra.length && ((flag === "--all" || flag === "--here") && val === undefined ? true : flag === "--session" && typeof val === "string" && val.length > 0);
   if (!ok) {
     console.error(usage);
     process.exit(1);
   }
-  await requireOperator(`taint clear ${flag === "--session" ? `--session ${val}` : flag}`);
+  await requireOperator(`settings outside-window clear ${flag === "--session" ? `--session ${val}` : flag}`);
   const { DB_PATH } = await import("./config.js");
   const { Store } = await import("./store.js");
   const store = new Store(DB_PATH);
@@ -1827,7 +1828,7 @@ async function taintCmd(args: string[]): Promise<void> {
 }
 
 async function configCmd(args: string[]): Promise<void> {
-  const usage = "Usage: monomem config [get | set confirm-days <n> | set confirm-mode off|label|enforce]";
+  const usage = "Usage: monomem settings [get | set confirm-days <n> | set confirm-mode off|label|enforce]";
   const [verb = "get", key, value, ...extra] = args;
   if (extra.length || (verb !== "get" && verb !== "set") || (verb === "get" && key !== undefined) || (verb === "set" && (value === undefined || (key !== "confirm-days" && key !== "confirm-mode")))) {
     console.error(usage);
@@ -2059,7 +2060,7 @@ async function restoreBackupCmd(args: string[]): Promise<void> {
     const r = applyRestore(plan, DB_PATH);
     console.log(`Restored ${plan.notes} note(s).`);
     if (r.keptCurrentAt) console.log(`Your previous database is kept at ${r.keptCurrentAt}.\nTo undo this restore: monomem backup restore "${r.keptCurrentAt}" --yes`);
-    console.log("Start Monomem again, then run: monomem doctor");
+    console.log("Start Monomem again, then run: monomem check --setup");
   } catch (e) {
     if (e instanceof RestoreError) {
       console.error(e.message);
@@ -2185,7 +2186,7 @@ async function encryptCmd(): Promise<void> {
       const sealed = store.encryptedCount();
       // Sealed bodies with no key is not "off": it is on with the key gone (doctor FAILs on the same state).
       console.log(
-        enabled ? "encryption: on" : sealed > 0 ? `encryption: on, but the key file is missing at ${keyFile}: ${sealed} note bod${sealed === 1 ? "y" : "ies"} cannot be read until you restore it from your backup (check: monomem doctor)` : "encryption: off"
+        enabled ? "encryption: on" : sealed > 0 ? `encryption: on, but the key file is missing at ${keyFile}: ${sealed} note bod${sealed === 1 ? "y" : "ies"} cannot be read until you restore it from your backup (check: monomem check --setup)` : "encryption: off"
       );
       console.log(`key file:   ${keyFile}${enabled ? "" : " (not present)"}`);
       console.log(`encrypted bodies: ${sealed}`);
@@ -2375,7 +2376,9 @@ function printCommandHelp(cmd: string): void {
 }
 
 /** The help lines for one command, taken from the full help (so there is one text to keep right). */
-function helpFor(cmd: string): string | null {
+function helpFor(given: string): string | null {
+  // An old name shows the help of the command it is now (quarantine -> review, token -> keys).
+  const cmd = Object.hasOwn(OLD_COMMANDS, given) ? OLD_COMMANDS[given].split(" ")[0] : given === "taint" ? "settings" : given;
   const orig = console.log;
   let buf = "";
   console.log = (s?: unknown): void => void (buf += String(s ?? "") + "\n");
@@ -2559,7 +2562,7 @@ async function main(): Promise<void> {
       // R2-03: notes whose anchored files changed in git since they were written.
       const { flags, rest } = parseFlags(process.argv.slice(3), { values: ["ns", "namespace"], bools: ["code", "json"] });
       if (rest.length || flags.code !== true) {
-        console.error("Usage: monomem stale --code [--ns <namespace>] [--json]");
+        console.error("Usage: monomem review code [--ns <namespace>] [--json]");
         process.exit(1);
       }
       const ns = typeof flags.ns === "string" ? flags.ns : typeof flags.namespace === "string" ? flags.namespace : undefined;

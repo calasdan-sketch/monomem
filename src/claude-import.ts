@@ -469,7 +469,7 @@ export async function runClaudeImport(e: Pick<SetupEnv, "home" | "env" | "cwd">,
       }
       const k = known.get(c.loc);
       if (!k && heldBefore.has(c.source)) {
-        heldSkipped++; // the linter held this exact text on an earlier run; it stays in `monomem quarantine`
+        heldSkipped++; // the linter held this exact text on an earlier run; it stays in `monomem review held`
         continue;
       }
       if (!k) {
@@ -487,7 +487,7 @@ export async function runClaudeImport(e: Pick<SetupEnv, "home" | "env" | "cwd">,
     const tot = rows.reduce((a, r) => ({ s: a.s + r.sections, c: a.c + r.create, same: a.same + r.same, ch: a.ch + r.changed, sec: a.sec + r.secrets }), { s: 0, c: 0, same: 0, ch: 0, sec: 0 });
     io.out(`\n${tot.s} section(s): ${tot.c} new, ${tot.same} already imported, ${tot.ch} changed since, ${tot.sec} skipped because they look like a secret.`);
     if (tot.sec) io.out("  Skipped sections are not stored and not shown. Take the secret out of the file (or keep it in a password manager) and run again.");
-    if (heldSkipped) io.out(`  ${heldSkipped} section(s) were held by the memory linter on an earlier run and are not queued again (see \`monomem quarantine\`; change the text to try again).`);
+    if (heldSkipped) io.out(`  ${heldSkipped} section(s) were held by the memory linter on an earlier run and are not queued again (see \`monomem review held\`; change the text to try again).`);
     if (tot.ch && !opts.update) io.out("  Changed sections were left as they are; add --update to refresh them.");
     if (imports) io.out(`  ${imports} "@file" import line(s) were not followed (the imported file is read only if it is one of the files above).`);
     for (const s of skipped) io.out(`  skipped ${s.display}: ${s.why}`);
@@ -536,7 +536,7 @@ export async function runClaudeImport(e: Pick<SetupEnv, "home" | "env" | "cwd">,
     if (held) writeHeld(opts.dbPath, heldBefore);
     io.out(`\nImported ${created} new note(s)${refreshed ? `, refreshed ${refreshed}` : ""}. They are tagged "${IMPORT_TAG}" and written by "${IMPORT_WRITER}".`);
     io.out("Claude Code's own session-start notes leave these out (it already reads CLAUDE.md and its auto-memory); search and your other apps still see them.");
-    if (held) io.out(`${held} section(s) were held by the memory linter (it saw something that reads like an instruction to an AI): see \`monomem quarantine\`.`);
+    if (held) io.out(`${held} section(s) were held by the memory linter (it saw something that reads like an instruction to an AI): see \`monomem review held\`.`);
     if (failed) {
       io.err(`${failed} section(s) could not be stored.`);
       return 1;

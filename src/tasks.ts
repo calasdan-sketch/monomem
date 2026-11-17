@@ -764,7 +764,7 @@ export function listTasks(store: Store, opts: TaskListOpts = {}): { tasks: Task[
 function distrustedTaskError(id: number): ValidationError {
   return new ValidationError(
     `task #${id} was written by a writer on this namespace's distrust list; it cannot be claimed or approved. ` +
-      "An admin can review it (include_distrusted) and, if it is fine, copy it into a new task under a trusted writer (rewriting it keeps the writer on its taint list) or take the writer off the list."
+      "An admin can review it (include_distrusted) and, if it is fine, copy it into a new task under a trusted writer (rewriting it keeps the writer on the distrust list) or take the writer off the list."
   );
 }
 

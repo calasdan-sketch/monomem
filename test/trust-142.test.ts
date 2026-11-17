@@ -688,7 +688,7 @@ describe("6b: the backup file is streamed", () => {
     const r = cli(home, ["import", "--file", f, "--dedupe"]);
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /Imported 1300 note/);
-    assert.match(r.stdout, /rebuild-edges/);
+    assert.match(r.stdout, /tidy edges/);
     const again = cli(home, ["import", "--file", f, "--dedupe"]);
     assert.match(again.stdout, /Imported 0 note\(s\), skipped 1300/);
     rmSync(home, { recursive: true, force: true });
@@ -821,7 +821,7 @@ describe("doctor and the primary token", () => {
     const only = cli(home, ["doctor"]);
     assert.match(only.stdout, /\[warn\] 1 distrust rule\(s\) exist, but the only token is the primary one/);
     const scoped = cli(home, ["doctor"], { MONOMEM_TOKENS: JSON.stringify([{ token: "w".repeat(40), scope: "write", label: "agent" }]) });
-    assert.match(scoped.stdout, /\[ok\]\s+1 distrust rule\(s\); 1 non-admin token/);
+    assert.match(scoped.stdout, /\[ok\]\s+1 distrust rule\(s\); 1 non-admin key/);
     rmSync(home, { recursive: true, force: true });
   });
 

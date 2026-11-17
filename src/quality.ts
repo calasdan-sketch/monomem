@@ -84,8 +84,8 @@ export async function qualityReport(store: Store, namespaces?: string[]): Promis
       ids: [olds[0].id, keep.id, ...olds.slice(1).map((o) => o.id)],
       keep_id: keep.id,
       detail: `${sorted.length} notes say the same thing: ${sorted.map((n) => `#${n.id} ${quote(n.title)}`).join(", ")} (score ${g.minScore.toFixed(3)} or higher); keep #${keep.id}, the newest`,
-      fix: `monomem supersede --old ${olds.map((o) => o.id).join(",")} --new-id ${keep.id}`,
-      alt: `monomem consolidate --namespace ${keep.namespace} --dry-run`,
+      fix: `monomem replace --old ${olds.map((o) => o.id).join(",")} --new-id ${keep.id}`,
+      alt: `monomem tidy merge --namespace ${keep.namespace} --dry-run`,
     });
   }
 
@@ -105,7 +105,7 @@ export async function qualityReport(store: Store, namespaces?: string[]): Promis
         namespace: n.namespace,
         ids: [n.id, fresh.id],
         detail: `#${n.id} ${quote(n.title)} is stale and #${fresh.id} ${quote(fresh.title)} is a newer note on the same subject: check whether it replaces it`,
-        fix: `monomem supersede --old ${n.id} --new-id ${fresh.id}`,
+        fix: `monomem replace --old ${n.id} --new-id ${fresh.id}`,
       });
       break;
     }
@@ -118,8 +118,8 @@ export async function qualityReport(store: Store, namespaces?: string[]): Promis
       ids: [],
       quarantine_id: q.id,
       detail: `${q.op === "update" ? `update of #${q.target_id}` : "new note"} ${quote(q.title ?? "(title unchanged)")} held: ${describeFindings(q.reasons)}`,
-      fix: `monomem quarantine approve ${q.id}`,
-      alt: `monomem quarantine reject ${q.id}`,
+      fix: `monomem review held approve ${q.id}`,
+      alt: `monomem review held reject ${q.id}`,
     });
   }
 
@@ -168,7 +168,7 @@ export async function qualityReport(store: Store, namespaces?: string[]): Promis
       namespace: c.namespace,
       ids: c.ids,
       detail: `#${c.ids[0]} and #${c.ids[1]} may contradict each other: ${c.why}`,
-      fix: `monomem supersede --old ${c.ids[0]} --new-id ${c.ids[1]}`,
+      fix: `monomem replace --old ${c.ids[0]} --new-id ${c.ids[1]}`,
       alt: byIdAll.has(c.ids[0]) ? "this only previews and asks first; if both are right, ignore it" : undefined,
     });
   }
@@ -199,7 +199,7 @@ export async function qualityReport(store: Store, namespaces?: string[]): Promis
       namespace: o.namespace,
       ids: [o.id, n.id],
       detail: `#${o.id} ${quote(o.title)} was restated by its own writer in #${n.id} ${quote(n.title)} but never retired, so both stay in search`,
-      fix: `monomem supersede --old ${o.id} --new-id ${n.id}`,
+      fix: `monomem replace --old ${o.id} --new-id ${n.id}`,
       alt: "if both are still true, ignore this (search already shows the newer one first)",
     });
   }

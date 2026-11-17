@@ -146,7 +146,7 @@ export function sendError(res: ServerResponse, e: unknown, receipt?: WriteReceip
       quarantined: {
         id: e.quarantineId,
         reasons: e.findings,
-        next: "The write was held, not lost. An administrator can approve or reject it in the dashboard, or with: monomem quarantine list",
+        next: "The write was held, not lost. An administrator can approve or reject it in the dashboard, or with: monomem review held list",
       },
       ...r,
     });

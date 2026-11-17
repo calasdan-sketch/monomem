@@ -37,7 +37,7 @@ export async function captureCheck(dr: Doctor): Promise<void> {
     if (spool >= SPOOL_MAX_BYTES) warn(`the capture spool is full (${spool} bytes): new events are dropped until a hook can open the database`);
     else if (spool > 0) warn(`${spool} bytes of captured events are waiting in the spool; the next hook that can open the database stores them`);
     for (const f of edgeFails) {
-      warn(`the background similarity-link build for namespace "${printable(f.namespace, 80)}" failed at ${f.at}: ${printable(f.error, 200)}; new notes there get no related-note links until it succeeds`, "monomem rebuild-edges");
+      warn(`the background similarity-link build for namespace "${printable(f.namespace, 80)}" failed at ${f.at}: ${printable(f.error, 200)}; new notes there get no related-note links until it succeeds`, "monomem tidy edges");
     }
     if (backlog > DOCTOR_MAX_BACKLOG) {
       warn(`${backlog} captured events are waiting to be distilled (over ${DOCTOR_MAX_BACKLOG}); that happens when a session starts or ends, so a failing session hook is the likely cause`);

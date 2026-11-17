@@ -52,7 +52,7 @@ export async function databaseCheck(dr: Doctor): Promise<void> {
     ok(footprint);
     // 1.4.0: one line per confirm rule, so "why isn't my note in session start?" has an answer here.
     for (const l of ruleLines) console.log("  [info] " + l);
-    if (heldCount) console.log(`  [info] ${heldCount >= 500 ? "500 or more writes are" : heldCount === 1 ? "1 write is" : `${heldCount} writes are`} held and waiting for your decision (not saved yet): monomem quarantine`);
+    if (heldCount) console.log(`  [info] ${heldCount >= 500 ? "500 or more writes are" : heldCount === 1 ? "1 write is" : `${heldCount} writes are`} held and waiting for your decision (not saved yet): monomem review held`);
     // Migration v4 adds the similarity-edge table but does not score
     // existing notes: a store upgraded from 1.0.0 has notes and no edges
     // until a one-time rebuild.
@@ -66,7 +66,7 @@ export async function databaseCheck(dr: Doctor): Promise<void> {
     if (similarPair) {
       warn(
         "notes but no similarity edges (a store created before 1.1, or notes brought in with import or restore, which skip linking to stay fast)",
-        "run `monomem rebuild-edges` once to link existing notes"
+        "run `monomem tidy edges` once to link existing notes"
       );
     }
   } catch (e) {

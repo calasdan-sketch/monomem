@@ -430,7 +430,7 @@ export async function runForeignImport(e: Pick<SetupEnv, "home" | "env" | "cwd">
     io.out(`\n${t.n} item(s): ${t.c} new, ${t.s} already imported, ${t.x} skipped because they look like a secret.`);
     if (t.x && from === "claude-code-chats") io.out("  These messages contain a secret and were left out (not stored, not shown). The messages around them are kept.");
     else if (t.x) io.out("  Skipped items are not stored and not shown. Take the secret out at the source (or keep it in a password manager) and run again.");
-    if (heldSkipped) io.out(`  ${heldSkipped} item(s) were held by the memory linter on an earlier run and are not queued again (see \`monomem quarantine\`).`);
+    if (heldSkipped) io.out(`  ${heldSkipped} item(s) were held by the memory linter on an earlier run and are not queued again (see \`monomem review held\`).`);
     if (opts.dryRun && from === "mcp-memory") previewMcp(io, todo, mcpStats);
     if (from === "claude-code-chats") {
       io.out(`  Read ${chatStats.sessions} conversation file(s).${chatStats.tooBig ? ` ${chatStats.tooBig} skipped: larger than 256 MB.` : ""}${chatStats.badLines ? ` ${chatStats.badLines} damaged line(s) skipped.` : ""}`);
@@ -480,7 +480,7 @@ export async function runForeignImport(e: Pick<SetupEnv, "home" | "env" | "cwd">
     }
     if (held) writeHeld(opts.dbPath, heldBefore);
     io.out(`\nImported ${created} new note(s). They are tagged "${tagFor(from)}" and written by "${writerFor(from)}".`);
-    if (held) io.out(`${held} item(s) were held by the memory linter (it saw something that reads like an instruction to an AI): see \`monomem quarantine\`.`);
+    if (held) io.out(`${held} item(s) were held by the memory linter (it saw something that reads like an instruction to an AI): see \`monomem review held\`.`);
     if (failed) {
       io.err(`${failed} item(s) could not be stored.`);
       return 1;

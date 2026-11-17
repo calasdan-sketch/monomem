@@ -160,7 +160,7 @@ export async function backupRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
         ...(deferEdges
           ? {
               similarityGraph: "deferred",
-              note: `similarity graph not rebuilt for ${created.length} notes; run \`monomem rebuild-edges\` to restore neighbor ranking (search is unaffected)`,
+              note: `similarity graph not rebuilt for ${created.length} notes; run \`monomem tidy edges\` to restore neighbor ranking (search is unaffected)`,
             }
           : {}),
         ...(report.skipped ? { skipped: report.skipped } : {}),

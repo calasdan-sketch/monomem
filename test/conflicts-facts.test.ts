@@ -185,8 +185,8 @@ describe("CLI lines", () => {
     const text = conflictLines(groupConflicts(findConflicts(s))).join("\n");
     assert.match(text, /deploy target\n {2}Fly\.io\n/);
     assert.match(text, /\n {2}Render\n/);
-    assert.ok(text.includes(`monomem supersede --old ${a} --new-id ${b}`));
-    assert.ok(text.includes(`monomem supersede --old ${b} --new-id ${a}`));
+    assert.ok(text.includes(`monomem replace --old ${a} --new-id ${b}`));
+    assert.ok(text.includes(`monomem replace --old ${b} --new-id ${a}`));
     assert.ok(text.includes(`monomem pin ${a}`) && text.includes(`monomem pin ${b}`));
     assert.ok(text.includes('monomem trust distrust "alice" --namespace "default"'));
     assert.ok(!/or the reverse/.test(text));
@@ -470,7 +470,7 @@ describe("adoption wording, key drift, session start", () => {
     for (const [k, v1, v2] of [["database", "pg", "mysql"], ["test_runner", "jest", "vitest"]] as const) { mk(s, "alice", `x${k}`, "y", { [k]: v1 }); mk(s, "bob", `y${k}`, "y", { [k]: v2 }); }
     const out = disputedLines(s, "default");
     assert.equal(out.split("\n").length, 2);
-    assert.match(out, /\(\+1 more: monomem conflicts\)$/);
+    assert.match(out, /\(\+1 more: monomem review conflicts\)$/);
     assert.equal(disputedLines(s, { namespace: "elsewhere" }), "");
     // honest size: the worst case (2 lines, "+N more") in the 4-chars-a-token estimate the rest of the context uses
     assert.ok(Math.ceil(out.length / 4) <= 90, `${Math.ceil(out.length / 4)} tokens`);

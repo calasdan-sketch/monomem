@@ -916,7 +916,7 @@ export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, 
         continue;
       }
       if ((entry as { url?: unknown }).url !== undefined || (entry as { headers?: unknown }).headers !== undefined) {
-        conflicts.push(`${target.label}: "${s.name}"${where} already connects this app with its own key. To change its limit, take that connection out first: monomem token list  (then monomem token remove <name> and monomem setup --undo), and run connect again`);
+        conflicts.push(`${target.label}: "${s.name}"${where} already connects this app with its own key. To change its limit, take that connection out first: monomem keys list  (then monomem keys remove <name> and monomem setup --undo), and run connect again`);
         continue;
       }
       const limited = { ...(withType ? { type: "http" } : {}), url: opts.httpEntry.url, headers: opts.httpEntry.headers } as unknown as ServerEntry;
@@ -1848,8 +1848,8 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
     if (plan.already.length === 0) {
         io.out("I found no app to connect on this computer (none of the supported apps is installed), so nothing was changed. That is fine. What to do next:");
         io.out("  1. If you use one of these, name it and I will create its settings file:  monomem connect claude-code   (also: claude-desktop, cursor, codex, gemini, muse, vscode, zed)");
-        io.out("  2. Or connect an app by hand: it needs the command  monomem mcp  (see INSTALL.md), or for a web connection run  monomem token add <app-name>  and paste what it prints.");
-        io.out("  3. Not sure? Run  monomem doctor  to see what Monomem can find.");
+        io.out("  2. Or connect an app by hand: it needs the command  monomem mcp  (see INSTALL.md), or for a web connection run  monomem keys add <app-name>  and paste what it prints.");
+        io.out("  3. Not sure? Run  monomem check --setup  to see what Monomem can find.");
       }
   }
   if (plan.conflicts.length) {
@@ -1914,7 +1914,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   if (plan.changes.length === 0 && !anyHook && !anyCapture && !extra) {
     for (const a of plan.already) io.out(`  (already fine) ${a}`);
     for (const w of plan.warnings) io.out(`  (careful) ${w}`);
-    io.out(plan.already.length ? "\nNothing to change: Monomem is already connected. To check it, run:  monomem doctor" : "\nNothing was changed.");
+    io.out(plan.already.length ? "\nNothing to change: Monomem is already connected. To check it, run:  monomem check --setup" : "\nNothing was changed.");
     hookLines();
     return 0;
   }
@@ -1931,7 +1931,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   if (capture === "ask") for (const h of upgradeHosts) io.out(`  ${n++}. ${h.label.replace(/ hook$/, "")}: upgrade your existing automatic memory hooks from the old onememory-mcp package (or another npx version) to this Monomem, same place and settings. They are already installed; this is not a new hook`);
   for (const d of dbs) io.out(`  ${n++}. Database ${d}: ${describeSchema(Store.peekSchemaVersion(d), SCHEMA_VERSION)}`);
   if (!opts.noTestNote) io.out(`  ${n++}. Write a test note, read it back and delete it, so you know writing, reading and deleting all work (only that one note is deleted; no other note is touched)`);
-  io.out(`  ${n++}. Run \`monomem doctor\` and tell you how to check the connection in your assistant`);
+  io.out(`  ${n++}. Run \`monomem check --setup\` and tell you how to check the connection in your assistant`);
   for (const a of plan.already) io.out(`  (already fine) ${a}`);
   for (const w of plan.warnings) io.out(`  (careful) ${w}`);
   io.out("");
@@ -2159,7 +2159,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
 
   // 3. Doctor.
   if (!opts.noDoctor) {
-    io.out("\nmonomem doctor:");
+    io.out("\nmonomem check --setup:");
     const env = { ...e.env };
     if (primaryDb !== DB_PATH) env.MONOMEM_DB_PATH = primaryDb;
     const self = selfCommand(["doctor"], selfOf(e));

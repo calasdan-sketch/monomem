@@ -37,7 +37,7 @@ export async function readRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
     const includeArchived = url.searchParams.get("includeArchived") === "1";
     const archivedOnly = url.searchParams.get("archived") === "1";
     if ((includeArchived || archivedOnly) && !isAdmin) {
-      sendJson(res, 403, { error: "listing archived (forgotten) notes needs an admin token" });
+      sendJson(res, 403, { error: "listing archived (forgotten) notes needs an admin key" });
       return true;
     }
     const wf = { ...writerFilter(url), ...supersededFilter(url) };

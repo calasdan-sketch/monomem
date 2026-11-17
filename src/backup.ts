@@ -154,7 +154,7 @@ function finishBackup(b: { dir: string; db: string; dropPart: () => void }, dbPa
     { mode: 0o600 }
   );
   try {
-    writeFileSync(join(dirname(dbPath), ".last-backup"), new Date().toISOString() + "\n", { mode: 0o600 }); // lets `monomem health` know how old the last backup is
+    writeFileSync(join(dirname(dbPath), ".last-backup"), new Date().toISOString() + "\n", { mode: 0o600 }); // lets `monomem check` know how old the last backup is
   } catch {
     /* best effort */
   }

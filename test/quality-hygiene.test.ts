@@ -24,7 +24,7 @@ describe("quality: memory hygiene", () => {
     assert.equal(dups.length, 1, JSON.stringify(dups));
     assert.equal(r.counts.duplicate, 1);
     assert.deepEqual(dups[0].ids.slice().sort((a, b) => a - b), ids);
-    assert.equal(dups[0].fix, `monomem supersede --old ${ids.slice(0, 3).join(",")} --new-id ${ids[3]}`);
+    assert.equal(dups[0].fix, `monomem replace --old ${ids.slice(0, 3).join(",")} --new-id ${ids[3]}`);
     assert.equal(dups[0].ids[1], ids[3], "ids[0]/ids[1] stay an old copy and the one to keep (the dashboard's Replace button)");
     assert.match(dups[0].detail, /4 notes say the same thing/);
     s.close();
@@ -51,7 +51,7 @@ describe("quality: memory hygiene", () => {
     const r = await qualityReport(s);
     const rs = r.issues.filter((i) => i.type === "restated");
     assert.deepEqual(rs.map((i) => i.ids), [[old, neu]], JSON.stringify(r.issues));
-    assert.equal(rs[0].fix, `monomem supersede --old ${old} --new-id ${neu}`);
+    assert.equal(rs[0].fix, `monomem replace --old ${old} --new-id ${neu}`);
     assert.equal(r.counts.restated, 1);
     s.close();
   });
@@ -71,7 +71,7 @@ describe("quality: memory hygiene", () => {
       assert.equal(line.status, "info");
       assert.match(line.text, /1 empty note/);
       assert.match(line.text, /1 group of duplicates/);
-      assert.match(line.text, /monomem quality/);
+      assert.match(line.text, /monomem review duplicates/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

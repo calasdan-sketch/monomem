@@ -69,8 +69,8 @@ export const PAGE_HTML = `<!doctype html>
     <div class="gbody">
       <p>Open Monomem from its Start menu entry, or run <code>monomem open</code> on this computer. It signs you in here.</p>
       <details>
-        <summary class="muted">Use an access key instead</summary>
-        <label class="field" style="margin-top:12px"><span>Access key</span><input id="tok" type="password" autocomplete="off" placeholder="Paste the key" onkeydown="if(event.key==='Enter')saveTok()"></label>
+        <summary class="muted">Use an app key instead</summary>
+        <label class="field" style="margin-top:12px"><span>App key</span><input id="tok" type="password" autocomplete="off" placeholder="Paste the key" onkeydown="if(event.key==='Enter')saveTok()"></label>
         <p class="help">Your main key is in the file named .token in your Monomem data folder; <code>monomem doctor</code> shows where that is.</p>
         <button class="primary" onclick="saveTok()">Open</button>
       </details>

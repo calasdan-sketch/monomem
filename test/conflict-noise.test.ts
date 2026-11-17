@@ -26,6 +26,6 @@ test("a clean two-note disagreement is still high and still offers the replace c
   as("b", () => s.create({ title: "Package manager: pnpm", body: "x" }));
   const rep = conflictReport(findConflicts(s));
   assert.equal(rep.groups[0].confidence, "high");
-  assert.match(conflictLines(rep.groups).join("\n"), /supersede --old \d+ --new-id/);
+  assert.match(conflictLines(rep.groups).join("\n"), /replace --old \d+ --new-id/);
   s.close();
 });

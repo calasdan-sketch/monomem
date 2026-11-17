@@ -40,7 +40,7 @@ export async function notSetUp(): Promise<boolean> {
   const { existsSync } = await import("node:fs");
   const { join } = await import("node:path");
   if (existsSync(DATA_DIR) || existsSync(DB_PATH) || existsSync(join(LEGACY_DATA_DIR, "state.db"))) return false;
-  console.log("monomem doctor\n");
+  console.log("monomem check --setup\n");
   console.log(`Monomem is not set up here: there is no data folder at ${DATA_DIR}. Set it up with: monomem setup`);
   console.log("(doctor created nothing.)");
   process.exitCode = 1;
@@ -61,7 +61,7 @@ export async function doctor(cliPath: string): Promise<void> {
     /* reported below */
   }
   d.keyJustCreated = takeNewKeyNotice();
-  console.log("monomem doctor\n");
+  console.log("monomem check --setup\n");
 
   // Quiet for a person at a terminal: only the [warn] and [FAIL] lines (with their Fix lines). --verbose, or output that
   // goes to a file, a pipe or a script, prints every check as before.

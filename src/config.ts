@@ -320,7 +320,7 @@ export function resolveToken(): string {
     if (t.length < MIN_TOKEN_LENGTH) {
       throw new Error(
         `monomem: MONOMEM_TOKEN is too short (${t.length} chars); use at least ${MIN_TOKEN_LENGTH}. ` +
-          `Make one with: monomem token new (it only prints a fresh value; nothing is saved)`
+          `Make one with: monomem keys new (it only prints a fresh value; nothing is saved)`
       );
     }
     return t;
@@ -517,7 +517,7 @@ export function resolveTokens(): TokenEntry[] {
       console.error(
         `[monomem] ignoring token ${typeof label === "string" && label ? `"${label}"` : "(unnamed)"}: ` +
           `it is ${plain.length} characters; user-supplied tokens must be at least ${MIN_TOKEN_LENGTH}. ` +
-          `To add an app, let Monomem make the token for you: monomem token add <name>`
+          `To add an app, let Monomem make the token for you: monomem keys add <name>`
       );
       return;
     }
@@ -657,7 +657,7 @@ export function resolveTokens(): TokenEntry[] {
       }
       // "primary" is the main key's name: another key carrying it would be treated as the unrestricted main key.
       if (typeof o?.label === "string" && o.label.trim().toLowerCase() === "primary" && typeof o.token === "string" && !locked.has(sha256Hex(o.token.trim()))) {
-        console.error(`[monomem] ignoring a token in ${where}: the name "primary" is reserved for the main key. Rename it (monomem token add <name> makes a new one).`);
+        console.error(`[monomem] ignoring a token in ${where}: the name "primary" is reserved for the main key. Rename it (monomem keys add <name> makes a new one).`);
         refused.add(sha256Hex(o.token.trim()));
         continue;
       }
@@ -683,7 +683,7 @@ export function resolveTokens(): TokenEntry[] {
   }
   for (const [k, ts] of byLabel) {
     if (ts.length < 2) continue;
-    console.error(`[monomem] ignoring ${ts.length} tokens that share the name ${k ? `"${k}"` : "(unnamed)"}: their writes would carry the same writer. Give each its own name in MONOMEM_TOKENS / tokens.json (or remove one: monomem token list); they will not work until then.`);
+    console.error(`[monomem] ignoring ${ts.length} tokens that share the name ${k ? `"${k}"` : "(unnamed)"}: their writes would carry the same writer. Give each its own name in MONOMEM_TOKENS / tokens.json (or remove one: monomem keys list); they will not work until then.`);
     for (const t of ts) if (!locked.has(t)) refused.add(t);
   }
   for (const t of refused) if (!locked.has(t)) byToken.delete(t);

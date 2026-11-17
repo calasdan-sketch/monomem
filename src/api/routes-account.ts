@@ -59,7 +59,7 @@ export async function accountRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
         }
         // An admin key or a key with no sensitivity limit is as strong as the main key: only the main key may make one here.
         if ((b.admin === true || b.no_limit === true) && principal.label !== "primary") {
-          sendJson(res, 403, { error: "only the main (primary) token can make an administrator app or an app with no sensitivity limit over REST; use: monomem token add <name> --admin / --no-limit" });
+          sendJson(res, 403, { error: "only the main (primary) token can make an administrator app or an app with no sensitivity limit over REST; use: monomem keys add <name> --admin / --no-limit" });
           return true;
         }
         const made = addApp({

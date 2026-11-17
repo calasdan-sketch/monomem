@@ -957,7 +957,7 @@ export function verifyAuditChain(
 
 /** The refusal for a call that needs the admin scope (state_delete, a forget date on someone else's note). */
 export const ADMIN_SCOPE_NEEDED =
-  "this token lacks the required 'admin' scope. Deleting and managing need an administrator key (the person can make one with: monomem token add <name> --admin).";
+  "this token lacks the required 'admin' scope. Deleting and managing need an administrator key (the person can make one with: monomem keys add <name> --admin).";
 
 const ROTATING_MARKER = ".audit-rotating";
 const ROTATING_STALE_MS = 5000;

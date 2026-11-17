@@ -231,7 +231,7 @@ export function conflictLines(groups: ConflictGroup[]): string[] {
     else for (const v of g.values) {
       const others = g.values.filter((o) => o !== v).flatMap((o) => o.notes.map((n) => n.id));
       if (others.length > 2) continue;
-      out.push(`    keep ${printable(v.value)}: monomem supersede --old ${others.join(",")} --new-id ${v.notes[0].id}   (replaces ${others.length === 1 ? "note" : "notes"} ${others.join(", ")} whole)`);
+      out.push(`    keep ${printable(v.value)}: monomem replace --old ${others.join(",")} --new-id ${v.notes[0].id}   (replaces ${others.length === 1 ? "note" : "notes"} ${others.join(", ")} whole)`);
     }
     if (g.tier === "fact") for (const v of g.values) out.push(`    or drop just the fact ${printable(v.value)}: ${v.notes.map((n) => `monomem fact remove ${n.id} ${printable(n.factKey ?? g.key)}`).join(" | ")}`);
     const all = g.values.flatMap((v) => v.notes);
@@ -248,7 +248,7 @@ export async function conflictsCmd(args: string[]): Promise<void> {
   const i = args.findIndex((a) => a === "--namespace" || a.startsWith("--namespace="));
   const ns = i < 0 ? undefined : args[i].includes("=") ? args[i].split("=")[1] : args[i + 1];
   if (i >= 0 && !ns) {
-    console.error("Usage: monomem conflicts [--json] [--namespace ns]");
+    console.error("Usage: monomem review conflicts [--json] [--namespace ns]");
     process.exit(1);
   }
   const { DB_PATH } = await import("./config.js");

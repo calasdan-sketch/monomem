@@ -223,7 +223,7 @@ const backupNow = (): void => {
   void maybeDailyBackupAsync(DB_PATH, { dataDir: DATA_DIR })
     .then((r) => {
       if (!r) return;
-      if (r.error) console.error(`[monomem] automatic backup failed: ${r.error} (monomem health shows it; monomem backup makes one by hand)`);
+      if (r.error) console.error(`[monomem] automatic backup failed: ${r.error} (monomem check shows it; monomem backup makes one by hand)`);
       else if (r.made) console.error(`[monomem] automatic backup made in ${r.dir}${r.removed.length ? ` (${r.removed.length} older removed)` : ""}`);
       if (r.keyWarning) console.error(`[monomem] ${r.keyWarning}`);
     })

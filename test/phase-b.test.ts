@@ -334,7 +334,7 @@ describe("B8: contradictions", () => {
     s.create({ title: "Staging again", body: "staging port is 9000" });
     const q = await qualityReport(s);
     const c = q.issues.find((i) => i.type === "contradiction")!;
-    assert.match(c.fix, /^monomem supersede --old \d+ --new-id \d+$/);
+    assert.match(c.fix, /^monomem replace --old \d+ --new-id \d+$/);
     s.close();
   });
 });

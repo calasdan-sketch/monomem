@@ -82,7 +82,7 @@ export async function securityFindings(dataDir: string, bindHost: string): Promi
     out.push({ id: "lint", label: "linter weakened", status: "warn", short: `MONOMEM_LINT weakens the memory linter (${policy})`, detail: lintDetail });
   }
   if (process.env.MONOMEM_STDIO_ADMIN_TOOLS === "1") {
-    out.push({ id: "admin", label: "stdio admin tools", status: "fail", short: "MONOMEM_STDIO_ADMIN_TOOLS=1 lets an agent approve its own held writes", detail: "MONOMEM_STDIO_ADMIN_TOOLS=1 lets an agent on the stdio server use the admin tools (approve its own quarantined writes, unpin, delete). Unset it unless you want that." });
+    out.push({ id: "admin", label: "stdio admin tools", status: "fail", short: "MONOMEM_STDIO_ADMIN_TOOLS=1 lets an agent approve its own held writes", detail: "MONOMEM_STDIO_ADMIN_TOOLS=1 lets an agent on the stdio server use the admin tools (approve its own held writes, unpin, delete). Unset it unless you want that." });
   }
   if (!LOOPBACK.includes(bindHost)) {
     out.push({ id: "bind", label: "non-loopback bind", status: "warn", short: `MONOMEM_BIND=${bindHost} is not loopback`, detail: `MONOMEM_BIND=${bindHost} is not a loopback address: anything that can reach this machine on the network can reach the API, so it must be behind your own authenticated tunnel (INFRA.md).` });
@@ -270,7 +270,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
               approve_first: "every namespace is approve-first until you set it again: monomem approve-first <namespace> on|off",
               flood_paused: "every agent writer is paused until you resume one: monomem resume <writer>",
               revoked_attester_keys: "no attester key is believed until the list is rewritten: monomem trust attester-revoke <key>",
-              confirm_mode: "expiry runs in enforce mode until you set it: monomem config set confirm-mode label",
+              confirm_mode: "expiry runs in enforce mode until you set it: monomem settings set confirm-mode label",
             };
             add("trust-settings", "Trust settings", "warn", `damaged stored setting${bad.length === 1 ? "" : "s"}, read in the strictest form: ${bad.map((k) => `${k} (${how[k]})`).join("; ")}`);
           }
@@ -306,7 +306,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
           try {
             const c = (await qualityReport(s)).counts;
             hygiene = c.empty + c.restated + c.duplicate
-              ? `${plural(c.empty, "empty note")}, ${plural(c.restated, "note")} restated but never retired, ${c.duplicate} ${c.duplicate === 1 ? "group" : "groups"} of duplicates: monomem quality lists each with its fix`
+              ? `${plural(c.empty, "empty note")}, ${plural(c.restated, "note")} restated but never retired, ${c.duplicate} ${c.duplicate === 1 ? "group" : "groups"} of duplicates: monomem review duplicates lists each with its fix`
               : "no empty notes, no notes restated but never retired, no duplicates";
           } catch (e) {
             hygiene = `could not be checked: ${(e as Error).message}`;
@@ -351,7 +351,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
   }
 
   const sec = await securityFindings(o.dataDir ?? DATA_DIR, o.bindHost ?? BIND_HOST);
-  if (sec.length) for (const f of sec) add(`security:${f.id}`, f.label, f.status, `${f.short} (monomem doctor has the detail)`);
+  if (sec.length) for (const f of sec) add(`security:${f.id}`, f.label, f.status, `${f.short} (monomem check --setup has the detail)`);
   else add("security", "Security settings", "ok", "no weakening settings found (lint, stdio admin tools, bind address, cloud-sync folder, remote embeddings, browser origins, file permissions, proxy trust, legacy runners)");
 
   if (dbOk) {
@@ -369,7 +369,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
     try {
       const { resolveTokens } = await import("./config.js");
       const open = resolveTokens().filter((t) => t.label !== "primary" && t.max_sensitivity === undefined && t.scope !== "admin");
-      if (open.length && labelledNotes > 0) reasons.push(`${plural(open.length, "app key")} with no limit can read your private notes (${open.map((t) => `"${t.label || "unnamed"}"`).slice(0, 3).join(", ")}; monomem token add <name> --max internal)`);
+      if (open.length && labelledNotes > 0) reasons.push(`${plural(open.length, "app key")} with no limit can read your private notes (${open.map((t) => `"${t.label || "unnamed"}"`).slice(0, 3).join(", ")}; monomem keys add <name> --max internal)`);
     } catch {
       /* tokens unreadable: the other checks say so */
     }
@@ -418,7 +418,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
   }
 
   if (dbOk) {
-    add("held", "Held writes", "info", held ? `${held >= 500 ? "500 or more writes" : plural(held, "write")} held for review: the defence working, nothing was stored without you (monomem quarantine list)` : "no writes waiting for review");
+    add("held", "Held writes", "info", held ? `${held >= 500 ? "500 or more writes" : plural(held, "write")} held for review: the defence working, nothing was stored without you (monomem review held list)` : "no writes waiting for review");
     add("distrust", "Distrusted writers", "info", `${plural(distrust, "distrust rule")}${distrust ? " (their notes are hidden from agents)" : ""}`);
     if (confirmLines.length) add("confirm", "Confirm rules", "info", confirmLines.join("; "));
     if (backlog) add("confirm-backlog", "Unconfirmed backlog", "warn", `${backlog}: review them with monomem review (the grade is capped at B until they are dealt with)`);

@@ -38,7 +38,7 @@ export function flaggedFactValue(v: string): string | null {
       : null)
   );
 }
-export const WITHHELD = "[value withheld: flagged, see monomem conflicts]";
+export const WITHHELD = "[value withheld: flagged, see monomem review conflicts]";
 
 /** The keys agents are told to reuse, so two writers state one decision under one key. One list: the tool text, SKILL.md and the docs repeat it. */
 export const COMMON_FACT_KEYS = ["deploy_target", "package_manager", "test_runner", "database", "node_version", "base_url", "ci_provider", "formatter"] as const;
@@ -302,7 +302,7 @@ export function disputedLines(store: Store, opts: DisputeOpts | string = {}): st
     }).join(" vs ");
     return `Monomem: writers disagree on ${o.namespace === undefined ? `[${printable(namespace, 40)}] ` : ""}${printable(key, 40)}: ${text}. Check with the user.`;
   });
-  if (found.length > MAX_DISPUTE_LINES) lines[lines.length - 1] += ` (+${found.length - MAX_DISPUTE_LINES} more: monomem conflicts)`;
+  if (found.length > MAX_DISPUTE_LINES) lines[lines.length - 1] += ` (+${found.length - MAX_DISPUTE_LINES} more: monomem review conflicts)`;
   return lines.join("\n");
 }
 
@@ -402,7 +402,7 @@ export async function factsCmd(args: string[]): Promise<void> {
       const groups = groupConflicts(findConflicts(store, { namespaces: ns ? [ns] : undefined }).filter((c) => c.tier === "fact"));
       if (!groups.length) console.log("facts check: no disputed facts.");
       else {
-        console.log(`facts check: ${groups.length} disputed fact${groups.length === 1 ? "" : "s"}: ${groups.slice(0, 5).map((g) => `${printable(g.namespace, 40)}/${printable(g.key, 40)}`).join(", ")}${groups.length > 5 ? ", ..." : ""}. Run: monomem conflicts`);
+        console.log(`facts check: ${groups.length} disputed fact${groups.length === 1 ? "" : "s"}: ${groups.slice(0, 5).map((g) => `${printable(g.namespace, 40)}/${printable(g.key, 40)}`).join(", ")}${groups.length > 5 ? ", ..." : ""}. Run: monomem review conflicts`);
         process.exitCode = 1;
       }
       return;

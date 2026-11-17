@@ -208,7 +208,7 @@ export function createApiServer(
         // Escalating delay on repeated failures (valid tokens never reach here).
         const proceed = await tarpit.failed(ip);
         if (!proceed || !authFailures.check(ip)) sendJson(res, 429, { error: "rate limit exceeded" });
-        else sendJson(res, 401, { error: "unauthorized", hint: "Send your key as the header  Authorization: Bearer <key>.  Your keys: monomem token list.  To open the dashboard already signed in: monomem open" });
+        else sendJson(res, 401, { error: "unauthorized", hint: "Send your key as the header  Authorization: Bearer <key>.  Your keys: monomem keys list.  To open the dashboard already signed in: monomem open" });
         return;
       }
       if (!perToken.check(tokenKey(tokenId(principal)))) {
@@ -245,8 +245,8 @@ export function createApiServer(
           error: `this token lacks the required '${need}' scope`,
           hint:
             need === "admin"
-              ? "This needs an administrator key. Make one with: monomem token add <name> --admin"
-              : "This app's key can only read. Make a key that can also write with: monomem token add <name> --scope write",
+              ? "This needs an administrator key. Make one with: monomem keys add <name> --admin"
+              : "This app's key can only read. Make a key that can also write with: monomem keys add <name> --scope write",
         });
         return;
       }
@@ -287,7 +287,7 @@ export function createApiServer(
             why === "other-namespace"
               ? `include_distrusted is honoured only for this token's own namespace ("${nsCtx.ownNamespace}"): pass namespace=${nsCtx.ownNamespace}. ` +
                 "The namespaces this token can only read are governed by their own admins."
-              : "include_distrusted needs an admin token: it shows notes from writers the admin put on the distrust list",
+              : "include_distrusted needs an admin key: it shows notes from writers the admin put on the distrust list",
         });
         return true;
       };

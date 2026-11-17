@@ -725,7 +725,7 @@ export async function importMarkdown(
       const held = store.pendingQuarantineId(namespace, title, body, content.tags);
       if (held !== null) {
         if (foreign) foreignHeld++;
-        push("quarantined", { detail: `already held in quarantine #${held}` });
+        push("quarantined", { detail: `already held (held write #${held})` });
         return;
       }
       // An older held create of this same origin note (the file was edited again before anyone approved it) is
@@ -749,7 +749,7 @@ export async function importMarkdown(
       } catch (e) {
         if (e instanceof QuarantinedError) {
           if (foreign) foreignHeld++;
-          push("quarantined", { detail: `quarantine #${e.quarantineId}: ${e.message}${dropStale()}` });
+          push("quarantined", { detail: `held write #${e.quarantineId}: ${e.message}${dropStale()}` });
         } else if (e instanceof ValidationError) {
           push("rejected", { detail: e.message });
         } else {

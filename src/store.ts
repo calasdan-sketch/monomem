@@ -3303,7 +3303,7 @@ export class Store {
     if (existing.status === "superseded") {
       throw new ValidationError(
         `note ${id} was replaced by ${existing.superseded_by !== undefined ? `note ${existing.superseded_by}` : "another note"} and is only kept as a record, so it cannot be edited. ` +
-          `To bring it back first, undo the replacement (supersede undo).`
+          `To bring it back first, undo the replacement (replace undo).`
       );
     }
 
@@ -4345,7 +4345,7 @@ export class Store {
     if (this.idHidden(id)) return null;
     const cur = this.db.prepare("SELECT superseded_by FROM notes WHERE id = ?").get(id) as { superseded_by: number | null } | undefined;
     if (cur && cur.superseded_by !== null) {
-      throw new ValidationError(`note ${id} was replaced by ${this.idHidden(cur.superseded_by) ? "another note" : `note ${cur.superseded_by}`}; use "supersede undo" to bring it back (a plain restore would hide that it was replaced)`);
+      throw new ValidationError(`note ${id} was replaced by ${this.idHidden(cur.superseded_by) ? "another note" : `note ${cur.superseded_by}`}; use "replace undo" to bring it back (a plain restore would hide that it was replaced)`);
     }
     // A restored captured row counts as just read, or the next decay sweep would archive it again at once.
     this.writeTx(() =>

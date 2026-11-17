@@ -71,7 +71,7 @@ export async function addCmd(args: string[]): Promise<void> {
     if (n.sensitivity === "private") console.log("Limited apps cannot see this; apps with no limit (including your main Claude connection) still can.\nNext step: monomem connect <app> --max internal   (for the session hook: set MONOMEM_RECALL_MAX_SENSITIVITY=internal)");
   } catch (e) {
     if (e instanceof QuarantinedError) {
-      console.log(`Held, not saved: ${e.message}. Review it with: monomem quarantine`);
+      console.log(`Held, not saved: ${e.message}. Review it with: monomem review held`);
       process.exit(3);
     }
     if (e instanceof ValidationError) fail(`Not saved: ${e.message}`);
@@ -144,7 +144,7 @@ export async function lsCmd(args: string[]): Promise<void> {
     if (archived) {
       if (!notes.length && !hidden) return void console.log(`No archived notes${ns ? ` in namespace "${printable(ns, 100)}"` : ""}.`);
       for (const n of notes) {
-        const back = n.superseded_by != null ? `replaced by #${n.superseded_by}; bring back: monomem supersede undo ${n.id}` : `bring back: monomem restore ${n.id}`;
+        const back = n.superseded_by != null ? `replaced by #${n.superseded_by}; bring back: monomem replace undo ${n.id}` : `bring back: monomem restore ${n.id}`;
         console.log(`#${n.id} [${printable(n.namespace, 100)}] ${printable(n.title, 70)}${noteFlags(n)}${distrustMark(n)}   (${back})`);
       }
       moreLine();
@@ -221,7 +221,7 @@ export async function editCmd(args: string[]): Promise<void> {
       console.log(`Saved #${id} (version ${next?.rev}).`);
     } catch (e) {
       if (e instanceof QuarantinedError) {
-        return stop(`Held, not saved: ${e.message}. Review it with: monomem quarantine`, 3);
+        return stop(`Held, not saved: ${e.message}. Review it with: monomem review held`, 3);
       }
       if (e instanceof ValidationError) return stop(`Not saved: ${e.message}`);
       throw e;

@@ -178,7 +178,7 @@ export function mcpContext(store: Store, scope: Scope, opts: ServerNamespaceOpts
       : `this token lacks the required '${need}' scope. ` +
         (need === "admin"
           ? ADMIN_SCOPE_NEEDED.slice(ADMIN_SCOPE_NEEDED.indexOf("Deleting"))
-          : "This app's key can only read; a key that can also write is made with: monomem token add <name> --scope write.");
+          : "This app's key can only read; a key that can also write is made with: monomem keys add <name> --scope write.");
 
   // Server-side namespace resolution, active only when the entry point
   // resolved a namespace at startup (see resolveStartupNamespace).

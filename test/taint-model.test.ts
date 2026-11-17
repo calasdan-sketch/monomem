@@ -187,7 +187,7 @@ describe("R1-04 visible, never silent", () => {
     const lines = s.openWindowLines("/p/c");
     assert.equal(lines.length, 1);
     assert.match(lines[0], /a session in this folder read outside content \(WebFetch\)/);
-    assert.match(lines[0], /monomem taint clear --here/);
+    assert.match(lines[0], /monomem settings outside-window clear --here/);
     assert.equal(s.openWindowLines("/p/a").length, 0, "idle session: no window");
     s.close();
     assert.ok(needsHumanConfirm);

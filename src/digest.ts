@@ -33,8 +33,8 @@ export interface Health {
 /** points per finding, cap per category */
 const RULES: Array<{ category: string; type?: QualityType; each: number; cap: number; what: string }> = [
   { category: "duplicates", type: "duplicate", each: 2, cap: 15, what: "groups of near-identical notes" },
-  { category: "stale twins", type: "stale_twin", each: 1, cap: 10, what: "old notes with a newer note on the same subject" },
-  { category: "quarantined", type: "quarantined", each: 3, cap: 15, what: "writes held for review" },
+  { category: "older duplicates", type: "stale_twin", each: 1, cap: 10, what: "old notes with a newer note on the same subject" },
+  { category: "held writes", type: "quarantined", each: 3, cap: 15, what: "writes held for review" },
   { category: "lint", type: "lint", each: 3, cap: 15, what: "notes the safety scan flags" },
   { category: "personal data suggestions", type: "pii", each: 1, cap: 15, what: "notes that look like personal data and are not private" },
   { category: "empty notes", type: "empty", each: 2, cap: 10, what: "notes with a title and no text" },
@@ -169,6 +169,6 @@ export function renderDigest(d: Digest): string {
   if (!writers.length) lines.push("  Nothing changed.");
   lines.push(d.topIssues.length ? "Worth a look:" : "Nothing needs your attention.");
   d.topIssues.forEach((t, i) => lines.push(`  ${i + 1}. ${t}`));
-  if (d.topIssues.length) lines.push("  Details and the command for each: monomem quality");
+  if (d.topIssues.length) lines.push("  Details and the command for each: monomem review duplicates");
   return lines.join("\n");
 }
