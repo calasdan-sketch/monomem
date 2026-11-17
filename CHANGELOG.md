@@ -224,7 +224,15 @@ schema v22), so going back to 1.5.0 needs no restore.
 - **`monomem update`** skips leftover folders it cannot remove, and `--check` keeps the rollback copy. The dashboard's
   Update button runs the update outside the server it restarts.
 - **The setup proof step** says "Save to Monomem: ..." (Claude Code's own memory caught the old "Remember: ..." wording).
-- **Session start** shows the restated label on an older note its writer restated.
+- **Session start** shows the restated label on an older note its writer restated. It names notes waiting for the user in
+  one "Needs you" line with one command (`monomem review` for held writes and unconfirmed notes), not twice.
+- **`monomem setup --undo --dry-run`** only shows what it would undo. Before, it undid the last setup (this dates back to
+  1.x). `monomem rollback --dry-run` is accepted too and only shows the plan.
+- **`memory_save` with `evidence`** no longer says the argument was ignored. `claims` and `derived_from` are now listed
+  in its schema, so agents can see them.
+- **`activity --writes`** names the local app that wrote (for example `claude-code`), not "you".
+- **When git does not answer** (a timeout, or git is missing), `why --commits`, `activity --commits` and session start's
+  branch scope say so instead of reporting no commits.
 - **Small fixes:** the Linux service file escapes `%`, the Windows task runs at normal priority, and a PATH undo on Windows
   puts the value back byte for byte.
 
