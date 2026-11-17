@@ -58,6 +58,19 @@ describe("prompt recall (step 4)", () => {
     s.close();
   });
 
+  test("Claude Code's own imported memory (CLAUDE.md, auto memory) is never pushed per prompt, even once confirmed", () => {
+    const s = new Store(":memory:");
+    const own = s.create({ title: "vexmoor build steps from CLAUDE.md", body: "x", tags: ["claude-md"] }).id;
+    const auto = s.create({ title: "vexmoor port from auto memory", body: "x", tags: ["claude-auto-memory"] }).id;
+    const plain = s.create({ title: "vexmoor release decision", body: "x" }).id;
+    for (let i = 0; i < 30; i++) s.create({ title: `filler ${i}`, body: "nothing" });
+    event(s, "session-start", {});
+    const r = step(s, "what about vexmoor?");
+    assert.ok(r.recalled.includes(plain), `${r.recalled}`);
+    for (const id of [own, auto]) assert.ok(!r.recalled.includes(id), `#${id} pushed`);
+    s.close();
+  });
+
   test("a busy writer gets at most 2 of the 3 when another writer matches too", () => {
     const s = new Store(":memory:");
     as("bot", () => {

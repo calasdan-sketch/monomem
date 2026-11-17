@@ -17,7 +17,7 @@ import { NEVER_SHOW_TAG } from "../reserved-tags.js";
 import { CHAT_TAG } from "../chat-import.js";
 import { TASK_TAG, HANDOFF_TAG } from "../tasks.js";
 import { heldFromSessionStart } from "../taint.js";
-import { titleText } from "../recall.js";
+import { titleText, CLAUDE_OWN_TAGS } from "../recall.js";
 import { eventInput } from "../capture.js";
 import { noticesMark, noticesSaid, receiptAppend, receiptShown } from "../receipts.js";
 import { accessLogDays } from "../store.js";
@@ -28,7 +28,8 @@ export const PROMPT_RECALL_LIMIT = 3;
 export const PROMPT_KEYWORDS = 6;
 const PER_WRITER = 2;
 const MAX_NOTICES = 3;
-const HIDDEN = [NEVER_SHOW_TAG, CHAT_TAG, TASK_TAG, HANDOFF_TAG];
+// Claude Code already has its own CLAUDE.md and auto memory in context: never repeat them per prompt (same as session start).
+const HIDDEN = [NEVER_SHOW_TAG, CHAT_TAG, TASK_TAG, HANDOFF_TAG, ...CLAUDE_OWN_TAGS];
 
 /** MONOMEM_PROMPT_RECALL, or the dashboard's Settings switch when that is unset: steps 2-4 on. Default off (see the header). */
 export { promptRecallOn } from "./switches.js";
