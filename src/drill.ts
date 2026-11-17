@@ -239,7 +239,7 @@ export function renderDrill(r: DrillReport): string {
   const known = r.reached.filter((x) => x.known_miss);
   if (known.length) parts.push(`known misses: ${known.map((x) => (x.id === "SELF" ? DESIGNED_MISSES.SELF : `${x.id} ${DESIGNED_MISSES[x.id]}`)).join(", ")}`);
   if (r.unexpected.length) parts.push(`unexpected: ${r.unexpected.map((x) => x.id).join(", ")}`);
-  lines.push("", `Held (quarantined) ${count("held")}, blocked otherwise ${count("blocked")}, warned ${count("warned")} (stored but labelled or warned about), reached ${count("reached")}.`);
+  lines.push("", `Held ${count("held")}, blocked otherwise ${count("blocked")}, warned ${count("warned")} (stored but labelled or warned about), reached ${count("reached")}.`);
   lines.push(`Poison reached the agent: ${r.reached.length} of ${r.attacks} attacks${parts.length ? ` (${parts.join("; ")})` : ""}`);
   lines.push(DRILL_SCOPE);
   if (r.approve_first) lines.push(APPROVE_FIRST_NOTE);

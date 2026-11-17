@@ -197,7 +197,7 @@ export function labelForRelabel(s: Store, raw: unknown, current: string | undefi
   const now = current ?? DEFAULT_SENSITIVITY;
   if (label === now) return undefined;
   if (sensitivityRank(label) < sensitivityRank(now) && actorStore.getStore()?.canDeclassify === false) {
-    throw new ValidationError("lowering a note's sensitivity label needs an admin token (raising it does not)");
+    throw new ValidationError("lowering a note's sensitivity label needs an admin key (raising it does not)");
   }
   return label;
 }

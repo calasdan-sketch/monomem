@@ -36,12 +36,12 @@ Each request still needs a key.
 ## 2. Give each developer a key with a limit
 
 ```bash
-docker compose exec monomem monomem token add alice --max internal
-docker compose exec monomem monomem token add bob   --max internal
+docker compose exec monomem monomem keys add alice --max internal
+docker compose exec monomem monomem keys add bob   --max internal
 ```
 
 Each command prints that person's key once, a block to paste into their app, and one sentence saying what the key can and cannot see.
-The running server picks the key up within a couple of seconds. List them (keys are never shown): `docker compose exec monomem monomem token list`.
+The running server picks the key up within a couple of seconds. List them (keys are never shown): `docker compose exec monomem monomem keys list`.
 
 `--max internal` means: sees `public` and `internal` notes, never `private` ones. Other choices: `--max public`, `--scope read`
 (read only), `--namespace alice` (confined to one space). See [give-an-app-limited-access.md](./give-an-app-limited-access.md).
@@ -71,7 +71,7 @@ Invoke-RestMethod -Headers @{ Authorization = "Bearer ALICES_KEY" } http://local
 
 1. As alice, save a note and mark it private; as bob, search for its words: nothing comes back.
 2. `docker compose exec monomem monomem audit --since 24h` shows who changed what.
-3. `monomem doctor` and `monomem health` (inside the container) report keys that have no limit.
+3. `monomem check --setup` and `monomem check` (inside the container) report keys that have no limit.
 
 ## What this does not do
 

@@ -6,7 +6,7 @@
 - It runs only on this computer and sends nothing anywhere. It **reads** the other tool's data and never changes or deletes it.
 - Start with `--dry-run`. It shows what would be imported and writes nothing. It does not even create the Monomem data folder.
 - Anything that looks like a password or token is skipped. It is counted, but it is never shown or stored.
-- Every note goes through the memory linter. Text that reads like an instruction to an AI is held in `monomem quarantine` for you to approve or reject.
+- Every note goes through the memory linter. Text that reads like an instruction to an AI is held in `monomem review held` for you to approve or reject.
 - Each note keeps the other tool's id in its `source` field (`import:claude-mem:obs:42`, `import:mem0:<id>`,
   `import:basic-memory:<permalink>`, `import:mcp-memory:entity:<name>`). If you run the import again, it adds only what is new.
 - Notes are written by `import:<tool>` and tagged `imported:<tool>`. `--namespace ns` puts them in a namespace of your choice.
@@ -142,7 +142,7 @@ monomem import --from claude-code-chats --path <folder>      # another projects 
 - **Where it goes:** the `chats` namespace (`--namespace` to change it). Every note is tagged `imported:claude-code-chats` and
   `chat.session:<id>`, and Claude's messages also carry the model-written label. Chat notes are **never shown at session
   start** or in the "new notes" line, however your namespaces are set up: they are for search (`monomem search`,
-  `state_search`), not for every session's opening context.
+  `memory_search`), not for every session's opening context.
 - **Same rules as the other imports:** read only, nothing leaves your computer, a message that looks like a secret is
   skipped (not stored, not shown), the memory linter may hold a message that reads like an instruction to an AI for your
   review, and running it again adds only new messages. The secret check reads each message as written: a secret the chat

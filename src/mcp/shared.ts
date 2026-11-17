@@ -190,11 +190,8 @@ export function quarantinedResult(e: QuarantinedError, extra?: Record<string, un
       // a plain install this told the assistant to call a tool it had not been
       // given -- the user was asked for an action nobody could take. Point at
       // the surfaces that always exist instead.
-      next: "The write was held, not lost. An administrator can approve or reject it in the dashboard, or with: monomem quarantine list",
-      message:
-        why +
-        "An admin can approve or reject it in the Monomem dashboard, or with `monomem quarantine` " +
-        "(and through the memory_quarantine tool where MONOMEM_TOOLS makes it available).",
+      next: "The write was held, not lost. A person can approve or reject it in the dashboard, or with: monomem review held",
+      message: why + "A person can approve or reject it in the Monomem dashboard, or with `monomem review held`.",
     },
     ...extra,
   });

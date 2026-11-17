@@ -29,7 +29,7 @@ test("the monomem-mcp bin starts the stdio MCP server with no arguments", async 
   await c.connect(t);
   try {
     const names = (await c.listTools()).tools.map((x) => x.name);
-    assert.ok(names.includes("state_write") && names.includes("state_search"), names.join(","));
+    assert.ok(names.includes("memory_save") && names.includes("memory_search"), names.join(","));
     await c.callTool({ name: "state_write", arguments: { title: "bin check", body: "written through monomem-mcp" } });
     const res = (await c.callTool({ name: "state_search", arguments: { query: "monomem-mcp" } })) as { content: Array<{ text: string }> };
     assert.match(res.content[0].text, /bin check/);

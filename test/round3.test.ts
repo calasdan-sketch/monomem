@@ -378,7 +378,7 @@ describe("R3-9: doctor", () => {
       const out = String(r.stdout);
       assert.equal(r.status, 0, out + String(r.stderr));
       assert.match(out, /Verdict: All good/);
-      assert.ok(!/Generated new bearer token/.test(String(r.stderr)), "no stray key-creation line");
+      assert.ok(!/Made the main app key|Generated new bearer token/.test(String(r.stderr)), "no stray key-creation line");
       assert.ok(!/recall failed/.test(String(r.stderr)));
       assert.ok(!/\[warn\]/.test(out), out);
     } finally {

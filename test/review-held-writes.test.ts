@@ -31,7 +31,7 @@ test("review and review --step point to held writes instead of a false all-clear
       const r = cli(...args);
       assert.equal(r.status, 0, r.stderr);
       assert.doesNotMatch(r.stdout, /^Nothing waits/m, args.join(" "));
-      assert.match(r.stdout, /1 held write waits for your decision: monomem quarantine/, args.join(" "));
+      assert.match(r.stdout, /1 held write waits for your decision: monomem review held/, args.join(" "));
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });

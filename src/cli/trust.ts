@@ -265,7 +265,7 @@ export async function tokenCmd(): Promise<void> {
   const { envTokenLabels } = await import("../token-file.js");
   const { flags, rest } = parseFlags(process.argv.slice(3), { values: ["label", "scope", "namespace", "max"], bools: ["admin", "json", "no-limit"] });
   const action = rest[0];
-  const usageLine = "Usage: monomem token add <name> [--scope read|write|admin] [--namespace ns] [--max public|internal|private | --no-limit] | token list | token remove <name> | token harden";
+  const usageLine = "Usage: monomem keys add <name> [--scope read|write|admin] [--namespace ns] [--max public|internal|private | --no-limit] | keys list | keys remove <name> | keys harden";
   try {
     if (action === "new") {
       console.log(t.newTokenValue());
@@ -308,7 +308,7 @@ export async function tokenCmd(): Promise<void> {
       console.log(
         t.removeApp(rest[1])
           ? `Removed token "${printable(rest[1])}". A running server stops accepting it within a couple of seconds, with no restart.`
-          : `No token labelled "${printable(rest[1])}" in tokens.json. See the names with: monomem token list (tokens set in the environment must be removed there).`
+          : `No token labelled "${printable(rest[1])}" in tokens.json. See the names with: monomem keys list (tokens set in the environment must be removed there).`
       );
     } else {
       throw new t.TokenAdminError(usageLine);
@@ -331,7 +331,7 @@ export async function quarantineCmd(): Promise<void> {
     if (action === "list") {
       const items = store.listQuarantine({ limit: 500 });
       if (items.length === 0) {
-        console.log("Quarantine is empty.");
+        console.log("No held writes.");
         return;
       }
       for (const q of items) {
@@ -343,12 +343,12 @@ export async function quarantineCmd(): Promise<void> {
           console.log(`    body: ${preview.replace(/\n/g, "\n          ")}`);
         }
       }
-      console.log("\nTo decide: monomem quarantine show <id>, then approve <id> | keep-history <id> | reject <id>  (in a terminal)");
+      console.log("\nTo decide: monomem review held show <id>, then approve <id> | keep-history <id> | reject <id>  (in a terminal)");
       return;
     }
     const id = Number(idRaw);
     if (!["show", "approve", "keep-history", "reject"].includes(action) || !Number.isInteger(id)) {
-      console.error("Usage: monomem quarantine [list | show <id> | approve <id> | keep-history <id> [--by <note id>] | reject <id>]");
+      console.error("Usage: monomem review held [list | show <id> | approve <id> | keep-history <id> [--by <note id>] | reject <id>]");
       process.exit(1);
     }
     if (action === "show") {
@@ -362,11 +362,11 @@ export async function quarantineCmd(): Promise<void> {
         console.error("--by takes a note id");
         process.exit(1);
       }
-      await requireOperator(`quarantine keep-history ${id}`, () => {
+      await requireOperator(`review held keep-history ${id}`, () => {
         // Same checks keepQuarantineAsHistory makes, run before the typed yes: nobody confirms what cannot happen.
         const ctx = store.quarantineContext(id);
         const why = !ctx
-          ? `no quarantined write with id ${id}`
+          ? `no held write with id ${id}`
           : !ctx.notes.length
             ? `held write #${id}: nothing newer on the same topic was saved in "${printable(ctx.namespace, 100)}" since it was held, so there is nothing to keep it as history of. Approve or reject it instead.`
             : by !== undefined && !ctx.notes.some((n) => n.id === by)
@@ -383,15 +383,15 @@ export async function quarantineCmd(): Promise<void> {
     }
     if (action === "reject") {
       if (!store.rejectQuarantine(id)) {
-        console.error(`No quarantined write with id ${id}`);
+        console.error(`No held write with id ${id}`);
         process.exit(1);
       }
-      console.log(`Rejected quarantined write #${id}.`);
+      console.log(`Rejected held write #${id}.`);
       return;
     }
-    await requireOperator(`quarantine approve ${id}`, () => {
+    await requireOperator(`review held approve ${id}`, () => {
       if (store.getQuarantine(id)) return;
-      console.error(`no quarantined write with id ${id}`);
+      console.error(`no held write with id ${id}`);
       process.exit(1);
     });
     const note = store.approveQuarantine(id);
@@ -413,7 +413,7 @@ function showHeld(store: import("../store.js").Store, id: number, casNote: (op: 
   const q = store.getQuarantine(id);
   const ctx = store.quarantineContext(id);
   if (!q || !ctx) {
-    console.error(`No quarantined write with id ${id}`);
+    console.error(`No held write with id ${id}`);
     process.exit(1);
   }
   const what = q.op === "update" ? `update of #${q.target_id}` : "new note";
@@ -433,7 +433,7 @@ function showHeld(store: import("../store.js").Store, id: number, casNote: (op: 
     for (const c of ctx.notes) console.log(`    #${c.id} "${printable(c.title)}" (${c.written_by ? `agent ${printable(c.written_by, 100)}, ` : ""}${c.updated_at.slice(0, 10)})`);
   }
   console.log(`\n${casNote(q.op)}`);
-  console.log(`Decide: monomem quarantine approve ${id}${n ? ` | keep-history ${id}` : ""} | reject ${id}`);
+  console.log(`Decide: monomem review held approve ${id}${n ? ` | keep-history ${id}` : ""} | reject ${id}`);
 }
 
 // `monomem approve-first [<namespace> on|off]`: operator-only switch (no MCP tool sets it).
@@ -477,7 +477,7 @@ function printFlagged(list: Array<{ id: number; namespace: string; title: string
     console.log(`  #${f.id} [${printable(f.namespace, 100)}] ${printable(f.title, 120)} (by ${printable(f.writer || "unknown", 100)})`);
     for (const x of f.flags.slice(0, 5)) console.log(`      flagged by ${printable(x.by, 60)}: "${printable(x.reason, 200)}"`);
   }
-  console.log('  Keep one as it is: monomem review keep <id>. Replace it: monomem supersede --old <id> --title "..." --body "..." (shows what changes, then asks).\n');
+  console.log('  Keep one as it is: monomem review keep <id>. Replace it: monomem replace --old <id> --title "..." --body "..." (shows what changes, then asks).\n');
 }
 
 /** R2-03: notes whose files changed in git since they were written (the operator reads this at a terminal). */
@@ -487,7 +487,7 @@ export function printCodeChanged(list: Array<{ id: number; namespace: string; ti
     console.log(`  #${c.id} [${printable(c.namespace, 100)}] ${printable(c.title, 120)} (by ${printable(c.writer || "unknown", 100)})${c.pinned ? " pinned" : ""}`);
     for (const f of c.changed.slice(0, 5)) console.log(`      ${printable(f.path, 200)} changed since commit ${printable(f.since_commit, 12)}`);
   }
-  console.log('  Still right: monomem review keep <id>. Out of date: monomem supersede --old <id> --title "..." --body "..." (shows what changes, then asks).\n');
+  console.log('  Still right: monomem review keep <id>. Out of date: monomem replace --old <id> --title "..." --body "..." (shows what changes, then asks).\n');
 }
 
 /**
@@ -530,7 +530,7 @@ export async function reviewCmd(args: string[]): Promise<void> {
     const items = store.reviewList(ns !== undefined ? [ns] : undefined);
     // Held writes are decided in `monomem quarantine`, but "review" is where people look first: never a false all-clear.
     const held = store.listQuarantine({ ...(ns !== undefined ? { namespaces: [ns] } : {}), limit: 500 }).length;
-    const heldLine = held ? `${held >= 500 ? "500 or more held writes wait" : held === 1 ? "1 held write waits" : `${held} held writes wait`} for your decision: monomem quarantine` : "";
+    const heldLine = held ? `${held >= 500 ? "500 or more held writes wait" : held === 1 ? "1 held write waits" : `${held} held writes wait`} for your decision: monomem review held` : "";
     if (flags.step === true) {
       if (heldLine && flags.json !== true) console.log(heldLine);
       // --step walks the review list only; flagged and code-changed notes are named here, so it never gives a false all-clear.
@@ -622,8 +622,8 @@ export async function approveFirstCmd(): Promise<void> {
       store.setApproveFirstAll(state === "on");
       console.log(
         state === "on"
-          ? "Approve-first is on for every namespace, including ones created later: agent writes wait in `monomem quarantine`."
-          : "Approve-first is off for all namespaces (any per-namespace setting still applies). Writes already held stay in `monomem quarantine`."
+          ? "Approve-first is on for every namespace, including ones created later: agent writes wait in `monomem review held`."
+          : "Approve-first is off for all namespaces (any per-namespace setting still applies). Writes already held stay in `monomem review held`."
       );
       return;
     }
@@ -631,8 +631,8 @@ export async function approveFirstCmd(): Promise<void> {
     store.setApproveFirst(ns, state === "on");
     console.log(
       state === "on"
-        ? `Approve-first is on for "${ns.trim()}": agent writes there now wait in \`monomem quarantine\`.`
-        : `Approve-first is off for "${ns.trim()}". Writes already held stay in \`monomem quarantine\`.`
+        ? `Approve-first is on for "${ns.trim()}": agent writes there now wait in \`monomem review held\`.`
+        : `Approve-first is off for "${ns.trim()}". Writes already held stay in \`monomem review held\`.`
     );
   } finally {
     store.close();

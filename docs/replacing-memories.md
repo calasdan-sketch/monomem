@@ -36,13 +36,13 @@ nothing changed.
 
 | Surface | Preview | Confirm |
 |---|---|---|
-| Command line | `monomem supersede --old 12[,13] --title "..." --body "..." [--tags a,b] [--confidence 0.8]` (or `--new-id 40` to use a note that already exists) | At a terminal it asks you to **type the number of notes** you are replacing (or `yes`); anything else cancels and changes nothing. With no terminal (a script) it only previews, prints the code, and exits 2. A script must run `monomem supersede --confirm-token <code> --title ... --body ...` (the same text). There is deliberately **no `--yes`**. |
+| Command line | `monomem replace --old 12[,13] --title "..." --body "..." [--tags a,b] [--confidence 0.8]` (or `--new-id 40` to use a note that already exists) | At a terminal it asks you to **type the number of notes** you are replacing (or `yes`); anything else cancels and changes nothing. With no terminal (a script) it only previews, prints the code, and exits 2. A script must run `monomem replace --confirm-token <code> --title ... --body ...` (the same text). (`monomem replace` was called `monomem supersede` before 1.6, the old name still works.) There is deliberately **no `--yes`**. |
 | REST | `POST /supersede/preview` `{ old_ids, new_note \| new_id }` | `POST /supersede/confirm` `{ token, new_note?, acknowledge_risk? }` |
-| MCP | `memory_supersede_preview` | `memory_supersede_confirm` |
-| Undo | `monomem supersede undo <id>` | `POST /supersede/undo` `{ id }` · `memory_supersede_undo` (recorded) |
+| MCP | `memory_replace` with `action: "preview"` | `memory_replace` with `action: "confirm"` and the preview's `code` |
+| Undo | `monomem replace undo <id>` | `POST /supersede/undo` `{ id }` · `memory_replace` with `action: "undo"` (recorded) |
 
 At most 20 notes can be replaced in one go. Tasks and handoffs are managed with the task tools and cannot be replaced.
-Replacing needs a write or admin token; a read token is refused.
+Replacing needs a write or admin app key; a read key is refused. (Over MCP, `memory_replace` is one of the seven tools shown by default; until 1.6 it was the three tools `memory_supersede_preview`, `memory_supersede_confirm` and `memory_supersede_undo`, old names that still answer for one release.)
 
 **A limit you should know about.** For MCP and REST, the "Are you sure?" step is enforced by the code (nothing happens
 without a valid code from a preview), but it is the **agent** that talks to you. A careless agent could show you a
@@ -52,13 +52,13 @@ For notes you care about, replace from the command line.
 
 ## Nothing is deleted
 
-A confirmed replacement marks the old note **superseded** and links it to the note that replaced it
-(`status: "superseded"`, `superseded_by`). Superseded notes are left out of search, lists, "what is relevant", similar-note
+A confirmed replacement marks the old note **replaced** and links it to the note that replaced it
+(`status: "superseded"`, `superseded_by`). Replaced notes are left out of search, lists, "what is relevant", similar-note
 suggestions. To see them anyway, ask for them: `?include_superseded=1` on
-`GET /search` and `GET /notes`, `?superseded=1` for only those, `include_superseded` on `state_search` / `state_list`.
-They are always labelled. A superseded note cannot be edited until it is brought back.
+`GET /search` and `GET /notes`, `?superseded=1` for only those, `include_replaced` on `memory_search` / `memory_list` (the 1.5 tools took `include_superseded`).
+They are always labelled. A replaced note cannot be edited until it is brought back.
 
-**Undo** brings the note back exactly as it was. Undo is recorded (who, when, which note) like the replacement itself. A write token can undo only a replacement
+**Undo** brings the note back exactly as it was. Undo is recorded (who, when, which note) like the replacement itself. A write key can undo only a replacement
 it made itself; undoing someone else's (for example an administrator's, made to hide a bad note) needs an administrator.
 **Hard delete is unchanged**: `DELETE /notes/:id` still deletes for good (admin), and takes the note's history with it. One exception, so nothing
 is lost by accident: if you hard-delete a note that *replaced* others, those notes come back (logged), because nothing would be left to point at.
@@ -86,13 +86,13 @@ Every edit that changes a note's title or body keeps the text it replaces (and t
   never dropped**, a writer's older copies go before another writer's newest one (so one writer flooding edits cannot push out
   someone else's version), and otherwise the oldest goes.
 - **Administrators only.** Old text can hold something that was taken out on purpose. `GET /notes/:id/history`, `memory_history`,
-  `monomem history <id>`. Versions written by a distrusted writer are left out unless the admin asks for them.
-- **Restore**: `POST /notes/:id/history/restore` `{ version, if_rev? }`, `memory_restore_version`, `monomem history restore <id> <version>`.
+  `monomem history <id>` (`memory_history` is not shown by default: `MONOMEM_TOOLS=memory_history`). Versions written by a distrusted writer are left out unless the admin asks for them.
+- **Restore**: `POST /notes/:id/history/restore` `{ version, if_rev? }`, `memory_history` action `restore`, `monomem history restore <id> <version>`.
   A restore makes a **new version**; the text it replaces goes into the history, so a restore can itself be undone.
   A version written by a distrusted writer cannot be restored. Restoring a version this server saw being written takes the note's
-  taint back to what that text had then (this is how an admin recovers a trusted original after distrusting an overwriter);
+  writer set back to what that text had then (this is how an admin recovers a trusted original after distrusting an overwriter);
   a version that arrived by import is only a claim and can only add names.
-- **Forget**: `DELETE /notes/:id/history`, `memory_history_purge`, `monomem history purge <id>` (asks first) removes the kept versions
+- **Forget**: `DELETE /notes/:id/history`, `memory_history` action `purge`, `monomem history purge <id>` (asks first) removes the kept versions
   (use it after a secret was removed from a note). A hard delete of the note removes its history too.
 - Encrypted at rest like note bodies when encryption is on, and bound to their own row.
 - Carried by `export` (turn off with `?history=0` / `--no-history`) and `import` (every entry is a **claim**: names in the file are kept as
@@ -101,21 +101,21 @@ Every edit that changes a note's title or body keeps the text it replaces (and t
 ## Pinned notes (CLI-only)
 
 `monomem pin <id>` pins a note; `monomem unpin <id>` lifts it; `monomem pin` lists them. Over REST: admin-only `GET /pinned` and
-`PUT /pinned { id, pinned }` (a namespace-pinned admin token reaches its own namespace only). No MCP tool pins or unpins. An agent with a shell tool can run the CLI itself, so a pin protects against MCP and REST agents, not against agents that can run commands.
+`PUT /pinned { id, pinned }` (a namespace-pinned admin key reaches its own namespace only). No MCP tool pins or unpins. An agent with a shell tool can run the CLI itself, so a pin protects against MCP and REST agents, not against agents that can run commands.
 
 Agents can still read a pinned note (reads show `pinned: true`, so an agent can tell why a change is refused). Only the local
 `monomem` CLI (writer `cli`) can change it. Everyone else gets an error naming the note: MCP over stdio or HTTP, every REST call
-(an admin token included, the same rule as approve-first: REST cannot tell an operator from an agent holding an admin token), the
+(an admin key included, the same rule as approve-first: REST cannot tell an operator from an agent holding an admin key), the
 server's own jobs and library callers. Refused for them:
 
-- editing it (`state_write` with its id, `PUT /notes/:id`; a tags-only or source-only edit too);
-- forgetting, restoring or hard-deleting it (`state_delete`, REST archive / restore / `DELETE /notes/:id`);
-- replacing it (`memory_supersede_preview` refuses up front, the confirm refuses too) or bringing it back with supersede undo;
-- putting back an older version (`memory_restore_version`) or forgetting its history (`memory_history_purge`);
-- merging it (`memory_consolidate`; the background janitor skips it).
+- editing it (`memory_save` with its id, `PUT /notes/:id`; a tags-only or source-only edit too);
+- archiving, restoring or hard-deleting it (`memory_archive`, REST archive / restore / `DELETE /notes/:id`);
+- replacing it (`memory_replace` action `preview` refuses up front, the confirm refuses too) or bringing it back with `replace undo`;
+- putting back an older version (`memory_history` action `restore`) or forgetting its history (action `purge`);
+- merging it (`memory_tidy` action `merge`; the background janitor skips it).
 
-A pinned note is never archived by the expiry sweep (`forget_after`) or by decay. An admin REST token can unpin a note and then
-change it, so a pin holds against every caller except the CLI and an admin token. A pin is local: export, import and vault sync do
+A pinned note is never archived by the expiry sweep (`forget_after`) or by decay. An admin app key over REST can unpin a note and then
+change it, so a pin holds against every caller except the CLI and an admin key. A pin is local: export, import and vault sync do
 not carry it. It is not the `pinned` tag, which only keeps captured rows from decay.
 
 ## Rolling back one writer
@@ -132,12 +132,12 @@ every `stdio:<app>`, as in distrust rules. For each note:
 - **created** by the writer since then: **archived** (never deleted; `monomem restore <id>` brings it back);
 - its title or body **changed** by the writer since then: the newest version kept from **before the writer's first change** since
   then becomes the current text again, as a new version (history reason `rollback`). The text it replaces goes into the history,
-  so `monomem history restore <id> <version>` / `memory_restore_version` undoes it. There is no separate undo command;
+  so `monomem history restore <id> <version>` / `memory_history` action `restore` undoes it. There is no separate undo command;
 - **another writer changed the text later**: a **conflict**, listed and skipped. `--include-conflicts` rolls it back anyway (the
   other writer's text stays in the history);
 - the version needed is no longer in the bounded history (pruned by the limits above, or purged): **cannot fully undo**, listed
   and always skipped. Nothing is guessed;
-- a replaced (superseded) or archived note is listed and skipped.
+- a replaced or archived note is listed and skipped.
 
 A restored version gets its own author back in `written_by` (who restored it is in the change log and the history reason).
 The same plan also undoes what the writer did **to** other notes since then, while it is still in force:
@@ -153,13 +153,13 @@ CLI shows the preview and asks you to type yes (`--yes` skips the question; with
 previews). Each rollback writes an audit entry.
 
 Also over REST (admin): `POST /rollback/preview { writer, since, include_conflicts? }` and `POST /rollback/confirm { token }`; and
-the MCP tool `memory_rollback` (admin, operator-only: not registered over stdio unless `MONOMEM_STDIO_ADMIN_TOOLS=1`, and only
+the MCP tool `memory_rollback` (admin, operator-only: not available over stdio unless `MONOMEM_STDIO_ADMIN_TOOLS=1`, and only
 under `MONOMEM_TOOLS=all` or when named). Pinned notes and notes in approve-first namespaces are rolled back from the CLI only
 (marked in its preview); REST and MCP list them as skipped (`operator_only`). Restores made by a rollback are not counted by the
 flood guard; a paused caller is still refused.
 
 Limits: only notes the writer created, and title/body changes it made, are rolled back. Tag, source, namespace or confidence edits,
-notes it forgot (archived), replacements it confirmed (use supersede undo) and hard deletes are not. A change made while history
+notes it archived, replacements it confirmed (use `monomem replace undo`) and hard deletes are not. A change made while history
 was off (`MONOMEM_HISTORY_VERSIONS=0`) left no saved version: it is reported as cannot fully undo only if history is still off and
 the note still names the writer, otherwise it is not seen. The dropped-version check is kept per writer as a time span, so an
 older drop that overlaps can also produce "cannot fully undo" (it errs on the side of skipping).
@@ -178,12 +178,12 @@ behind the newer one in search, even if it matches the words slightly better. It
 
 ## Conflicts between writers
 
-`monomem conflicts` (also in `monomem quality` and the dashboard's Quality view) lists live notes from different writers that
+`monomem review conflicts` (also in `monomem review duplicates` and the dashboard's Quality view) lists live notes from different writers that
 disagree. It only flags: nothing is changed, hidden or merged. Notes from distrusted writers are left out. Each side shows
 the writer's label and what kind of label it is (a server-stamped marker such as `stdio`, or a token label from your config),
 so a label cannot pass as a peer by its spelling.
 
-- **Exact tier (`facts`).** An agent attaches `facts` when it writes (`state_write`, `POST /notes`): at most 10 keys, keys
+- **Exact tier (`facts`).** An agent attaches `facts` when it writes (`memory_save`, `POST /notes`): at most 10 keys, keys
   `[a-z0-9_.-]{1,40}`, values one line of at most 80 characters. They are stored as the tags `fact:<key>=<value>` (no schema
   change; the secret and injection scan runs on them like any tag). Two live notes in one namespace, from different writers,
   with the same key and different values (case and extra spaces ignored) are flagged. When such a note is written, the write

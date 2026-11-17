@@ -226,8 +226,8 @@ approve again.
 The store tells you instead of leaving you guessing:
 
 ```
-runner_status()                       # MCP, read scope
-GET /runner/status[?namespace=ns]     # REST, read token
+memory_tasks({ action: "runner" })    # MCP, read scope (formerly runner_status)
+GET /runner/status[?namespace=ns]     # REST, read key
 monomem runner-status [--json]      # CLI on the machine holding the store
 ```
 
@@ -237,7 +237,7 @@ against the runner it is addressed to, by its `target`), and, for each namespace
 can read: `waiting` (approved, not started), `expiring_soon` (approval ends within an hour),
 `expired` (a genuine approval that lapsed before the runner took the task), and the age and id
 of the oldest waiting task. Only counts, ages and ids: never command text, parameters, targets or
-the host name (`task_get` is still the only place those are read). Past 2,000 queued approved
+the host name (`memory_tasks` action `get` is still the only place those are read). Past 2,000 queued approved
 tasks the counts are "at least" (`truncated: true`).
 
 **What counts as waiting.** The same rule the runner uses to pick tasks, shared in the code
@@ -253,14 +253,14 @@ they need a person to approve again. (The runner's rate window is a runtime limi
 count.)
 
 When commands are waiting and the runner is not online, or approvals have expired, the same fact is one
-line at the top of `catch_up` (`runner_notice`), in the SessionStart recall and on the dashboard, for example:
+line at the top of `memory_catch_up` (`runner_notice`), in the SessionStart recall and on the dashboard, for example:
 `Runner offline (last seen 3 h ago): 2 approved commands waiting, 1 expiring within 1 h.`
 
 **How the heartbeat is judged.** The store does not hold the runner secret, so it cannot check the
 signature inside the heartbeat. Instead the time is the server's own timestamp of the heartbeat note (the
 `alive_at` in the body is ignored, so a wrong clock or a forged body cannot make the runner look alive),
 a time in the future is not believed, and only a note stamped `written_by: runner` by the server counts
-(a token holder's note carries their token label; a token named `runner` is stored as `token:runner`).
+(an app key holder's note carries their key's label; a key named `runner` is stored as `token:runner`).
 A runner older than 1.3.4 stamps no marker; since 1.4.0 that heartbeat is **not believed** (see
 "Upgrading the runner" below). This is a strong hint, not a proof:
 someone who can write the database file can still fake it; to prove a heartbeat, use the sign page's
@@ -274,7 +274,7 @@ store changes.
 
 ### Per-runner status (1.4.0)
 
-With more than one PC, `runner_status`, `GET /runner/status` and `monomem runner-status` report each
+With more than one PC, `memory_tasks` action `runner`, `GET /runner/status` and `monomem runner-status` report each
 runner on its own line. The top-level `runner`, `waiting_total`, `expiring_soon_total` and
 `expired_total` fields keep their old meaning for older clients: `runner` describes the most worrying
 runner that has commands waiting (a stale or never-seen one beats an online one), else the freshest.
@@ -338,7 +338,7 @@ do not grow forever. Unclaimed commands are never pruned, however old.
 | `MONOMEM_ENABLE_SIGN_PAGE` | *(off)* | Set to `1` on the **API** process to serve `/sign`. |
 | `MONOMEM_RUNNER_RETENTION_DAYS` | `30` | Delete handled notes older than this. `0` keeps everything. |
 | `MONOMEM_RUNNER_PRUNE_EVERY_MS` | `3600000` | Minimum gap between cleanup sweeps. |
-| `MONOMEM_RUNNER_STALE_SECONDS` | `600` | Heartbeat age after which `runner_status` reports the runner stale (30 s - 7 d, and never less than three beat intervals). Set on the **API/MCP** process. |
+| `MONOMEM_RUNNER_STALE_SECONDS` | `600` | Heartbeat age after which `memory_tasks` action `runner` reports the runner stale (30 s - 7 d, and never less than three beat intervals). Set on the **API/MCP** process. |
 | `MONOMEM_RUNNER_ID` | machine name | This runner's name, matched against a command's `target`. |
 
 ## Honest limits
@@ -368,16 +368,19 @@ approve it from any admin session. It reaches the same runner, through the
 same allowlist.
 
 ```
-task_put({ title: "pull the site", command: { action: "site-pull", params: { repo: "calas-site" } }, target: "DANITA" })
-        // any write token: creates a task in status `queued`. It cannot run yet.
-task_approve({ id: 41, command_hash: "<the command_hash task_get showed>" })
-        // ADMIN token only. Read the task first (task_get); the approval is refused if the command changed since.
+memory_tasks({ action: "put", title: "pull the site", command: { action: "site-pull", params: { repo: "calas-site" } }, target: "DANITA" })
+        // any write-scope app key: creates a task in status `queued`. It cannot run yet.
+memory_tasks({ action: "approve", id: 41, command_hash: "<the command_hash that action get showed>" })
+        // ADMIN key only. Read the task first (action get); the approval is refused if the command changed since.
         // the PC's runner runs it within one poll and writes the result onto the task
 ```
 
+`memory_tasks` is not one of the seven default MCP tools: turn it on with `MONOMEM_TOOLS=memory_tasks` (or `all`).
+Its 1.5 names, formerly `task_put`, `task_approve`, `task_get` and `runner_status`, still work for one release.
+
 REST: `POST /tasks` with `command` and `target`, `POST /tasks/:id/approve`
 (admin), `GET /tasks/:id`. Pass `approve: true` when creating with an admin
-token to do both in one call.
+key to do both in one call.
 
 Switch it on at the PC by naming the namespace the runner should watch:
 
@@ -385,7 +388,7 @@ Switch it on at the PC by naming the namespace the runner should watch:
     setx MONOMEM_RUNNER_ID "DANITA"
 
 It is **off** until you do. The task must be created in that same namespace
-(`namespace: "tasks"` in `task_put`; with namespace resolution on, the API
+(`namespace: "tasks"` in `memory_tasks` action `put`; with namespace resolution on, the API
 writes into its own namespace, so put your runner's namespace there).
 
 ### What has to be true before anything runs
@@ -397,9 +400,9 @@ writes into its own namespace, so put your runner's namespace there).
 3. An admin approved it. The approval is a MAC, made with a secret that lives
    only inside the store, over the namespace, the task id, a one-time nonce and
    an expiry (default 24 h, `MONOMEM_APPROVAL_TTL_SECONDS`) and a hash of the command, params and target.
-   `task_approve` must echo the `command_hash` (or `rev`) the admin read. Editing any of those (through
-   `task_put` or by hand) voids it; copying the approval tag to another task
-   fails; a write token cannot write the approval tag at all (the `task.*` tags
+   Action `approve` must echo the `command_hash` (or `rev`) the admin read. Editing any of those (through
+   action `put` or by hand) voids it; copying the approval tag to another task
+   fails; a write-scope app key cannot write the approval tag at all (the `task.*` tags
    are reserved).
 4. It is single-use: the approval is removed in the same compare-and-swap write
    that marks the task `running`, before anything executes (so a crash or a lost

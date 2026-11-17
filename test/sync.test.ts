@@ -337,7 +337,7 @@ describe("sync hardening (r3)", () => {
     assert.equal((await importMarkdown(s, dir)).counts.quarantined, 1);
     const r2 = await importMarkdown(s, dir);
     assert.equal(r2.counts.quarantined, 1);
-    assert.match(r2.entries[0].detail!, /already held in quarantine #/);
+    assert.match(r2.entries[0].detail!, /already held \(held write #/);
     assert.equal(s.listQuarantine().length, 1);
     s.close();
   });

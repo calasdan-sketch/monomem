@@ -56,7 +56,7 @@ export async function keyFilesCheck(dr: Doctor): Promise<void> {
       }
     }
     const plainKeys = (await import("../tokens-admin.js")).plainKeyCount();
-    if (plainKeys) warn(`${plainKeys} app key(s) are stored in plain text in tokens.json.`, "Run: monomem token harden  (the apps keep working)");
+    if (plainKeys) warn(`${plainKeys} app key(s) are stored in plain text in tokens.json.`, "Run: monomem keys harden  (the apps keep working)");
     if (files.length) ok(`keys are kept in: ${files.join(", ")}. Any program running as you can read these (SECURITY.md lists every place).`);
   }
 }

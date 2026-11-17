@@ -148,7 +148,7 @@ describe("new-by-others under a busy writer (r2-improvement #9)", () => {
     const text = newNotesSince(s, SID);
     assert.match(text, new RegExp(`#${human} by cursor:`));
     assert.doesNotMatch(text, /bot log/);
-    assert.match(text, /bot saved 12 notes \(#\d+-#\d+\); memory_since lists them\./);
+    assert.match(text, /bot saved 12 notes \(#\d+-#\d+\); memory_catch_up lists them\./);
     s.close();
   });
 });

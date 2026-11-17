@@ -84,11 +84,11 @@ describe("quality view", () => {
     assert.deepEqual(of("duplicate").map((i) => i.ids.slice().sort()), [[d1.id, d2.id]]);
     assert.ok(of("stale_twin").some((i) => i.ids[0] === old.id && i.ids[1] === fresh.id), JSON.stringify(r.issues));
     assert.equal(of("quarantined").length, 1);
-    assert.match(of("quarantined")[0].fix, /^monomem quarantine approve \d+$/);
+    assert.match(of("quarantined")[0].fix, /^monomem review held approve \d+$/);
     assert.deepEqual(of("lint").map((i) => i.ids[0]), [linted.id]);
     assert.deepEqual(of("decay").map((i) => i.ids[0]), [idle.id]);
     for (const t of ["duplicate", "stale_twin", "quarantined", "lint", "decay"] as const) assert.ok(r.counts[t] >= 1, t);
-    assert.match(of("duplicate")[0].fix, /^monomem supersede --old \d+ --new-id \d+$/);
+    assert.match(of("duplicate")[0].fix, /^monomem replace --old \d+ --new-id \d+$/);
     assert.equal(s.read(idle.id)!.archived_at, undefined, "the report archived nothing");
     assert.equal(s.listQuarantine().length, 1);
     s.close();

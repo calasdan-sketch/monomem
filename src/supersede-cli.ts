@@ -174,7 +174,7 @@ export async function supersedeCli(store: Store, args: string[], io: CliIO, call
     return 0;
   } catch (e) {
     if (e instanceof QuarantinedError) {
-      io.err(`Held for review (quarantine #${e.quarantineId}); nothing was replaced.`);
+      io.err(`Held for review (held write #${e.quarantineId}); nothing was replaced.`);
       return 1;
     }
     if (e instanceof SupersedeError || e instanceof ValidationError) {
@@ -234,7 +234,7 @@ export async function historyCli(store: Store, args: string[], io: CliIO, caller
     return 0;
   } catch (e) {
     if (e instanceof QuarantinedError) {
-      io.err(`Held for review (quarantine #${e.quarantineId}); the version was not restored.`);
+      io.err(`Held for review (held write #${e.quarantineId}); the version was not restored.`);
       return 1;
     }
     if (e instanceof ValidationError) {
@@ -300,7 +300,7 @@ Roll back ${preview.actions.length} note(s)? Type yes: `);
     return 0;
   } catch (e) {
     if (e instanceof QuarantinedError) {
-      io.err(`A restored text was held for review (quarantine #${e.quarantineId}); nothing was rolled back.`);
+      io.err(`A restored text was held for review (held write #${e.quarantineId}); nothing was rolled back.`);
       return 1;
     }
     if (e instanceof ValidationError) {

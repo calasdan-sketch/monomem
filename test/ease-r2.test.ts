@@ -302,9 +302,9 @@ describe("U-08 the verbs people try first get a hint (nothing runs)", () => {
       assert.equal(undo.status, 1);
       assert.match(undo.stderr, /monomem history restore <id> <version>/);
       assert.match(undo.stderr, /monomem rollback --writer <writer> --since 1h/);
-      assert.match(undo.stderr, /monomem supersede undo <id>/);
-      assert.match(run(dir, ["approve", "3"]).stderr, /monomem quarantine approve <id>/);
-      assert.match(run(dir, ["reject"]).stderr, /monomem quarantine reject <id>/);
+      assert.match(undo.stderr, /monomem replace undo <id>/);
+      assert.match(run(dir, ["approve", "3"]).stderr, /monomem review held approve <id>/);
+      assert.match(run(dir, ["reject"]).stderr, /monomem review held reject <id>/);
       const d = run(dir, ["distrust", "cursor"]);
       assert.equal(d.status, 1);
       assert.match(d.stderr, /monomem trust distrust <writer> --namespace '\*'/);

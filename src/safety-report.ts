@@ -43,7 +43,7 @@ export async function safetyChecks(i: SafetyInput): Promise<Check[]> {
   const pinned = apps.filter((t) => t.namespace).length;
   const list = `${apps.length - open.length} with a limit${pinned ? `, ${pinned} confined to one namespace` : ""}.`;
   out.push(open.length || adminApps.length
-    ? { name: "Keys and their limits", status: "Warn", detail: `${apps.length} app key(s). ${open.length} can see everything without a limit, ${adminApps.length} are administrators. ${list} (App names are left out of this page on purpose.)`, fix: "monomem token list   (then give each app a limit: monomem token add <name> --max internal)" }
+    ? { name: "Keys and their limits", status: "Warn", detail: `${apps.length} app key(s). ${open.length} can see everything without a limit, ${adminApps.length} are administrators. ${list} (App names are left out of this page on purpose.)`, fix: "monomem keys list   (then give each app a limit: monomem keys add <name> --max internal)" }
     : { name: "Keys and their limits", status: "Pass", detail: apps.length ? `${apps.length} app key(s), all with a limit. ${pinned ? `${pinned} confined to one namespace.` : ""}` : "No separate app keys; only the main key exists." });
 
   const priv = i.store.hasPrivateNotes();
@@ -64,7 +64,7 @@ export async function safetyChecks(i: SafetyInput): Promise<Check[]> {
   const q = await qualityReport(i.store);
   out.push(q.counts.quarantined === 0
     ? { name: "Held writes", status: "Pass", detail: "Nothing is waiting for review." }
-    : { name: "Held writes", status: "Warn", detail: `${q.counts.quarantined} write(s) are waiting for review.`, fix: "monomem quarantine list" });
+    : { name: "Held writes", status: "Warn", detail: `${q.counts.quarantined} write(s) are waiting for review.`, fix: "monomem review held list" });
   out.push(q.counts.pii === 0
     ? { name: "Personal-data suggestions", status: "Pass", detail: "The pattern scan found nothing it would suggest labelling private (it can miss things)." }
     : { name: "Personal-data suggestions", status: "Warn", detail: `${q.counts.pii} note(s) look like they hold personal data and are not private (pattern-based; may be wrong).`, fix: "monomem pii scan" });
@@ -77,7 +77,7 @@ export async function safetyChecks(i: SafetyInput): Promise<Check[]> {
   }
   out.push(integrity === "ok"
     ? { name: "Database check", status: "Pass", detail: "The database file passes SQLite's own integrity check." }
-    : { name: "Database check", status: "Warn", detail: `The integrity check said: ${integrity}.`, fix: "monomem doctor" });
+    : { name: "Database check", status: "Warn", detail: `The integrity check said: ${integrity}.`, fix: "monomem check --setup" });
   return out;
 }
 

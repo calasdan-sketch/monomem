@@ -25,7 +25,7 @@ holds no readable note, title or computer name.
 
 **On each other computer**
 
-1. Install Monomem and put the copied `.sync-key` in its data folder (`monomem doctor` shows where that is).
+1. Install Monomem and put the copied `.sync-key` in its data folder (`monomem check --setup` shows where that is).
 2. Run the same `monomem sync setup ...` with the same folder (as that computer sees it) or the same address.
 
 **After that**
@@ -151,7 +151,7 @@ edit and never blanks or deletes its copy; it ignores the lines. A deleted note'
 removed (removing it made the other computer write it back on every sync, forever). An archived note that was never synced stays
 out of the folder. A newer Monomem importing a marked file archives its live copy (never deletes it), unless the note was edited
 here since (the edit wins and travels back, and the other computer restores it), it is pinned here, or its namespace needs
-approval here: then it stays live and the report says why (`monomem forget <id>` to match). Each marker is acted on once
+approval here: then it stays live and the report says why (`monomem archive <id>` to match). Each marker is acted on once
 (`_meta.sync_marks`), so restoring the note here is not undone by the next sync. When the marker goes away (the computer that
 archived the note restored it), the note is restored here too.
 
@@ -214,7 +214,7 @@ note's file is rewritten with the restored note's new id so it is restored
 once; another machine's note is re-linked to its origin; an unedited file of
 a deleted note is `skipped`), `quarantined` / `rejected`
 (every import write goes through the [memory linter](./memory-linter.md);
-re-importing content that is already pending in quarantine reports it again
+re-importing content that is already held for review reports it again
 without queuing a duplicate).
 **Import never deletes notes.** Deleting a file does not delete the note. A forget or a delete reaches the other stores as an
 archive, through the marker above. Files under `.machines/` hold each computer's chosen name (one line); they are not notes.
@@ -318,5 +318,5 @@ on stderr and exits with status 1.
 ([trust.md](./trust.md)) and removes their earlier files (pruning is the default; `--no-prune` keeps them), so a vault synced to another
 machine or an editor plugin does not carry the content an agent is told not to trust. `--include-distrusted`
 writes them anyway, with `distrusted: true` in the front matter. A file's `origin_writer` is a claim, not a
-proof; on import it is recorded as `imported_written_by` and added to the note's taint set, so a distrust
-rule on that name hides the imported note. A file that omits `origin_writer` carries no taint.
+proof; on import it is recorded as `imported_written_by` and added to the note's writer set (formerly the taint set), so a distrust
+rule on that name hides the imported note. A file that omits `origin_writer` adds no name to it.

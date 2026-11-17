@@ -162,15 +162,15 @@ export function confirmRuleLines(s: Store): string[] {
   return [
     `Unconfirmed notes (from outside content, kept out of session start until confirmed): ${unconfirmed}${unconfirmed ? " (monomem review)" : ""}`,
     ...(unconfirmed ? [`By origin: ${b.tool} written during a session that read the web, ${b.via} after reading unconfirmed notes, ${b.declared} declared by the writer`] : []),
-    ...(wins.length ? [`Open outside-content windows: ${wins.map((w) => `${w.cwd || "(unknown folder)"} (${w.tools.join(", ") || "other"}, ${w.minutes} min ago)`).join("; ")} (end them: monomem taint clear)`] : []),
+    ...(wins.length ? [`Open outside-content windows: ${wins.map((w) => `${w.cwd || "(unknown folder)"} (${w.tools.join(", ") || "other"}, ${w.minutes} min ago)`).join("; ")} (end them: monomem settings outside-window clear)`] : []),
     ...(back.capped ? [`The health grade is capped at B: ${back.reason}. Review them: monomem review`] : []),
     c.mode === "off"
-      ? "Re-confirmation expiry: off (no note expires; turn on: monomem config set confirm-mode label)"
+      ? "Re-confirmation expiry: off (no note expires; turn on: monomem settings set confirm-mode label)"
       : `Re-confirmation expiry: ${c.mode}, every ${c.days} days; ${plural(expired)} past due (${c.mode === "enforce" ? "kept out of session start" : "labelled in search, still shown"})`,
     hours > 0
       ? `Outside-content window: notes written by a local app (no key of its own) launched in the same folder as a hooked session that read outside content, within ${hours} hours and while that session is active (idle 30 minutes ends it), are marked; apps with their own key are not (MONOMEM_TAINT_WINDOW_HOURS)`
       : "Outside-content window: off (MONOMEM_TAINT_WINDOW_HOURS=0), so hooked sessions' outside reads mark nothing",
-    "Reading unconfirmed notes marks later writes: when an app reads a note nobody has confirmed, what it writes next is marked too, until that note is confirmed or the taint window passes. This is counted per connection and starts over when the server restarts.",
+    "Reading unconfirmed notes marks later writes: when an app reads a note nobody has confirmed, what it writes next is marked too, until that note is confirmed or the outside-content window passes. This is counted per connection and starts over when the server restarts.",
   ];
 }
 

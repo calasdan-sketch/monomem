@@ -172,7 +172,7 @@ export function openWindows(s: Store, cwd?: string): Array<{ cwd: string; tools:
 export function openWindowLines(s: Store, cwd: string): string[] {
   return s.openWindows(cwd).map(
     (w) =>
-      `Monomem: a session in this folder read outside content (${w.tools.join(", ") || "other"}) ${w.minutes} min ago; notes written from here are marked until it ends. A person can stop this: monomem taint clear --here`
+      `Monomem: a session in this folder read outside content (${w.tools.join(", ") || "other"}) ${w.minutes} min ago; notes written from here are marked until it ends. A person can stop this: monomem settings outside-window clear --here`
   );
 }
 

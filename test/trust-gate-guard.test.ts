@@ -3,6 +3,7 @@
 // that nobody has classified, so a future route cannot quietly bypass the gate (the 1.4.0 review found
 // four such routes: tags-only update echo, task replay, the janitor and the vault export).
 import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
+import { NEW_TOOLS } from "../src/mcp/tool-names.js";
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
@@ -392,9 +393,9 @@ describe("B: the canary never reaches a non-admin reader through any classified 
 
 describe("docs name every MCP tool", () => {
   test("SKILL.md frontmatter and docs/architecture.md list every registered tool", () => {
-    const mcp = readGroup("mcp-server-core.ts");
-    const tools = [...mcp.matchAll(/server\.registerTool\(\s*"([a-z_]+)"/g)].map((m) => m[1]);
-    assert.ok(tools.length >= 20);
+    // 1.6: the tools a client is shown are the 16 memory_* tools; the 1.5 names are hidden aliases (tool-names.ts).
+    const tools = [...NEW_TOOLS];
+    assert.ok(tools.length >= 14);
     const root = join(SRC, "..");
     const skill = readFileSync(join(root, "SKILL.md"), "utf8");
     const front = skill.slice(0, skill.indexOf("\n---", 4));

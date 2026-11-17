@@ -54,7 +54,7 @@ export async function scrubCmd(): Promise<void> {
 export async function piiCmd(): Promise<void> {
   const { v, pos } = args({ namespace: { type: "string" }, json: { type: "boolean" } });
   if (pos[0] !== "scan") {
-    console.error("usage: monomem pii scan [--namespace <name>] [--json]");
+    console.error("Usage: monomem pii scan [--namespace <name>] [--json]");
     process.exit(1);
   }
   const { DB_PATH } = await import("./config.js");
@@ -107,7 +107,7 @@ export async function safetyReportCmd(): Promise<void> {
   const { v } = args({ out: { type: "string" } });
   const out = s(v.out);
   if (!out) {
-    console.error("usage: monomem safety-report --out report.html");
+    console.error("Usage: monomem safety-report --out report.html");
     process.exit(1);
   }
   const { store, DATA_DIR, tokens, bind, dbPath } = await openAll();

@@ -223,7 +223,7 @@ describe("backup: deferred similarity-graph rebuild", () => {
       };
       assert.equal(json.imported, 250);
       assert.equal(json.similarityGraph, "deferred", "large import must say the graph is deferred");
-      assert.match(json.note ?? "", /rebuild-edges/, "must tell the operator how to finish");
+      assert.match(json.note ?? "", /tidy edges/, "must tell the operator how to finish");
     } finally {
       await new Promise<void>((r) => server.close(() => r()));
       store.close();

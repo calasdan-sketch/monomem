@@ -51,7 +51,7 @@ describe("dashboard: Held view", () => {
     assert.match(html, /instruction override in body/);
     assert.match(html, /work/);
     assert.ok(!html.includes("<img"), "no live markup");
-    assert.match(html, /arm\(this,function\(\)\{qQuarantine\(4,&quot;reject&quot;\)\}\)/);
+    assert.match(html, /arm\(this,function\(\)\{qHeld\(4,&quot;reject&quot;\)\}\)/);
     // Calm: no red bar on the card and no red outline on the tab; red stays only on the HELD stamp.
     assert.ok(!/card held/.test(html));
     assert.match(html, /<span class='stamp'>HELD &middot; NOT IN MEMORY<\/span>/);
@@ -83,7 +83,7 @@ describe("dashboard: Held view", () => {
     const p = page((path, m) => (m === "POST" ? { rejected: 4 } : { quarantine: [] }));
     p.ctx.loadHeld();
     await settle();
-    p.ctx.qQuarantine(4, "reject");
+    p.ctx.qHeld(4, "reject");
     await settle();
     assert.ok(p.calls.includes("POST /quarantine/4/reject"), p.calls.join());
   });

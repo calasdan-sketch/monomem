@@ -144,7 +144,7 @@ export function previewText(input: {
   out.push("");
   out.push("WHAT YOU DO NOT LOSE:");
   out.push("  - Nothing is deleted. The old note keeps its full text, its writer, its dates and its tags, and is marked as replaced.");
-  out.push(`  - You can bring ${notes.length === 1 ? "it" : "each one"} back at any time with "supersede undo <note number>". The undo is recorded.`);
+  out.push(`  - You can bring ${notes.length === 1 ? "it" : "each one"} back at any time with "replace undo <note number>". The undo is recorded.`);
 
   const flagLines: string[] = [];
   if (flags.replacer_distrusted) {
@@ -181,7 +181,7 @@ export function doneText(retired: Array<{ id: number; title: string }>, replacem
   const lines = [
     `Done. ${plural(retired.length, "note")} replaced by note ${replacementId}${created ? " (the new note was written)" : ""}.`,
     ...retired.map((r) => `  - Note ${r.id} ${q(r.title, 80)} is now marked as replaced. It was not deleted.`),
-    `To undo: "supersede undo <note number>" brings a note back.`,
+    `To undo: "replace undo <note number>" brings a note back.`,
   ];
   return lines.join("\n");
 }

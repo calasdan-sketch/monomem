@@ -121,8 +121,8 @@ describe("memory_receipt MCP tool", () => {
   }
 
   test("opt-in: not in the default tool surface", () => {
-    assert.ok(!enabledToolNames({})?.has("memory_receipt"));
-    assert.ok(enabledToolNames({ MONOMEM_TOOLS: "memory_receipt" })?.has("memory_receipt"));
+    assert.ok(!enabledToolNames({})?.has("memory_usage"));
+    assert.ok(enabledToolNames({ MONOMEM_TOOLS: "memory_receipt" })?.has("memory_usage"), "the 1.5 name turns on the 1.6 tool that answers for it");
   });
 
   test("returns the receipt behind the untrusted-data banner, or the recent list without an id", async () => {

@@ -149,7 +149,7 @@ export async function taskRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
         const warnings: LintFinding[] = [];
         const wantApprove = body.approve === true;
         if (wantApprove && !scopeAllows(scope, "admin")) {
-          sendJson(res, 403, { error: "approve:true needs an admin token; approve with POST /tasks/:id/approve (send the command_hash you read)" });
+          sendJson(res, 403, { error: "approve:true needs an admin key; approve with POST /tasks/:id/approve (send the command_hash you read)" });
           return true;
         }
         if (wantApprove && !body.command) {

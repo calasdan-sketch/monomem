@@ -94,7 +94,7 @@ export function createMcpHttpServer(
       const ckey = clientKey(req);
       const proceed = await tarpit.failed(ckey);
       if (!proceed || !authFailures.check(ckey)) sendJson(res, 429, { error: "rate limit exceeded" });
-      else sendJson(res, 401, { error: "unauthorized", hint: "Send your key as the header  Authorization: Bearer <key>.  Your keys: monomem token list." });
+      else sendJson(res, 401, { error: "unauthorized", hint: "Send your key as the header  Authorization: Bearer <key>.  Your keys: monomem keys list." });
       return;
     }
     if (!perToken.check(tokenKey(tokenId(principal)))) {

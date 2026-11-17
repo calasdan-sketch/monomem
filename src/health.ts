@@ -82,7 +82,7 @@ export async function securityFindings(dataDir: string, bindHost: string): Promi
     out.push({ id: "lint", label: "linter weakened", status: "warn", short: `MONOMEM_LINT weakens the memory linter (${policy})`, detail: lintDetail });
   }
   if (process.env.MONOMEM_STDIO_ADMIN_TOOLS === "1") {
-    out.push({ id: "admin", label: "stdio admin tools", status: "fail", short: "MONOMEM_STDIO_ADMIN_TOOLS=1 lets an agent approve its own held writes", detail: "MONOMEM_STDIO_ADMIN_TOOLS=1 lets an agent on the stdio server use the admin tools (approve its own quarantined writes, unpin, delete). Unset it unless you want that." });
+    out.push({ id: "admin", label: "stdio admin tools", status: "fail", short: "MONOMEM_STDIO_ADMIN_TOOLS=1 lets an agent approve its own held writes", detail: "MONOMEM_STDIO_ADMIN_TOOLS=1 lets an agent on the stdio server use the admin tools (approve its own held writes, unpin, delete). Unset it unless you want that." });
   }
   if (!LOOPBACK.includes(bindHost)) {
     out.push({ id: "bind", label: "non-loopback bind", status: "warn", short: `MONOMEM_BIND=${bindHost} is not loopback`, detail: `MONOMEM_BIND=${bindHost} is not a loopback address: anything that can reach this machine on the network can reach the API, so it must be behind your own authenticated tunnel (INFRA.md).` });
@@ -270,7 +270,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
               approve_first: "every namespace is approve-first until you set it again: monomem approve-first <namespace> on|off",
               flood_paused: "every agent writer is paused until you resume one: monomem resume <writer>",
               revoked_attester_keys: "no attester key is believed until the list is rewritten: monomem trust attester-revoke <key>",
-              confirm_mode: "expiry runs in enforce mode until you set it: monomem config set confirm-mode label",
+              confirm_mode: "expiry runs in enforce mode until you set it: monomem settings set confirm-mode label",
             };
             add("trust-settings", "Trust settings", "warn", `damaged stored setting${bad.length === 1 ? "" : "s"}, read in the strictest form: ${bad.map((k) => `${k} (${how[k]})`).join("; ")}`);
           }
@@ -306,7 +306,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
           try {
             const c = (await qualityReport(s)).counts;
             hygiene = c.empty + c.restated + c.duplicate
-              ? `${plural(c.empty, "empty note")}, ${plural(c.restated, "note")} restated but never retired, ${c.duplicate} ${c.duplicate === 1 ? "group" : "groups"} of duplicates: monomem quality lists each with its fix`
+              ? `${plural(c.empty, "empty note")}, ${plural(c.restated, "note")} restated but never retired, ${c.duplicate} ${c.duplicate === 1 ? "group" : "groups"} of duplicates: monomem review duplicates lists each with its fix`
               : "no empty notes, no notes restated but never retired, no duplicates";
           } catch (e) {
             hygiene = `could not be checked: ${(e as Error).message}`;
@@ -351,7 +351,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
   }
 
   const sec = await securityFindings(o.dataDir ?? DATA_DIR, o.bindHost ?? BIND_HOST);
-  if (sec.length) for (const f of sec) add(`security:${f.id}`, f.label, f.status, `${f.short} (monomem doctor has the detail)`);
+  if (sec.length) for (const f of sec) add(`security:${f.id}`, f.label, f.status, `${f.short} (monomem check --setup has the detail)`);
   else add("security", "Security settings", "ok", "no weakening settings found (lint, stdio admin tools, bind address, cloud-sync folder, remote embeddings, browser origins, file permissions, proxy trust, legacy runners)");
 
   if (dbOk) {
@@ -369,7 +369,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
     try {
       const { resolveTokens } = await import("./config.js");
       const open = resolveTokens().filter((t) => t.label !== "primary" && t.max_sensitivity === undefined && t.scope !== "admin");
-      if (open.length && labelledNotes > 0) reasons.push(`${plural(open.length, "app key")} with no limit can read your private notes (${open.map((t) => `"${t.label || "unnamed"}"`).slice(0, 3).join(", ")}; monomem token add <name> --max internal)`);
+      if (open.length && labelledNotes > 0) reasons.push(`${plural(open.length, "app key")} with no limit can read your private notes (${open.map((t) => `"${t.label || "unnamed"}"`).slice(0, 3).join(", ")}; monomem keys add <name> --max internal)`);
     } catch {
       /* tokens unreadable: the other checks say so */
     }
@@ -418,7 +418,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
   }
 
   if (dbOk) {
-    add("held", "Held writes", "info", held ? `${held >= 500 ? "500 or more writes" : plural(held, "write")} held for review: the defence working, nothing was stored without you (monomem quarantine list)` : "no writes waiting for review");
+    add("held", "Held writes", "info", held ? `${held >= 500 ? "500 or more writes" : plural(held, "write")} held for review: the defence working, nothing was stored without you (monomem review held list)` : "no writes waiting for review");
     add("distrust", "Distrusted writers", "info", `${plural(distrust, "distrust rule")}${distrust ? " (their notes are hidden from agents)" : ""}`);
     if (confirmLines.length) add("confirm", "Confirm rules", "info", confirmLines.join("; "));
     if (backlog) add("confirm-backlog", "Unconfirmed backlog", "warn", `${backlog}: review them with monomem review (the grade is capped at B until they are dealt with)`);
@@ -449,14 +449,18 @@ export function gradeReason(r: HealthReport): string {
   return `${r.grade}: ${count} (${bad.map((c) => c.label.toLowerCase()).join(", ")})`;
 }
 
-export function renderHealth(r: HealthReport): string {
+/** Quiet by default: only the warn and fail lines, the grade and what is not covered; verbose adds every line and the rule. */
+export function renderHealth(r: HealthReport, verbose = true): string {
+  const rows = verbose ? r.checks : r.checks.filter((c) => c.status === "warn" || c.status === "fail");
+  const quiet = verbose ? [] : [`  ${r.checks.length - rows.length} check(s) fine or for information only (--verbose lists them, with the grade rule).`];
   return [
-    "monomem health\n",
-    ...r.checks.map((c) => `  ${TAG[c.status]} ${c.label}: ${c.text}`),
+    "monomem check\n",
+    ...rows.map((c) => `  ${TAG[c.status]} ${c.label}: ${c.text}`),
+    ...quiet,
     "",
     `Grade ${r.grade}`,
     gradeReason(r),
-    `Rule: ${r.rule}`,
+    ...(verbose ? [`Rule: ${r.rule}`] : []),
     r.not_covered,
   ].join("\n");
 }
@@ -483,9 +487,9 @@ export function renderHealthCard(r: HealthReport): string {
   );
 }
 
-export const HEALTH_USAGE = `monomem health [--json] [--card [file.svg]]
+export const HEALTH_USAGE = `monomem check [--verbose] [--json] [--card [file.svg]]   (old name: monomem health)
 
-  One line per check (setup, hook, each weakening security setting, drill, audit chain, held writes, distrusted writers,
+  Without --verbose: only the lines that need a look, then the grade. --verbose: one line per check (setup, hook, each weakening security setting, drill, audit chain, held writes, distrusted writers,
   redacted notes, memory size), then a grade and the reason for it.
   Health opens your store to count things (an older database file is upgraded once, as with any monomem command), and
   drill runs on a copy. It writes one small row noting how long the audit log was, so the next run can see lines removed.
@@ -496,13 +500,15 @@ export const HEALTH_USAGE = `monomem health [--json] [--card [file.svg]]
 
 export async function healthMain(argv: string[], out: (s: string) => void = console.log, opts: HealthOpts = {}): Promise<number> {
   let json = false;
+  let verbose = out !== console.log || !process.stdout.isTTY; // quiet only for a person at a terminal
   let card: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--help" || a === "-h") return out(HEALTH_USAGE), 0;
     if (a === "--json") json = true;
+    else if (a === "--verbose") verbose = true;
     else if (a === "--card") card = argv[i + 1] && !argv[i + 1].startsWith("-") ? argv[++i] : join(opts.dataDir ?? DATA_DIR, "monomem-health.svg");
-    else return console.error(`health: unknown option ${a} (try: monomem health --help)`), 2;
+    else return console.error(`Error: unknown option ${a}. Fix: see monomem check --help`), 2;
   }
   const r = await runHealth(opts);
   if (card) {
@@ -510,6 +516,6 @@ export async function healthMain(argv: string[], out: (s: string) => void = cons
     mkdirSync(dirname(card), { recursive: true });
     writeFileSync(card, renderHealthCard(r));
   }
-  out(json ? JSON.stringify({ ...r, reason: gradeReason(r), ...(card ? { card } : {}) }, null, 2) : renderHealth(r) + (card ? `\nwrote ${card}` : ""));
+  out(json ? JSON.stringify({ ...r, reason: gradeReason(r), ...(card ? { card } : {}) }, null, 2) : renderHealth(r, verbose) + (card ? `\nwrote ${card}` : ""));
   return r.exit_code;
 }

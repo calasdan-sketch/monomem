@@ -293,13 +293,34 @@ export function prepareDataDir(): void {
 /** Shortest user-supplied bearer token accepted (generated tokens are 64 hex). */
 export const MIN_TOKEN_LENGTH = 32;
 
+/** The line a first run prints when it made the main app key. */
+export const NEW_KEY_LINE = "[monomem] Made the main app key (first run), saved to ";
+let pendingKeyNotice: (() => void) | null = null;
+/**
+ * Say once that the main app key was made. Commands that start something (start, mcp, setup, open) say it right away;
+ * any other command says it after its own output, so it never lands in the middle of a report.
+ */
+function announceNewKey(file: string): void {
+  // eslint-disable-next-line no-console
+  const say = (): void => console.error(NEW_KEY_LINE + file);
+  if (["start", "serve", "mcp", "mcp:stdio", "setup", "open"].includes(process.argv[2] ?? "")) return say();
+  pendingKeyNotice = say;
+  process.once("exit", () => pendingKeyNotice?.());
+}
+/** True when this process made the main app key; the caller reports it in its own words and the exit line is dropped. */
+export function takeNewKeyNotice(): boolean {
+  const made = pendingKeyNotice !== null;
+  pendingKeyNotice = null;
+  return made;
+}
+
 export function resolveToken(): string {
   if (process.env.MONOMEM_TOKEN && process.env.MONOMEM_TOKEN.trim()) {
     const t = process.env.MONOMEM_TOKEN.trim();
     if (t.length < MIN_TOKEN_LENGTH) {
       throw new Error(
         `monomem: MONOMEM_TOKEN is too short (${t.length} chars); use at least ${MIN_TOKEN_LENGTH}. ` +
-          `Make one with: monomem token new (it only prints a fresh value; nothing is saved)`
+          `Make one with: monomem keys new (it only prints a fresh value; nothing is saved)`
       );
     }
     return t;
@@ -327,8 +348,7 @@ export function resolveToken(): string {
   // Windows Scheduled Task's redirected output, a service manager's logs, or
   // future log-shipping, and the token is a full-access credential valid
   // over the public tunnel. Reference only the file path it was saved to.
-  // eslint-disable-next-line no-console
-  console.error(`[monomem] Generated new bearer token, saved to ${TOKEN_FILE}`);
+  announceNewKey(TOKEN_FILE);
   return token;
 }
 
@@ -497,7 +517,7 @@ export function resolveTokens(): TokenEntry[] {
       console.error(
         `[monomem] ignoring token ${typeof label === "string" && label ? `"${label}"` : "(unnamed)"}: ` +
           `it is ${plain.length} characters; user-supplied tokens must be at least ${MIN_TOKEN_LENGTH}. ` +
-          `To add an app, let Monomem make the token for you: monomem token add <name>`
+          `To add an app, let Monomem make the token for you: monomem keys add <name>`
       );
       return;
     }
@@ -637,7 +657,7 @@ export function resolveTokens(): TokenEntry[] {
       }
       // "primary" is the main key's name: another key carrying it would be treated as the unrestricted main key.
       if (typeof o?.label === "string" && o.label.trim().toLowerCase() === "primary" && typeof o.token === "string" && !locked.has(sha256Hex(o.token.trim()))) {
-        console.error(`[monomem] ignoring a token in ${where}: the name "primary" is reserved for the main key. Rename it (monomem token add <name> makes a new one).`);
+        console.error(`[monomem] ignoring a token in ${where}: the name "primary" is reserved for the main key. Rename it (monomem keys add <name> makes a new one).`);
         refused.add(sha256Hex(o.token.trim()));
         continue;
       }
@@ -663,7 +683,7 @@ export function resolveTokens(): TokenEntry[] {
   }
   for (const [k, ts] of byLabel) {
     if (ts.length < 2) continue;
-    console.error(`[monomem] ignoring ${ts.length} tokens that share the name ${k ? `"${k}"` : "(unnamed)"}: their writes would carry the same writer. Give each its own name in MONOMEM_TOKENS / tokens.json (or remove one: monomem token list); they will not work until then.`);
+    console.error(`[monomem] ignoring ${ts.length} tokens that share the name ${k ? `"${k}"` : "(unnamed)"}: their writes would carry the same writer. Give each its own name in MONOMEM_TOKENS / tokens.json (or remove one: monomem keys list); they will not work until then.`);
     for (const t of ts) if (!locked.has(t)) refused.add(t);
   }
   for (const t of refused) if (!locked.has(t)) byToken.delete(t);

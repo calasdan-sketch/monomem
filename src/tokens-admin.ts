@@ -157,7 +157,7 @@ export interface AddOptions {
 
 export function addApp(o: AddOptions): { token: string; app: ListedApp; ceilingWasDefault: boolean } {
   const label = (o.label ?? "").trim();
-  if (!label) throw new TokenAdminError("Give the app a name, for example: monomem token add cursor");
+  if (!label) throw new TokenAdminError("Give the app a name, for example: monomem keys add cursor");
   if (label.length > 64 || !/^[\w .@+-]+$/.test(label)) throw new TokenAdminError(`"${label}" is not a good name: use letters, numbers, spaces, dots, dashes (up to 64).`);
   let scope: Scope = "write";
   if (o.scope !== undefined) {
@@ -187,7 +187,7 @@ export function addApp(o: AddOptions): { token: string; app: ListedApp; ceilingW
   return withLock(() => {
   const entries = readRaw();
   const taken = new Set([...entries.map((e) => (e.label ?? "").toLowerCase()), ...resolveTokens().map((t) => (t.label ?? "").toLowerCase()), "primary"]);
-  if (taken.has(label.toLowerCase())) throw new TokenAdminError(`An app called "${label}" already exists. Pick another name, or remove it first: monomem token remove "${label}"`);
+  if (taken.has(label.toLowerCase())) throw new TokenAdminError(`An app called "${label}" already exists. Pick another name, or remove it first: monomem keys remove "${label}"`);
   const token = newTokenValue();
   const entry: RawEntry = { token_sha256: sha256Hex(token), scope, label, ...(ns ? { namespace: ns } : {}), ...(max !== undefined ? { max_sensitivity: max } : {}), created_at: new Date().toISOString() };
   writeRaw([...entries, entry]);
@@ -233,7 +233,7 @@ export function hardenTokensFile(): { converted: number } {
       return { converted };
     });
   } catch (e) {
-    console.error(`[monomem] could not harden ${f} (${(e as Error).message}); the keys in it keep working as they are. Try: monomem token harden`);
+    console.error(`[monomem] could not harden ${f} (${(e as Error).message}); the keys in it keep working as they are. Try: monomem keys harden`);
     return { converted: 0 };
   }
 }
@@ -298,6 +298,6 @@ export function addedReport(made: { token: string; app: ListedApp; ceilingWasDef
   out.push(`\nThis is its key. It is shown ONCE and Monomem will not print it again. (${tokensPath()} keeps only a one-way hash of it; the app's own config file holds the key.)\n`);
   out.push("  " + made.token + "\n");
   out.push(connectionSnippet(made.token));
-  out.push(`\nThe running server notices the change within a couple of seconds. To take access away later: monomem token remove "${made.app.label}"`);
+  out.push(`\nThe running server notices the change within a couple of seconds. To take access away later: monomem keys remove "${made.app.label}"`);
   return out.join("\n");
 }

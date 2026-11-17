@@ -356,7 +356,7 @@ describe("A4: errors and CLI polish", () => {
     try {
       const short = String(s.run("help").stdout);
       assert.ok(short.split("\n").length < 70, "short help is one grouped page");
-      assert.match(short, /Get started[\s\S]*Daily[\s\S]*Trust[\s\S]*Maintenance/);
+      assert.match(short, /Get started[\s\S]*Notes[\s\S]*Review[\s\S]*Data and settings/);
       assert.match(short, /connect <app>[\s\S]*open /);
       assert.match(short, /monomem help --all/);
       assert.match(String(s.run("help", "--all").stdout), /rebuild-edges \[--threshold/);
@@ -458,7 +458,7 @@ describe("A4: errors and CLI polish", () => {
     const b2: any = await w.json();
     assert.equal(w.status, 403);
     assert.match(b2.error, /lacks the required 'write' scope/);
-    assert.match(b2.hint, /monomem token add <name> --scope write/);
+    assert.match(b2.hint, /monomem keys add <name> --scope write/);
     await new Promise<void>((r) => server.close(() => r()));
     store.close();
     // scope typo
@@ -499,7 +499,7 @@ describe("A4: errors and CLI polish", () => {
       const held = await fetch(base + "/notes", { method: "POST", headers: H, body: JSON.stringify({ title: "k", body: "key AKIA" + "1234567890ABCD12" }) });
       const hb: any = await held.json();
       assert.equal(held.status, 202);
-      assert.match(hb.quarantined.next, /monomem quarantine list/);
+      assert.match(hb.quarantined.next, /monomem review held list/);
     } finally {
       if (prev === undefined) delete process.env.MONOMEM_LINT;
       else process.env.MONOMEM_LINT = prev;
@@ -524,7 +524,7 @@ describe("A4: errors and CLI polish", () => {
     assert.equal(store.list({}).notes[0].sensitivity, "private");
     const del: any = await client.callTool({ name: "state_delete", arguments: { id: store.list({}).notes[0].id } });
     assert.equal(del.isError, true);
-    assert.match(del.content[0].text, /monomem token add <name> --admin/);
+    assert.match(del.content[0].text, /monomem keys add <name> --admin/);
     await client.close();
     store.close();
   });

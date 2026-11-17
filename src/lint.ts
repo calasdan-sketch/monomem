@@ -221,7 +221,7 @@ const INJECTION_PATTERNS: Array<[string, RegExp]> = [
   ],
   [
     "tool-call coercion",
-    /\b(?:call|invoke|run|execute|use)\s+(?:the\s+)?[`'"]?(?:state_delete|state_write|memory_consolidate|memory_quarantine|memory_rebuild_edges)[`'"]?(?:\s+tool)?\s+(?:on\s+(?:every|all)|for\s+(?:every|all)|immediately|now\b|right\s+away)/i,
+    /\b(?:call|invoke|run|execute|use)\s+(?:the\s+)?[`'"]?(?:state_delete|state_write|memory_consolidate|memory_quarantine|memory_rebuild_edges|memory_save|memory_archive|memory_tidy|memory_held|memory_tasks|memory_replace|memory_rollback|memory_history)[`'"]?(?:\s+tool)?\s+(?:on\s+(?:every|all)|for\s+(?:every|all)|immediately|now\b|right\s+away)/i,
   ],
   [
     // A markdown image loads by itself when rendered, so a query string on a

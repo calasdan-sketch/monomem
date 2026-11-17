@@ -46,7 +46,7 @@ export async function connectCmd(cliPath: string): Promise<void> {
   const named = str(flags.name)?.trim();
   let label = named || app;
   if (named && t.listApps().some((a) => a.label.toLowerCase() === named.toLowerCase())) {
-    console.error(`A key labelled "${named}" already exists. Pick another --name, or see them with: monomem token list`);
+    console.error(`A key labelled "${named}" already exists. Pick another --name, or see them with: monomem keys list`);
     process.exit(1);
   }
   for (let n = 2; t.listApps().some((a) => a.label.toLowerCase() === label.toLowerCase()); n++) label = `${app}-${n}`;
@@ -98,7 +98,7 @@ export async function connectCmd(cliPath: string): Promise<void> {
   }
   process.exitCode = code;
   if (code === 0) {
-    if (!dry) console.log(`\nDone. ${app} now connects with its own key. Start the server so it has something to talk to:  monomem start\nTake access away any time:  monomem token remove "${label}"`);
+    if (!dry) console.log(`\nDone. ${app} now connects with its own key. Start the server so it has something to talk to:  monomem start\nTake access away any time:  monomem keys remove "${label}"`);
   } else if (!dry) {
     t.removeApp(label);
     console.error(`Nothing was connected, so the key for "${label}" was removed again.`);
@@ -125,7 +125,7 @@ export async function openCmd(cliPath: string): Promise<void> {
     child.unref();
     for (let i = 0; i < 40 && !(await up()); i++) await new Promise((r) => setTimeout(r, 250));
     if (!(await up())) {
-      console.error(`Monomem did not start. Run  monomem doctor  to see why, or start it yourself with  monomem start  and look at what it prints.`);
+      console.error(`Monomem did not start. Run  monomem check --setup  to see why, or start it yourself with  monomem start  and look at what it prints.`);
       process.exit(1);
     }
   }
@@ -142,7 +142,7 @@ export async function openCmd(cliPath: string): Promise<void> {
   const { spawn } = await import("node:child_process");
   const [cmd, args] = process.platform === "win32" ? ["cmd", ["/c", "start", "", url.replace(/%/g, "%%").replace(/&/g, "^&")]] : process.platform === "darwin" ? ["open", [url]] : ["xdg-open", [url]];
   try {
-    spawn(cmd, args, { detached: true, stdio: "ignore", windowsHide: true }).on("error", () => console.log(`I could not open a browser. Open this address yourself:\n${url.replace(/#.*/, "")}  (then paste your key; run monomem doctor to see where it is kept)`)).unref();
+    spawn(cmd, args, { detached: true, stdio: "ignore", windowsHide: true }).on("error", () => console.log(`I could not open a browser. Open this address yourself:\n${url.replace(/#.*/, "")}  (then paste your key; run monomem check --setup to see where it is kept)`)).unref();
     console.log(`Opened the dashboard: ${base}`);
   } catch {
     console.log(`Open this address in your browser: ${base}`);
@@ -175,7 +175,7 @@ export async function init(cliPath: string): Promise<void> {
     console.log("I did not find any supported app on this computer. That is fine:");
     console.log("  - Install one (for example Claude Code or Cursor) and run  monomem init  again, or");
     console.log("  - Run  monomem connect claude-code  (or another app name) to create its settings anyway.");
-    console.log("  - Not sure what is wrong? Run  monomem doctor.");
+    console.log("  - Not sure what is wrong? Run  monomem check --setup.");
     return;
   }
   console.log("Apps I found:");

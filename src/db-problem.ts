@@ -24,7 +24,7 @@ export function describeDbFailure(path: string, err: unknown): { problem: string
   if (/EACCES|EPERM|permission|readonly|read-only/i.test(msg)) {
     return { problem: `database problem at ${path}: no permission (${msg})`, fix: `Make sure your user can read and write ${path} and the folder it is in.` };
   }
-  return { problem: `database problem at ${path}: ${msg}`, fix: "Run  monomem doctor  for more detail. If it keeps happening, restore a backup over the file (monomem backup makes them)." };
+  return { problem: `database problem at ${path}: ${msg}`, fix: "Run  monomem check --setup  for more detail. If it keeps happening, restore a backup over the file (monomem backup makes them)." };
 }
 
 /**

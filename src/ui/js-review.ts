@@ -69,8 +69,8 @@ function loadHeld(){
         "<div class='chips'>"+(why || "<span class='tag why'>held by your approve-first rule</span>")+"</div>"+tagsHtml(q.tags)+
         (q.body ? "<div class='heldbody'>"+esc(q.body)+"</div>" : "")+
         "<div id='qctx"+Number(q.id)+"' class='meta'></div>"+
-        acts("<button class='primary' aria-label='reject held write #"+Number(q.id)+"' onclick='arm(this,function(){qQuarantine("+Number(q.id)+",&quot;reject&quot;)})'>Reject</button>"+
-          "<button aria-label='approve held write #"+Number(q.id)+"' onclick='arm(this,function(){qQuarantine("+Number(q.id)+",&quot;approve&quot;)})'>Approve</button>")+"</article>";
+        acts("<button class='primary' aria-label='reject held write #"+Number(q.id)+"' onclick='arm(this,function(){qHeld("+Number(q.id)+",&quot;reject&quot;)})'>Reject</button>"+
+          "<button aria-label='approve held write #"+Number(q.id)+"' onclick='arm(this,function(){qHeld("+Number(q.id)+",&quot;approve&quot;)})'>Approve</button>")+"</article>";
     }).join("") : empty("Nothing is held", "Writes that look like a secret or an injected instruction wait here for you.");
     held.forEach(function(q){ loadHeldContext(Number(q.id)); });
   }).catch(failList);
@@ -82,14 +82,14 @@ function loadHeldContext(id){
     var rows = notes.map(function(n){ return "<li>&ldquo;"+esc(n.title)+"&rdquo; ("+(n.written_by ? esc(shownWriter(n.written_by))+", " : "")+esc(ago(n.updated_at))+")</li>"; }).join("");
     box.innerHTML = (c.diff ? "<div>What this change does to the note (- now, + held):</div>" + diffHtml(c.diff) : "") +
       (notes.length ? "Saved on the same topic since:<ul>"+rows+"</ul>"+
-        acts("<button aria-label='keep held write #"+id+" as history' onclick='arm(this,function(){qQuarantine("+id+",&quot;keep-history&quot;)})'>Keep as history</button>") : "") +
+        acts("<button aria-label='keep held write #"+id+" as history' onclick='arm(this,function(){qHeld("+id+",&quot;keep-history&quot;)})'>Keep as history</button>") : "") +
       (c.target_changed ? "<div>The note it changes was edited since, so Approve will not work.</div>" : "") +
       (c.clears && c.clears.length ? "<div>Approving it also clears the note's " + esc(c.clears.map(function(x){ return x === "forget_after" ? "forget date" : x; }).join(" and ")) + ".</div>" : "") +
       (c.note ? "<div>" + esc(c.note) + "</div>" : "");
   }).catch(function(){ var box = $("qctx" + id); if(box){ box.textContent = "Could not load what was saved since."; } });
 }
 function refreshHeld(){ if(VIEW === "quality"){ loadQuality(); } else { loadHeld(); } }
-function qQuarantine(id, action){
+function qHeld(id, action){
   api("/quarantine/" + id + "/" + action, { method:"POST" }).then(function(){
     refreshHeld(); loadNeeds(); toast(action === "approve" ? "Approved: it is in memory now." : action === "keep-history" ? "Kept as history." : "Rejected: it was discarded.");
   }).catch(fail);

@@ -302,7 +302,7 @@ async function fetchRecentNotes(opts: RecallOptions): Promise<RecallData> {
   if (onDisk !== null && onDisk >= 1 && onDisk < SCHEMA_VERSION) {
     console.error(
       `monomem recall: the database is at schema v${onDisk} (this release uses v${SCHEMA_VERSION}); ` +
-        "not upgrading it from the hook. Run any `monomem` command (for example `monomem doctor`) to upgrade it."
+        "not upgrading it from the hook. Run any `monomem` command (for example `monomem check --setup`) to upgrade it."
     );
     return { memory: "", board: "" };
   }

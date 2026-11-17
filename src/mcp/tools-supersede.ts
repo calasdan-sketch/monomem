@@ -57,7 +57,7 @@ export function registerSupersedeTools(c: McpCtx): void {
           store,
           callerNow(),
           { old_ids: a.old_ids, new_note: newNoteFrom(a), new_id: a.new_id },
-          "To go ahead, ONLY after the person says yes: call memory_supersede_confirm with this code: {token}"
+          "To go ahead, ONLY after the person says yes: call memory_replace with action \"confirm\" and this code: {token}"
         );
         // One block: the warning is inside the JSON ({ok, token, expires, warning}); a second plain copy of it doubled the size.
         return { content: [{ type: "text" as const, text: UNTRUSTED_BANNER + JSON.stringify(out) }] };

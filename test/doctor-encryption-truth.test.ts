@@ -27,7 +27,7 @@ describe("S-03 encryption truth", () => {
       // final-security SF6: status must not say "off" here; it says the key is missing and points to doctor.
       const st = run(dir, ["encrypt", "status"]);
       assert.doesNotMatch(st.stdout, /encryption: off/);
-      assert.match(st.stdout, /encryption: on, but the key file is missing at [\s\S]*monomem doctor/);
+      assert.match(st.stdout, /encryption: on, but the key file is missing at [\s\S]*monomem check --setup/);
       const r = run(dir, ["doctor"]);
       assert.notEqual(r.status, 0);
       assert.match(r.stdout + r.stderr, /1 note.* encrypted.*key is missing/i);

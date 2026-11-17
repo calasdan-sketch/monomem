@@ -51,7 +51,7 @@ describe("session-start context", () => {
     assert.ok(text.startsWith(`What I know about this project:\nLast session: Session: refactor\n\nLatest session summary (#${sum.id}`), text.slice(0, 120));
     assert.ok(text.indexOf("Recent memory (1 note):\n#81 [A plain note] {recent 0d}: remember this") > 0);
     assert.match(text, /\n#\d+ \[change\] Observation number \d+ \(\d{4}-\d\d-\d\d, ~\d+ tok\)/);
-    assert.match(text, /Showing \d+ of 82 memories in ~\d+ tokens \(estimate\)(?:, condensed from ~\d+ tokens of notes and captured events|\. The notes themselves are only ~\d+ tokens; the rest is headers and index lines)\. Open any with memory_get ids=\[N\]$/);
+    assert.match(text, /Showing \d+ of 82 memories in ~\d+ tokens \(estimate\)(?:, condensed from ~\d+ tokens of notes and captured events|\. The notes themselves are only ~\d+ tokens; the rest is headers and index lines)\. Open any with memory_read id=N$/);
     const big = await injectContext(s, { signals: noGit, tokens: 3000 });
     assert.ok(big.length > text.length, "a bigger budget shows more");
     assert.equal(indexLine(sum).startsWith(`#${sum.id} by capture: [summary] Session: refactor`), true);
@@ -65,7 +65,7 @@ describe("session-start context", () => {
     const text = await injectContext(s, { signals: noGit });
     assert.doesNotMatch(text, new RegExp(`\\n#${sum.id} \\[summary\\]`));
     assert.match(text, /Showing 2 of 2 memories/);
-    assert.match(text, /memory_get ids=\[N\]$/);
+    assert.match(text, /memory_read id=N$/);
     s.close();
   });
 

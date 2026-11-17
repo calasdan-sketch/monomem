@@ -412,7 +412,7 @@ describe("setup: making the change", () => {
     s.e.execPath = process.execPath;
     const io = makeIO();
     assert.equal(await runSetup(s.e, io, { ...opts({ yes: true, db: s.db, noTestNote: true }), noDoctor: false }), 0);
-    assert.match(io.all(), /monomem doctor:/);
+    assert.match(io.all(), /monomem check --setup:/);
     // Whatever Node is running this suite -- 22 and 24 are both supported, so
     // do not hard-code one of them here.
     assert.match(io.all(), new RegExp(`Node ${process.versions.node.replace(/\./g, "\\.")}`));

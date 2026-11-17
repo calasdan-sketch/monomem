@@ -17,7 +17,7 @@ export async function distrustCheck(dr: Doctor): Promise<void> {
             "and read the hidden notes. Give agents a write or read token (MONOMEM_TOKENS / tokens.json, see docs/token-namespaces.md) and keep the primary token off them."
         );
       } else {
-        ok(`${dr.distrustCount} distrust rule(s); ${scoped.length} non-admin token(s) configured (keep the primary admin token off agents)`);
+        ok(`${dr.distrustCount} distrust rule(s); ${scoped.length} non-admin key(s) configured (keep the main app key off agents)`);
       }
     } catch {
       /* token configuration unreadable: reported below */
@@ -32,14 +32,14 @@ export async function tokenCheck(dr: Doctor): Promise<void> {
   try {
     resolveToken();
     ok(
-      `bearer token present (${process.env.MONOMEM_TOKEN?.trim() ? "MONOMEM_TOKEN" : TOKEN_FILE})${dr.keyJustCreated ? " - created just now, because this was the first run" : ""}`
+      `main app key present (${process.env.MONOMEM_TOKEN?.trim() ? "MONOMEM_TOKEN" : TOKEN_FILE})${dr.keyJustCreated ? " - created just now, because this was the first run" : ""}`
     );
   } catch (e) {
     const msg = (e as Error).message;
     if (!dr.dataDirWritable || /EACCES|EPERM|EROFS|permission/i.test(msg)) {
       if (dr.dataDirWritable) fail("token: " + msg, "This looks like a permissions problem with " + TOKEN_FILE + ". Make it readable and writable for your user.");
     } else {
-      fail("token: " + msg, "Set MONOMEM_TOKEN to a long random value (monomem token new prints one), or delete the token file and let Monomem make one.");
+      fail("token: " + msg, "Set MONOMEM_TOKEN to a long random value (monomem keys new prints one), or delete the token file and let Monomem make one.");
     }
   }
 }
@@ -58,7 +58,7 @@ export async function tokensFileCheck(dr: Doctor): Promise<void> {
         const parsed = JSON.parse(rf(tf, "utf8"));
         if (!Array.isArray(parsed)) throw new Error("it should hold a list");
       } catch (e) {
-        fail(`${tf} cannot be read (${(e as Error).message}), so the apps listed in it cannot connect, and a running server keeps its old list.`, `Open ${tf}, fix or delete it, then run monomem doctor again. (A backup of the previous version may be at ${tf}.bak.)`);
+        fail(`${tf} cannot be read (${(e as Error).message}), so the apps listed in it cannot connect, and a running server keeps its old list.`, `Open ${tf}, fix or delete it, then run monomem check --setup again. (A backup of the previous version may be at ${tf}.bak.)`);
       }
     }
   } catch {
@@ -80,7 +80,7 @@ export async function appKeysCheck(dr: Doctor): Promise<void> {
     if (open.length > 0 && dr.hasLabelled) {
       warn(
         `${open.map((t) => `"${t.label || "(unnamed)"}"`).join(", ")} can read your private notes (no limit is set on ${open.length === 1 ? "its key" : "their keys"}), and you have notes labelled other than internal.`,
-        `give each a limit: monomem token remove <name>, then monomem token add <name> --max internal   (see docs/give-an-app-limited-access.md)`
+        `give each a limit: monomem keys remove <name>, then monomem keys add <name> --max internal   (see docs/give-an-app-limited-access.md)`
       );
     }
     // Apps connected without a key (stdio) can read everything, whatever limits other apps have.

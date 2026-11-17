@@ -468,7 +468,7 @@ export function noteHistory(store: Store, caller: Caller, id: number, opts: { in
 /** Put an earlier version back as a NEW version (the text it replaces goes into the history). Administrators only. */
 export function restoreVersion(store: Store, caller: Caller, id: number, version: unknown, opts: { ifRev?: number } = {}): { ok: true; message: string; note: NoteRecord } {
   const n = historyGate(store, caller, id);
-  if (n.status === "superseded") throw new SupersedeError(`note ${id} was replaced by ${n.superseded_by !== undefined ? `note ${n.superseded_by}` : "another note"}; bring it back (supersede undo) before restoring a version`, 409);
+  if (n.status === "superseded") throw new SupersedeError(`note ${id} was replaced by ${n.superseded_by !== undefined ? `note ${n.superseded_by}` : "another note"}; bring it back (replace undo) before restoring a version`, 409);
   if (typeof version !== "number" || !Number.isInteger(version) || version < 1) throw new SupersedeError("give the version number to restore");
   const entry = store.historyVersion(id, version);
   if (!entry) throw new SupersedeError(`note ${id} has no saved version ${version}`, 404);

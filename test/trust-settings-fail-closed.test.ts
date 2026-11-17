@@ -85,7 +85,7 @@ describe("A3 doctor names a damaged trust setting", () => {
       const c = r.checks.find((x: { id: string }) => x.id === "trust-settings");
       assert.ok(c, JSON.stringify(r.checks.map((x: { id: string }) => x.id)));
       assert.equal(c!.status, "warn");
-      assert.match(c!.text, /confirm_mode .*monomem config set confirm-mode/);
+      assert.match(c!.text, /confirm_mode .*monomem settings set confirm-mode/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

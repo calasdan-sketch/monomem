@@ -24,9 +24,11 @@ import { registerTaskTools } from "./mcp/tools-tasks.js";
 import { registerTrustTools } from "./mcp/tools-trust.js";
 import { registerSupersedeTools } from "./mcp/tools-supersede.js";
 import { registerSessionTools } from "./mcp/tools-sessions.js";
+import { registerV16Tools, filterToolList } from "./mcp/tools-v16.js";
 export { PACKAGE_VERSION };
 export { LIST_BODY_CHARS, OPERATOR_ONLY_TOOLS, type ConnectionCtx } from "./mcp/shared.js";
-export { DEFAULT_TOOLS, enabledToolNames } from "./mcp/tool-names.js";
+export { DEFAULT_TOOLS, LEGACY_DEFAULT_TOOLS, NEW_TOOLS, OLD_TOOL_ALIASES, enabledToolNames, toolProfile } from "./mcp/tool-names.js";
+export { SERVER_INSTRUCTIONS } from "./mcp/instructions.js";
 
 /** The stdio server's hourly housekeeping (most installs never run the HTTP server, which does the same): expiry and change-log pruning. Never throws. */
 export function stdioSweep(store: Store, log: (msg: string) => void = (m) => process.stderr.write(m + "\n")): void {
@@ -68,5 +70,7 @@ export function createMcpServer(
   registerTrustTools(c);
   registerSupersedeTools(c);
   registerSessionTools(c);
+  registerV16Tools(c);
+  filterToolList(c);
   return c.server;
 }

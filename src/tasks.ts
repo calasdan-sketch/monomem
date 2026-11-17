@@ -764,7 +764,7 @@ export function listTasks(store: Store, opts: TaskListOpts = {}): { tasks: Task[
 function distrustedTaskError(id: number): ValidationError {
   return new ValidationError(
     `task #${id} was written by a writer on this namespace's distrust list; it cannot be claimed or approved. ` +
-      "An admin can review it (include_distrusted) and, if it is fine, copy it into a new task under a trusted writer (rewriting it keeps the writer on its taint list) or take the writer off the list."
+      "An admin can review it (include_distrusted) and, if it is fine, copy it into a new task under a trusted writer (rewriting it keeps the writer on the distrust list) or take the writer off the list."
   );
 }
 
@@ -1324,7 +1324,7 @@ export function catchUp(store: Store, opts: CatchUpOpts = {}): CatchUp {
   const over = overwritesOf(store, currentWriter(), since, opts.namespaces);
   if (over.length) {
     out.overwritten = over;
-    out.overwritten_hint = "Another writer replaced text you wrote. Read the note (state_read) and its history if the change looks wrong, and tell the user.";
+    out.overwritten_hint = "Another writer replaced text you wrote. Read the note (memory_read) and its history if the change looks wrong, and tell the user.";
   }
   return out;
 }
@@ -1419,7 +1419,7 @@ export function buildBoardSummary(
     }
     const more = total - shown;
     sections.push(
-      [`Open tasks (${total}${more > 0 ? `, showing ${shown}` : ""}):`, ...lines, ...(more > 0 ? [`- … and ${more} more (task_list)`] : [])].join("\n")
+      [`Open tasks (${total}${more > 0 ? `, showing ${shown}` : ""}):`, ...lines, ...(more > 0 ? [`- … and ${more} more (memory_tasks)`] : [])].join("\n")
     );
   }
   if (handoff) {

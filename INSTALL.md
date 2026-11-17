@@ -25,7 +25,7 @@ run on your computer with no limit, so use `connect` for any app that should not
    they were set up with (`monomem@1.5.0`); they keep launching that old copy after the upgrade, and once the newer one has
    upgraded the database the old hook returns nothing at session start, without an error. Running setup again points them at
    the new version (it shows the change and asks first).
-3. `monomem doctor`: it warns `... launches monomem X, this is Y` (and says to run `monomem setup`) while an app entry or hook still
+3. `monomem check --setup` (formerly `monomem doctor`): it warns `... launches monomem X, this is Y` (and says to run `monomem setup`) while an app entry or hook still
    names the old version.
 
 What changes per release, and how to go back: [docs/upgrading.md](./docs/upgrading.md).
@@ -83,12 +83,12 @@ changes nothing.
   `monomem.cmd`, right-click the zip, choose **Properties**, tick **Unblock**, click **OK**, and extract again. Do not turn
   Smart App Control off. Task Manager shows Monomem as "Node.js JavaScript Runtime". We have not yet tested this on a
   computer with Smart App Control switched on.
-- **Mac.** A browser download gets a "quarantine" mark, and macOS Gatekeeper checks marked programs. Node's `runtime/node`
+- **Mac.** A browser download gets a download mark (`com.apple.quarantine`), and macOS Gatekeeper checks marked programs. Node's `runtime/node`
   is signed by its makers; the `monomem` launcher is a plain text script and is not signed. If you see "cannot be opened
   because Apple cannot check it for malicious software" (or "from an unidentified developer"):
   1. Open **System Settings > Privacy & Security**, scroll down, and click **Open Anyway** next to the Monomem message.
   2. Or, in Terminal, remove the mark from the unpacked folder once: `xattr -dr com.apple.quarantine ~/Downloads/Monomem`
-  An archive fetched with `curl` gets no quarantine mark at all. We have not yet tested these steps on a Mac.
+  An archive fetched with `curl` gets no such mark at all. We have not yet tested these steps on a Mac.
 - **Linux.** No warning. `chmod +x Monomem/monomem` if your unpacker dropped the executable bit.
 
 **Check the download (recommended)**
@@ -113,10 +113,12 @@ changes nothing.
 > `monomem mcp`. Your memory lives in `~/.monomem` (override with
 > `MONOMEM_HOME`), so it survives upgrades.
 >
-> **Nine tools are registered by default** — enough to write, find, read,
-> forget and safely replace a memory. Every tool's schema is sent to the model
-> on every turn, so the operator tools (change feed, task board, trust,
-> quarantine, consolidation, history, session index) are opt-in. To switch
+> **Seven tools are shown by default** (`memory_save`, `memory_search`,
+> `memory_read`, `memory_list`, `memory_archive`, `memory_replace`,
+> `memory_catch_up`) — enough to save, find, read, archive and safely replace a
+> memory and catch up at session start. Every tool's schema is sent to the model
+> on every turn, so the operator tools (review, task board, trust, held writes,
+> tidy, history, usage, sessions) are opt-in. To switch
 > them on, add an `env` block to the client config you are about to edit:
 >
 > ```json
@@ -128,8 +130,10 @@ changes nothing.
 > ```
 >
 > You can name individual tools instead of `all`:
-> `"MONOMEM_TOOLS": "memory_index,memory_timeline,memory_get,session_list"`.
-> The default nine are always kept, so a typo cannot leave you unable to read
+> `"MONOMEM_TOOLS": "memory_sessions,memory_held"`. A 1.5 name in the list
+> (such as `memory_index`) turns on the 1.6 tool that answers for it, and
+> `"MONOMEM_TOOLS": "legacy-1.5"` shows the 1.5 tool list instead.
+> The default seven are always kept, so a typo cannot leave you unable to read
 > or write. See [docs/configuration.md](./docs/configuration.md).
 >
 > Working from a git clone instead? `npm install && npm run build && npm link`
@@ -281,8 +285,8 @@ a server whose command is `monomem` and whose argument is `mcp`. Example (Windsu
 ## Connect to a shared server (a teammate's setup)
 
 If your team runs one Monomem server (see [docs/team.md](./docs/team.md)), you do not install anything. Your admin gives you
-the address (`https://<your host>/mcp`) and your own token (shown once by `monomem token add`). Every client sends the token as
-`Authorization: Bearer <token>`. Keep the token out of files you commit.
+the address (`https://<your host>/mcp`) and your own app key (shown once by `monomem keys add`, formerly `monomem token add`). Every
+client sends the key as `Authorization: Bearer <token>`. Keep the key out of files you commit.
 
 **Claude Code**
 
@@ -290,7 +294,7 @@ the address (`https://<your host>/mcp`) and your own token (shown once by `monom
 claude mcp add --transport http monomem https://<your host>/mcp --header "Authorization: Bearer <token>"
 ```
 
-Then type `/mcp` in Claude Code: `monomem` should show as connected. A red mark with 401 means the token is wrong.
+Then type `/mcp` in Claude Code: `monomem` should show as connected. A red mark with 401 means the app key is wrong.
 
 **Cursor** (`~/.cursor/mcp.json`, or `.cursor/mcp.json` in a project)
 

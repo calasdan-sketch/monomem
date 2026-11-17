@@ -67,7 +67,7 @@ export async function trustRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
       }
       if (path === "/trust/attesters" && req.method === "POST") {
         if (pinned) {
-          sendJson(res, 403, { error: "the attester list is server-wide: use an admin token that is not pinned to a namespace" });
+          sendJson(res, 403, { error: "the attester list is server-wide: use an admin key that is not pinned to a namespace" });
           return true;
         }
         const b = await body();
@@ -85,7 +85,7 @@ export async function trustRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
       const attDel = /^\/trust\/attesters\/([0-9a-fA-F]{16})$/.exec(path);
       if (attDel && req.method === "DELETE") {
         if (pinned) {
-          sendJson(res, 403, { error: "the attester list is server-wide: use an admin token that is not pinned to a namespace" });
+          sendJson(res, 403, { error: "the attester list is server-wide: use an admin key that is not pinned to a namespace" });
           return true;
         }
         sendJson(res, 200, { removed: store.attesterRemove(attDel[1]), attesters: store.attesterList() });
@@ -93,7 +93,7 @@ export async function trustRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
       }
       if (path === "/trust/revoked" && req.method === "POST") {
         if (pinned) {
-          sendJson(res, 403, { error: "the revocation list is server-wide: use an admin token that is not pinned to a namespace" });
+          sendJson(res, 403, { error: "the revocation list is server-wide: use an admin key that is not pinned to a namespace" });
           return true;
         }
         const b = await body();
@@ -105,7 +105,7 @@ export async function trustRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
       const revDel = /^\/trust\/revoked\/([0-9a-fA-F]{16})$/.exec(path);
       if (revDel && req.method === "DELETE") {
         if (pinned) {
-          sendJson(res, 403, { error: "the revocation list is server-wide: use an admin token that is not pinned to a namespace" });
+          sendJson(res, 403, { error: "the revocation list is server-wide: use an admin key that is not pinned to a namespace" });
           return true;
         }
         sendJson(res, 200, { removed: store.attesterUnrevoke(revDel[1]), revocations: store.revocationList() });

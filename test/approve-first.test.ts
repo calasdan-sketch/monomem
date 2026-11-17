@@ -344,8 +344,8 @@ describe('state_search mode "relevant"', () => {
     store.close();
   });
 
-  test("state_relevant is out of the default set (nine tools) but still registered", () => {
-    assert.equal(DEFAULT_TOOLS.length, 9);
+  test("state_relevant is out of the default set (seven tools) but still registered", () => {
+    assert.equal(DEFAULT_TOOLS.length, 7);
     assert.ok(!DEFAULT_TOOLS.includes("state_relevant"));
   });
 });
