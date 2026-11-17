@@ -15,8 +15,15 @@ Pass `claims` to `memory_save` when creating a note (at most 20). Each entry is 
 | `{ "file": "scripts/deploy.sh", "exists": true }` | the file is there |
 | `"src/auth.ts:10-24"` or `{ "file": "src/auth.ts", "lines": "10-24" }` | a line citation (at most 200 lines): Monomem stores a SHA-256 hash of those lines and later compares it |
 
-Every claim must hold when the note is written. A claim that is false now, or cites lines past the end of the file, is
-refused and nothing is written. Claims can only be added when a note is created: to change them, replace the note.
+Every claim must hold when the note is written, on a file git tracks. A claim that is false now, cites lines past the end
+of the file, or names a file git does not track (a gitignored `.env`, a new file not yet added) is refused and nothing is
+written. Every such refusal is the same message, `claims: refused. ...`: it does not say which claim or which part failed,
+so a writer cannot learn a file's text one guess at a time. Claims can only be added when a note is created: to change
+them, replace the note.
+
+Claims are for local connections only: an app started on this computer (stdio), whose folder is known. A connection with
+no folder of its own (an app key over HTTP or REST, an OAuth app such as claude.ai) is refused with "claims are checked
+against the files of a local connection only". It would otherwise be checking files on the computer that runs the server.
 
 ## What you see
 
@@ -37,11 +44,16 @@ A label names the file and line numbers only, never the claim's text.
 ## Limits and safety
 
 - Files are only read. Nothing is ever run: no commands, no scripts, no regular expressions.
-- Claims need a git repository with a commit: the folder a local MCP server was started in, otherwise the folder the Monomem
-  process runs in. Outside one, `claims` is refused (unlike `files`, which is then ignored).
+- Claims need a git repository with a commit: the folder a local MCP server was started in (or a command-line script's own
+  folder). Outside one, `claims` is refused (unlike `files`, which is then ignored).
+- Only files git tracks are read (`git ls-files`, run with fixed arguments and a short timeout). An untracked or
+  gitignored file is refused before it is opened.
 - Paths stay inside the repository root. Refused: `..`, an absolute path outside it, a folder, a path through a symlink
   that leads out. A file that later becomes a link out of the root is not read; its claim fails with "path leads outside the
   repository".
+- A local agent that can already read the repository can still learn whether a tracked file holds some text by trying a
+  claim (the refusal says no). That is no more than it could read directly; untracked files and remote connections are
+  where the limit matters.
 - A file over 1 MB is not read; its claim fails with "file over 1 MB, not read".
 - Checks compare the files on disk now, including uncommitted edits (code anchors compare committed code).
 - Line endings do not count: a file switched from CRLF to LF still matches.

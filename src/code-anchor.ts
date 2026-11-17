@@ -94,6 +94,19 @@ export function repoPaths(files: string[], cwd: string, what = "files"): { root:
   return { root, realRoot, commit: commit!, rels };
 }
 
+/** The blob in git's index for each of `rels` that git tracks (path -> sha); an untracked path is absent. The blob is what
+ * the file will be once committed. No filters run (ls-files never calls a clean filter). Shared with claims.ts. */
+export function indexBlobs(root: string, rels: readonly string[]): Map<string, string> {
+  const blobs = new Map<string, string>();
+  if (!rels.length) return blobs;
+  const out = git(root, ["ls-files", "-s", "-z", "--", ...rels.map((r) => `:(literal)${r}`)]) ?? "";
+  for (const rec of out.split("\0")) {
+    const m = /^\d+ ([0-9a-f]{40,64}) \d+\t(.+)$/s.exec(rec);
+    if (m) blobs.set(m[2], m[1]);
+  }
+  return blobs;
+}
+
 /**
  * Anchors for `files` written from `cwd`: each path must be inside the repository that holds `cwd` (no absolute path
  * outside it, no symlink out of it) and tracked by git. [] when `cwd` is not in a repository with a commit (or git is
@@ -105,13 +118,7 @@ export function anchorsFor(files: string[], cwd: string): CodeAnchor[] {
   if (!where) return [];
   const { root, commit } = where;
   const rels = [...new Set(where.rels)];
-  // The blob in the index: what the file will be once committed. No filters run (ls-files never calls a clean filter).
-  const out = git(root, ["ls-files", "-s", "-z", "--", ...rels.map((r) => `:(literal)${r}`)]) ?? "";
-  const blobs = new Map<string, string>();
-  for (const rec of out.split("\0")) {
-    const m = /^\d+ ([0-9a-f]{40,64}) \d+\t(.+)$/s.exec(rec);
-    if (m) blobs.set(m[2], m[1]);
-  }
+  const blobs = indexBlobs(root, rels);
   return rels.map((rel) => {
     const blob = blobs.get(rel);
     if (!blob) throw new ValidationError(`files: ${rel.slice(0, 120)} is not tracked by git here (git add it first)`);

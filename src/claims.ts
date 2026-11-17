@@ -18,7 +18,7 @@ import type { NoteRecord, NoteRow, Store } from "./store.js";
 import { actorStore, currentWriter } from "./actor.js";
 import { ValidationError } from "./errors.js";
 import { printable } from "./security.js";
-import { inside, MAX_FILES, repoPaths } from "./code-anchor.js";
+import { indexBlobs, inside, MAX_FILES, repoPaths } from "./code-anchor.js";
 
 export const MAX_BYTES = 1 << 20;
 const MAX_TEXT = 200;
@@ -176,24 +176,46 @@ const describe = (c: Pick<Claim, "kind" | "path" | "arg">): string =>
   c.kind === "lines" ? `${c.path}:${span(c.arg)}` : c.kind === "exists" ? `${c.path} exists` : `${c.path} ${c.kind === "contains" ? "contains" : "has dependency"} ${JSON.stringify(c.arg)}`;
 
 /**
- * The claims for a new note, checked now from the writer's folder (a local server's launch folder, else this process's).
- * Runs before the write lock. Throws ValidationError for a bad path, no git repository, or a claim that is not true now.
+ * The one answer for every claim that is not stored (r4 S1): a file outside the repository, one git does not track, a folder,
+ * a link out, a missing file and a false claim all read the same, so a writer cannot learn a file's text (a gitignored .env)
+ * one guess at a time from which refusal it got. Shape errors (checkClaimsInput) stay specific: they read no file.
+ */
+export const CLAIMS_REFUSED =
+  "claims: refused. Each claim must name a file git tracks in this repository and hold now (exact text, a listed dependency, " +
+  "an existing file, or lines that exist). Nothing was written; Monomem does not say which claim or which part failed.";
+/** Claims need a folder of the writer's own: a remote connection (HTTP / REST / OAuth key) would be probing the server's disk. */
+export const CLAIMS_LOCAL_ONLY = "claims are checked against the files of a local connection only (the folder its app runs in); this connection has none, so leave claims out";
+
+/**
+ * The claims for a new note, checked now from the writer's folder: a local stdio server's folder, or this process's for the
+ * CLI and scripts (no connection at all). A connection with no folder of its own (HTTP, REST, OAuth) is refused, and only
+ * files git tracks are read. Runs before the write lock. Throws ValidationError (CLAIMS_REFUSED for anything about a file).
  */
 export function prepareClaims(input: unknown): Claim[] {
   const list = checkClaimsInput(input);
   if (!list?.length) return [];
-  const where = repoPaths(list.map((c) => c.file), actorStore.getStore()?.cwd ?? process.cwd(), "claims");
+  const actor = actorStore.getStore();
+  if (actor && actor.cwd === undefined) throw new ValidationError(CLAIMS_LOCAL_ONLY);
+  let where: ReturnType<typeof repoPaths>;
+  try {
+    where = repoPaths(list.map((c) => c.file), actor?.cwd ?? process.cwd(), "claims");
+  } catch {
+    throw new ValidationError(CLAIMS_REFUSED);
+  }
   if (!where) throw new ValidationError("claims: they are checked against a git repository with a commit; write the note from inside one");
+  const root = where.root;
+  const tracked = indexBlobs(root, [...new Set(where.rels)]);
   return list.map((c, i) => {
-    const claim: Claim = { kind: c.kind, path: where.rels[i], arg: c.arg, hash: "", root: where.root };
+    const claim: Claim = { kind: c.kind, path: where.rels[i], arg: c.arg, hash: "", root };
+    // Untracked (gitignored .env, a stray key file) is refused before it is read.
+    if (!tracked.has(claim.path)) throw new ValidationError(CLAIMS_REFUSED);
     if (c.kind === "lines") {
-      const r = readInRepo(where.root, claim.path);
+      const r = readInRepo(root, claim.path);
       const h = "text" in r ? lineHash(r.text, c.arg) : null;
-      if (h === null) throw new ValidationError(`claims[${i}]: ${printable(describe(claim), 200)}: ${"why" in r ? r.why : "lines gone"}`);
+      if (h === null) throw new ValidationError(CLAIMS_REFUSED);
       return { ...claim, hash: h };
     }
-    const why = evaluate(claim);
-    if (why) throw new ValidationError(`claims[${i}]: ${printable(describe(claim), 200)} is not true now (${why})`);
+    if (evaluate(claim)) throw new ValidationError(CLAIMS_REFUSED);
     return claim;
   });
 }
