@@ -123,8 +123,8 @@ for (const encrypt of [false, true]) {
       await sync(w.a, opts);
       await sync(w.b, opts);
       const onB = byTitle(w.b, "Old host");
-      assert.ok(onB && onB.archived_at, "B archived it, kept the text");
-      assert.equal(onB!.body, "render.com");
+      assert.ok(onB && onB.archived_at, "B archived it (never a delete)");
+      assert.equal(onB!.body, "", "a hard delete takes the text out of the folder, so B's copy is emptied too (its history keeps it)");
       const before = commits(w.remote);
       for (let i = 0; i < 4; i++) {
         await sync(w.a, opts);
@@ -224,5 +224,32 @@ describe("tombstone file format", { skip }, () => {
     const hash = (t: string) => /\nhash: (".*")/.exec(t)![1];
     assert.equal(hash(after), hash(before), "hash unchanged");
     assert.ok(after.endsWith("---\nbody stays\n"), "body kept");
+  });
+});
+
+describe("hard delete in a plain folder (r3 security S2)", () => {
+  test("the tombstone keeps no text of a hard-deleted note, and the next export and import leave it alone", async () => {
+    const { exportMarkdown, importMarkdown } = await import("../src/sync.js");
+    const root = mkdtempSync(join(tmpdir(), "om-tomb-plain-"));
+    roots.push(root);
+    const vault = join(root, "vault");
+    const s = new Store(join(root, "state.db"));
+    try {
+      const n = s.create({ title: "oops", body: "AWS secret wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY pasted by mistake" });
+      exportMarkdown(s, vault);
+      assert.equal(s.delete(n.id), true);
+      exportMarkdown(s, vault);
+      const files = (readdirSync(vault, { recursive: true }) as string[]).filter((f) => f.endsWith(".md")).map((f) => readFileSync(join(vault, f), "utf8"));
+      assert.equal(files.length, 1, "the tombstone file stays, so the other computers learn about the delete");
+      assert.match(files[0], /\narchived_at: "/);
+      assert.ok(!files[0].includes("wJalrXUtnFEMI"), "the deleted text is gone from the folder");
+      const again = exportMarkdown(s, vault);
+      assert.deepEqual([again.written, again.skipped], [0, []], "a later export neither rewrites nor complains");
+      const imp = await importMarkdown(s, vault);
+      assert.equal(imp.counts.restored + imp.counts.created, 0, "importing our own tombstone does not bring the note back");
+      assert.equal(s.exportAll().length, 0);
+    } finally {
+      s.close();
+    }
   });
 });

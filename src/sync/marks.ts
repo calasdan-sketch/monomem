@@ -3,6 +3,7 @@
 // 1. Tombstones. A note this store archived (forgot) or hard-deleted keeps its file in the sync folder, with two extra
 //    front-matter keys at the end: `archived_at` and `archived_by` (the store id that forgot it). The body and the content
 //    hash stay the same, so a 1.5 peer (which ignores unknown keys) never sees an edit and never blanks its live copy. A
+//    hard delete is the exception: its body is blanked (the person took that text out on purpose), which peers apply as an edit. A
 //    newer peer applies the marker as an archive, never a delete. Which markers this store already acted on is kept in
 //    _meta (`sync_marks`), so a local restore is not undone by the next sync, and a marker that disappears (the forgetting
 //    computer restored the note) brings the note back here too.

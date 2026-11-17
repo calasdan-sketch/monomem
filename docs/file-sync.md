@@ -45,7 +45,8 @@ backups and logs. Only note files (sealed) and each computer's chosen name (seal
 
 - **you forget (archive) a note on one computer:** it is archived on the others too at their next sync. It is kept, never deleted,
   and `monomem restore <id>` brings it back. Restoring it on the computer that archived it brings it back everywhere.
-- **you delete a note:** the others archive their copy (a delete never deletes anything on another computer).
+- **you delete a note:** its text leaves the folder; the others empty and archive their copy (a delete never deletes anything on
+  another computer; their history still has the old text until it is purged there).
 - **one computer archived a note that another had just edited:** the edit wins; the note comes back on both, and sync says so.
 - **the same note was edited on two computers:** the newer text is live and the other text is **held** for you
   (`monomem review`): approve it to use it instead. Nothing is overwritten unseen; a copy is also kept in
@@ -54,8 +55,10 @@ backups and logs. Only note files (sealed) and each computer's chosen name (seal
   nothing in it is read. The real file wins at the next sync.
 - **a computer has no key yet:** sync stops and tells it to copy the key; nothing changes.
 
-**Privacy notes.** A forgotten note's sealed text stays in the folder or repository (and in git history), marked archived, so
-the other computers learn about the forget. A git repository is reached over the network at each sync (`git fetch`/`git push`
+**Privacy notes.** A forgotten (archived) note's text stays in the folder or repository (and in git history), marked archived, so
+the other computers learn about the forget: sealed with `sync setup`, readable in a plain folder (`monomem sync <dir>`,
+`export --format md`). A deleted note's file keeps only its title and the archived marker; its earlier text stays in git
+history if the folder is a git repository. A git repository is reached over the network at each sync (`git fetch`/`git push`
 to the address you gave); a shared folder is only read and written locally. Do not run two syncs at once on one computer.
 
 The rest of this page is the manual way and the details.
@@ -148,7 +151,9 @@ archived_by: "b48d83f6-2fdc-4df8-899b-98d7bc60bdc5"
 
 `archived_by` is the store that archived it. The content hash does not cover these lines, so an older Monomem (1.5) sees no
 edit and never blanks or deletes its copy; it ignores the lines. A deleted note's file gets the same two lines instead of being
-removed (removing it made the other computer write it back on every sync, forever). An archived note that was never synced stays
+removed (removing it made the other computer write it back on every sync, forever), and its body is blanked: a delete is how
+you take text (say a pasted secret) out, so it leaves the folder too. A computer importing that file sees an edit to empty text
+and then archives its copy (an older 1.5 computer keeps an empty live note). An archived note that was never synced stays
 out of the folder. A newer Monomem importing a marked file archives its live copy (never deletes it), unless the note was edited
 here since (the edit wins and travels back, and the other computer restores it), it is pinned here, or its namespace needs
 approval here: then it stays live and the report says why (`monomem archive <id>` to match). Each marker is acted on once
@@ -282,8 +287,8 @@ not touched. A push that loses a race with another computer is retried once afte
 - **Conflicts.** A note edited on two computers keeps the newer version live, holds the other as an edit for you to pick
   (`monomem review`), and saves a copy (under `<data folder>/sync-conflicts/` for a sealed sync, `.conflicts/` otherwise); nothing is
   lost silently.
-- **Forgets and deletes arrive as archives** (see Tombstones above): the other computers archive their copy, keep the text, and stop
-  committing. A deleted note does not come back on the computer that deleted it.
+- **Forgets and deletes arrive as archives** (see Tombstones above): the other computers archive their copy and stop committing. A forget keeps the text;
+  a delete blanks it. A deleted note does not come back on the computer that deleted it.
 - **Computer names** travel sealed as `<keyed hash>.mach` files next to the `.enc` notes (older versions ignore them). A sealed file
   whose name is not one Monomem writes (a sync tool's conflict copy) is skipped and named, never read.
 - **Encrypted database, plain sync:** at-rest encryption covers the database only. `sync --git` without `--encrypt` writes readable
