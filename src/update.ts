@@ -18,7 +18,7 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { selfCommand, selfFacts, selfVersion, type SelfMode } from "./self.js";
+import { bundledNode, selfCommand, selfFacts, selfVersion, type SelfMode } from "./self.js";
 
 export const RELEASE_REPO = "calasdan-sketch/monomem";
 export const TARGETS = ["win-x64", "darwin-arm64", "darwin-x64", "linux-x64"] as const;
@@ -171,7 +171,7 @@ export interface UpdateDeps {
   restartServer?: number;
 }
 
-const nodeIn = (root: string, platform: NodeJS.Platform): string => join(root, "runtime", platform === "win32" ? "node.exe" : "node");
+const nodeIn = (root: string, platform: NodeJS.Platform): string => bundledNode(root, platform);
 const cliIn = (root: string): string => join(root, "dist", "src", "cli.js");
 
 /** `monomem update [--check]`. Returns the exit code. */

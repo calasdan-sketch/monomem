@@ -52,6 +52,21 @@ export function modeFor(sea: boolean, execPath: string, root: string): SelfMode 
   return rel && !rel.startsWith("..") && !isAbsolute(rel) ? "bundle" : "npm";
 }
 
+/**
+ * The bundled runtime's file name on Windows. It is Node's official signed node.exe, renamed: the Authenticode signature
+ * does not cover the file name, so it stays valid (checked in CI), and Task Manager's Details tab shows "monomem-node.exe".
+ * Its description still says "Node.js JavaScript Runtime" (that is inside the signed file). macOS and Linux keep runtime/node.
+ */
+export const BUNDLED_NODE_WIN = "monomem-node.exe";
+
+/** The runtime inside a Monomem folder. A Windows folder built before the rename (runtime\node.exe only) is still found. */
+export function bundledNode(root: string, platform: NodeJS.Platform, exists: (p: string) => boolean = existsSync): string {
+  if (platform !== "win32") return join(root, "runtime", "node");
+  const named = join(root, "runtime", BUNDLED_NODE_WIN);
+  const old = join(root, "runtime", "node.exe");
+  return !exists(named) && exists(old) ? old : named;
+}
+
 /** The facts for this process. */
 export function selfFacts(): SelfFacts {
   const sea = isSea();

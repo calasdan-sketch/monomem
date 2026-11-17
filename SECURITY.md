@@ -196,7 +196,7 @@ Known limits, stated plainly:
   [docs/claim-checks.md](./docs/claim-checks.md).
 - **Observed evidence** on a note is what the writer says it saw (`cited by the writer, not checked`). The
   `facts-need-evidence` setting is a nudge, not a check: a writer can cite evidence it did not observe.
-- **`NODE_OPTIONS`.** The download runs Node's official `node.exe` (or `node`), which honours the `NODE_OPTIONS`
+- **`NODE_OPTIONS`.** The download runs Node's official `node.exe` (named `monomem-node.exe` in the Windows download; or `node`), which honours the `NODE_OPTIONS`
   environment variable, as any Node program does. Anything that can set your environment can make it load other code.
   That needs the same access as running a program as you, so it gives no one more than they already have, but do not set
   `NODE_OPTIONS` for Monomem from a source you do not trust.

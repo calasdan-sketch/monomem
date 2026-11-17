@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Build the standalone Monomem download: one folder (and one archive) per platform, holding
-//   runtime/node(.exe)   the OFFICIAL Node build from nodejs.org, untouched (signature intact), checked against SHASUMS256
+//   runtime/node, runtime/monomem-node.exe   the OFFICIAL Node build from nodejs.org, checked against SHASUMS256, bytes
+//                        untouched; on Windows only its file name changes (the Authenticode signature does not cover it)
+//   dist/monomem.ico|.icns|.png   the app icon (docs/brand/favicon-64.png) for the Start menu / Applications / menu entry
 //   dist/src/cli.js      Monomem's code (one esbuild file by default; --js files copies the tsc output + node_modules)
 //   package.json, docs, LICENSE, ...   the same files the npm package carries
 //   monomem.cmd / monomem   a small launcher at the folder's root (the folder is the stable install path)
@@ -21,6 +23,8 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 /** Node LTS embedded in the download. Bump deliberately: node:sqlite (and its FTS5) comes from this build. */
 export const NODE_VERSION = "26.13.1";
 export const TARGETS = ["win-x64", "darwin-arm64", "darwin-x64", "linux-x64"];
+/** The Windows runtime's file name (src/self.ts BUNDLED_NODE_WIN): Task Manager's Details tab shows it. */
+export const WIN_NODE = "monomem-node.exe";
 
 /** The target of the machine running this script (win32 -> win). */
 export function hostTarget(platform = process.platform, arch = process.arch) {
@@ -89,7 +93,7 @@ function placeRuntime(archive, base, target, app) {
   execFileSync(tarBin(), ["-xf", archive, "-C", tmp, bin, `${base}/LICENSE`], { stdio: "inherit" });
   const rt = join(app, "runtime");
   mkdirSync(rt, { recursive: true });
-  const exe = join(rt, target.startsWith("win-") ? "node.exe" : "node");
+  const exe = join(rt, target.startsWith("win-") ? WIN_NODE : "node");
   copyFileSync(join(tmp, bin), exe);
   chmodSync(exe, 0o755);
   copyFileSync(join(tmp, base, "LICENSE"), join(rt, "LICENSE"));
@@ -173,6 +177,41 @@ function copyDocs(app, version) {
   cpSync(join(ROOT, "bench", "scenarios"), join(app, "bench", "scenarios"), { recursive: true, filter: (p) => statSync(p).isDirectory() || p.endsWith(".json") });
 }
 
+/** A Windows .ico holding one PNG image unchanged (PNG entries are read by Windows Vista and later). */
+export function icoFromPng(png) {
+  const w = png.readUInt32BE(16), h = png.readUInt32BE(20);
+  const head = Buffer.alloc(22);
+  head.writeUInt16LE(0, 0); // reserved
+  head.writeUInt16LE(1, 2); // type: icon
+  head.writeUInt16LE(1, 4); // one image
+  head[6] = w >= 256 ? 0 : w;
+  head[7] = h >= 256 ? 0 : h;
+  head.writeUInt16LE(1, 10); // colour planes
+  head.writeUInt16LE(32, 12); // bits per pixel
+  head.writeUInt32LE(png.length, 14);
+  head.writeUInt32LE(22, 18); // image offset
+  return Buffer.concat([head, png]);
+}
+
+/** A macOS .icns holding one 64x64 PNG ("icp6") unchanged. */
+export function icnsFromPng(png) {
+  const head = Buffer.alloc(16);
+  head.write("icns", 0, "latin1");
+  head.writeUInt32BE(16 + png.length, 4);
+  head.write("icp6", 8, "latin1");
+  head.writeUInt32BE(8 + png.length, 12);
+  return Buffer.concat([head, png]);
+}
+
+/** The icon the app entry shows, in this target's format. */
+function placeIcon(app, target) {
+  const png = readFileSync(join(ROOT, "docs", "brand", "favicon-64.png"));
+  const dist = join(app, "dist");
+  if (target.startsWith("win-")) writeFileSync(join(dist, "monomem.ico"), icoFromPng(png));
+  else if (target.startsWith("darwin-")) writeFileSync(join(dist, "monomem.icns"), icnsFromPng(png));
+  else writeFileSync(join(dist, "monomem.png"), png);
+}
+
 /** The launcher for this target, from installer/. */
 function placeLauncher(app, target) {
   if (target.startsWith("win-")) copyFileSync(join(ROOT, "installer", "monomem.cmd"), join(app, "monomem.cmd"));
@@ -207,6 +246,7 @@ async function main() {
     installDeps(app);
   }
   placeLauncher(app, o.target);
+  placeIcon(app, o.target);
   writeFileSync(join(app, "runtime", "SOURCE.txt"), `Official Node.js v${o.node} (${node.base}) from https://nodejs.org/dist/v${o.node}/, unmodified.\nSHA-256 of the nodejs.org archive: ${node.want}\n`);
   console.log(`folder: ${app} (${(folderBytes(app) / 1e6).toFixed(1)} MB)`);
 
@@ -215,7 +255,8 @@ async function main() {
     const file = join(o.out, name);
     rmSync(file, { force: true });
     // bsdtar picks zip from the .zip name (-a); the tar.gz keeps the launcher's and node's executable bits.
-    const args = o.target.startsWith("win-") ? ["-a", "-cf", file, "-C", work, "Monomem"] : ["-czf", file, "-C", work, "Monomem"];
+    // zip at deflate level 9: measured 40.21 -> 40.05 MB on 1.6.0 (node.exe is 38.7 MB of it, and cannot shrink).
+    const args = o.target.startsWith("win-") ? ["-a", "-cf", file, "--options", "zip:compression-level=9", "-C", work, "Monomem"] : ["-czf", file, "-C", work, "Monomem"];
     execFileSync(o.target.startsWith("win-") ? tarBin() : "tar", args, { stdio: "inherit" });
     console.log(`archive: ${file} (${(statSync(file).size / 1e6).toFixed(1)} MB) sha256 ${sha256(file)}`);
   }
