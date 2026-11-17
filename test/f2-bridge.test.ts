@@ -61,6 +61,24 @@ const withStore = <T>(db: string, f: (s: Store) => T): T => {
 const notes = (db: string) => withStore(db, (s) => s.list({ limit: 500, includeArchived: true }).notes);
 
 describe("C16: import --claude remembers what it imported", () => {
+  test("a large first import lets the server thread run between batches (it runs inside the server on a timer)", async () => {
+    const f = fixture();
+    for (let i = 0; i < 60; i++) f.w(join(f.mem, `topic${i}.md`), `---\nname: Topic ${i}\n---\nFact number ${i}.\n`);
+    let turns = 0;
+    let done = false;
+    const spin = (): void => {
+      if (done) return;
+      turns++;
+      setImmediate(spin);
+    };
+    setImmediate(spin);
+    const run = runClaudeImport(f.e, io(), o(f.db)).finally(() => (done = true));
+    assert.equal(await run, 0);
+    assert.ok(notes(f.db).length >= 60);
+    // One turn for every batch of writes at least (without the yields the writes run in one block: 0-1 turns).
+    assert.ok(turns >= 3, `the event loop got ${turns} turn(s) during the import`);
+  });
+
   test("a run records each file; the next run reads only what changed and still reports the rest as already there", async () => {
     const f = fixture();
     await runClaudeImport(f.e, io(), o(f.db));
@@ -233,6 +251,37 @@ describe("I: Codex memories", () => {
     assert.equal(n[0].written_by, "import:codex");
     assert.ok(n[0].tags.includes("imported:codex"));
     assert.equal(withStore(f.db, (s) => s.unconfirmedRows().length), 1, "held until a person confirms it");
+  });
+
+  test("a Codex memory file too large to read is counted in the output, not skipped in silence", async () => {
+    const f = fixture();
+    f.w(join(f.root, "ch", "memories", "MEMORY.md"), "## User preferences\nShort answers.\n");
+    f.w(join(f.root, "ch", "memories_v2", "MEMORY.md"), "## Big\n" + "x".repeat(2048));
+    const stats = { skipped: 0 };
+    assert.equal(readCodexMemories(join(f.root, "ch"), 1024, stats).length, 1);
+    assert.equal(stats.skipped, 1);
+    const only = { skipped: 0 };
+    assert.throws(() => readCodexMemories(join(f.root, "ch", "memories_v2"), 1024, only), /1 Codex memory file\(s\) here are larger than/);
+    const lines: string[] = [];
+    const big = "## Huge\n" + "y".repeat(2 * 1024 * 1024);
+    f.w(join(f.root, "ch", "memories_v2", "MEMORY.md"), big);
+    const e = { ...f.e, env: { ...f.e.env, CODEX_HOME: join(f.root, "ch") } };
+    const said: SetupIO = { interactive: false, out: (l) => void lines.push(l), err: (l) => void lines.push(l), ask: async () => "" };
+    assert.equal(await runForeignImport(e, said, { from: "codex", dryRun: true, yes: true, dbPath: f.db }), 0);
+    assert.match(lines.join("\n"), /1 Codex memory file\(s\) skipped: larger than/);
+  });
+
+  test("a damaged bridge state file says so once on stderr (a missing one is quiet)", (t) => {
+    const f = fixture();
+    const said: string[] = [];
+    t.mock.method(console, "error", (l: string) => void said.push(l));
+    readBridgeState(f.db);
+    assert.deepEqual(said, [], "no state yet: nothing to say");
+    mkdirSync(dirname(f.db), { recursive: true });
+    writeFileSync(join(dirname(f.db), STATE_FILE), "{ not json");
+    assert.deepEqual(readBridgeState(f.db), { files: {} });
+    assert.equal(said.length, 1);
+    assert.match(said[0], /could not be read.*treats every file as new/);
   });
 });
 

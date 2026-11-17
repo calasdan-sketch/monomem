@@ -551,7 +551,10 @@ export async function runClaudeImport(e: Pick<SetupEnv, "home" | "env" | "cwd">,
     let failed = 0;
     writer = writer ?? new Store(opts.dbPath);
     const target = writer;
-    for (const t of todo) {
+    for (const [i, t] of todo.entries()) {
+      // The bridge refresh runs this inside the server: a first import of a few hundred notes would hold its thread ~1 s,
+      // so other requests get a turn between batches.
+      if (i && i % 20 === 0) await new Promise((r) => setImmediate(r));
       try {
         if (t.action === "create") {
           // Held, not trusted (r3 security L6): text from files any app on this computer can write waits for a person's confirm.

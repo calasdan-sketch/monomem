@@ -78,4 +78,16 @@ describe("notice apps installed later", () => {
     const next = await maybeCheckApps(s.e, s.data, new Date(T0.getTime() + 86_400_000));
     assert.deepEqual(next!.new.map((a) => a.id), ["qwen"]);
   });
+
+  test("a damaged state file: the daily check says so in one log line and starts over", async () => {
+    const s = sandbox();
+    const said: string[] = [];
+    assert.ok(await maybeCheckApps(s.e, s.data, T0, (l) => void said.push(l)));
+    assert.equal(said.length, 0, "no file yet: nothing to say");
+    writeFileSync(join(s.data, "app-detect.json"), "{ broken");
+    assert.equal(readAppDetect(s.data), null, "the dashboard's read stays quiet");
+    assert.ok(await maybeCheckApps(s.e, s.data, T0, (l) => void said.push(l)), "starts over");
+    assert.equal(said.length, 1);
+    assert.match(said[0], /app-detect\.json could not be read.*starts over/);
+  });
 });
