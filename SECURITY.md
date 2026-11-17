@@ -137,8 +137,63 @@ How this maps to OWASP ASI06 (Memory & Context Poisoning), and results on publis
   it unless the operator sets `MONOMEM_STDIO_ADMIN_TOOLS=1`.
 - **Not covered:** a live attacker holding a valid admin token; an attacker
   who can read both the database and the key file; prompt injection is
-  mitigated, not eliminated (OWASP GenAI #1); there is no OAuth, only static
-  bearer tokens.
+  mitigated, not eliminated (OWASP GenAI #1). OAuth for claude.ai and ChatGPT connectors exists since Monomem 1.6.0
+  but is off by default and is a preview: see "Remote connectors (OAuth)" below.
+
+## Remote connectors (OAuth, Monomem 1.6.0, preview)
+
+Monomem can answer the OAuth sign-in that claude.ai and ChatGPT custom connectors use, so they can read and write your
+notes over the internet. Full details: [docs/oauth.md](./docs/oauth.md).
+
+- **Off by default.** `monomem oauth on <your https address>` switches it on; a person must type `yes` at a terminal.
+  `monomem oauth off` switches the pages off and ends every connected app at once (their keys are removed).
+- **A pairing code from your terminal.** The consent page allows an app only with a code that `monomem oauth pair` prints
+  in a terminal on your computer (10 characters, 10 minutes, one use). No code, no access.
+- **Read, or read and write. Never admin.** An OAuth app can never delete notes, manage keys or approve held notes, and it
+  never sees private notes (ceiling `internal`). Every note it writes is marked as from outside.
+- **MCP-only, short-lived keys.** Each approved app becomes an ordinary app key (`oauth:<app name>`) that lasts one hour,
+  works only on the MCP port (`audience: "mcp"`; refused on the REST API and the dashboard) and is renewed with a
+  one-use refresh token. Keys and refresh tokens are stored as SHA-256 hashes only.
+- **Redirects** go only to claude.ai, chatgpt.com or this computer unless you allow another site at a terminal.
+- **You provide the HTTPS address** (Tailscale Funnel or a Cloudflare Tunnel); Monomem itself stays bound to `127.0.0.1`.
+- **Review status:** one dedicated security review (its findings are fixed), no outside review. Treat it as a preview.
+
+Known limits, stated plainly:
+- **Behind a tunnel every caller shares one rate-limit count.** Behind Cloudflare, `MONOMEM_TRUST_CLOUDFLARE=1` counts each
+  caller on its own address. Tailscale Funnel sends no header Monomem can trust, so there a stranger can use up the shared
+  limits (registrations, consent pages, renewals) and get in your way. That is a nuisance, not a way in.
+- **The terminal checks are speed bumps.** The `yes` that `oauth on` and `allow-redirect` ask for, and the terminal check on
+  `oauth pair`, stop an agent that runs commands in a shell. A program running as you can still write `oauth.json` or
+  `tokens.json` directly, as with every other Monomem key.
+- **Before going back to 1.5.0, run `monomem oauth off`.** 1.5.0 does not know an OAuth key's expiry or its MCP-only limit,
+  so a key left in `tokens.json` would work there as a write key with no expiry, on both ports.
+
+## Guards and labels added in Monomem 1.6.0
+
+- **Action guard (opt-in, Claude Code only).** `monomem setup --action-guard` adds a hook that asks you before a push, a
+  publish, a web request to a host not on your known hosts, reading key and credential files, or writing `AGENTS.md`,
+  `CLAUDE.md` or Claude Code's settings, once the session has read outside content. It matches command text, so **it is
+  a speed bump, not a sandbox**: an alias, a script file or a tool it does not know goes by without a question, and it
+  lets the action through when it cannot decide (a missing or busy database). What it misses:
+  [docs/action-guard.md](./docs/action-guard.md).
+- **Known hosts.** The web hosts the action guard does not ask about (default: github.com, registry.npmjs.org,
+  localhost), in `<data folder>/known-hosts.json`. Adding a host needs a person at a terminal
+  (`monomem settings known-hosts add`); no REST, MCP or dashboard route writes it.
+- **Writer probation.** A writer Monomem has not seen before (for example a new app key) is labelled `[new writer]`, and its
+  confirms of other writers' notes do not count, until it has 5 notes at least 24 hours old that nobody replaced, archived
+  or flagged, or a person runs `monomem trust confirm-writer <name>`. It is a label and a brake on agreement, not a block:
+  its notes are served from the first write. `monomem settings set probation-notes 0` turns it off.
+- **Claim checks.** A note can carry claims about code (a file holds a text, lists a dependency, exists, or a line range
+  has a given hash). Monomem checks them only against files git tracks, and refuses claims from connections that have no
+  folder of their own (HTTP, REST, OAuth), so a key cannot use a claim to guess the content of an untracked file such as
+  `.env`. A refused claim does not say which part failed. Monomem reads files only; it never runs a command.
+  [docs/claim-checks.md](./docs/claim-checks.md).
+- **Observed evidence** on a note is what the writer says it saw (`cited by the writer, not checked`). The
+  `facts-need-evidence` setting is a nudge, not a check: a writer can cite evidence it did not observe.
+- **`NODE_OPTIONS`.** The download runs Node's official `node.exe` (or `node`), which honours the `NODE_OPTIONS`
+  environment variable, as any Node program does. Anything that can set your environment can make it load other code.
+  That needs the same access as running a program as you, so it gives no one more than they already have, but do not set
+  `NODE_OPTIONS` for Monomem from a source you do not trust.
 
 ## Writer trust (OneMemory 1.4.0, hardened in 1.4.1)
 
@@ -164,7 +219,7 @@ note's original author. Read [docs/trust.md](./docs/trust.md) for exactly what t
 - Heartbeats from runners older than OneMemory 1.3.4 are no longer believed by default (`MONOMEM_RUNNER_ACCEPT_LEGACY=1`
   restores the old behaviour). A heartbeat counts only if the runner process wrote it and its own `alive_at` agrees
   with the server's clock within two minutes, so a tag-only touch of an old heartbeat does not make it fresh.
-- **Replacing a note (OneMemory 1.6.0)** is two steps: a preview that changes nothing, then a confirm that needs the preview's one-time
+- **Replacing a note** is two steps: a preview that changes nothing, then a confirm that needs the preview's one-time
   code. The code is signed with a key kept in the database, expires (default 10 minutes), works once, is bound to the caller
   (writer, scope, tenant), to the exact notes and revisions previewed and to the exact replacement text, and a wrong code gets
   one generic message. A distrusted writer, or a replacement that claims lower confidence, needs an administrator and an explicit
@@ -172,7 +227,7 @@ note's original author. Read [docs/trust.md](./docs/trust.md) for exactly what t
   warning; the tool descriptions tell it to show the full warning and wait for you, and the code makes it impossible to confirm
   without a preview, but a careless or manipulated agent could still confirm on its own. The command line asks you at your own
   keyboard and is the strongest gate.
-- **Version history (OneMemory 1.6.0)** keeps the text an edit replaces, so it can hold text someone removed on purpose. It is administrators-only,
+- **Version history** keeps the text an edit replaces, so it can hold text someone removed on purpose. It is administrators-only,
   bounded per note, encrypted at rest when encryption is on (plaintext otherwise, like note bodies), included in `export` unless
   `?history=0` / `--no-history`, and removable with `history purge`. Treat an export that carries history like the database.
 - Pre-upgrade copies (`<db>.pre-v16-backup`) are plaintext snapshots: remove them
