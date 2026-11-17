@@ -66,11 +66,11 @@ jobs:
       - name: Smoke test (--version, doctor, MCP initialize, session-start hook, setup --dry-run)
         shell: bash
         run: node scripts/smoke-bundle.mjs build/bundle/${{ matrix.target }}/Monomem "$(node -p "require('./package.json').version")"
-      - name: The bundled node.exe still carries the OpenJS Foundation signature
+      - name: The bundled monomem-node.exe (Node's node.exe, renamed) still carries the OpenJS Foundation signature
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $s = Get-AuthenticodeSignature build/bundle/win-x64/Monomem/runtime/node.exe
+          $s = Get-AuthenticodeSignature build/bundle/win-x64/Monomem/runtime/monomem-node.exe
           "$($s.Status) $($s.SignerCertificate.Subject)"
           if ($s.Status -ne 'Valid') { exit 1 }
       - name: The bundled node still carries its Developer ID signature

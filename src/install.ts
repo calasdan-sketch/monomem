@@ -6,8 +6,9 @@
 // never moves (updates swap the contents in place: update.ts). The entry runs `monomem open` (the dashboard).
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
+import { BUNDLED_NODE_WIN } from "./self.js";
 import { swapIn } from "./update.js";
 
 export interface PlaceEnv {
@@ -42,20 +43,36 @@ export function rebase(p: string, from: string, to: string): string {
  * Copy the unpacked download into its home. An older copy already there is replaced with update's rename-aside swap
  * (its node may be running an app's MCP server right now).
  */
-export function copyToInstall(from: string, to: string): void {
+export function copyToInstall(from: string, to: string, platform: NodeJS.Platform = process.platform): void {
   // An earlier update's leftovers inside the download folder are not copied.
   const filter = (p: string): boolean => p === from || !/[\\/]\.(old|update)-[^\\/]*$/.test(p);
   if (!existsSync(to)) {
     mkdirSync(dirname(to), { recursive: true });
     cpSync(from, to, { recursive: true, filter });
+    if (platform === "win32") clearDownloadMark(to);
     return;
   }
   const staged = join(to, `.update-copy-${Date.now()}`);
   cpSync(from, staged, { recursive: true, filter });
+  if (platform === "win32") clearDownloadMark(staged);
   try {
     swapIn(to, staged, join(to, `.old-${Date.now()}`));
   } finally {
     rmSync(staged, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Windows: Explorer's "Extract All" copies the zip's download mark (the Zone.Identifier stream, "Mark of the Web") onto every
+ * file, and the copy above carries it along, so the Start menu entry would ask "Open File - Security Warning" on every
+ * click. setup is the install step the person chose to run; like an installer's files, the installed copy has no mark.
+ * The unpacked download itself keeps its mark.
+ */
+export function clearDownloadMark(dir: string): void {
+  for (const ent of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, ent.name);
+    if (ent.isDirectory()) clearDownloadMark(p);
+    else rmSync(`${p}:Zone.Identifier`, { force: true });
   }
 }
 
@@ -70,28 +87,31 @@ export interface ShortcutPlan {
   text?: string;
   /** Windows: what the .lnk starts. */
   lnk?: { target: string; args: string; dir: string };
+  /** The Monomem icon in the installed folder (Windows .ico, macOS .icns); used only if the file is there. */
+  icon?: string;
 }
 
 const q = (s: string): string => `"${s.replace(/(["\\$`])/g, "\\$1")}"`;
 
 /** The "Monomem" entry that opens the dashboard, for the copy at `root`. */
 export function shortcutPlan(e: PlaceEnv, root: string): ShortcutPlan {
-  const node = join(root, "runtime", e.platform === "win32" ? "node.exe" : "node");
+  // The name this build ships (setup plans the entry before it copies the download over an older copy).
+  const node = join(root, "runtime", e.platform === "win32" ? BUNDLED_NODE_WIN : "node");
   const cli = join(root, "dist", "src", "cli.js");
   if (e.platform === "win32") {
     const programs = join(e.env.APPDATA?.trim() || join(e.home, "AppData", "Roaming"), "Microsoft", "Windows", "Start Menu", "Programs");
-    return { file: join(programs, "Monomem.lnk"), where: "Start menu", lnk: { target: node, args: `"${cli}" open`, dir: root } };
+    return { file: join(programs, "Monomem.lnk"), where: "Start menu", lnk: { target: node, args: `"${cli}" open`, dir: root }, icon: join(root, "dist", "monomem.ico") };
   }
   if (e.platform === "darwin") {
     const app = join(e.home, "Applications", "Monomem.app");
-    return { file: join(app, "Contents", "MacOS", "Monomem"), createdDir: app, where: "Applications (~/Applications)", text: `#!/bin/sh\nexec ${q(node)} ${q(cli)} open\n` };
+    return { file: join(app, "Contents", "MacOS", "Monomem"), createdDir: app, where: "Applications (~/Applications)", text: `#!/bin/sh\nexec ${q(node)} ${q(cli)} open\n`, icon: join(root, "dist", "monomem.icns") };
   }
   const apps = join(e.env.XDG_DATA_HOME?.trim() || join(e.home, ".local", "share"), "applications");
   const exec = (s: string): string => `"${s.replace(/(["`$\\])/g, "\\$1")}"`;
   return {
     file: join(apps, "monomem.desktop"),
     where: "the applications menu",
-    text: ["[Desktop Entry]", "Type=Application", "Name=Monomem", "Comment=Open your Monomem notes", `Exec=${exec(node)} ${exec(cli)} open`, "Terminal=false", "Categories=Utility;", ""].join("\n"),
+    text: ["[Desktop Entry]", "Type=Application", "Name=Monomem", "Comment=Open your Monomem notes", `Exec=${exec(node)} ${exec(cli)} open`, `Icon=${join(root, "dist", "monomem.png")}`, "Terminal=false", "Categories=Utility;", ""].join("\n"),
   };
 }
 
@@ -102,6 +122,7 @@ const MAC_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
 <key>CFBundleIdentifier</key><string>io.monomem.open</string>
 <key>CFBundleExecutable</key><string>Monomem</string>
 <key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleIconFile</key><string>monomem</string>
 <key>LSUIElement</key><true/>
 </dict></plist>
 `;
@@ -111,9 +132,9 @@ export function createShortcut(p: ShortcutPlan, platform: NodeJS.Platform): stri
   mkdirSync(dirname(p.file), { recursive: true });
   if (p.lnk) {
     // Values travel in environment variables, so no path is ever pasted into the PowerShell text.
-    const script = "$s=(New-Object -ComObject WScript.Shell).CreateShortcut($env:MM_LNK);$s.TargetPath=$env:MM_TARGET;$s.Arguments=$env:MM_ARGS;$s.WorkingDirectory=$env:MM_DIR;$s.WindowStyle=7;$s.Description='Open Monomem';$s.Save()";
+    const script = "$s=(New-Object -ComObject WScript.Shell).CreateShortcut($env:MM_LNK);$s.TargetPath=$env:MM_TARGET;$s.Arguments=$env:MM_ARGS;$s.WorkingDirectory=$env:MM_DIR;$s.WindowStyle=7;$s.Description='Open Monomem';if($env:MM_ICON){$s.IconLocation=$env:MM_ICON+',0'};$s.Save()";
     execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
-      env: { ...process.env, MM_LNK: p.file, MM_TARGET: p.lnk.target, MM_ARGS: p.lnk.args, MM_DIR: p.lnk.dir },
+      env: { ...process.env, MM_LNK: p.file, MM_TARGET: p.lnk.target, MM_ARGS: p.lnk.args, MM_DIR: p.lnk.dir, MM_ICON: p.icon && existsSync(p.icon) ? p.icon : "" },
       stdio: ["ignore", "ignore", "pipe"],
       windowsHide: true,
       timeout: 30_000,
@@ -123,6 +144,10 @@ export function createShortcut(p: ShortcutPlan, platform: NodeJS.Platform): stri
     if (platform === "darwin") {
       chmodSync(p.file, 0o755);
       writeFileSync(join(p.createdDir!, "Contents", "Info.plist"), MAC_PLIST);
+      if (p.icon && existsSync(p.icon)) {
+        mkdirSync(join(p.createdDir!, "Contents", "Resources"), { recursive: true });
+        copyFileSync(p.icon, join(p.createdDir!, "Contents", "Resources", "monomem.icns"));
+      }
     }
   }
   return createHash("sha256").update(readFileSync(p.file, "utf8")).digest("hex");

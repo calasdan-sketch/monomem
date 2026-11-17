@@ -84,7 +84,7 @@ describe("home folder and the app entry", () => {
     assert.match(mac.text!, /^#!\/bin\/sh\nexec ".*runtime[\\/]+node" ".*cli\.js" open\n$/);
     const win = shortcutPlan({ platform: "win32", home: "C:\\Users\\a", env: { APPDATA: "C:\\Users\\a\\AppData\\Roaming" } }, "C:\\Users\\a\\AppData\\Local\\Programs\\Monomem");
     assert.match(win.file, /Start Menu[\\/]Programs[\\/]Monomem\.lnk$/);
-    assert.match(win.lnk!.target, /runtime[\\/]node\.exe$/);
+    assert.match(win.lnk!.target, /runtime[\\/]monomem-node\.exe$/);
     assert.match(win.lnk!.args, /^".*cli\.js" open$/);
   });
   test("samePath ignores case on Windows and macOS only", () => {

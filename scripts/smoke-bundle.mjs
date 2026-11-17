@@ -18,7 +18,7 @@ if (!folderArg || !want) {
 }
 const app = resolve(folderArg);
 const win = process.platform === "win32";
-const node = join(app, "runtime", win ? "node.exe" : "node");
+const node = join(app, "runtime", win ? "monomem-node.exe" : "node");
 const cli = join(app, "dist", "src", "cli.js");
 const home = mkdtempSync(join(tmpdir(), "mm-smoke-"));
 const env = {
