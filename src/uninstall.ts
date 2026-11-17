@@ -13,6 +13,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { servicePlan, TASK_NAME } from "./service.js";
 import { serviceLaunch } from "./self.js";
+import { installDir } from "./install.js";
 import { dataHome, detectClients, hookHosts, readHistory, saveHistory, stamp, undoSession, type HistorySession, type SetupEnv, type SetupIO, selfOf } from "./setup.js";
 
 export interface UninstallOptions {
@@ -282,5 +283,8 @@ The background service could not be removed, so I stopped and did NOT delete you
     }
   }
   io.out("\nDone. Restart the apps that had Monomem so they forget it.");
+  // The standalone download's program folder stays: a running program cannot delete its own folder on Windows.
+  const program = installDir(e);
+  if (existsSync(program)) io.out(`The program itself is still in ${program}. To remove it too, close your apps and delete that folder.`);
   return 0;
 }

@@ -526,9 +526,9 @@ async function relevant(): Promise<void> {
         )
       );
     }
-    console.log(`Keywords: ${keywords.length > 0 ? keywords.join(", ") : "(none)"}`);
+    // The words searched for show only when nothing matched (they explain the miss); --json always has them.
     if (results.length === 0) {
-      console.log("No relevant notes found.");
+      console.log(`No relevant notes found. ${keywords.length ? `Searched for: ${keywords.join(", ")}.` : "That text has no words to search for."}`);
       sealedLine();
     }
     else console.log(`Relevant notes (${results.length}):`);
@@ -706,20 +706,12 @@ async function backupCmd(): Promise<void> {
       includeAttestKey: flags["include-attest-key"] === true,
       includeKey: flags["include-key"] === true,
     });
-    console.log(`Backed up ${r.notes} note(s) (${r.bytes} bytes) to ${r.db}`);
-    console.log(
-      r.approvalKey
-        ? "Included the command-task approval key (--include-approval-key): guard this backup like the encryption key."
-        : "The command-task approval key was NOT copied: after a restore, existing approvals read as stale (fail closed) and an admin re-approves queued command tasks."
-    );
-    if (r.attestKey) {
-      console.log(`Included the attestation signing key (--include-attest-key): guard this backup like the encryption key.`);
-    } else if (r.attestKeyLeftOut) {
-      console.log(
-        "The attestation signing key (.attest-key) was NOT copied: a restore keeps the server_id but creates a NEW signing key, so peers that\n" +
-          "trusted the old one must be told the new key. Use --include-attest-key to keep the identity."
-      );
-    }
+    const mb = (r.bytes / 1048576).toFixed(1);
+    console.log(`Backed up ${r.notes} note${r.notes === 1 ? "" : "s"} (${mb} MB) to ${r.db}`);
+    // The two power-user keys get one line; README.txt in the backup folder explains what leaving them out means.
+    if (r.approvalKey) console.log("Included the command-task approval key (--include-approval-key): guard this backup like the encryption key.");
+    if (r.attestKey) console.log(`Included the attestation signing key (--include-attest-key): guard this backup like the encryption key.`);
+    if (!r.approvalKey || r.attestKeyLeftOut) console.log("Signing keys were left out on purpose; README.txt in that folder says what that means if you restore.");
     if (r.key) {
       console.log(`Copied the encryption key to ${r.key} (mode 0600) because you asked for --include-key.`);
       console.log(
@@ -1763,10 +1755,14 @@ async function qualityCmd(): Promise<void> {
       console.log("No quality issues found.");
       return;
     }
-    console.log(QUALITY_TYPES.map((t) => `${report.counts[t]} ${t}`).join(", ") + `, ${reportHeader({ groups: report.conflict_groups, total: report.conflict_total, capped: report.conflict_capped })}`);
+    // Plain words, the same as the dashboard's Review list (ui/js-review.ts TYPE_WORDS); only the kinds that occur.
+    const QUALITY_WORDS: Record<string, string> = { duplicate: "duplicate", stale_twin: "older copy", quarantined: "held", lint: "looks risky", decay: "about to be forgotten", pii: "private details", contradiction: "disagreement", empty: "no text", restated: "said again" };
+    const word = (t: string): string => QUALITY_WORDS[t] ?? t.replace(/_/g, " ");
+    const kinds = QUALITY_TYPES.filter((t) => report.counts[t]).map((t) => `${report.counts[t]} ${word(t)}`);
+    console.log([...kinds, reportHeader({ groups: report.conflict_groups, total: report.conflict_total, capped: report.conflict_capped })].join(", "));
     for (const l of conflictLines(report.conflict_groups)) console.log(l);
     for (const i of report.issues) {
-      console.log(`\n[${i.type}] [${printable(i.namespace, 100)}] ${i.detail}`);
+      console.log(`\n${word(i.type)} (${printable(i.namespace, 100)}): ${i.detail}`);
       console.log(`    fix: ${i.fix}${i.alt ? `   (or: ${i.alt})` : ""}`);
     }
   } finally {
@@ -2007,9 +2003,12 @@ function askYesNo(prompt: string): Promise<boolean> {
 
 async function main(): Promise<void> {
   // 1.6 words (check, review <part>, activity, tidy, keys, settings, replace) become the command that does the work.
+  // `shown` keeps what the person typed, so `keys --help` is headed "monomem keys", not the old name it runs as.
+  let shown = "";
   {
     const { translateVerb, oldNameNoteOnce, TIDY_HELP } = await import("./cli/verbs.js");
     const typed = process.argv.slice(2);
+    shown = typed.filter((a) => a !== "--help" && a !== "-h").join(" ");
     const t = typed.length ? translateVerb(typed) : null;
     if (t?.[0] === "tidy") {
       console.log(TIDY_HELP);
@@ -2031,7 +2030,7 @@ async function main(): Promise<void> {
     process.argv = process.argv.map((a, i) => (i < 3 ? a : a === "--ns" ? "--namespace" : a.startsWith("--ns=") ? "--namespace=" + a.slice(5) : a));
   }
   if ((process.argv.includes("--help") || process.argv.includes("-h")) && process.argv.indexOf(cmd) === 2 && COMMANDS.includes(cmd) && !cmd.startsWith("-") && cmd !== "help" && cmd !== "trust") {
-    printCommandHelp(cmd);
+    printCommandHelp(cmd, shown || cmd);
     return;
   }
   // Old Node: say so in plain words BEFORE anything loads node:sqlite (which would crash with a stack trace).

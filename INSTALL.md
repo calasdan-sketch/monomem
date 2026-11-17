@@ -121,8 +121,8 @@ changes nothing.
 > **Seven tools are shown by default** (`memory_save`, `memory_search`,
 > `memory_read`, `memory_list`, `memory_archive`, `memory_replace`,
 > `memory_catch_up`) — enough to save, find, read, archive and safely replace a
-> memory and catch up at session start. Every tool's schema is sent to the model
-> on every turn, so the operator tools (review, task board, trust, held writes,
+> memory and catch up at session start. A client that loads every tool's schema
+> up front pays for it on each request, so the operator tools (review, task board, trust, held writes,
 > tidy, history, usage, sessions) are opt-in. To switch
 > them on, add an `env` block to the client config you are about to edit:
 >

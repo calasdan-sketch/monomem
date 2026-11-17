@@ -37,6 +37,21 @@ folder). `monomem check --setup` prints which one, and its size.
 | `monomem-task.xml` | Windows only, `monomem service install` (the task definition it hands to Task Scheduler) | `service uninstall` / `uninstall --purge` |
 | `.migrate.lock` | a few ms while a 1.0.x database is moved out of the package | removed by itself |
 
+## The program folder (only with the download)
+
+The download's `monomem setup` copies the unpacked `Monomem` folder (about 100 MB: Node's official runtime plus Monomem's
+code) to one fixed place, so app settings never point into your Downloads folder. No admin rights are needed.
+
+| Folder | Written when | Remove |
+|---|---|---|
+| `%LOCALAPPDATA%\Programs\Monomem` (Windows), `~/Applications/Monomem` (Mac), `~/.local/share/monomem` (Linux; `XDG_DATA_HOME` moves it) | `monomem setup` from the download | close your apps, then delete the folder by hand: `monomem uninstall` takes Monomem out of your apps and says where the folder is, but a running program cannot delete its own folder on Windows |
+| `<program folder>/.old-<version>/` | `monomem update`: the previous version, moved aside during the swap (apps that were open keep running from it) | removed by the next `monomem update`; or delete it by hand once your apps have restarted |
+| `<program folder>/.update-<version>/` | `monomem update`: the downloaded archive while it is checked and unpacked | removed by the next `monomem update`; or by hand |
+| The **Monomem** entry in the Start menu, `~/Applications`, or the Linux applications menu | `monomem setup` from the download | `monomem setup --undo` / `monomem uninstall` |
+| One entry in your per-user PATH (Windows) or one line marked `# added by monomem setup` in your shell's startup file | `monomem setup` from the download, only if you said yes to it | `monomem setup --undo` / `monomem uninstall` |
+
+Your notes are not in the program folder; deleting it does not touch them.
+
 ## App config files (only with `monomem setup`)
 
 `setup` changes only the `monomem` entry and, if you agree, the Monomem hooks, in:

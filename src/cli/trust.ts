@@ -16,7 +16,7 @@ function trustHelp(): void {
       "  trust distrust <writer> --namespace <ns|'*'> [--force]     leave a writer's notes out of every read and never run them",
       "        A name with no notes that is close to one that has some is refused with a 'Did you mean'; --force saves it as typed.",
       "  trust undistrust <writer> --namespace <ns|'*'>",
-      "        <writer> is a token label, or a writer id <server_id>/<label>. Quote the star: --namespace '*'.",
+      "        <writer> is an app key's name, or a writer id <server_id>/<label>. Quote the star: --namespace '*'.",
       "  trust attester-add <public-key> --server-id <id> [--label text] [--not-after <ISO time>] [--any-server]",
       "        Believe signed exports from that server. A key is trusted for ONE server (--server-id);",
       "        --any-server accepts a key for any server id (discouraged). --not-after ends trust in the key",
@@ -150,7 +150,7 @@ export async function trustCmd(): Promise<void> {
       case "undistrust": {
         const writer = str(flags.writer) ?? rest[1];
         if (!writer) {
-          console.error(`Usage: monomem trust ${action} <writer> --namespace <ns|*>   (writer: a token label or <server_id>/<label>; --writer <w> or -- <w> if it starts with "-")`);
+          console.error(`Usage: monomem trust ${action} <writer> --namespace <ns|*>   (writer: an app key's name or <server_id>/<label>; --writer <w> or -- <w> if it starts with "-")`);
           process.exit(1);
         }
         const ns = str(flags.namespace);
@@ -275,7 +275,7 @@ export async function tokenCmd(): Promise<void> {
       const scope = str(flags.scope);
       const asAdmin = scope === "admin" || flags.admin === true;
       const noLimit = flags["no-limit"] === true;
-      await requireOperator(`token add (${scope ?? "write"} token "${label}"${noLimit ? ", with NO sensitivity limit" : ""})`);
+      await requireOperator(`keys add (${scope ?? "write"} app key "${label}"${noLimit ? ", with NO sensitivity limit" : ""})`);
       const made = t.addApp({
         label,
         ...(scope !== undefined && scope !== "admin" ? { scope } : {}),
@@ -297,18 +297,18 @@ export async function tokenCmd(): Promise<void> {
         return;
       }
       const fromEnv = envTokenLabels();
-      if (!apps.length) console.log(`No tokens in ${t.tokensPath()} (the primary token is not listed here).`);
+      if (!apps.length) console.log(`No app keys in ${t.tokensPath()} yet (the main key, which this computer uses, is not listed here).`);
       for (const a of apps) {
         const limit = a.max_sensitivity ?? "NO LIMIT (can read private notes)";
         console.log(`${printable(a.label)}  ${a.scope}${a.namespace ? `  namespace=${printable(a.namespace)}` : ""}  sees up to: ${limit}${a.source === "main" ? "  (the main key)" : ""}`);
       }
-      if (fromEnv?.length) console.log(`${fromEnv.length} more token(s) come from MONOMEM_TOKENS (labels: ${fromEnv.map((l) => printable(l, 40)).join(", ")}). They are not editable here.`);
+      if (fromEnv?.length) console.log(`${fromEnv.length} more app key(s) come from MONOMEM_TOKENS (labels: ${fromEnv.map((l) => printable(l, 40)).join(", ")}). They are not editable here.`);
     } else if ((action === "remove" || action === "rm") && rest.length === 2) {
       // Removing a token that is not there is not an error (the command stays scriptable), but it says so.
       console.log(
         t.removeApp(rest[1])
-          ? `Removed token "${printable(rest[1])}". A running server stops accepting it within a couple of seconds, with no restart.`
-          : `No token labelled "${printable(rest[1])}" in tokens.json. See the names with: monomem keys list (tokens set in the environment must be removed there).`
+          ? `Removed app key "${printable(rest[1])}". A running server stops accepting it within a couple of seconds, with no restart.`
+          : `No app key named "${printable(rest[1])}" in tokens.json. See the names with: monomem keys list (keys set in the environment must be removed there).`
       );
     } else {
       throw new t.TokenAdminError(usageLine);

@@ -153,9 +153,9 @@ describe("A2: token administration", () => {
       const list = run("list");
       assert.ok(!list.stdout.includes(key));
       assert.match(list.stdout, /my app[\s\S]*sees up to: public/);
-      assert.match(run("remove", "nobody").stdout, /No token labelled "nobody"/);
-      assert.match(run("remove", "my app").stdout, /Removed token "my app"/);
-      assert.match(run("remove", "my app").stdout, /No token labelled/);
+      assert.match(run("remove", "nobody").stdout, /No app key named "nobody"/);
+      assert.match(run("remove", "my app").stdout, /Removed app key "my app"/);
+      assert.match(run("remove", "my app").stdout, /No app key named/);
       assert.match(run("new").stdout.trim(), /^[0-9a-f]{64}$/);
     } finally {
       rmSync(home, { recursive: true, force: true });

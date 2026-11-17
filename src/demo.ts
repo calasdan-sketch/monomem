@@ -38,7 +38,9 @@ export async function runDemo(opts: DemoOptions, out: (s: string) => void = cons
     const n1 = as("claude-code", () => store.create({ title: "Staging server port is 8443", body: "Deploys go to staging on port 8443." }));
     const seen = as("cursor", () => store.readVisible(n1.id)!);
     out(`   claude-code wrote note #${seen.id}: "${seen.title}".`);
-    out(`   cursor read it back. The server recorded the writer as "${seen.written_by}" (the app cannot choose that).`);
+    out(`   cursor read it back. The writer is "${seen.written_by}". This demo connects each app with its own key, so the server`);
+    out("   stamped that name and the app could not pick it. Apps that setup connects locally (no key) are named from their");
+    out("   config file instead: that tells your apps apart, but it is not proof.");
 
     await step(2, "A limit hides a private note, and the counts show it");
     as("claude-code", () => store.create({ title: "Passport renewal is due in March", body: "Personal reminder.", sensitivity: "private" }));

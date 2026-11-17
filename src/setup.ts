@@ -2282,7 +2282,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   io.out("  Check it loaded: type  /mcp  (or your tool's equivalent) and look for  monomem  connected.");
   if (proof) {
     io.out(`\nOne memory, ${proof.sameVendor ? "two assistants" : "two companies' assistants"}. Thirty seconds to see it:`);
-    io.out(`  1. In ${proof.a}, say:   Remember: my staging server is on port 8443.`);
+    io.out(`  1. In ${proof.a}, say:   Save to Monomem: my staging server is on port 8443.`);
     io.out(`  2. In ${proof.b}, ask:   What port is my staging server on?`);
     // Never assert what the other assistant WILL say: it searches memory only
     // if it decides to, and some hosts have no session-start hook at all. An
@@ -2291,14 +2291,18 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
     io.out(`\n  ${proof.b} was never told, and nothing left this machine. If it says it does not know,`);
     io.out("  ask it to search your memory — some assistants only look when you ask.");
     io.out("\n  Then ask either one:   Who wrote that note, and when?");
-    io.out("  Every memory names the assistant that wrote it. That is the part other memory");
-    io.out("  servers skip: when two agents disagree, you can see which one to believe.");
+    io.out("  Every memory names the assistant that wrote it, so when two agents disagree you can see");
+    io.out("  which one to believe.");
   } else {
     io.out("\nNow prove it (about 30 seconds):");
-    io.out("  1. Say:   Remember: my staging server is on port 8443.");
+    io.out("  1. Say:   Save to Monomem: my staging server is on port 8443.");
     io.out("  2. Start a brand-new chat and ask:   What port is my staging server on?");
-    io.out("\n  The new chat was never told. It answers 8443. Wire up a second assistant with `monomem setup` and the same memory follows you there.");
+    io.out("\n  The new chat was never told, so an answer of 8443 came from your memory. Wire up a second assistant with `monomem setup` and the same memory follows you there.");
   }
+  // "Save to Monomem", never "Remember": Claude Code files a "remember ..." request in its own auto memory, and the
+  // proof would then pass without Monomem.
+  io.out('\n  Why "Save to Monomem" and not just "remember": some assistants, Claude Code among them, keep a memory of');
+  io.out("  their own, and a plain \"remember\" can land there instead, where your other apps cannot see it.");
   await offerClaudeMemPreview(e, io, opts, primaryDb);
   await offerServerMemoryPreview(e, io, opts, primaryDb);
   io.out("\nIf monomem is missing or red: docs/live-claude-code.md has the fixes. To go back: monomem setup --undo");

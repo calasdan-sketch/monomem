@@ -7,6 +7,7 @@ Pick by what you want to do. Everything here is also linked from the main [READM
 | I want to... | Read |
 |---|---|
 | connect my apps in a minute | [INSTALL.md](../INSTALL.md), then [live-claude-code.md](./live-claude-code.md) if something goes wrong |
+| back up my notes, or restore a backup | [backups.md](./backups.md) |
 | give an app its own key and a limit on what it can see | [give-an-app-limited-access.md](./give-an-app-limited-access.md) |
 | mark a note `private` so only some apps see it | [sensitivity-labels.md](./sensitivity-labels.md) |
 | keep one app inside one folder of notes | [token-namespaces.md](./token-namespaces.md) |
@@ -23,6 +24,8 @@ Pick by what you want to do. Everything here is also linked from the main [READM
 
 | I want to know... | Read |
 |---|---|
+| everything Monomem does, in detail | [features.md](./features.md) |
+| how it compares with other memory tools | [comparison.md](./comparison.md) |
 | how the pieces fit together | [architecture.md](./architecture.md) |
 | who wrote a note, and what can be trusted | [provenance.md](./provenance.md), [trust.md](./trust.md) |
 | how notes are found | [search.md](./search.md) |
@@ -37,6 +40,7 @@ Pick by what you want to do. Everything here is also linked from the main [READM
 | I need... | Read |
 |---|---|
 | every setting (environment variables) | [configuration.md](./configuration.md) |
+| every MCP tool, its token cost, and every command | [tools.md](./tools.md) |
 | the task board, claims and handoffs | [tasks.md](./tasks.md) |
 | the release notes | [CHANGELOG.md](../CHANGELOG.md) |
 | how an agent should use the memory | [SKILL.md](../SKILL.md) |

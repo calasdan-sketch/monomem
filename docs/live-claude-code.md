@@ -63,7 +63,7 @@ When you are happy, `monomem backup --prune-premigration` removes the safety cop
 1. Close every Claude Code window and open Claude Code again (it reads the server list when it starts).
 2. Type `/mcp`. You should see **monomem** in the list, connected. (`claude mcp list` in a terminal shows the same, with a health check.)
 3. Ask: `Search my memory for "Monomem is connected"`. Claude should call `memory_search` and show the test note.
-4. Ask: `Remember that my favourite editor is Neovim`, start a new session and ask `What is my favourite editor?`.
+4. Ask: `Save to Monomem: my favourite editor is Neovim`, start a new session and ask `What is my favourite editor?`. Say "Save to Monomem", not just "remember": Claude Code also keeps a memory of its own, and a plain "remember" can be saved there instead, where your other apps cannot see it.
 5. If you installed the hook: a new session starts with a short "Recent memory" summary (check with `monomem recall`).
 6. Optional: `monomem start`, then open http://localhost:8790 and paste the token from `~/.monomem/.token` (Windows
    `%USERPROFILE%\.monomem\.token`) to see the notes, and the **Review** button for notes an agent wrote.
