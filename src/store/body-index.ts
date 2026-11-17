@@ -200,6 +200,13 @@ export class BodyIndex {
       CREATE TEMP TRIGGER om_bodyidx_ad AFTER DELETE ON main.notes BEGIN
         DELETE FROM ${TABLE} WHERE rowid = old.id;
       END;
+      DROP VIEW IF EXISTS temp.om_bodyidx_redo;
+      CREATE TEMP VIEW om_bodyidx_redo(id) AS SELECT 0;
+      CREATE TEMP TRIGGER om_bodyidx_redo_t INSTEAD OF INSERT ON om_bodyidx_redo BEGIN
+        DELETE FROM ${TABLE} WHERE rowid = new.id;
+        INSERT INTO ${TABLE}(rowid, title, body, tags)
+          SELECT id, title, om_index_body(id, namespace, body, body_enc), tags FROM main.notes WHERE id = new.id;
+      END;
     `);
     this.ready = true;
     this.builds++;
@@ -223,13 +230,12 @@ export class BodyIndex {
     const keep = !db.isTransaction;
     if (keep) this.dataVersion = v;
     if (rows.length === 0) return true; // access counters and other non-note writes
-    const del = db.prepare(`DELETE FROM ${TABLE} WHERE rowid = ?`);
-    const ins = db.prepare(`INSERT INTO ${TABLE}(rowid, title, body, tags) SELECT id, title, om_index_body(id, namespace, body, body_enc), tags FROM notes WHERE id = ?`);
+    // Re-index each note through a TEMP trigger (om_bodyidx_redo): a DELETE from this contentless_delete table leaves the
+    // connection's last insert rowid above 2^53, which node:sqlite cannot read on Node 26 (it throws, then every later
+    // run() on the connection does too). Inside a trigger SQLite puts the last rowid back when the trigger ends.
+    const redo = db.prepare("INSERT INTO om_bodyidx_redo(id) VALUES (?)");
     this.inTx(() => {
-      for (const id of new Set(rows.map((r) => Number(r.note_id)))) {
-        del.run(id);
-        ins.run(id);
-      }
+      for (const id of new Set(rows.map((r) => Number(r.note_id)))) redo.run(id);
     });
     if (keep) this.watermark = Number(rows[rows.length - 1].seq);
     return true;
@@ -253,7 +259,7 @@ export class BodyIndex {
     const db = this.s.db;
     this.ready = false;
     try {
-      db.exec("DROP TRIGGER IF EXISTS temp.om_bodyidx_ai; DROP TRIGGER IF EXISTS temp.om_bodyidx_au; DROP TRIGGER IF EXISTS temp.om_bodyidx_ad;");
+      db.exec("DROP TRIGGER IF EXISTS temp.om_bodyidx_ai; DROP TRIGGER IF EXISTS temp.om_bodyidx_au; DROP TRIGGER IF EXISTS temp.om_bodyidx_ad; DROP VIEW IF EXISTS temp.om_bodyidx_redo;");
       if (db.isTransaction) db.exec(`DROP TABLE IF EXISTS bodyidx.${TABLE}`);
       else if (this.attached) {
         db.exec("DETACH DATABASE bodyidx");

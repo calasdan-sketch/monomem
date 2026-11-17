@@ -74,6 +74,21 @@ describe("monomem health", () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
+  test("F4 silent L5: passage pooling on an encrypted store is said (info, grade unchanged); off or plain: no line", async () => {
+    const { dir, opts, store } = setup();
+    try {
+      const { ensureKey } = await import("../src/crypto.js");
+      const s = store();
+      s.setMeta("passage_pooling", "on");
+      s.close();
+      assert.equal((await runHealth(opts)).checks.find((c) => c.id === "passage-pooling"), undefined, "plain store: pooling is used");
+      ensureKey(dir);
+      const r = await runHealth(opts);
+      assert.equal(find(r, "passage-pooling").status, "info");
+      assert.match(find(r, "passage-pooling").text, /not used: this store is encrypted/);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
   test("broken audit chain fails: grade D, exit 1", async () => {
     const { dir, opts } = setup();
     try {

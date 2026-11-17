@@ -341,6 +341,10 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
             const m = meterStats(s);
             meterText = `${plural(notes, "note")}, database ${(m.db_bytes / 1048576).toFixed(1)} MB; the meter counts ~${m.totals.saved_tokens} tokens saved over ${plural(m.totals.sessions, "session")} (estimate, ~4 characters a token)`;
           });
+          // F4 silent L5: passage pooling switched on but not used on an encrypted store; said, never a grade step.
+          if (s.getMeta("passage_pooling") === "on" && s.sealsWrites()) {
+            add("passage-pooling", "Passage pooling", "info", "switched on but not used: this store is encrypted, so search ranks whole notes only (an on-disk passage index would hold the words of sealed bodies)");
+          }
           // Memory hygiene is heuristic, so it informs and never costs a grade step.
           try {
             const c = (await qualityReport(s)).counts;

@@ -4,12 +4,19 @@
 // it has `probation-notes` notes that stayed for `probation-hours` without being replaced, archived or flagged, or when a
 // person runs `monomem trust confirm-writer <name>`. Label only: nothing is held or hidden because of it.
 // Writers that already had notes when this table was first made (the upgrade) are grandfathered. The person (cli), the
-// owner's main key ("primary", as for the flood guard) and plain markers (stdio, server, ...) are never on probation.
+// owner's main key ("primary", as for the flood guard) and plain markers (stdio, server, ...) are never on probation. Nor is
+// an app the person connected with `monomem setup` / `connect`: `stdio:<app>` where <app> is the MONOMEM_CLIENT name setup
+// wrote, read from setup-history.json in the store's folder (undone sessions do not count). That name is declared by the
+// app's config file, not verified; probation is for writers nobody set up: unknown app names and new app keys.
+// Only notes a writer CREATED and kept count toward leaving probation (editing other writers' notes does not).
 // Storage: its own side table `writer_probation`, made on the first write after upgrade (no schema bump).
 // Free functions over the Store. Imports `type { Store }` only.
 
 import type { NoteRecord, NoteRow, Store } from "../store.js";
+import { readFileSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { actorStore } from "../actor.js";
+import { DATA_DIR } from "../config.js";
 import { ValidationError } from "../errors.js";
 
 export const DEFAULT_PROBATION_NOTES = 5;
@@ -35,8 +42,46 @@ const tableSeen = new WeakMap<Store, boolean>();
 function hasTable(s: Store): boolean {
   if (tableSeen.get(s)) return true;
   const yes = s.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'writer_probation'").get() !== undefined;
-  if (yes) tableSeen.set(s, true);
+  // Remembered only outside a transaction: a table made inside one is gone again if it rolls back.
+  if (yes && !s.db.isTransaction) tableSeen.set(s, true);
   return yes;
+}
+
+const connected = new Map<string, { key: string; apps: Set<string> }>();
+
+/**
+ * The `stdio:<app>` writers the person connected with setup / connect: setup-history.json in the store's folder (the
+ * data folder for an in-memory store), the client of each change in a session not undone. A folder's .mcp.json ("project")
+ * is Claude Code's, as setup labels it. Re-read when the file changes.
+ */
+function connectedApps(s: Store): Set<string> {
+  const main = (s.db.prepare("PRAGMA database_list").all() as Array<{ name: string; file: string }>).find((d) => d.name === "main")?.file;
+  const f = join(main ? dirname(main) : DATA_DIR, "setup-history.json");
+  let key: string;
+  try {
+    const st = statSync(f);
+    key = `${st.size}:${st.mtimeMs}`;
+  } catch {
+    return new Set();
+  }
+  const c = connected.get(f);
+  if (c?.key === key) return c.apps;
+  const apps = new Set<string>();
+  try {
+    const all = JSON.parse(readFileSync(f, "utf8")) as Array<{ undone?: boolean; changes?: Array<{ client?: unknown }> }>;
+    for (const sess of Array.isArray(all) ? all : []) {
+      if (sess?.undone) continue;
+      for (const ch of Array.isArray(sess?.changes) ? sess.changes : []) {
+        if (typeof ch?.client !== "string" || ch.client === "shortcut" || ch.client === "git-hook") continue;
+        apps.add(`stdio:${ch.client === "project" ? "claude-code" : ch.client}`);
+      }
+    }
+  } catch (e) {
+    process.stderr.write(`monomem: could not read ${f} (${(e as Error).message}); apps connected by setup start on probation
+`);
+  }
+  connected.set(f, { key, apps });
+  return apps;
 }
 
 export function probationSettings(s: Store): ProbationSettings {
@@ -70,12 +115,17 @@ function candidate(writer: string): boolean {
   return writer.startsWith("stdio:");
 }
 
+/** A candidate the person did not connect with setup (see connectedApps). */
+function probationApplies(s: Store, writer: string): boolean {
+  return !(writer.startsWith("stdio:") && connectedApps(s).has(writer));
+}
+
 /**
  * Called by create() inside its write transaction, BEFORE the note row is inserted. The first call on a store makes the table
  * and grandfathers every writer that already has notes (so the upgrade puts nobody on probation), then records this writer.
  */
 export function noteWriterSeen(s: Store, writer: string, at: string): void {
-  if (!writer || !candidate(writer)) return;
+  if (!writer || !candidate(writer) || !probationApplies(s, writer)) return;
   if (!hasTable(s)) {
     s.db.exec(TABLE);
     s.db
@@ -84,20 +134,19 @@ export function noteWriterSeen(s: Store, writer: string, at: string): void {
          SELECT w, ?, 'grandfathered' FROM (SELECT written_by AS w FROM notes UNION SELECT created_by FROM notes) WHERE w <> ''`
       )
       .run(at);
-    tableSeen.set(s, true);
   }
   const r = s.db.prepare("INSERT OR IGNORE INTO writer_probation (writer, first_seen_at, state) VALUES (?, ?, 'probation')").run(writer, at);
   if (Number(r.changes) > 0) cache.delete(s);
 }
 
-/** Notes by this writer that stayed `hours` without being replaced, archived or flagged (current version). */
+/** Notes this writer created that stayed `hours` without being replaced, archived or flagged (editing others' notes does not count). */
 function keptNotes(s: Store, writer: string, hours: number): number {
   const before = new Date(Date.now() - hours * 3_600_000).toISOString();
   return Number(
     (
       s.db
         .prepare(
-          `SELECT COUNT(*) AS c FROM notes n WHERE n.written_by = ? AND n.created_at <= ? AND n.archived_at IS NULL AND n.superseded_by IS NULL
+          `SELECT COUNT(*) AS c FROM notes n WHERE n.created_by = ? AND n.created_at <= ? AND n.archived_at IS NULL AND n.superseded_by IS NULL
              AND NOT EXISTS (SELECT 1 FROM note_flags f WHERE f.note_id = n.id AND f.cleared_at IS NULL)`
         )
         .get(writer, before) as { c: number }
@@ -113,7 +162,7 @@ export function probationSet(s: Store): Set<string> {
   const cfg = probationSettings(s);
   if (cfg.notes > 0 && hasTable(s)) {
     const rows = s.db.prepare("SELECT writer FROM writer_probation WHERE state = 'probation'").all() as Array<{ writer: string }>;
-    for (const r of rows) if (keptNotes(s, r.writer, cfg.hours) < cfg.notes) set.add(r.writer);
+    for (const r of rows) if (probationApplies(s, r.writer) && keptNotes(s, r.writer, cfg.hours) < cfg.notes) set.add(r.writer);
   }
   cache.set(s, { at: Date.now(), set });
   return set;

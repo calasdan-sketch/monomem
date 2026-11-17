@@ -91,6 +91,21 @@ describe("monomem drill", () => {
     }
   });
 
+  test("F4 ease N1: with passage_pooling on the replay runs with pooling and E14 (flooding) is still held", async () => {
+    const { dir, db } = makeStore(5);
+    try {
+      const s = new Store(db);
+      s.setMeta("passage_pooling", "on");
+      s.close();
+      const r = await runDrill({ dbPath: db });
+      assert.notEqual(r.rows.find((x) => x.id === "E14")?.verdict, "reached", "a flood of look-alike notes does not bury the real answer");
+      assert.deepEqual(r.unexpected, []);
+      assert.equal(r.ok, true);
+    } finally {
+      tidy(dir);
+    }
+  });
+
   test("the user's settings decide the result: MONOMEM_LINT=warn lets an injection through and exits 1", async () => {
     const { dir, db } = makeStore(5);
     try {

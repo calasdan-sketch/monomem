@@ -7,6 +7,7 @@ import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Store } from "./store.js";
 import { backupStore } from "./backup.js";
+import { scrubPassages } from "./store/passages.js";
 
 export interface ScrubResult {
   backupDir: string;
@@ -31,6 +32,7 @@ export function diskBytes(dbPath: string): number {
 export function runScrub(store: Store, dbPath: string, backupDir: string): ScrubResult {
   const beforeBytes = diskBytes(dbPath);
   const made = backupStore(store, dbPath, backupDir); // refuses to overwrite; the key is not copied
+  scrubPassages(store); // the passage index (pooling) is rebuilt too, so a deleted note's words leave it
   // A very large file is still compacted: the person asked for it by name.
   const { vacuumed } = store.scrubPlaintext({ maxVacuumBytes: Number.MAX_SAFE_INTEGER });
   return { backupDir: made.dir, beforeBytes, afterBytes: diskBytes(dbPath), vacuumed };

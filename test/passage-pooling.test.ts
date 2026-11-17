@@ -3,7 +3,7 @@ import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads
 // best passage, the side index follows writes, and encrypted stores never get an on-disk passage index.
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../src/store.js";
@@ -124,6 +124,55 @@ describe("monomem settings set passage_pooling", () => {
       } finally {
         e.close();
       }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("F4 arch SF1/SF2: the passage index under encryption and scrub", () => {
+  const raw = (dir: string): Buffer => readFileSync(join(dir, "state.db"));
+  test("encrypt enable drops the passage index (no plain body words left in the file); surfaces names it", () => {
+    const dir = mkdtempSync(join(tmpdir(), "om-pp-encall-"));
+    try {
+      const s = new Store(join(dir, "state.db"));
+      try {
+        s.create({ title: "x", body: lines(10, (i) => (i === 3 ? "user: the walrusword sits here" : `user: line ${i}`)) }, mk);
+        s.setMeta(PASSAGE_SETTING, "on");
+        assert.ok(passageHits(s, "walrusword", 5).length === 1 && passageCount(s) > 0);
+        assert.equal(s.encryptionSurfaces({ dataDir: dir, dbPath: join(dir, "state.db") }).find((r) => r.surface === "passage index")?.encrypted, "no");
+        s.encryptAll(ensureKey(dir));
+        assert.equal(s.db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'passages_fts'").get(), undefined, "dropped inside encryptAll");
+        assert.equal(s.encryptionSurfaces({ dataDir: dir, dbPath: join(dir, "state.db") }).find((r) => r.surface === "passage index")?.encrypted, "nothing stored");
+      } finally {
+        s.close();
+      }
+      assert.ok(!raw(dir).includes("walrusword"), "no plain body word in the database file");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the passage index is built with FTS5 secure-delete; scrub rebuilds it so deleted words are gone", async () => {
+    const { runScrub } = await import("../src/scrub.js");
+    const dir = mkdtempSync(join(tmpdir(), "om-pp-scrub-"));
+    try {
+      const s = new Store(join(dir, "state.db"));
+      try {
+        s.setMeta(PASSAGE_SETTING, "on");
+        const keep = s.create({ title: "k", body: lines(8, (i) => (i === 2 ? "user: otterkeep" : `user: k ${i}`)) }, mk);
+        const gone = s.create({ title: "g", body: lines(8, (i) => (i === 2 ? "user: lemmingword" : `user: g ${i}`)) }, mk);
+        assert.equal(passageHits(s, "otterkeep", 5).length, 1);
+        const sd = s.db.prepare("SELECT v FROM passages_fts_config WHERE k = 'secure-delete'").get() as { v: number } | undefined;
+        assert.equal(Number(sd?.v), 1, "secure-delete is on for the passage index");
+        s.delete(gone.id);
+        runScrub(s, join(dir, "state.db"), join(dir, "bk"));
+        assert.deepEqual(passageHits(s, "otterkeep", 5).map((h) => h.note.id), [keep.id], "rebuilt and searchable after the scrub");
+        assert.equal(passageHits(s, "lemmingword", 5).length, 0);
+      } finally {
+        s.close();
+      }
+      assert.ok(!raw(dir).includes("lemmingword"), "the deleted note's words are not in the file");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

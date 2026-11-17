@@ -9,8 +9,13 @@
 //
 // Kept current lazily, like the encrypted body index (body-index.ts): before a pooled search, the change_log rows after the
 // last seen seq are replayed (that note's passages deleted and re-cut); a trimmed log or a missing table means a full build.
-// Inside a caller's transaction nothing is written and the index is used as it is; the whole-note ranking still finds new
-// notes, and the notes join filters deleted, archived and hidden ones.
+// Inside a caller's transaction nothing is written, so the index is used only when it already holds every change. A failed
+// sync means the index is not searched either (whole notes only): a stale passage index is never used.
+//
+// Node 26: a DELETE from a contentless_delete FTS5 table leaves the connection's last insert rowid above 2^53, and
+// node:sqlite reads it after every run() (Node 26 throws, Node 24 returns a wrong number; then every later run() on the
+// connection does the same). So passages are only ever deleted inside a TEMP trigger (on a TEMP view, this connection
+// only): SQLite puts the last rowid back when a trigger ends.
 
 import type { Store } from "../store.js";
 import { extractKeywords, searchStem } from "../keywords.js";
@@ -68,6 +73,16 @@ function inTx(store: Store, fn: () => void): void {
   }
 }
 
+/** The TEMP view whose INSTEAD OF trigger deletes a note's passages (see the Node 26 note at the top). */
+const DEL_VIEW = "om_passages_del";
+
+/** Create the delete view and trigger on this connection if missing. TEMP: never seen by other connections or binaries. */
+function ensureDeleteView(store: Store): void {
+  store.db.exec(`CREATE TEMP VIEW IF NOT EXISTS ${DEL_VIEW}(lo, hi) AS SELECT 0, 0;
+    CREATE TEMP TRIGGER IF NOT EXISTS ${DEL_VIEW}_t INSTEAD OF INSERT ON ${DEL_VIEW}
+    BEGIN DELETE FROM main.${TABLE} WHERE rowid >= new.lo AND rowid < new.hi; END;`);
+}
+
 function tableExists(store: Store): boolean {
   return store.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(TABLE) !== undefined;
 }
@@ -76,11 +91,15 @@ function indexNote(store: Store, ins: { run: (...a: Array<number | string>) => u
   passagesOf(body).forEach((p, k) => ins.run(id * SLOT + k, p));
 }
 
-/** Drop and rebuild every passage. Caller holds a write transaction. */
+/**
+ * Drop and rebuild every passage. Caller holds a write transaction. FTS5 secure-delete: a deleted passage's words are
+ * removed from the index segments at once, not left behind a tombstone until a merge.
+ */
 function build(store: Store): void {
   const db = store.db;
   db.exec(`DROP TABLE IF EXISTS ${TABLE};
-    CREATE VIRTUAL TABLE ${TABLE} USING fts5(body, content='', contentless_delete=1, prefix='1');`);
+    CREATE VIRTUAL TABLE ${TABLE} USING fts5(body, content='', contentless_delete=1, prefix='1');
+    INSERT INTO ${TABLE}(${TABLE}, rank) VALUES('secure-delete', 1);`);
   store.setMeta(SEQ_KEY, String(store.maxChangeSeq()));
   const ins = db.prepare(`INSERT INTO ${TABLE}(rowid, body) VALUES (?, ?)`);
   const rows = db.prepare("SELECT id, body FROM notes WHERE id > ? AND id <= ? AND body_enc IS NULL");
@@ -91,15 +110,16 @@ function build(store: Store): void {
 }
 
 /**
- * Bring the passage index up to date. Returns false when there is no index to search (it could not be built now: inside a
- * caller's transaction, or the build failed; the caller then searches whole notes only).
+ * Bring the passage index up to date. Returns false when there is no current index to search (inside a caller's
+ * transaction with changes not yet replayed, or the sync failed; the caller then searches whole notes only).
  */
 export function syncPassages(store: Store): boolean {
   const db = store.db;
   const exists = tableExists(store);
-  if (db.isTransaction) return exists;
+  const seen = Number(store.getMeta(SEQ_KEY) ?? NaN);
+  // Inside a caller's transaction nothing is written: the index is searched only when it already holds every change.
+  if (db.isTransaction) return exists && Number.isFinite(seen) && store.maxChangeSeq() === seen;
   try {
-    const seen = Number(store.getMeta(SEQ_KEY) ?? NaN);
     const rows = exists && Number.isFinite(seen)
       ? (db.prepare("SELECT seq, note_id FROM change_log WHERE seq > ? ORDER BY seq").all(seen) as Array<{ seq: number; note_id: number }>)
       : null;
@@ -109,7 +129,8 @@ export function syncPassages(store: Store): boolean {
     const full = !rows || Number(rows[0]?.seq) !== seen + 1;
     inTx(store, () => {
       if (full) return build(store);
-      const del = db.prepare(`DELETE FROM ${TABLE} WHERE rowid >= ? AND rowid < ?`);
+      ensureDeleteView(store);
+      const del = db.prepare(`INSERT INTO ${DEL_VIEW}(lo, hi) VALUES (?, ?)`);
       const get = db.prepare("SELECT body FROM notes WHERE id = ? AND body_enc IS NULL");
       const ins = db.prepare(`INSERT INTO ${TABLE}(rowid, body) VALUES (?, ?)`);
       for (const id of new Set(rows.map((r) => Number(r.note_id)))) {
@@ -122,7 +143,7 @@ export function syncPassages(store: Store): boolean {
     return true;
   } catch (e) {
     process.stderr.write(`monomem: passage index not updated (${(e as Error).message}); searching whole notes\n`);
-    return tableExists(store);
+    return false;
   }
 }
 
@@ -132,6 +153,23 @@ export function dropPassages(store: Store): void {
     store.db.exec(`DROP TABLE IF EXISTS ${TABLE}`);
     store.db.prepare("DELETE FROM _meta WHERE key = ?").run(SEQ_KEY);
   });
+}
+
+/**
+ * Leave no passage words behind (encrypt enable, monomem scrub). Inside a write transaction (encryptAll) or on a store
+ * with a key: the index is dropped, since pooling never runs there. Otherwise (scrub on a plain store) it is dropped and,
+ * when pooling is on, built again from the notes that exist now. The caller's PRAGMA secure_delete / VACUUM clear the pages.
+ */
+export function scrubPassages(store: Store): void {
+  if (store.db.isTransaction || store.sealsWrites()) {
+    if (!tableExists(store)) return;
+    store.db.exec(`DROP TABLE IF EXISTS ${TABLE}`);
+    store.db.prepare("DELETE FROM _meta WHERE key = ?").run(SEQ_KEY);
+    return;
+  }
+  if (!tableExists(store)) return;
+  dropPassages(store);
+  if (passagePoolingOn(store)) syncPassages(store);
 }
 
 /** Passages in the index (0 when there is none). */
@@ -181,7 +219,9 @@ export function passageHits(
         b = { note, score: -Infinity, parts: passagesOf(note.body) };
         best.set(id, b);
       }
-      const sc = Number(r.p_score) * weigh(b.parts[Number(r.p_rowid) % SLOT] ?? "");
+      // The passage is weighed with its note's title: a passage is read in its note's context, and a query word only the
+      // title holds must count (without it a flood of short look-alike notes outranked the real answer: drill E14).
+      const sc = Number(r.p_score) * weigh(`${b.note.title}\n${b.parts[Number(r.p_rowid) % SLOT] ?? ""}`);
       if (sc > b.score) b.score = sc;
     }
     return [...best.values()]
