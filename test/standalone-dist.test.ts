@@ -577,6 +577,18 @@ describe("monomem update", () => {
     });
   });
 
+  test("the release upload waits for the full CI, never replaces a published file; every src/ PR builds the download", () => {
+    const wf = readFileSync(join(REPO, ".github", "workflows", "bundle.yml"), "utf8");
+    assert.match(wf, /verify:\n(?:\s+.*\n)*?\s+uses: \.\/\.github\/workflows\/ci\.yml/);
+    assert.match(wf, /release:\n(?:\s+.*\n)*?\s+needs: \[build, verify\]/);
+    assert.match(wf, /isDraft[\s\S]*--clobber[\s\S]*else[\s\S]*gh release upload "\$tag" out\/monomem-\* out\/SHA256SUMS\n/);
+    assert.match(wf, /paths:\n\s+- src\/\*\*\n/);
+    const smoke = readFileSync(join(REPO, "scripts", "smoke-bundle.mjs"), "utf8");
+    assert.match(smoke, /\/health/);
+    assert.match(smoke, /"service", "install", "--print"/);
+    assert.doesNotMatch(smoke, /\|\| \/Monomem\|database\/i/, "doctor must really pass, not just print the name");
+  });
+
   test("the CLI knows `update` and never runs it from a hook", () => {
     const r = spawnSync(process.execPath, [CLI, "update", "--bogus"], { encoding: "utf8" });
     assert.equal(r.status, 1);

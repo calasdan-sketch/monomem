@@ -2,24 +2,27 @@ name: Standalone download
 
 # The no-Node download: the OFFICIAL signed Node runtime from nodejs.org (checksum-checked, never modified) plus Monomem's
 # code, one folder/archive per platform (scripts/build-bundle.mjs). Built natively on each runner, smoke-tested in a scratch
-# home, summed (SHA256SUMS) and given GitHub build attestations. On a v* tag the files go to that tag's GitHub release (a
-# DRAFT is created when none exists: publishing it stays a person's click). By hand (workflow_dispatch) it only builds.
+# home, summed (SHA256SUMS) and given GitHub build attestations. On a v* tag, once the full CI matrix (ci.yml) passes, the
+# files go to that tag's GitHub release (a DRAFT is created when none exists: publishing it stays a person's click; files
+# on a published release are never replaced). By hand (workflow_dispatch) it only builds.
 # A single-file SEA build runs too, as an artifact only: it is unsigned, and Windows Smart App Control blocks unsigned
 # exes with no override, so it is kept ready for the day code signing is bought (add a signing step here, nothing else).
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
-  # A pull request that touches the download's own files builds and smoke-tests it (no checksums, no release).
+  # A pull request that touches the code builds and smoke-tests the download (no checksums, no release): breakage that only
+  # shows in the bundled build (an import.meta.url file read, an esbuild-incompatible dependency, hook text) can come from
+  # anywhere in src/, not only from the download's own files.
   pull_request:
     branches: [main]
     paths:
+      - src/**
+      - package.json
+      - package-lock.json
       - scripts/build-bundle.mjs
       - scripts/smoke-bundle.mjs
       - installer/**
-      - src/self.ts
-      - src/install.ts
-      - src/update.ts
       - .github/workflows/bundle.yml
 
 permissions:
@@ -102,10 +105,19 @@ jobs:
           path: build/sea/monomem.exe
           if-no-files-found: error
 
+  # On a tag, literally the CI workflow (full matrix) must pass before anything reaches the release, like publish.yml does
+  # for npm: `monomem update` installs whatever the latest release holds.
+  verify:
+    if: github.ref_type == 'tag'
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   release:
     name: checksums, attestations, release upload
-    needs: [build]
-    if: github.event_name != 'pull_request'
+    needs: [build, verify]
+    # verify runs on tags only; a hand-run build (no tag, nothing uploaded) goes on without it.
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.build.result == 'success' && (needs.verify.result == 'success' || (github.ref_type != 'tag' && needs.verify.result == 'skipped')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write # upload to the release
@@ -129,12 +141,20 @@ jobs:
         with:
           name: standalone-release-files
           path: out/*
-      - name: Upload to the tag's GitHub release (a draft is created if none exists)
+      - name: Upload to the tag's GitHub release (a draft is created if none exists; a published one is never overwritten)
         if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
           tag="${GITHUB_REF_NAME}"
-          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --draft --verify-tag --title "$tag" --notes "Standalone downloads: see INSTALL.md (Download)."
-          gh release upload "$tag" out/monomem-* out/SHA256SUMS --clobber
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --draft --verify-tag --title "$tag" --notes "Standalone downloads: see INSTALL.md (Download)."
+          fi
+          if [ "$(gh release view "$tag" --json isDraft -q .isDraft)" = "true" ]; then
+            gh release upload "$tag" out/monomem-* out/SHA256SUMS --clobber
+          else
+            # Already published: people may have downloaded these files and checked their SHA-256. Add, never replace
+            # (gh fails when a file of the same name is there; make a new tag instead).
+            gh release upload "$tag" out/monomem-* out/SHA256SUMS
+          fi
