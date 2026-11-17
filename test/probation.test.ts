@@ -92,3 +92,13 @@ test("monomem facts does not count a writer on probation as agreeing", () => {
   assert.ok(NEW_WRITER_LABEL.includes("new writer"));
   s.close();
 });
+
+test("session start names new writers once, in one line, and labels no note line with it", async () => {
+  const { injectContext } = await import("../src/context-inject.js");
+  const s = new Store(":memory:");
+  for (let i = 0; i < 4; i++) as("newbot", () => s.create({ title: `note ${i}`, body: "some body text here" }));
+  const out = await injectContext(s, { signals: { branch: "", diffFiles: [] }, tokens: 1500 });
+  assert.equal(out.split("New writers, not a second source yet: newbot").length, 2, out);
+  assert.ok(!out.split("\n").some((l) => /^#\d+/.test(l) && l.includes("[new writer]")), out);
+  s.close();
+});

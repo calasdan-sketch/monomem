@@ -66,7 +66,7 @@ function specs(nsActive: boolean): Spec[] {
         evidence: z
           .array(z.object({ kind: z.enum(["test", "file", "command", "url", "output"]), ref: z.string() }))
           .optional()
-          .describe('What you observed, e.g. [{"kind":"file","ref":"src/a.ts:12"}]. [] if it is your inference.'),
+          .describe("What you saw (a.ts:12, a test, a URL). [] = your inference."),
         detail,
       },
     },

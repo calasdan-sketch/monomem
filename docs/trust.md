@@ -426,8 +426,8 @@ dashboard uses) and plain markers (`stdio` with no name, `server`) are never on 
 
 While a writer is on probation:
 
-- Its notes are saved and shown at once, with the label `[new writer: not a second source yet]`. Nothing is held or
-  hidden, and session start adds no extra line, only the label on that writer's notes.
+- Its notes are saved and shown at once. Search, read and list label them `[new writer]` (field `new_writer`). Session
+  start does not label each line; it names the new writers once, in one line under the list. Nothing is held or hidden.
 - It is not a second source. Its confirm of someone else's note is recorded but does not count (reason `new_writer`), and
   `monomem facts` does not count it as a writer agreeing. A non-admin key is affected. An admin key's confirm is not,
   because a person gave it that power.

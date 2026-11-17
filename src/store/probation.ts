@@ -16,7 +16,7 @@ export const DEFAULT_PROBATION_NOTES = 5;
 export const DEFAULT_PROBATION_HOURS = 24;
 const MAX_PROBATION_NOTES = 1000;
 const MAX_PROBATION_HOURS = 24 * 90;
-export const NEW_WRITER_LABEL = "[new writer: not a second source yet]";
+export const NEW_WRITER_LABEL = "[new writer]";
 
 const TABLE = `CREATE TABLE IF NOT EXISTS writer_probation (
   writer TEXT PRIMARY KEY,
