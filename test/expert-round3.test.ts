@@ -447,7 +447,7 @@ describe("10. recall ids; CLI edit works for non-terminals", () => {
       const old = notes.map((n) => `- [${n.title}]: ${n.body}`).join("\n");
       assert.ok(lines.join("\n").length < old.length, "fewer characters (tokens) than the old rendering");
       const ctx = await injectContext(s, { signals: {} });
-      assert.match(ctx, /Open any with (?:state_read id=N|memory_get ids=\[N\])$/);
+      assert.match(ctx, /Open any with (?:state_read id=N|memory_get ids=\[N\]|memory_read id=N)$/);
     } finally {
       s.close();
     }

@@ -155,7 +155,7 @@ describe("dashboard polish", () => {
     assert.match(DASHBOARD_HTML, /<dialog id="settings"/);
     for (const t of ["Usage", "Tidy up", "Apps and keys", "Activity log", "Archived notes", "Back up now", "Check for updates", "Sign out", "every note this key can see, not encrypted"]) assert.ok(DASHBOARD_JS.includes(t), t);
     // The sign-in screen: one sentence first; the key paste is behind a disclosure and never names MONOMEM_TOKEN.
-    assert.match(DASHBOARD_HTML, /<summary class="muted">Use an access key instead<\/summary>/);
+    assert.match(DASHBOARD_HTML, /<summary class="muted">Use an app key instead<\/summary>/);
     assert.ok(!/MONOMEM_TOKEN/.test(DASHBOARD_HTML));
     assert.equal((DASHBOARD_HTML.match(/by Calas Automations/g) || []).length, 2);
     assert.match(DASHBOARD_HTML, /Show notes from distrusted writers/);

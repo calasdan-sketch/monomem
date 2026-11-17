@@ -86,7 +86,7 @@ describe("user-prompt hook: new notes since the last message", () => {
       const many = ctxOf(await runHook("user-prompt", ev("user-prompt"), opts));
       // r2-improvement #9: a writer with more than 3 new notes is one line, not five of its titles.
       assert.equal((many.match(/^#\d+ by carol:/gm) ?? []).length, 0);
-      assert.match(many, /\ncarol saved 7 notes \(#\d+-#\d+\); memory_since lists them\./);
+      assert.match(many, /\ncarol saved 7 notes \(#\d+-#\d+\); memory_catch_up lists them\./);
     } finally {
       s.close();
       rmSync(dir, { recursive: true, force: true });

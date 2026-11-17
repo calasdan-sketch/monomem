@@ -9,7 +9,7 @@ import { join } from "node:path";
 /** Line count after the split, plus a small margin for one-line fixes. */
 const MAX_LINES: Record<string, number> = {
   "src/store.ts": 8300, // 8,250 after the split
-  "src/cli.ts": 2760, // 2,728
+  "src/cli.ts": 2430, // 2395 after help text moved to src/cli/help.ts
   "src/api.ts": 370, // 353
   "src/mcp-server-core.ts": 80, // 72
 };
