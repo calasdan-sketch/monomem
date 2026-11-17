@@ -218,7 +218,7 @@ describe("backup and the approval key", () => {
       const env = { ...process.env, MONOMEM_HOME: dir, MONOMEM_DB_PATH: db };
       const c1 = spawnSync(process.execPath, [CLI, "backup", "--out", join(dir, "b3")], { env, encoding: "utf8" });
       assert.equal(c1.status, 0, c1.stderr);
-      assert.match(c1.stdout, /NOT copied/);
+      assert.match(c1.stdout, /left out on purpose; README.txt/); // the detail is in README.txt (checked above)
       const c2 = spawnSync(process.execPath, [CLI, "backup", "--out", join(dir, "b4"), "--include-approval-key"], { env, encoding: "utf8" });
       assert.equal(c2.status, 0, c2.stderr);
       assert.match(c2.stdout, /Included the command-task approval key/);

@@ -122,6 +122,9 @@ const TYPE_WORDS: Record<QualityType, [string, string]> = {
   restated: ["old note was restated but never retired", "old notes were restated but never retired"],
 };
 
+/** The command that lists and fixes each kind of issue (held writes and disagreements have their own). */
+const TYPE_COMMAND = (t: QualityType): string => (t === "quarantined" ? "monomem review held" : t === "contradiction" ? "monomem review conflicts" : "monomem review duplicates");
+
 /** "yesterday" = since local midnight yesterday; otherwise what the change feed accepts (24h, 7d, an ISO time, last). */
 export function resolveSince(s: string, now = new Date()): string {
   if (s === "yesterday") {
@@ -154,7 +157,7 @@ export async function buildDigest(store: Store, since: string, opts: { namespace
     .filter((x) => x.n > 0)
     .sort((a, b) => b.n - a.n || a.i - b.i)
     .slice(0, 3)
-    .map((x) => `${x.n} ${TYPE_WORDS[x.t][x.n === 1 ? 0 : 1]}`);
+    .map((x) => `${x.n} ${TYPE_WORDS[x.t][x.n === 1 ? 0 : 1]} (${TYPE_COMMAND(x.t)})`);
   return { since: first.since, until: first.until, counts: { created: first.counts.created, updated: first.counts.updated, deleted: first.counts.deleted }, byWriter, topIssues };
 }
 
@@ -169,6 +172,5 @@ export function renderDigest(d: Digest): string {
   if (!writers.length) lines.push("  Nothing changed.");
   lines.push(d.topIssues.length ? "Worth a look:" : "Nothing needs your attention.");
   d.topIssues.forEach((t, i) => lines.push(`  ${i + 1}. ${t}`));
-  if (d.topIssues.length) lines.push("  Details and the command for each: monomem review duplicates");
   return lines.join("\n");
 }

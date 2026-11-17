@@ -874,7 +874,9 @@ describe("backup: --include-attest-key", () => {
       assert.equal(r1.status, 0, r1.stderr);
       const files1: string[] = readdirSync(o1, { recursive: true } as any).map(String);
       assert.ok(!files1.some((f) => f.includes(ATTEST_KEY_FILENAME)), files1.join(","));
-      assert.match(r1.stdout, /attestation signing key \(\.attest-key\) was NOT copied/);
+      // The terminal gets one line; the backup's README.txt carries the detail.
+      assert.match(r1.stdout, /Signing keys were left out on purpose; README\.txt/);
+      assert.match(readFileSync(join(o1, "README.txt"), "utf8"), /attestation key NOT included/);
       const o2 = join(dir, "o2");
       const r2 = run("backup", "--out", o2, "--include-attest-key");
       assert.match(r2.stdout, /Included the attestation signing key/);

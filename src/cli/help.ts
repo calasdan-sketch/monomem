@@ -169,7 +169,7 @@ export function usage(all = false): void {
       "            Prints at most --limit entries (default 100, max 500) and how many more there are; --json pages through and prints them all.",
       "            What changed while you were away: created/updated/deleted notes",
       "            grouped by source. --since last uses (and advances) a per-consumer marker.",
-      "  backup [--out <dir>] [--include-approval-key] [--include-attest-key] | backup --prune-premigration",
+      "  backup [--out <dir>] [--include-key] [--include-approval-key] [--include-attest-key] | backup --prune-premigration",
       "            Consistent hot copy of the database (works while the server runs)",
       "            into <dir>/state.db. The encryption key (.key) is NOT copied unless you add --include-key.",
       "            Default dir: ~/monomem-backup-<time>",
@@ -370,9 +370,10 @@ export function usage(all = false): void {
   );
 }
 
-export function printCommandHelp(cmd: string): void {
+/** `shown` is the command as the person typed it (a 1.6 word), `cmd` the command it runs as. */
+export function printCommandHelp(cmd: string, shown = cmd): void {
   const h = helpFor(cmd);
-  console.log(h ? `monomem ${cmd}\n\n${h}\n\nAll commands: monomem help --all` : `monomem ${cmd}: no extra options. All commands: monomem help --all`);
+  console.log(h ? `monomem ${shown}\n\n${h}\n\nAll commands: monomem help --all` : `monomem ${shown}: no extra options. All commands: monomem help --all`);
 }
 
 /** The help lines for one command, taken from the full help (so there is one text to keep right). */

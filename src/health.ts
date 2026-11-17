@@ -357,11 +357,15 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
   if (dbOk) {
     try {
       const d: DrillReport = await (o.drill ?? runDrill)({ dbPath });
-      add("drill", "Drill", d.ok ? "ok" : "fail", d.ok ? (d.reached.length ? `${d.attacks - d.reached.length} of ${d.attacks} known attacks blocked; ${d.reached.length === 1 ? "the 1 that gets through is a known limit" : `the ${d.reached.length} that get through are known limits`}` : `none of ${d.attacks} known attacks reached the agent`) + (d.approve_first ? " (approve-first is on: held writes wait for your review; approving one unread lets it in)" : "") : `${d.unexpected.length} unexpected of ${d.attacks} attacks reached the agent: ${d.unexpected.map((x) => x.id).join(", ")} (monomem drill has the detail)`);
+      // Held, blocked and stored-with-a-warning are counted apart: a warned attack is stored, so it is never called blocked.
+      const n = (v: string): number => (d.rows ?? []).filter((x) => x.verdict === v).length;
+      const split = d.rows ? ` (${n("held")} held, ${n("blocked")} blocked, ${n("warned")} stored with a warning)` : "";
+      const stopped = `${d.attacks - d.reached.length} of ${d.attacks} known attacks did not reach an agent as trusted content${split}`;
+      add("drill", "Attack replay", d.ok ? "ok" : "fail", d.ok ? (d.reached.length ? `${stopped}; ${d.reached.length === 1 ? "the 1 that gets through is a known limit" : `the ${d.reached.length} that get through are known limits`}` : stopped) + (d.approve_first ? " (approve-first is on: held writes wait for your review; approving one unread lets it in)" : "") : `${d.unexpected.length} unexpected of ${d.attacks} attacks reached the agent: ${d.unexpected.map((x) => x.id).join(", ")} (monomem check --attacks has the detail)`);
     } catch (e) {
-      add("drill", "Drill", "warn", `could not run: ${(e as Error).message}`);
+      add("drill", "Attack replay", "warn", `could not run: ${(e as Error).message}`);
     }
-  } else add("drill", "Drill", "info", dbDamaged ? "not run: the database is damaged (see the Database line)" : "not run: there is no database to replay the attacks against yet");
+  } else add("drill", "Attack replay", "info", dbDamaged ? "not run: the database is damaged (see the Database line)" : "not run: there is no database to replay the attacks against yet");
 
   if (dbOk) {
     // Exposure: reasons the notes are more reachable than the labels suggest. One check, so it costs at most one grade step however many reasons it lists.

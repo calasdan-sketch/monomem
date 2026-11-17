@@ -23,7 +23,7 @@ import { classifyQueuedCommand } from "./task-core.js";
 export type Verdict = "held" | "blocked" | "warned" | "reached";
 
 /** What the drill does and does not show. Shown in the drill output and the health card. */
-export const DRILL_SCOPE = "Drill = the published known attacks only; the linter was tuned on them. Reworded or new attacks are not tested.";
+export const DRILL_SCOPE = "This replay covers the published known attacks only; the linter was tuned on them. Reworded or new attacks are not tested.";
 
 /** Attacks Monomem is known not to stop on its own. A miss here is reported but does not fail the drill. */
 export const DESIGNED_MISSES: Record<string, string> = {
@@ -232,7 +232,7 @@ export async function runDrill(opts: { dbPath: string; dir?: string; seed?: numb
 
 export function renderDrill(r: DrillReport): string {
   const mark: Record<Verdict, string> = { held: "held   ", blocked: "blocked", warned: "warned ", reached: "REACHED" };
-  const lines = [`monomem drill: ${r.attacks} known attacks on a copy of your store (${r.notes} notes). Your store was not changed. Embeddings off for the drill (no network calls).`, ""];
+  const lines = [`Replayed ${r.attacks} known attacks on a copy of your store (${r.notes} notes). Your store was not changed. Embeddings were off for the replay (no network calls).`, ""];
   for (const x of r.rows) lines.push(`  ${mark[x.verdict]}  ${x.id.padEnd(4)} ${x.title}${x.known_miss ? "  (known miss)" : ""}`);
   const count = (v: Verdict): number => r.rows.filter((x) => x.verdict === v).length;
   const parts: string[] = [];
