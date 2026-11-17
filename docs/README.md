@@ -28,6 +28,7 @@ Pick by what you want to do. Everything here is also linked from the main [READM
 | how it compares with other memory tools | [comparison.md](./comparison.md) |
 | how the pieces fit together | [architecture.md](./architecture.md) |
 | who wrote a note, and what can be trusted | [provenance.md](./provenance.md), [trust.md](./trust.md) |
+| how a note checks itself against the code (claims, line citations) | [claim-checks.md](./claim-checks.md) |
 | how notes are found | [search.md](./search.md) |
 | what the safety scan catches | [memory-linter.md](./memory-linter.md) |
 | what changed while I was away | [change-feed.md](./change-feed.md) |
