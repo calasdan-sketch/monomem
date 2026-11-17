@@ -3,7 +3,7 @@ import "./quiet-sqlite.js"; // first: hide the node:sqlite ExperimentalWarning
 import "./legacy-env.js"; // second: read the old CLAUDE_BRIDGE_* variables as MONOMEM_*
 import readline from "node:readline";
 import { SELF_CLI, serviceLaunch } from "./self.js";
-import { parseFlags, str, terminalIO } from "./cli/shared.js";
+import { parseFlags, str, terminalIO, errorLine } from "./cli/shared.js";
 import { gatePinned, gateOutside, requireOperator } from "./operator-gate.js";
 import { actorStore, setProcessWriter } from "./actor.js";
 import type { RestatedNote } from "./search-service.js";
@@ -1203,7 +1203,7 @@ async function neverShowCmd(): Promise<void> {
   const args = process.argv.slice(3);
   const id = Number(args.find((a) => !a.startsWith("-")));
   if (!Number.isInteger(id) || id < 1) {
-    console.error("usage: monomem never-show <note id> [--undo]");
+    console.error("Usage: monomem never-show <note id> [--undo]");
     process.exit(1);
   }
   const store = new Store(DB_PATH);
@@ -2447,7 +2447,7 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     const guess = suggestCommand(cmd);
-    console.error(`Unknown command '${cmd}'.${guess ? ` Did you mean '${guess}'?` : ""}\nRun 'monomem help' to see the commands.`);
+    console.error(errorLine(`Unknown command '${cmd}'.${guess ? ` Did you mean '${guess}'?` : ""}`, "monomem help lists the commands."));
     process.exit(1);
   }
   if (cmd === "--version" || cmd === "-v" || cmd === "version") {
@@ -2766,7 +2766,7 @@ async function main(): Promise<void> {
       break;
     }
     default:
-      console.error(`Unknown command '${cmd}'. Run 'monomem help' to see the commands.`);
+      console.error(errorLine(`Unknown command '${cmd}'.`, "monomem help lists the commands."));
       process.exit(1);
   }
 }
@@ -2779,12 +2779,12 @@ main().catch(async (e) => {
     try {
       const { DB_PATH } = await import("./config.js");
       const d = (await import("./db-problem.js")).describeDbFailure(DB_PATH, e);
-      console.error(`${d.problem}\nFix: ${d.fix}`);
+      console.error(errorLine(d.problem, d.fix));
       process.exit(1);
     } catch {
       /* fall through to the plain message */
     }
   }
-  console.error(msg);
+  console.error(/^(error|usage):|\nFix: /i.test(msg) ? msg : errorLine(msg));
   process.exit(1);
 });

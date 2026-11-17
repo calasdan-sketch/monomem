@@ -449,14 +449,18 @@ export function gradeReason(r: HealthReport): string {
   return `${r.grade}: ${count} (${bad.map((c) => c.label.toLowerCase()).join(", ")})`;
 }
 
-export function renderHealth(r: HealthReport): string {
+/** Quiet by default: only the warn and fail lines, the grade and what is not covered; verbose adds every line and the rule. */
+export function renderHealth(r: HealthReport, verbose = true): string {
+  const rows = verbose ? r.checks : r.checks.filter((c) => c.status === "warn" || c.status === "fail");
+  const quiet = verbose ? [] : [`  ${r.checks.length - rows.length} check(s) fine or for information only (--verbose lists them, with the grade rule).`];
   return [
-    "monomem health\n",
-    ...r.checks.map((c) => `  ${TAG[c.status]} ${c.label}: ${c.text}`),
+    "monomem check\n",
+    ...rows.map((c) => `  ${TAG[c.status]} ${c.label}: ${c.text}`),
+    ...quiet,
     "",
     `Grade ${r.grade}`,
     gradeReason(r),
-    `Rule: ${r.rule}`,
+    ...(verbose ? [`Rule: ${r.rule}`] : []),
     r.not_covered,
   ].join("\n");
 }
@@ -483,9 +487,9 @@ export function renderHealthCard(r: HealthReport): string {
   );
 }
 
-export const HEALTH_USAGE = `monomem health [--json] [--card [file.svg]]
+export const HEALTH_USAGE = `monomem check [--verbose] [--json] [--card [file.svg]]   (old name: monomem health)
 
-  One line per check (setup, hook, each weakening security setting, drill, audit chain, held writes, distrusted writers,
+  Without --verbose: only the lines that need a look, then the grade. --verbose: one line per check (setup, hook, each weakening security setting, drill, audit chain, held writes, distrusted writers,
   redacted notes, memory size), then a grade and the reason for it.
   Health opens your store to count things (an older database file is upgraded once, as with any monomem command), and
   drill runs on a copy. It writes one small row noting how long the audit log was, so the next run can see lines removed.
@@ -496,13 +500,15 @@ export const HEALTH_USAGE = `monomem health [--json] [--card [file.svg]]
 
 export async function healthMain(argv: string[], out: (s: string) => void = console.log, opts: HealthOpts = {}): Promise<number> {
   let json = false;
+  let verbose = out !== console.log || !process.stdout.isTTY; // quiet only for a person at a terminal
   let card: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--help" || a === "-h") return out(HEALTH_USAGE), 0;
     if (a === "--json") json = true;
+    else if (a === "--verbose") verbose = true;
     else if (a === "--card") card = argv[i + 1] && !argv[i + 1].startsWith("-") ? argv[++i] : join(opts.dataDir ?? DATA_DIR, "monomem-health.svg");
-    else return console.error(`health: unknown option ${a} (try: monomem health --help)`), 2;
+    else return console.error(`Error: unknown option ${a}. Fix: see monomem check --help`), 2;
   }
   const r = await runHealth(opts);
   if (card) {
@@ -510,6 +516,6 @@ export async function healthMain(argv: string[], out: (s: string) => void = cons
     mkdirSync(dirname(card), { recursive: true });
     writeFileSync(card, renderHealthCard(r));
   }
-  out(json ? JSON.stringify({ ...r, reason: gradeReason(r), ...(card ? { card } : {}) }, null, 2) : renderHealth(r) + (card ? `\nwrote ${card}` : ""));
+  out(json ? JSON.stringify({ ...r, reason: gradeReason(r), ...(card ? { card } : {}) }, null, 2) : renderHealth(r, verbose) + (card ? `\nwrote ${card}` : ""));
   return r.exit_code;
 }

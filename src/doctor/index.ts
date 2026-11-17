@@ -49,33 +49,45 @@ export async function notSetUp(): Promise<boolean> {
 
 /** `cliPath`: the path of cli.js (app entries and hooks are checked against it). */
 export async function doctor(cliPath: string): Promise<void> {
-  const { BIND_HOST, API_PORT, MCP_HTTP_PORT, resolveToken } = await import("../config.js");
+  const { BIND_HOST, API_PORT, MCP_HTTP_PORT, resolveToken, takeNewKeyNotice } = await import("../config.js");
   await import("node:fs");
   await import("node:path");
   await import("../store.js");
   const d = newDoctor(cliPath);
-  // The first run of anything that needs the key creates it and says so on stderr, in the middle of this report.
-  // Make it quietly here and report it in its proper place below.
-  {
-    const orig = console.error;
-    console.error = (...a: unknown[]): void => {
-      if (/Generated new bearer token/.test(String(a[0]))) d.keyJustCreated = true;
-      else orig(...(a as []));
-    };
-    try {
-      resolveToken();
-    } catch {
-      /* reported below */
-    } finally {
-      console.error = orig;
-    }
+  // The first run of anything that needs the key creates it; doctor reports that in its own line below.
+  try {
+    resolveToken();
+  } catch {
+    /* reported below */
   }
+  d.keyJustCreated = takeNewKeyNotice();
   console.log("monomem doctor\n");
 
-  for (const check of CHECKS) await check(d);
+  // Quiet for a person at a terminal: only the [warn] and [FAIL] lines (with their Fix lines). --verbose, or output that
+  // goes to a file, a pipe or a script, prints every check as before.
+  const verbose = process.argv.includes("--verbose") || !process.stdout.isTTY;
+  const orig = console.log;
+  let fine = 0;
+  let shown = true;
+  if (!verbose) {
+    console.log = (...a: unknown[]): void => {
+      const tagged = /^\s*(?:\x1b\[\d+m)?\[(ok|info|warn|fail)\]/i.exec(String(a[0] ?? ""));
+      if (tagged) {
+        shown = /warn|fail/i.test(tagged[1]);
+        if (!shown) fine++;
+      }
+      if (shown) orig(...(a as []));
+    };
+  }
+  try {
+    for (const check of CHECKS) await check(d);
+  } finally {
+    console.log = orig;
+  }
 
   const { warnings, failures } = d;
-  console.log(`\n  bind ${BIND_HOST}   api :${API_PORT}   mcp :${MCP_HTTP_PORT}`);
+  if (verbose) console.log(`\n  bind ${BIND_HOST}   api :${API_PORT}   mcp :${MCP_HTTP_PORT}`);
+  else console.log(`  ${fine} check(s) passed or are for information only (monomem check --setup --verbose lists them).`);
   console.log(
     "\n" +
       (failures > 0

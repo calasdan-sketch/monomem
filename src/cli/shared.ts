@@ -63,3 +63,9 @@ export function terminalIO(): import("../setup.js").SetupIO {
       }),
   };
 }
+
+/** One error form for every command: "Error: <sentence>" and, when there is one, a second line "Fix: <what to do>". */
+export function errorLine(message: string, fix?: string): string {
+  const m = message.trim().replace(/^error:\s*/i, "");
+  return `Error: ${m.charAt(0).toUpperCase()}${m.slice(1)}${fix ? `\nFix: ${fix}` : ""}`;
+}

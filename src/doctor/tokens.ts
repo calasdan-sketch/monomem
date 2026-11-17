@@ -32,7 +32,7 @@ export async function tokenCheck(dr: Doctor): Promise<void> {
   try {
     resolveToken();
     ok(
-      `bearer token present (${process.env.MONOMEM_TOKEN?.trim() ? "MONOMEM_TOKEN" : TOKEN_FILE})${dr.keyJustCreated ? " - created just now, because this was the first run" : ""}`
+      `main app key present (${process.env.MONOMEM_TOKEN?.trim() ? "MONOMEM_TOKEN" : TOKEN_FILE})${dr.keyJustCreated ? " - created just now, because this was the first run" : ""}`
     );
   } catch (e) {
     const msg = (e as Error).message;
