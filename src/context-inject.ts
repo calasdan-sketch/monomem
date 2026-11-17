@@ -15,9 +15,6 @@
 // Every note / index line carries a short "why shown" tag ({files,kw,recent,decision Nd}, explained once in a legend);
 // a note tagged never-show (NEVER_SHOW_TAG) is never injected. With a session id, the sizes go to the meter (meter.ts).
 // Operator-pinned notes (notes.pinned, set by `monomem pin` or an admin key) come before all of it, within PINNED_CHARS.
-import { execFile } from "node:child_process";
-import { realpathSync } from "node:fs";
-import { resolve as resolvePath } from "node:path";
 import type { Store, NoteRecord } from "./store.js";
 import { NOTE_KINDS } from "./store.js";
 import { extractKeywords } from "./keywords.js";
@@ -42,6 +39,7 @@ export function openToolName(): string {
 }
 import { meterAdd } from "./meter.js";
 import { receiptAdd } from "./receipts.js";
+import { branchLabel, gitHead, gitRun, hasOtherBranchNotes, insideFolder, noteScopes, unmergedBranches } from "./git-trail.js";
 import { currentWriter, stdioWriter } from "./actor.js";
 import { overwritesOf } from "./store/overwrites.js";
 import { noteComputer } from "./sync/marks.js";
@@ -59,7 +57,6 @@ export const INDEX_WRITER_CAP = 20;
 const SETTLED = 20;
 /** The "Project facts:" line: at most this many characters. */
 export const FACTS_LINE_CHARS = 400;
-const GIT_TIMEOUT_MS = 400;
 /** Hard cap on the pinned block (characters), charged to the recall budget. */
 export const PINNED_CHARS = 1600;
 export const PINNED_HEAD = "Pinned (always shown):";
@@ -113,53 +110,17 @@ export function recallTokens(env: NodeJS.ProcessEnv = process.env): number {
   return Number.isFinite(n) && n >= 100 ? Math.floor(n) : DEFAULT_RECALL_TOKENS;
 }
 
-function git(cwd: string, args: string[]): Promise<string> {
-  return new Promise((resolve) => {
-    try {
-      // A repo's own config must not make this read-only call run a program: no fsmonitor hook, no hooks path.
-      execFile("git", ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=", ...args], { cwd, timeout: GIT_TIMEOUT_MS, windowsHide: true }, (err, out) => resolve(err ? "" : String(out)));
-    } catch {
-      resolve("");
-    }
-  });
-}
+export { insideFolder };
 
 export async function gitSignals(cwd: string): Promise<ContextSignals> {
   const [b, d, r] = await Promise.all([
-    git(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]),
-    git(cwd, ["diff", "--no-ext-diff", "--name-only", "HEAD"]),
-    git(cwd, ["rev-parse", "--show-toplevel"]),
+    gitRun(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]),
+    gitRun(cwd, ["diff", "--no-ext-diff", "--name-only", "HEAD"]),
+    gitRun(cwd, ["rev-parse", "--show-toplevel"]),
   ]);
   const branch = b.trim();
   const root = r.trim();
   return { branch: branch === "HEAD" ? "" : branch, diffFiles: d.split("\n").map((s) => s.trim()).filter(Boolean).slice(0, 50), ...(root ? { root } : {}) };
-}
-
-/** A folder in comparable form: real path (git reports /private/var for macOS /var), "/" separators, no trailing "/", lowercased on Windows. */
-const realDirs = new Map<string, string>();
-const normDir = (p: string): string => {
-  let real = realDirs.get(p);
-  if (real === undefined) {
-    try {
-      real = realpathSync.native(p);
-    } catch {
-      real = resolvePath(p); // gone or unreadable: compare as written
-    }
-    if (realDirs.size > 1000) realDirs.clear(); // ponytail: crude cap; folders seen per process are few
-    realDirs.set(p, real);
-  }
-  const r = real.replace(/\\/g, "/").replace(/\/+$/, "");
-  return process.platform === "win32" ? r.toLowerCase() : r;
-};
-/**
- * C18: `dir` is `root` or inside it. One-way on purpose: a server launched in the home folder (some apps do) contains every
- * project, and must not count as "this project".
- */
-export function insideFolder(dir: string | null | undefined, root: string | null | undefined): boolean {
-  if (!dir || !root) return false;
-  const a = normDir(dir);
-  const b = normDir(root);
-  return a === b || a.startsWith(b + "/");
 }
 
 const tokensOf = (n: NoteRecord): number => Math.max(1, Math.ceil((n.title.length + n.body.length) / CHARS_PER_TOKEN));
@@ -367,7 +328,7 @@ export function projectFactsLine(factNotes: readonly NoteRecord[], maxChars = FA
 export async function rankContext(
   store: Store,
   opts: InjectOptions = {}
-): Promise<{ ranked: NoteRecord[]; total: number; latestSummary: NoteRecord | null; why: Map<number, Set<string>>; pinned: NoteRecord[]; factNotes: NoteRecord[] }> {
+): Promise<{ ranked: NoteRecord[]; total: number; latestSummary: NoteRecord | null; why: Map<number, Set<string>>; pinned: NoteRecord[]; factNotes: NoteRecord[]; otherBranch: Map<number, string> }> {
   const ns = opts.namespace;
   const wf = {
     ...(opts.writtenBy ? { writtenBy: opts.writtenBy } : {}),
@@ -405,6 +366,9 @@ export async function rankContext(
   const latestSummary = store.list({ ...base, kinds: ["summary"] as const, limit: 5, count: false }).notes.find((n) => !skip(n) && n.written_by === "capture") ?? null;
   const signals = opts.signals ?? (await gitSignals(opts.cwd ?? process.cwd()));
   const db = store.captureDb();
+  // Branch scope: the one git call it may need starts now and runs while the searches below do (session-start budget).
+  const repoHere = signals.root ? (gitHead(signals.root)?.repo ?? null) : null;
+  const liveBranches = repoHere && signals.root && hasOtherBranchNotes(db, repoHere, signals.branch || null) ? unmergedBranches(signals.root) : null;
   const recentFiles = store.recentFilePaths(ns, 30);
   const words = (p: string): string => p.replace(/\.[A-Za-z0-9]+$/, "").replace(/[\\/._-]+/g, " ");
   const keywords = extractKeywords(
@@ -471,23 +435,36 @@ export async function rankContext(
   let byRecency = [...pool.values()].sort((a, b) => (a.updated_at < b.updated_at ? 1 : a.updated_at > b.updated_at ? -1 : b.id - a.id)).map((n) => n.id);
   // C18 project-first: notes written from inside this repository (notes.writer_cwd, the local server's folder) get their own
   // list; another project's note with no keyword or file match leaves the recency list. NULL (REST, tokens, CLI, old notes) is neutral.
+  // PLAN I branch scope (git-trail.ts): a note of this repository (any of its worktrees) written on the current branch comes
+  // first of all; one written on another live branch (not merged into HEAD, not deleted) is labelled and kept back like
+  // another project's note unless it matches the work. A merged or deleted branch's notes count as the repository's.
   const here: number[] = [];
+  const onBranch: number[] = [];
+  const otherBranch = new Map<number, string>();
   if (signals.root && byRecency.length) {
-    const cwdOf = new Map<number, string | null>();
-    for (let i = 0; i < byRecency.length; i += 500) {
-      const ids = byRecency.slice(i, i + 500);
-      for (const r of db.prepare(`SELECT id, writer_cwd FROM notes WHERE id IN (${ids.map(() => "?").join(",")})`).all(...ids) as Array<{ id: number; writer_cwd: string | null }>) cwdOf.set(Number(r.id), r.writer_cwd);
-    }
+    const scopes = noteScopes(db, byRecency);
+    const repo = repoHere;
+    const cur = signals.branch || null;
+    const sameRepo = (id: number): boolean => insideFolder(scopes.get(id)?.cwd, signals.root) || (!!repo && scopes.get(id)?.repo === repo);
+    const live = liveBranches ? await liveBranches : new Set<string>();
     const elsewhere = new Set<number>();
+    const matched = (id: number): boolean => !!(why.get(id)?.has("kw") || why.get(id)?.has("files"));
     for (const id of byRecency) {
-      const c = cwdOf.get(id);
-      if (insideFolder(c, signals.root)) here.push(id);
-      else if (c && !why.get(id)?.has("kw") && !why.get(id)?.has("files")) elsewhere.add(id);
+      const sc = scopes.get(id);
+      if (sameRepo(id)) {
+        if (sc?.branch && sc.branch !== cur && live.has(sc.branch)) {
+          otherBranch.set(id, sc.branch);
+          if (!matched(id)) elsewhere.add(id);
+        } else {
+          here.push(id);
+          if (cur && sc?.branch === cur) onBranch.push(id);
+        }
+      } else if (sc?.cwd && !matched(id)) elsewhere.add(id);
     }
     byRecency = [...byRecency.filter((id) => !elsewhere.has(id)), ...byRecency.filter((id) => elsewhere.has(id))];
   }
   for (const id of byRecency.slice(0, 10)) mark(id, "recent");
-  const fused = rrfScores([bm25, overlap, byRecency, settled.map((n) => n.id), here]);
+  const fused = rrfScores([bm25, overlap, byRecency, settled.map((n) => n.id), here, onBranch]);
   // Operator-pinned notes (the notes.pinned COLUMN, never the agent-settable "pinned" tag): shown first by injectContext, so
   // they leave the ranked pass. pinnedNotes applies the sensitivity ceiling; readVisible + fits the distrust and session filters.
   const pinned = store
@@ -497,12 +474,12 @@ export async function rankContext(
   const pinnedIds = new Set(pinned.map((n) => n.id));
   const ranked = rankHits(store, [...fused.entries()].filter(([id]) => !pinnedIds.has(id)).map(([id, score]) => ({ note: pool.get(id)!, score })));
   const summary = latestSummary && pinnedIds.has(latestSummary.id) ? null : latestSummary;
-  return { ranked, total: store.list({ ...base, limit: 1, countCap: SESSION_COUNT_CAP }).total, latestSummary: summary, why, pinned, factNotes };
+  return { ranked, total: store.list({ ...base, limit: 1, countCap: SESSION_COUNT_CAP }).total, latestSummary: summary, why, pinned, factNotes, otherBranch };
 }
 
 /** The packed context text ("" when there is nothing to say). */
 export async function injectContext(store: Store, opts: InjectOptions = {}): Promise<string> {
-  const { ranked, total, latestSummary, why, pinned, factNotes } = await rankContext(store, opts);
+  const { ranked, total, latestSummary, why, pinned, factNotes, otherBranch } = await rankContext(store, opts);
   // 1.4.0: one count line for the notes held back as unconfirmed outside content; never their titles or text.
   const nsList = opts.namespace !== undefined ? [opts.namespace] : undefined;
   const heldLine = [unconfirmedCountLine(store.unconfirmedBreakdown(nsList)), ...(opts.cwd !== undefined ? store.openWindowLines(opts.cwd) : []), expiryEnforced(store) ? expiredCountLine(store.expiredCount(nsList), store.confirmSettings().days) : ""].filter(Boolean).join("\n");
@@ -556,7 +533,8 @@ export async function injectContext(store: Store, opts: InjectOptions = {}): Pro
   const now = Date.now();
   const tagOf = (n: NoteRecord): string => whyTag(n, why.get(n.id), now);
   // Recent lines: the why tag plus, for a note that came by device sync, the computer it came from.
-  const recentTag = (n: NoteRecord): string => tagOf(n) + fromComputerText(noteComputer(store, n.id));
+  const branchOf = (n: NoteRecord): string => (otherBranch.has(n.id) ? branchLabel(otherBranch.get(n.id)!) : "");
+  const recentTag = (n: NoteRecord): string => tagOf(n) + branchOf(n) + fromComputerText(noteComputer(store, n.id));
   if (latestSummary) {
     // A summary of a session that read outside content is not pasted in: its title and the reason, and the agent can open it.
     const outside = originTools(latestSummary).length > 0;
@@ -595,7 +573,7 @@ export async function injectContext(store: Store, opts: InjectOptions = {}): Pro
       (over.get(n.written_by) ?? over.set(n.written_by, []).get(n.written_by)!).push(n);
       continue;
     }
-    const line = indexLine(n, tagOf(n), true, noteComputer(store, n.id));
+    const line = indexLine(n, tagOf(n) + branchOf(n), true, noteComputer(store, n.id));
     // The writer label is not charged to the budget, so the same store shows as many notes as it did before labels existed.
     const charged = indexLine(n, tagOf(n), false).length;
     if (used + header.length + charged + 1 > budget) break;

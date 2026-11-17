@@ -172,12 +172,12 @@ export function noteWhy(store: Store, note: NoteRecord, opts: { namespaces?: str
   };
 }
 
-/** `monomem why <id> [--json] [--body]` */
+/** `monomem why <id> [--json] [--body] [--commits]` */
 export async function whyCmd(args: string[]): Promise<void> {
   const raw = args.find((a) => !a.startsWith("-"));
   const id = raw && /^#?\d+$/.test(raw) ? Number(raw.replace("#", "")) : NaN;
   if (!Number.isInteger(id)) {
-    console.error("Usage: monomem why <note-id> [--json] [--body]");
+    console.error("Usage: monomem why <note-id> [--json] [--body] [--commits]");
     process.exit(1);
   }
   const { DB_PATH } = await import("./config.js");
@@ -189,6 +189,7 @@ export async function whyCmd(args: string[]): Promise<void> {
       console.error(`no note #${id}`);
       process.exit(1);
     }
+    if (args.includes("--commits")) return await commitsOf(store, note.id, note.title, args.includes("--json"));
     const w = noteWhy(store, note, { body: args.includes("--body") });
     if (args.includes("--json")) return console.log(JSON.stringify(w, null, 2));
     console.log(`#${w.id} "${printable(w.title)}"  namespace ${printable(w.namespace)}`);
@@ -211,4 +212,14 @@ export async function whyCmd(args: string[]): Promise<void> {
   } finally {
     store.close();
   }
+}
+
+/** PLAN I: `why <id> --commits`: commits made in sessions that were shown or wrote the note (git-trail.ts). */
+async function commitsOf(store: Store, id: number, title: string, json: boolean): Promise<void> {
+  const { commitsUsing } = await import("./git-trail.js");
+  const hits = await commitsUsing(store.captureDb(), id);
+  if (json) return console.log(JSON.stringify({ id, commits: hits }, null, 2));
+  console.log(`#${id} "${printable(title)}": ${plural(hits.length, "commit")} made in sessions that used it`);
+  for (const h of hits) console.log(`  ${h.commit.hash.slice(0, 10)}  ${localTime(h.commit.at)}  ${printable(h.commit.subject, 70)}  (session ${printable(h.session, 40)}: ${h.how.join(", ")})`);
+  console.log("Found from session receipts (kept MONOMEM_ACCESS_LOG_DAYS) and git log in each session's folder: commits by this machine's git identity made while the session ran. A commit with a Monomem-Notes line counts only if the line names the note.");
 }

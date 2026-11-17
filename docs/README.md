@@ -31,6 +31,7 @@ Pick by what you want to do. Everything here is also linked from the main [READM
 | how notes are found | [search.md](./search.md) |
 | what the safety scan catches | [memory-linter.md](./memory-linter.md) |
 | what changed while I was away | [change-feed.md](./change-feed.md) |
+| which git commits used a note, and how notes stay on their branch | [commits-and-branches.md](./commits-and-branches.md) |
 | what is measured, and what is not | [BENCHMARK.md](./BENCHMARK.md) |
 | what it costs in tokens and disk | [footprint.md](./footprint.md) |
 | what it does not protect against | [SECURITY.md](../SECURITY.md) |

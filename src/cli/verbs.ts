@@ -43,7 +43,7 @@ const REVIEW_PARTS: Record<string, string[]> = {
   code: ["stale", "--code"],
   facts: ["facts"],
 };
-const ACTIVITY_FLAGS: Record<string, string> = { "--follow": "watch", "--reads": "access", "--summary": "digest", "--writes": "audit" };
+const ACTIVITY_FLAGS: Record<string, string> = { "--follow": "watch", "--reads": "access", "--summary": "digest", "--writes": "audit", "--commits": "commit-trail" };
 export const TIDY_JOBS: Readonly<Record<string, string>> = {
   merge: "consolidate",
   edges: "rebuild-edges",

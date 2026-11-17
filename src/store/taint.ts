@@ -9,6 +9,7 @@ import { ValidationError } from "../errors.js";
 import { MAX_DERIVED_FROM, ORIGIN_DECLARED, ORIGIN_PREFIX, ORIGIN_VIA_MEMORY, isOutsideTool, isTainted, sameFolder, sessionTaintExempt, toolTag } from "../taint.js";
 import { SESSION_IDLE_MS, parseTags, tagsToStorage } from "./rows.js";
 import { cosineOfFreq, termFreq, tokenize } from "../text-sim.js";
+import { recordBranch } from "../git-trail.js";
 
 /**
  * The `obs.origin:*` tags a write gets: `outside: true` (declared), the connection's own (ActorRef.taint: a reads_outside
@@ -82,6 +83,8 @@ export function stampCliTerminal(s: Store, id: number, writer: string): void {
   const actor = actorStore.getStore();
   const cwd = actor?.authed !== true && (writer === "stdio" || writer.startsWith("stdio:")) && actor?.cwd ? actor.cwd : null;
   s.db.prepare("UPDATE notes SET writer_cwd = ? WHERE id = ?").run(cwd, id);
+  // PLAN I: and the git repository and branch that folder is on (note_branches side table; branch-scoped session start).
+  recordBranch(s.db, id, cwd);
 }
 
 export function addLinks(s: Store, id: number, parents: number[], by: string, at: string): void {
