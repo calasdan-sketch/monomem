@@ -33,6 +33,34 @@ export interface HealthCheck {
   status: Status;
   /** One line: what was found and what it means. */
   text: string;
+  /** Warn and fail lines only: a sentence the person can paste to their agent to get help with this line. */
+  ask?: string;
+}
+
+/**
+ * "Fix it with your agent": what to paste to an agent for each warning. Each one asks the agent to look and explain
+ * first and to ask before it changes anything, so pasting it never changes a setting by itself.
+ */
+const ASK: Record<string, string> = {
+  node: "Check which Node.js version I have and tell me how to install Node.js 22.16 or later. Ask me before you install anything.",
+  database: "Run monomem check --setup and explain the Database problem in plain words. Do not delete, move or replace the database file; ask me first.",
+  "trust-settings": "Run monomem check --verbose and explain the damaged trust settings and the command that resets each one. Ask me before you run any of them.",
+  apps: "Run monomem setup --dry-run and tell me what it would change in my app connections. Ask me before you run it for real.",
+  drill: "Run monomem check --attacks and explain in plain words which attack got through and why. Do not change any settings.",
+  exposure: "Run monomem check --verbose and explain the Exposure line: which app keys have no limit and which notes hold personal data. Ask me before you change any key or note.",
+  audit: "Run monomem check --verbose and explain the Audit chain line. Do not edit or delete the audit log.",
+  "audit-write": "Run monomem check --verbose and explain why the audit log cannot be written. Ask me before you change any folder permissions.",
+  "confirm-backlog": "Run monomem review and summarise the unconfirmed notes for me. Let me decide which ones to keep.",
+  backup: "Run monomem check --verbose and explain the Backups line. Ask me before you run monomem backup or change any backup setting.",
+  sync: "Run monomem check --verbose and explain the Device sync line. Ask me before you change any sync setting.",
+};
+
+/** The sentence to paste for one warn or fail line; a plain "explain it" request for a check with no sentence of its own. */
+export function askFor(c: Pick<HealthCheck, "id" | "label">): string {
+  if (ASK[c.id]) return ASK[c.id];
+  if (c.id.startsWith("security:"))
+    return `Run monomem check --setup and explain the "${c.label}" warning and which setting causes it. Ask me before you change any setting.`;
+  return `Run monomem check --verbose and explain the "${c.label}" line in plain words, then suggest a fix. Ask me before you change anything.`;
 }
 export interface HealthReport {
   grade: string;
@@ -188,7 +216,7 @@ function auditLines(path: string): string[] {
  * anywhere in the log, unless the log has rotated past it. It cannot see tampering that happened before its first run, and
  * once rotation has dropped the remembered line it cannot tell rotation from removal.
  */
-function auditCheck(path: string | undefined, db: Db | undefined, notes: number): Result {
+function auditCheck(path: string | undefined, db: Db | undefined, notes: number, readOnly = false): Result {
   const a = verifyAuditChain(path);
   if (a.breaks > 0) return { status: "fail", text: `${plural(a.breaks, "break")} (first at line ${a.brokenLine}): a log line was edited or removed` };
   let seen: { lines: number; hash: string; ts?: string } | undefined;
@@ -220,7 +248,7 @@ function auditCheck(path: string | undefined, db: Db | undefined, notes: number)
     else if (lines.length < seen.lines) return { status: "warn", text: `the log has ${plural(lines.length, "line")}, fewer than the ${seen.lines} it had at the last health check: lines were removed` };
     else return { status: "warn", text: `line ${seen.lines} is not the line health saw there last time: the log was edited or replaced (health only notices changes since its last run)` };
   }
-  try {
+  if (!readOnly) try {
     db?.prepare("INSERT OR REPLACE INTO _meta (key, value) VALUES (?, ?)").run(SEEN_KEY, JSON.stringify({ lines: lines.length, hash: sha(lines[lines.length - 1]), ts: lastTs(lines) }));
   } catch {
     /* read-only database: skip the note */
@@ -240,6 +268,11 @@ export interface HealthOpts {
   drill?: typeof runDrill;
   /** Where the app configs are looked for (tests); default the real home folder. */
   setupEnv?: import("./setup.js").SetupEnv;
+  /**
+   * The MCP health action: write nothing (not even the audit-log marker) and skip the attack replay, which swaps
+   * process-wide settings while it runs and so must not run inside a server that is answering other calls.
+   */
+  readOnly?: boolean;
 }
 
 export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
@@ -260,7 +293,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
   let audit: Result | undefined;
   if (existsSync(dbPath)) {
     try {
-      const s = new Store(dbPath);
+      const s = new Store(dbPath, o.readOnly ? { noMigrate: true } : {});
       try {
         const damaged = s.integrityProblem();
         if (damaged) {
@@ -316,7 +349,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
             hygiene = `could not be checked: ${(e as Error).message}`;
           }
           try {
-            audit = auditCheck(o.auditPath, s.captureDb(), notes);
+            audit = auditCheck(o.auditPath, s.captureDb(), notes, o.readOnly);
           } catch (e) {
             audit = { status: "warn", text: `could not read the audit log: ${(e as Error).message}` };
           }
@@ -358,7 +391,8 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
   if (sec.length) for (const f of sec) add(`security:${f.id}`, f.label, f.status, `${f.short} (monomem check --setup has the detail)`);
   else add("security", "Security settings", "ok", "no weakening settings found (lint, stdio admin tools, bind address, cloud-sync folder, remote embeddings, browser origins, file permissions, proxy trust, legacy runners)");
 
-  if (dbOk) {
+  if (dbOk && o.readOnly) add("drill", "Attack replay", "info", "not run here: run monomem check --attacks in a terminal");
+  else if (dbOk) {
     try {
       const d: DrillReport = await (o.drill ?? runDrill)({ dbPath });
       // Held, blocked and stored-with-a-warning are counted apart: a warned attack is stored, so it is never called blocked.
@@ -446,6 +480,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
   const sync = syncProblem(o.dataDir ?? DATA_DIR, o.now ?? new Date());
   if (sync) add("sync", "Device sync", "warn", sync.text);
 
+  for (let i = 0; i < checks.length; i++) if (checks[i].status === "warn" || checks[i].status === "fail") checks[i] = { ...checks[i], ask: askFor(checks[i]) };
   const grade = gradeOf(checks);
   return { grade, rule: GRADE_RULE, checks, not_covered: NOT_COVERED, date: (o.now ?? new Date()).toISOString().slice(0, 10), exit_code: grade <= "C" ? 0 : 1 };
 }
@@ -467,7 +502,7 @@ export function renderHealth(r: HealthReport, verbose = true): string {
   const quiet = verbose ? [] : [`  ${r.checks.length - rows.length} check(s) fine or for information only (--verbose lists them, with the grade rule).`];
   return [
     "monomem check\n",
-    ...rows.map((c) => `  ${TAG[c.status]} ${c.label}: ${c.text}`),
+    ...rows.flatMap((c) => [`  ${TAG[c.status]} ${c.label}: ${c.text}`, ...(c.ask ? [`         Ask your agent: "${c.ask}"`] : [])]),
     ...quiet,
     "",
     `Grade ${r.grade}`,

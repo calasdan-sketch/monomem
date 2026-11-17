@@ -183,9 +183,9 @@ function specs(nsActive: boolean): Spec[] {
     {
       name: "memory_usage",
       title: "Usage and receipts",
-      description: "stats: how memory is used. receipt: what a session start showed. why: the story of one note.",
-      actions: { stats: "memory_stats", receipt: "memory_receipt", why: "memory_why" },
-      shape: { action: z.enum(["stats", "receipt", "why"]).optional(), id: num().optional(), session_id: z.string().optional() },
+      description: "stats: how memory is used. receipt: what a session start showed. why: the story of one note. health: monomem check warnings (read-only, admin).",
+      actions: { stats: "memory_stats", receipt: "memory_receipt", why: "memory_why", health: HEALTH_ACTION },
+      shape: { action: z.enum(["stats", "receipt", "why", "health"]).optional(), id: num().optional(), session_id: z.string().optional() },
     },
     {
       name: "memory_sessions",
@@ -212,6 +212,21 @@ function specs(nsActive: boolean): Spec[] {
       },
     },
   ];
+}
+
+/** An action served here, not by a 1.5 tool: memory_usage health (Fix it with your agent). */
+const HEALTH_ACTION = "(health)";
+
+/**
+ * memory_usage health: the `monomem check` lines (warnings only, each with its "Ask your agent" sentence) as text.
+ * Read-only: no settings change, no audit-log marker, no attack replay. Admin only: it shows this machine's set-up.
+ */
+async function healthAction(c: McpCtx): Promise<unknown> {
+  const denied = c.denyIfUnder("admin");
+  if (denied) return errorResult(denied);
+  const { runHealth, renderHealth } = await import("../health.js");
+  const r = await runHealth({ readOnly: true });
+  return { content: [{ type: "text", text: renderHealth(r, false) }] };
 }
 
 /** Tools whose 1.5 handler takes the action itself (memory_held, memory_trust): it is passed on, defaulting to list. */
@@ -280,7 +295,7 @@ function missingAction(s: Spec, actionNames: string[], rest: Record<string, unkn
 export function registerV16Tools(c: McpCtx): void {
   const { registerRaw, oldTools, profile, enabled, nsActive } = c;
   for (const s of specs(nsActive)) {
-    const sources = [...new Set(Object.values(s.actions))];
+    const sources = [...new Set(Object.values(s.actions))].filter((o) => o !== HEALTH_ACTION);
     if (!sources.some((o) => oldTools.has(o))) continue; // none of its 1.5 tools is offered here (the local guard, a profile)
     if (profile.legacy ? s.name === "memory_history" || s.name === "memory_rollback" : enabled && !enabled.has(s.name)) continue;
     const actionNames = Object.keys(s.actions);
@@ -296,6 +311,7 @@ export function registerV16Tools(c: McpCtx): void {
         }
         const action = single ? actionNames[0] : typeof given === "string" ? given : actionNames[0];
         const oldName = s.actions[action];
+        if (oldName === HEALTH_ACTION) return healthAction(c);
         const old = oldName ? oldTools.get(oldName) : undefined;
         if (!old) return errorResult(`${s.name} action "${action}" is not available on this connection`);
         const oldArgs: Record<string, unknown> = {};

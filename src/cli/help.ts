@@ -74,6 +74,8 @@ export function usage(all = false): void {
       "            Settings kept in the store (how often a note needs re-checking).",
       "  replace --old <ids> (--title T --body B | --new-id N)  |  replace undo <id>",
       "            Replace out-of-date notes with a newer one: shows what would change and asks first. Nothing is deleted.",
+      "  tasks [list | show <id> | done <id> | handoff [\"summary\" --next ...]]",
+      "            The task board your agents keep: open tasks, one line each; the latest handoff, or write one.",
       "",
       "  Old names still work: doctor = check --setup, health = check, drill = check --attacks, meter = check --usage,",
       "  safety-report = check --report, quarantine = review held, quality = review duplicates, conflicts = review conflicts,",
