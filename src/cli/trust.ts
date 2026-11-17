@@ -17,6 +17,8 @@ function trustHelp(): void {
       "        A name with no notes that is close to one that has some is refused with a 'Did you mean'; --force saves it as typed.",
       "  trust undistrust <writer> --namespace <ns|'*'>",
       "        <writer> is an app key's name, or a writer id <server_id>/<label>. Quote the star: --namespace '*'.",
+      "  trust probation [--json]                 writers Monomem saw for the first time: labelled \"new writer\", not a second source yet",
+      "  trust confirm-writer <name>              end a new writer's probation (a person only). See docs/trust.md \"New writers\".",
       "  trust attester-add <public-key> --server-id <id> [--label text] [--not-after <ISO time>] [--any-server]",
       "        Believe signed exports from that server. A key is trusted for ONE server (--server-id);",
       "        --any-server accepts a key for any server id (discouraged). --not-after ends trust in the key",
@@ -60,13 +62,13 @@ export async function trustCmd(): Promise<void> {
     bools: ["json", "any-server", "keep-old-private", "force"],
   });
   const action = rest[0] ?? "list";
-  const known = ["list", "identity", "distrust", "undistrust", "attester-add", "attester-remove", "attester-revoke", "attester-unrevoke", "export-key", "rotate"];
+  const known = ["list", "probation", "confirm-writer", "identity", "distrust", "undistrust", "attester-add", "attester-remove", "attester-revoke", "attester-unrevoke", "export-key", "rotate"];
   if (!known.includes(action)) {
     console.error(`Unknown trust action: ${action}\n`);
     trustHelp();
     process.exit(1);
   }
-  const maxRest = action === "list" || action === "identity" || action === "rotate" || action === "export-key" ? 1 : 2;
+  const maxRest = action === "list" || action === "probation" || action === "identity" || action === "rotate" || action === "export-key" ? 1 : 2;
   if (rest.length > maxRest) {
     console.error(
       `Unexpected extra argument(s): ${rest.slice(maxRest).map((x) => JSON.stringify(x.slice(0, 40))).join(" ")}. ` +
@@ -144,6 +146,33 @@ export async function trustCmd(): Promise<void> {
       case "identity": {
         const i = store.identity();
         show(i, `server_id:  ${i.server_id}\nkey_id:     ${i.key_id}\npublic_key: ${i.public_key}\n\nGive the public_key (and server_id) to the admin of the server that should believe this server's exports:\n  monomem trust attester-add --public-key ${i.public_key} --server-id ${i.server_id} --label "<name>"`);
+        return;
+      }
+      case "probation": {
+        const { probationList, probationSettings } = await import("../store/probation.js");
+        const rows = probationList(store);
+        const cfg = probationSettings(store);
+        if (flags.json) return void console.log(JSON.stringify({ settings: cfg, writers: rows }, null, 2));
+        console.log(cfg.notes === 0 ? "Writer probation: off (monomem settings set probation-notes 5 turns it on)." : `Writer probation: a new writer leaves it after ${cfg.notes} notes kept ${cfg.hours} hours without being replaced, archived or flagged, or when a person runs monomem trust confirm-writer <name>.`);
+        const on = rows.filter((r) => r.on_probation);
+        if (!on.length) return void console.log("No writer is on probation.");
+        for (const r of on) console.log(`  ${printable(r.writer, 60)}: first seen ${r.first_seen_at.slice(0, 16).replace("T", " ")}, ${r.kept} of ${cfg.notes} notes kept`);
+        return;
+      }
+      case "confirm-writer": {
+        const writer = str(flags.writer) ?? rest[1];
+        if (!writer) {
+          console.error("Usage: monomem trust confirm-writer <name>   (the name monomem trust probation lists)");
+          process.exit(1);
+        }
+        await requireOperator(`trust confirm-writer ${writer}`);
+        const { confirmWriter } = await import("../store/probation.js");
+        const r = confirmWriter(store, writer!, "cli");
+        if (!r) {
+          console.error(`Monomem has no record of a writer named "${printable(writer!, 60)}". monomem trust probation lists the new ones.`);
+          process.exit(1);
+        }
+        show(r, `${printable(writer!, 60)} is no longer on probation: its notes lose the "new writer" label and it counts as a second source.`);
         return;
       }
       case "distrust":
