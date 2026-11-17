@@ -618,7 +618,7 @@ function findServers(text: string, includeProjects: boolean, key: string | reado
  */
 function serversKey(id: ClientId, text: string): string | readonly string[] {
   const extra = extraTarget(id);
-  if (extra) return extra.key;
+  if (extra) return typeof extra.key === "function" ? extra.key(text) : extra.key;
   if (id === "vscode") return "servers";
   if (id === "zed") return "context_servers";
   if (id === "muse") return text.trim() && !getPath(parseDoc(text), ["mcp_servers"]) && getPath(parseDoc(text), ["mcpServers"]) ? "mcpServers" : "mcp_servers";
@@ -1172,9 +1172,9 @@ export function buildCaptureCommand(e: SetupEnv, opts: Pick<SetupOptions, "comma
 
 const CAPTURE_REWRITE = "replace the automatic memory hooks";
 
-interface OtherCopyHook {
+export interface OtherCopyHook {
   on: string;
-  item: { hooks?: Array<{ command?: unknown }> };
+  item: { hooks?: Array<{ command?: unknown }>; command?: unknown };
   /** The other copy's cli.js path as written: finds the entry again (unappend). */
   cli: string;
   problem: string;
@@ -1184,7 +1184,7 @@ interface OtherCopyHook {
  * The standalone download: hook entries (start-of-session and capture events) whose command runs another Monomem copy's
  * cli.js (otherCopyProblem). Entries with comments inside are left alone, as elsewhere.
  */
-function otherCopyHooks(e: SetupEnv, text: string, host: HookHost, ons: string[] = [host.start.on, ...host.events.map((h) => h.on)]): OtherCopyHook[] {
+export function otherCopyHooks(e: SetupEnv, text: string, host: HookHost, ons: string[] = [host.start.on, ...host.events.map((h) => h.on)]): OtherCopyHook[] {
   if (e.mode !== "bundle" || !text.trim()) return [];
   let doc: ReturnType<typeof parseDoc>;
   try {
@@ -1201,7 +1201,7 @@ function otherCopyHooks(e: SetupEnv, text: string, host: HookHost, ons: string[]
       } catch {
         continue;
       }
-      const cmds = Array.isArray(item.hooks) ? item.hooks.map((x) => (typeof x?.command === "string" ? x.command : "")) : [];
+      const cmds = Array.isArray(item.hooks) ? item.hooks.map((x) => (typeof x?.command === "string" ? x.command : "")) : typeof item.command === "string" ? [item.command] : []; // Cursor: {command}
       for (const c of cmds) {
         const cli = hookCliPath(c);
         const problem = cli && /\s(?:recall|hook)\b/.test(c) ? otherCopyProblem(e, [cli]) : null;
@@ -1216,7 +1216,7 @@ function otherCopyHooks(e: SetupEnv, text: string, host: HookHost, ons: string[]
 }
 
 /** A hook command of another copy run by this download: the launcher changes, `recall ...` / `hook <event> ...` stays. */
-function moveHookCommand(e: SetupEnv, command: string, cli: string): string {
+export function moveHookCommand(e: SetupEnv, command: string, cli: string): string {
   const tail = hookCliPath(command) === cli ? /\s((?:recall|hook)\b.*)$/s.exec(command) : null;
   return tail ? selfShellLine(tail[1], selfOf(e)) : command;
 }

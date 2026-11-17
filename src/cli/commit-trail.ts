@@ -8,7 +8,7 @@
 // The hook is per repository, never global (core.hooksPath set = refuse and print the line to add instead).
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { TRAILER_KEY, commitsBetween, gitRun, sessionNotes, trailerValue, type SessionRow } from "../git-trail.js";
 import { quoteShellArg, selfCommand, type SelfFacts } from "../self.js";
@@ -76,6 +76,9 @@ export function installHook(file: string, f: SelfFacts): { file: string; sha: st
   chmodSync(file, 0o755);
   return { file, sha: createHash("sha256").update(text).digest("hex") };
 }
+
+/** Ours, but written by another Monomem copy (an npm install, another Node): the line it runs is not this copy's. */
+export const isStale = (file: string, f: SelfFacts): boolean => isOurs(file) && readFileSync(file, "utf8") !== hookScript(f);
 
 export function removeHook(file: string): boolean {
   if (!existsSync(file) || !isOurs(file)) return false;
@@ -148,6 +151,9 @@ export async function commitTrailCmd(args: string[]): Promise<void> {
   const place = await hookPlace(process.cwd());
   if (sub === "status") {
     if (!place.ok) return console.log(`Commit line: off (${place.reason}).`);
+    if (isStale(place.file, (await import("../self.js")).selfFacts())) {
+      return console.log(`Commit line: on in ${place.top}, but its hook runs another Monomem copy, not this one, so it stops when that copy is removed. Move it: monomem commit-trail on`);
+    }
     return console.log(isOurs(place.file) ? `Commit line: on in ${place.top} (${place.file}).` : `Commit line: off in ${place.top}. Turn on: monomem commit-trail on`);
   }
   if (sub === "off") {
@@ -158,6 +164,11 @@ export async function commitTrailCmd(args: string[]): Promise<void> {
     if (!place.ok) {
       console.error(errorLine(place.reason, `the hook line: ${selfCommand(["commit-trail", "hook"]).command} ... commit-trail hook "$1" "$2"`));
       process.exit(1);
+    }
+    const facts = (await import("../self.js")).selfFacts();
+    if (isStale(place.file, facts)) {
+      installHook(place.file, facts);
+      return console.log(`Moved the commit line hook in ${place.top} to this Monomem copy.`);
     }
     if (isOurs(place.file)) return console.log(`Already on in ${place.top}.`);
     const io = terminalIO();
@@ -189,6 +200,7 @@ const commitLineQuestion = (top: string): string =>
  * recorded in setup's history, so `monomem setup --undo` removes the hook like any file setup created.
  */
 export async function offerCommitTrail(e: SetupEnv, io: SetupIO, opts: SetupOptions): Promise<void> {
+  if (e.mode === "bundle" && !opts.dryRun) await moveCommitTrail(e, io, opts);
   if (!io.interactive || opts.yes || opts.dryRun) return;
   const place = await hookPlace(e.cwd);
   if (!place.ok || existsSync(place.file)) return;
@@ -203,5 +215,32 @@ export async function offerCommitTrail(e: SetupEnv, io: SetupIO, opts: SetupOpti
     io.out(`Added the commit line hook: ${place.file}. Off: monomem commit-trail off (or monomem setup --undo)`);
   } catch (err) {
     io.err(`Could not add the commit line hook (${(err as Error).message}). Everything else is done.`);
+  }
+}
+
+/**
+ * The download over an npm install: this repository's commit line hook still runs the npm copy (git hooks are per
+ * repository, so only the folder setup runs in is seen). Rewrite it to this copy (asks, unless --yes), keeping a backup
+ * so `monomem setup --undo` puts the old hook back. Other repositories: `monomem commit-trail status` there says so.
+ */
+async function moveCommitTrail(e: SetupEnv, io: SetupIO, opts: SetupOptions): Promise<void> {
+  const place = await hookPlace(e.cwd);
+  const facts: SelfFacts = { mode: e.mode ?? "npm", execPath: e.execPath, cliPath: e.cliPath, platform: e.platform };
+  if (!place.ok || !isStale(place.file, facts)) return;
+  if (!opts.yes) {
+    const a = io.interactive ? (await io.ask(`\nThe commit line hook in ${place.top} runs another Monomem copy. Move it to this download? Type y: `)).trim().toLowerCase() : "";
+    if (a !== "y" && a !== "yes") return io.out(`The commit line hook in ${place.top} still runs another Monomem copy. Move it: monomem commit-trail on`);
+  }
+  try {
+    const { readHistory, saveHistory, stamp } = await import("../setup.js");
+    const backup = `${place.file}.monomem-backup-${stamp(e.now())}`;
+    copyFileSync(place.file, backup);
+    const { sha } = installHook(place.file, facts);
+    const all = readHistory(e);
+    all.push({ id: stamp(e.now()), at: e.now().toISOString(), version: e.version, changes: [{ client: "git-hook", file: place.file, real: place.file, backup, createdFile: false, afterSha: sha, inverse: [], label: "commit line hook (moved)" }] });
+    saveHistory(e, all);
+    io.out(`Moved the commit line hook in ${place.top} to this download (backup: ${backup}).`);
+  } catch (err) {
+    io.err(`Could not move the commit line hook (${(err as Error).message}). Move it: monomem commit-trail on`);
   }
 }

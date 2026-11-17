@@ -7,6 +7,7 @@
 // carries MONOMEM_CLIENT=<id> so its writes are stamped stdio:<id>.
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { getPath, parseDoc } from "../jsonc-edit.js";
 import type { ServerEntry, SetupEnv } from "../setup.js";
 
 /** How an app writes one stdio server. "std": {command, args, env} (Claude Desktop / Cursor style). */
@@ -19,8 +20,8 @@ export interface ExtraTarget {
   file: (e: SetupEnv) => string;
   /** A folder whose presence means the app is installed even when the file is not there yet. */
   dir?: (e: SetupEnv) => string;
-  /** Where the servers live in the file (an object path). */
-  key: readonly string[];
+  /** Where the servers live in the file (an object path), or a choice made from the file's text. */
+  key: readonly string[] | ((text: string) => readonly string[]);
   shape: EntryShape;
 }
 
@@ -57,13 +58,16 @@ export const EXTRA_TARGETS: readonly ExtraTarget[] = [
   { id: "antigravity", label: "Antigravity", file: (e) => join(e.home, ".gemini", "config", "mcp_config.json"), key: ["mcpServers"], shape: "std" },
   // qwenlm.github.io/qwen-code-docs .../features/mcp: user scope ~/.qwen/settings.json, "mcpServers" with command/args/env.
   { id: "qwen", label: "Qwen Code", file: (e) => join(e.home, ".qwen", "settings.json"), key: ["mcpServers"], shape: "std" },
-  // opencode.ai/docs/config and /docs/mcp-servers: ~/.config/opencode/opencode.json(c); V2 servers live under
-  // "mcp" -> "servers" as {type: "local", command: [exe, ...args], environment}.
+  // opencode.ai/docs/config, /docs/mcp-servers and /docs/migrate-v1 (checked 2026-11-17): ~/.config/opencode/opencode.json(c).
+  // OpenCode 2 ("V2") keeps servers under "mcp" -> "servers"; OpenCode 1 put them directly under "mcp", and V2 still reads
+  // that form (V1 and V2 members may be mixed inside "mcp"). So a file already in the V2 form gets the V2 place, and any
+  // other file the V1 place, which both versions read. The entry is the same in both: {type: "local", command: [exe,
+  // ...args], environment} (no "enabled"/"disabled": both default to on).
   {
     id: "opencode",
     label: "OpenCode",
     file: (e) => firstExisting(join(xdgConfig(e), "opencode", "opencode.json"), join(xdgConfig(e), "opencode", "opencode.jsonc")),
-    key: ["mcp", "servers"],
+    key: (text) => (text.trim() && getPath(parseDoc(text), ["mcp", "servers"])?.kind === "object" ? ["mcp", "servers"] : ["mcp"]),
     shape: "opencode",
   },
   // kilo.ai/docs/automate/mcp/using-in-kilo-code: ~/.config/kilo/kilo.jsonc (or kilo.json), servers directly under "mcp"

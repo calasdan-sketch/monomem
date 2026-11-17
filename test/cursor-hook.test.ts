@@ -72,6 +72,19 @@ describe("Cursor session-start hook", () => {
     assert.equal(readFileSync(file, "utf8"), mine);
   });
 
+  test("a CRLF hooks.json keeps CRLF on every line setup adds; undo restores the exact bytes", async () => {
+    const s = sandbox();
+    const file = join(s.home, ".cursor", "hooks.json");
+    const mine = '{\r\n  // my hooks\r\n  "version": 1,\r\n  "hooks": {\r\n    "sessionStart": [ { "command": "echo hi" } ],\r\n    "stop": [ { "command": "echo bye" } ]\r\n  }\r\n}\r\n';
+    writeFileSync(file, mine);
+    assert.equal(await runSetup(s.e, io(), opts(s)), 0);
+    const text = readFileSync(file, "utf8");
+    assert.match(text, /hook cursor-session-start/);
+    assert.equal(text.replace(/\r\n/g, "").includes("\n"), false, "no LF-only line was added");
+    assert.equal(await runSetup(s.e, io(), opts(s, { undo: true })), 0);
+    assert.equal(readFileSync(file, "utf8"), mine);
+  });
+
   test("hook cursor-session-start answers additional_context for the workspace folder, {} when there is nothing", async () => {
     const dir = mkdtempSync(join(tmpdir(), "om-cursor-hook-"));
     roots.push(dir);

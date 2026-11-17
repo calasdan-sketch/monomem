@@ -51,8 +51,9 @@ const APPS: App[] = [
   {
     id: "opencode",
     rel: ".config/opencode/opencode.json",
-    at: ["mcp", "servers"],
-    foreign: '{\n  "$schema": "https://opencode.ai/config.json",\n  // mine\n  "mcp": {\n    "servers": {\n      "everything": { "type": "local", "command": ["npx", "-y", "x"], },\n    },\n  },\n}\n',
+    // OpenCode 1's place (directly under "mcp"): OpenCode 2 reads it too, so a new or V1-form file gets it.
+    at: ["mcp"],
+    foreign: '{\n  "$schema": "https://opencode.ai/config.json",\n  // mine\n  "mcp": {\n    "everything": { "type": "local", "command": ["npx", "-y", "x"], },\n  },\n}\n',
     check: arrayCmd,
   },
   {
@@ -141,6 +142,22 @@ describe("setup: the apps added in 1.6", () => {
       assert.equal(readFileSync(file, "utf8"), a.foreign);
     });
   }
+
+  test("opencode: a file already in OpenCode 2's own form (mcp.servers) gets the entry there, not a second place", async () => {
+    const s = sandbox();
+    const file = join(s.home, ".config/opencode/opencode.json");
+    const v2 = '{\n  "mcp": {\n    "servers": {\n      "everything": { "type": "local", "command": ["npx", "-y", "x"] }\n    }\n  }\n}\n';
+    writeFileSync(file, v2);
+    assert.equal(await runSetup(s.e, io(), opts(s, { only: ["opencode"] })), 0);
+    const text = readFileSync(file, "utf8");
+    const entry = entryAt(text, ["mcp", "servers"]);
+    assert.ok(entry, "under mcp.servers");
+    arrayCmd(entry!);
+    assert.equal(entry!.enabled, undefined, "OpenCode 2 has no enabled field (it uses disabled)");
+    assert.equal(entryAt(text, ["mcp"]), undefined, "not also directly under mcp");
+    assert.equal(await runSetup(s.e, io(), opts(s, { undo: true })), 0);
+    assert.equal(readFileSync(file, "utf8"), v2);
+  });
 
   test("opencode: an entry whose program is gone is reported and rewritten in the same shape; undo puts it back", async () => {
     const s = sandbox();

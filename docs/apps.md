@@ -25,7 +25,7 @@ An app that is not installed is left alone, unless you name it with `monomem con
 | GitHub Copilot CLI | `copilot-cli` | `~/.copilot/mcp-config.json` (entry `type: "local"`, `tools: ["*"]`) | docs.github.com, "Adding MCP servers for GitHub Copilot CLI" |
 | Antigravity | `antigravity` | `~/.gemini/config/mcp_config.json` | antigravity.google/docs/mcp |
 | Qwen Code | `qwen` | `~/.qwen/settings.json` | qwenlm.github.io/qwen-code-docs, MCP page |
-| OpenCode | `opencode` | `~/.config/opencode/opencode.json` (or `.jsonc`), under `mcp` then `servers`; the command is one list | opencode.ai/docs/config and /docs/mcp-servers |
+| OpenCode | `opencode` | `~/.config/opencode/opencode.json` (or `.jsonc`), directly under `mcp` (OpenCode 1's place, which OpenCode 2 also reads); a file already in OpenCode 2's own form gets it under `mcp` then `servers`. The command is one list | opencode.ai/docs/config, /docs/mcp-servers and /docs/migrate-v1 (checked 2026-11-17) |
 | Kilo Code (VS Code and CLI) | `kilo` | `~/.config/kilo/kilo.jsonc` (or `kilo.json`), under `mcp`; the command is one list, `enabled: true` | kilo.ai/docs, "Using MCP in Kilo Code" |
 
 The last nine were checked against each app's own documentation on 2026-11-17. Apps change where they keep settings;
@@ -75,7 +75,8 @@ hook, setup adds one:
 ```
 
 It shows the same recent notes Claude Code gets at session start, for the folder Cursor has open (`workspace_roots`).
-Your other hooks stay as they are, and undo takes only this one out. Cursor's other events (prompts, tool calls) are not
+Your other hooks stay as they are, and undo takes only this one out. When you move from the npm package to the download,
+setup moves this hook to the download too (`monomem check` names a hook that still runs the npm copy). Cursor's other events (prompts, tool calls) are not
 wired: Monomem's automatic memory records Claude Code, Codex, Gemini CLI and Muse sessions only. Cursor's cloud agents
 do not read `~/.cursor/hooks.json` (Cursor's docs say so), so they get no notes from this hook.
 
