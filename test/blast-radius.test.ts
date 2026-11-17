@@ -274,3 +274,39 @@ test("MCP: memory_why touched needs admin; memory_rollback takes note (one tool,
     store.close();
   }
 });
+
+test("r4 L3: GET /notes/:id/touched and memory_why touched refuse a namespace-pinned admin key (the read log is store-wide)", async () => {
+  const { createApiServer } = await import("../src/api.js");
+  const { createMcpServer } = await import("../src/mcp-server-core.js");
+  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+  const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
+  const store = new Store(":memory:");
+  const n = as("evil", () => store.create({ namespace: "team", title: "bad", body: "b" }));
+  const ADMIN = "tok-admin-1234567890abcdef";
+  const PINNED = "tok-pinned-1234567890abcdef";
+  const server = createApiServer(store, [
+    { token: ADMIN, scope: "admin", label: "op" },
+    { token: PINNED, scope: "admin", label: "team-admin", namespace: "team" },
+  ]);
+  await new Promise<void>((r) => server.listen(0, r));
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const H = (t: string) => ({ Authorization: `Bearer ${t}` });
+  try {
+    assert.equal((await fetch(`${base}/notes/${n.id}/touched`, { headers: H(ADMIN) })).status, 200);
+    const pinned = await fetch(`${base}/notes/${n.id}/touched`, { headers: H(PINNED) });
+    assert.equal(pinned.status, 403);
+    assert.match(((await pinned.json()) as { error: string }).error, /not pinned to a namespace/);
+    assert.equal((await fetch(`${base}/access`, { headers: H(PINNED) })).status, 403, "the same rule as /access");
+    const mcp = createMcpServer(store, "admin", { namespace: "team", tools: ["memory_why"] }, { label: "team-admin", authed: true });
+    const [c, sv] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "t", version: "1" });
+    await Promise.all([client.connect(c), mcp.connect(sv)]);
+    const r: any = await client.callTool({ name: "memory_why", arguments: { id: n.id, touched: true } });
+    assert.equal(r.isError, true);
+    assert.match(r.content[0].text, /not pinned to a namespace/);
+    await client.close();
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+    store.close();
+  }
+});

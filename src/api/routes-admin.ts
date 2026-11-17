@@ -201,9 +201,14 @@ export async function adminRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
   }
 
   // GET /notes/:id/touched -> who read the note and what was built on it (blast-radius.ts), plus the same text the CLI prints.
-  // Admin-only; refused for a key with a sensitivity limit (it comes from the read log, like /access). Namespace-pinned: its own.
+  // Admin-only; refused for a namespace-pinned key and a key with a sensitivity limit, like /access (r4 L3): it comes from the
+  // store-wide read log, which names readers from every namespace.
   const touched = req.method === "GET" ? /^\/notes\/(\d+)\/touched$/.exec(path) : null;
   if (touched) {
+    if (principal.namespace?.trim()) {
+      sendJson(res, 403, { error: "what a note touched comes from the store-wide read log: use a key that is not pinned to a namespace" });
+      return true;
+    }
     if (principal.max_sensitivity !== undefined) {
       sendJson(res, 403, { error: "what a note touched comes from the read log: use an administrator key with no sensitivity limit" });
       return true;
