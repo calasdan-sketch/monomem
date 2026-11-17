@@ -80,8 +80,9 @@ const DEL_VIEW = "om_passages_del";
 function ensureDeleteView(store: Store): void {
   store.db.exec(`CREATE TEMP VIEW IF NOT EXISTS ${DEL_VIEW}(lo, hi) AS SELECT 0, 0;
     CREATE TEMP TRIGGER IF NOT EXISTS ${DEL_VIEW}_t INSTEAD OF INSERT ON ${DEL_VIEW}
-    BEGIN DELETE FROM main.${TABLE} WHERE rowid >= new.lo AND rowid < new.hi; END;`);
+    BEGIN DELETE FROM ${TABLE} WHERE rowid >= new.lo AND rowid < new.hi; END;`);
 }
+// The trigger names the table without "main.": older SQLite (Node 22.16) refuses qualified names inside trigger bodies.
 
 function tableExists(store: Store): boolean {
   return store.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(TABLE) !== undefined;
