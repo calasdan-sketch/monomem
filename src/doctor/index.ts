@@ -11,6 +11,7 @@ import { distrustCheck, tokenCheck, tokensFileCheck, appKeysCheck } from "./toke
 import { namespaceCheck } from "./namespaces.js";
 import { recallHookCheck, claudeHookCheck, appEntriesCheck } from "./hooks.js";
 import { captureCheck } from "./capture.js";
+import { actionGuardCheck } from "./action-guard.js";
 import { serverCheck } from "./server.js";
 
 /** The checks, in the order their lines are printed. Later checks read facts earlier ones put on `d`. */
@@ -31,6 +32,7 @@ export const CHECKS: ReadonlyArray<(d: Doctor) => Promise<void>> = [
   claudeHookCheck,
   appEntriesCheck,
   captureCheck,
+  actionGuardCheck,
   serverCheck,
 ];
 

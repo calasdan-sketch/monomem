@@ -4,7 +4,8 @@
 //   - git push; npm / pnpm / yarn publish
 //   - curl, wget, Invoke-WebRequest / Invoke-RestMethod, fetch( ... ) or WebFetch to a host that is not on the known-hosts list
 //   - reading or writing .env, ~/.ssh and other credential files (Read, Grep, Write, Edit, or named in a shell command)
-//   - writing AGENTS.md / CLAUDE.md, Claude Code's settings files or Monomem's known-hosts list
+//   - writing AGENTS.md / CLAUDE.md, Claude Code's settings files, Monomem's known-hosts list, an MCP server list, Cursor's
+//     hooks.json or a GitHub workflow (Write/Edit, or a shell redirect, tee, sed -i, cp / mv / Copy-Item / Move-Item onto one)
 // It never denies and never allows: the answer is "ask" or nothing, and the person decides in Claude Code's own prompt.
 //
 // A SPEED BUMP, NOT A SANDBOX. It matches the command text, so an alias, a script file, base64 or a tool it does not list goes
@@ -22,6 +23,8 @@ import { isOutsideTool } from "./taint.js";
 /** The tools the gate's PreToolUse entry matches (Claude Code exact-list matcher). */
 export const GATE_MATCHER = "Bash|PowerShell|Read|Grep|Write|Edit|MultiEdit|NotebookEdit|WebFetch";
 const BUSY_MS = 150;
+/** Where the hook writes why it last let an action through on an error (fail open), for `monomem check`. */
+export const GATE_ERROR_FILE = "action-guard-error.json";
 
 // Credential files, matched in a path or anywhere in a command (the leading class stops `process.env` from counting; `@` is
 // curl's upload syntax: `-d @.env`, `-F f=@.env`).
@@ -154,6 +157,19 @@ export async function actionGuardHook(payload: Record<string, unknown>, opts: Ga
     return JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: reason } });
   } catch (e) {
     process.stderr.write(`monomem hook action-guard: ${(e as Error).message}\n`);
+    await noteFailOpen(e as Error, opts.dataDir);
     return "";
+  }
+}
+
+/** Fail open, but not silently: `monomem check` shows the last error (action-guard-setup.ts actionGuardStatus). Best effort. */
+async function noteFailOpen(err: Error, dataDir?: string): Promise<void> {
+  try {
+    const { writeFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const dir = dataDir ?? (await import("./config.js")).DATA_DIR;
+    writeFileSync(join(dir, GATE_ERROR_FILE), JSON.stringify({ at: new Date().toISOString(), error: String(err?.message ?? err).slice(0, 300) }) + "\n", { mode: 0o600 });
+  } catch {
+    /* nowhere to write: stderr above is all there is */
   }
 }

