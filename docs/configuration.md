@@ -39,6 +39,7 @@ All environment variables are optional. This table lists **every** `MONOMEM_*` v
 | `MONOMEM_RUNNER_ALLOW` | `data/runner-allow.json` | Runner: the allow-list (JSON) of actions it may run; none = nothing runs |
 | `MONOMEM_RUNNER_SECRET` | unset | Runner and signing helper: the shared secret that signs and verifies command notes. Required to run or sign anything |
 | `MONOMEM_TASK_COMMAND_QUOTA` | `100` | Most queued command tasks per namespace; more are refused |
+| `MONOMEM_CLAUDE_REFRESH` | off | `on` = while the server runs, every 10 minutes Claude Code's changed memory files (CLAUDE.md, auto memory) are brought in, held until you confirm them. Unset, the dashboard's Settings switch decides; set, this wins. See [switching.md](./switching.md#claude-codes-own-memory-import---claude) |
 | `MONOMEM_AUTO_BACKUP` | on | `off` stops the server's automatic daily backup (`<data>/backups`, 7 daily + 4 weekly kept; see [footprint.md](./footprint.md)). Unset, the dashboard's Settings switch decides; set, this wins. `monomem backup` still works by hand |
 | `MONOMEM_CHANGE_LOG_PURGE_MS` | `3600000` (min `100`) | How often the server prunes the 90-day change log and stale runner heartbeats. Shortened by tests only |
 | `MONOMEM_TARPIT_STEP_MS` | `250` | Authentication failures from one client are delayed by this much more each time ... |
