@@ -53,7 +53,8 @@ export function readHandled(store: Store): Handled {
       if (/^\d+$/.test(k) && typeof v?.at === "string") out.set(Number(k), { at: v.at, applied: v.applied === true });
     }
     return out;
-  } catch {
+  } catch (e) {
+    process.stderr.write(`[monomem] sync: the record of handled archive markers is damaged (${(e as Error).message}); starting it again (worst case a note is archived once more, never deleted)\n`);
     return new Map(); // damaged: worst case a marker is applied once more (an archive, never a delete)
   }
 }

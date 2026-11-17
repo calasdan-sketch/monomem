@@ -92,22 +92,66 @@ export async function runFolderSync(io: GitSyncIO, o: DeviceEnv & { folder: stri
   }
 }
 
-/** `monomem sync` with no address: the one `sync setup` saved. Writes sync-status.json (time, ok) for the dashboard / doctor. */
+/** sync-status.json: the last `monomem sync` (by hand or the timer). check, Needs you and session start read it. */
+export interface SyncStatus {
+  at: string;
+  ok: boolean;
+  /** The last error line of a failed sync (addresses scrubbed). */
+  error?: string;
+}
+const STATUS = "sync-status.json";
+const ERROR_MAX = 300;
+
+export function readSyncStatus(dataDir: string): SyncStatus | null {
+  try {
+    const s = JSON.parse(readFileSync(join(dataDir, STATUS), "utf8")) as Partial<SyncStatus>;
+    if (typeof s.at !== "string" || typeof s.ok !== "boolean") return null;
+    return { at: s.at, ok: s.ok, ...(typeof s.error === "string" ? { error: s.error } : {}) };
+  } catch {
+    return null;
+  }
+}
+
+function writeSyncStatus(dataDir: string, s: SyncStatus): void {
+  try {
+    writeFileSync(join(dataDir, STATUS), JSON.stringify(s) + "\n", { mode: 0o600 });
+  } catch (e) {
+    process.stderr.write(`[monomem] could not record the sync result in ${join(dataDir, STATUS)}: ${(e as Error).message}\n`);
+  }
+}
+
+/**
+ * What is wrong with device sync, or null (also null when sync is not set up). "failed": the last sync stopped.
+ * "stale": automatic sync is on but nothing worked for 3 of its intervals (Monomem not running, or the timer's child dies).
+ */
+export function syncProblem(dataDir: string, now = new Date()): { kind: "failed" | "stale"; at: string; text: string } | null {
+  const c = readSyncConfig(dataDir);
+  if (!c) return null;
+  const s = readSyncStatus(dataDir);
+  if (!s) return null;
+  const when = s.at.slice(0, 16).replace("T", " ");
+  if (!s.ok) return { kind: "failed", at: s.at, text: `the last sync (${when}) failed${s.error ? `: ${s.error}` : ""}. Run monomem sync to see why` };
+  if (c.auto && now.getTime() - Date.parse(s.at) > 3 * c.everyMinutes * 60_000) {
+    return { kind: "stale", at: s.at, text: `automatic sync is on (every ${c.everyMinutes} min) but the last one was ${when}: it only runs while Monomem is running (monomem start)` };
+  }
+  return null;
+}
+
+/** `monomem sync` with no address: the one `sync setup` saved. Writes sync-status.json (time, ok, last error). */
 export async function runConfiguredSync(io: GitSyncIO, o: DeviceEnv): Promise<number> {
   const c = readSyncConfig(o.dataDir);
   if (!c) {
     io.err("No sync is set up. Run: monomem sync setup <your private git address, or a shared folder such as OneDrive>");
     return 1;
   }
+  let lastErr = "";
+  const tee: GitSyncIO = { ...io, err: (l: string) => void ((lastErr = l), io.err(l)) };
   const code =
     c.kind === "git"
-      ? await runGitSync(io, { repo: c.repo!, encrypt: true, keyFile: c.keyFile, dryRun: false, noPush: false, yes: true, dataDir: o.dataDir, dbPath: o.dbPath, env: o.env, now: o.now })
-      : await runFolderSync(io, { ...o, folder: c.target, keyFile: c.keyFile });
-  try {
-    writeFileSync(join(o.dataDir, "sync-status.json"), JSON.stringify({ at: (o.now ?? (() => new Date()))().toISOString(), ok: code === 0 }) + "\n", { mode: 0o600 });
-  } catch {
-    /* status is a convenience */
-  }
+      ? await runGitSync(tee, { repo: c.repo!, encrypt: true, keyFile: c.keyFile, dryRun: false, noPush: false, yes: true, dataDir: o.dataDir, dbPath: o.dbPath, env: o.env, now: o.now })
+      : await runFolderSync(tee, { ...o, folder: c.target, keyFile: c.keyFile });
+  const error = scrubUrls(lastErr.replace(/^\s*Stopped:\s*/, "").trim()).slice(0, ERROR_MAX);
+  writeSyncStatus(o.dataDir, { at: (o.now ?? (() => new Date()))().toISOString(), ok: code === 0, ...(code !== 0 && error ? { error } : {}) });
   return code;
 }
 
@@ -180,7 +224,7 @@ export async function setupSync(io: GitSyncIO, o: SetupOptions): Promise<number>
  * The server's timer (src/start.ts): only when `sync setup --auto on` was chosen. Each tick re-reads the setting (turning it
  * off works without a restart) and runs `monomem sync` as a child process, one at a time.
  */
-export function startSyncTimer(dataDir: string, launch: () => { command: string; args: string[] }, log: (l: string) => void): void {
+export function startSyncTimer(dataDir: string, launch: () => { command: string; args: string[] }, log: (l: string) => void, firstMs = 60_000): void {
   const c = readSyncConfig(dataDir);
   if (!c?.auto) return;
   log(`[monomem] device sync every ${c.everyMinutes} min (${c.kind === "git" ? "git" : "shared folder"}); turn off: monomem sync setup --auto off`);
@@ -190,11 +234,19 @@ export function startSyncTimer(dataDir: string, launch: () => { command: string;
     running = true;
     const { command, args } = launch();
     const child = spawn(command, [...args, "sync"], { stdio: "ignore", windowsHide: true, env: process.env });
-    const done = (): void => void (running = false);
-    child.on("exit", done);
-    child.on("error", done);
+    // The child writes sync-status.json itself; a non-zero exit is also logged here, and a child that never started is
+    // recorded, so a failing background sync is never silent (check, Needs you and session start read the status).
+    child.on("exit", (code, signal) => {
+      running = false;
+      if (code !== 0) log(`[monomem] device sync failed (${code === null ? `stopped by ${signal}` : `exit code ${code}`}); run monomem sync to see why`);
+    });
+    child.on("error", (e) => {
+      running = false;
+      log(`[monomem] device sync could not start: ${e.message}`);
+      writeSyncStatus(dataDir, { at: new Date().toISOString(), ok: false, error: `could not start: ${e.message}`.slice(0, ERROR_MAX) });
+    });
   };
-  setTimeout(tick, 60_000).unref();
+  setTimeout(tick, firstMs).unref();
   setInterval(tick, c.everyMinutes * 60_000).unref();
 }
 

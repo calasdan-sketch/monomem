@@ -62,6 +62,10 @@ export interface DailyBackupResult {
   error?: string;
 }
 
+/** Removes one dated backup folder (tests pass a failing one). */
+type RemoveFn = (dir: string) => void;
+const removeDir: RemoveFn = (dir) => rmSync(dir, { recursive: true, force: true });
+
 /** The last backup (daily or "Back up now") when it failed, or null when it worked (or none was made). One file: backup-status.json. */
 export function backupFailure(dbPath: string): { at: string; error: string } | null {
   const s = readBackupStatus(dirname(dbPath));
@@ -69,7 +73,7 @@ export function backupFailure(dbPath: string): { at: string; error: string } | n
 }
 
 /** Make today's backup if there is none yet, then rotate. Never throws: a failure is recorded and returned. Copies on this thread. */
-export function runDailyBackup(store: Store, dbPath: string, now = new Date()): DailyBackupResult {
+export function runDailyBackup(store: Store, dbPath: string, now = new Date(), rm: RemoveFn = removeDir): DailyBackupResult {
   const d = dailyTarget(dbPath, now);
   if (!d) return { made: false, removed: [] };
   try {
@@ -78,7 +82,7 @@ export function runDailyBackup(store: Store, dbPath: string, now = new Date()): 
   } catch (e) {
     return failed(dbPath, now, e);
   }
-  return afterDailyBackup(dbPath, now, d);
+  return afterDailyBackup(dbPath, now, d, rm);
 }
 
 /** runDailyBackup with the copy on a worker thread (the server's timer): serving does not pause while it copies. */
@@ -118,7 +122,7 @@ function failed(dbPath: string, now: Date, e: unknown): DailyBackupResult {
 }
 
 /** Status, the one-time key warning and rotation, after a good copy. */
-function afterDailyBackup(dbPath: string, now: Date, d: { root: string; day: string; dir: string }): DailyBackupResult {
+function afterDailyBackup(dbPath: string, now: Date, d: { root: string; day: string; dir: string }, rm: RemoveFn = removeDir): DailyBackupResult {
   const { root, day, dir } = d;
   const data = dirname(dbPath);
   try {
@@ -145,9 +149,16 @@ function afterDailyBackup(dbPath: string, now: Date, d: { root: string; day: str
     const names = readdirSync(root).filter((n) => NAME.test(n) && n <= day);
     const keep = keepSet(names).add(day);
     removed = names.filter((n) => !keep.has(n));
-    for (const n of removed) rmSync(join(root, n), { recursive: true, force: true });
+    for (const n of removed) rm(join(root, n));
   } catch (e) {
-    return { made: true, dir, removed, error: `backup made, but older ones could not be removed: ${(e as Error).message}`, ...(keyWarning ? { keyWarning } : {}) };
+    // Recorded as a failure: old copies that stay fill the disk, and check / Needs you only read the status file.
+    const error = `backup made, but older ones could not be removed: ${(e as Error).message}`;
+    try {
+      writeBackupStatus({ ok: false, at: now.toISOString(), dir, error }, data);
+    } catch {
+      /* as above */
+    }
+    return { made: true, dir, removed, error, ...(keyWarning ? { keyWarning } : {}) };
   }
   return { made: true, dir, removed, ...(keyWarning ? { keyWarning } : {}) };
 }

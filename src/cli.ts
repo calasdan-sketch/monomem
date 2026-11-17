@@ -1191,6 +1191,9 @@ async function importCmd(): Promise<void> {
         `${c.quarantined} held, ${c.rejected} rejected.`
     );
     if (r.foreignHeld > 0) console.log(`${r.foreignHeld} note(s) from other machines held for review (monomem review held list).`);
+    if (r.disputes > 0) console.log(`${r.disputes} note(s) had two different edits: the newer text is live and the other one is held for you to pick (monomem review).`);
+    const { archiveLines } = await import("./sync-git.js");
+    for (const l of archiveLines(r.archive)) console.log(l);
     if (c.rejected > 0) {
       console.error(
         `\n!!! ${c.rejected} FILE(S) WERE REJECTED AND NOT IMPORTED (see the "rejected" lines above). ` +

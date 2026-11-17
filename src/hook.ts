@@ -342,7 +342,8 @@ export async function runHook(eventArg: string, stdinText: string, opts: HookOpt
     const cwd = typeof payload.cwd === "string" ? payload.cwd : undefined;
     const sessionId = typeof payload.session_id === "string" ? payload.session_id.slice(0, 200) : undefined;
     return await runRecall({ ...(opts.dbPath ? { dbPath: opts.dbPath } : {}), ...(cwd ? { cwd } : {}), ...(sessionId ? { sessionId } : {}) });
-  } catch {
+  } catch (e) {
+    process.stderr.write(`monomem hook session-start: no notes this time (${(e as Error)?.message ?? String(e)})\n`);
     return '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":""}}';
   }
 }

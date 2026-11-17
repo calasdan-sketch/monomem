@@ -407,6 +407,17 @@ interface VaultRun {
   where?: string;
 }
 
+/** What an import did because another computer archived, restored or kept notes: printed by sync and by import --dir. */
+export function archiveLines(ar: { archived: number; kept: number; restored: number; lines: string[] }): string[] {
+  const n = (k: number, one: string): string => `${k} ${one}${k === 1 ? "" : "s"}`;
+  return [
+    ...(ar.archived ? [`archived ${n(ar.archived, "note")} that another computer archived (kept, not deleted).`] : []),
+    ...(ar.restored ? [`brought back ${n(ar.restored, "archived note")} (restored or edited on another computer).`] : []),
+    ...(ar.kept ? [`kept ${n(ar.kept, "note")} live here that another computer archived:`] : []),
+    ...ar.lines.map((l) => `  ${l}`),
+  ];
+}
+
 /** Step 2 of a sync (git or shared folder): unseal, three-way merge into the database, write back, seal. Returns the key. */
 export async function mergeVault(io: GitSyncIO, v: VaultRun): Promise<Buffer | null> {
   const where = v.where ?? "repository";
@@ -450,12 +461,7 @@ export async function mergeVault(io: GitSyncIO, v: VaultRun): Promise<Buffer | n
         }
       }
       if (imp.disputes > 0) io.out(`  ${imp.disputes} of them: the newer text is live and the other one is held for you to pick (monomem review).`);
-      const ar = imp.archive;
-      const n = (k: number, one: string): string => `${k} ${one}${k === 1 ? "" : "s"}`;
-      if (ar.archived) io.out(`  archived ${n(ar.archived, "note")} that another computer archived (kept, not deleted).`);
-      if (ar.restored) io.out(`  brought back ${n(ar.restored, "archived note")} (restored or edited on another computer).`);
-      if (ar.kept) io.out(`  kept ${n(ar.kept, "note")} live here that another computer archived:`);
-      for (const l of ar.lines) io.out(`    ${l}`);
+      for (const l of archiveLines(imp.archive)) io.out(`  ${l}`);
       if (imp.foreignHeld > 0) io.out(`  ${imp.foreignHeld} note(s) from other machines held for review (monomem review held list).`);
       if (c.rejected > 0) io.err(`  ${c.rejected} file(s) were rejected (see \`monomem import --dir\` for details).`);
     } finally {
