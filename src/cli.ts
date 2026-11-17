@@ -22,7 +22,7 @@ const COMMANDS = [
   "consolidate", "rebuild-edges", "relevant", "search", "token", "changes", "backup", "runner-status", "watch", "export", "import", "trust",
   "quarantine", "approve-first", "access", "flood", "resume", "decay", "archive", "restore", "delete", "quality", "conflicts", "facts", "fact",
   "encrypt", "meter", "receipts", "why", "never-show", "supersede", "history", "pin", "unpin", "rollback", "bench", "drill", "health", "audit", "verify-receipt",
-  "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet", "confirm", "review", "taint", "config", "service", "stale", "project-rules", "update", "stop",
+  "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet", "confirm", "review", "taint", "config", "service", "stale", "project-rules", "update", "stop", "commit-trail",
   "help", "--help", "-h", "--version", "-v", "version",
   "check", "activity", "tidy", "keys", "settings", "replace",
 ];
@@ -2273,6 +2273,9 @@ async function main(): Promise<void> {
       break;
     case "encrypt":
       await encryptCmd();
+      break;
+    case "commit-trail":
+      await (await import("./cli/commit-trail.js")).commitTrailCmd(process.argv.slice(3));
       break;
     case "why":
       await (await import("./why.js")).whyCmd(process.argv.slice(3));

@@ -1512,7 +1512,7 @@ export function lineDiff(before: string, after: string, file: string): string[] 
 
 export interface WrittenChange {
   /** Which client this entry configured, so callers can group by vendor ("shortcut": the Start menu / Applications entry). */
-  client: ClientId | "shortcut";
+  client: ClientId | "shortcut" | "git-hook";
   file: string;
   /** Resolved real file (the target of a symlink). */
   real: string;
@@ -2305,6 +2305,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   io.out("  their own, and a plain \"remember\" can land there instead, where your other apps cannot see it.");
   await offerClaudeMemPreview(e, io, opts, primaryDb);
   await offerServerMemoryPreview(e, io, opts, primaryDb);
+  await (await import("./cli/commit-trail.js")).offerCommitTrail(e, io, opts); // PLAN I: per repository, asks first
   io.out("\nIf monomem is missing or red: docs/live-claude-code.md has the fixes. To go back: monomem setup --undo");
   hookLines();
   return 0;
