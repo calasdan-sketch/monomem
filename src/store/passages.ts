@@ -91,11 +91,15 @@ function indexNote(store: Store, ins: { run: (...a: Array<number | string>) => u
   passagesOf(body).forEach((p, k) => ins.run(id * SLOT + k, p));
 }
 
-/** Drop and rebuild every passage. Caller holds a write transaction. */
+/**
+ * Drop and rebuild every passage. Caller holds a write transaction. FTS5 secure-delete: a deleted passage's words are
+ * removed from the index segments at once, not left behind a tombstone until a merge.
+ */
 function build(store: Store): void {
   const db = store.db;
   db.exec(`DROP TABLE IF EXISTS ${TABLE};
-    CREATE VIRTUAL TABLE ${TABLE} USING fts5(body, content='', contentless_delete=1, prefix='1');`);
+    CREATE VIRTUAL TABLE ${TABLE} USING fts5(body, content='', contentless_delete=1, prefix='1');
+    INSERT INTO ${TABLE}(${TABLE}, rank) VALUES('secure-delete', 1);`);
   store.setMeta(SEQ_KEY, String(store.maxChangeSeq()));
   const ins = db.prepare(`INSERT INTO ${TABLE}(rowid, body) VALUES (?, ?)`);
   const rows = db.prepare("SELECT id, body FROM notes WHERE id > ? AND id <= ? AND body_enc IS NULL");
@@ -149,6 +153,23 @@ export function dropPassages(store: Store): void {
     store.db.exec(`DROP TABLE IF EXISTS ${TABLE}`);
     store.db.prepare("DELETE FROM _meta WHERE key = ?").run(SEQ_KEY);
   });
+}
+
+/**
+ * Leave no passage words behind (encrypt enable, monomem scrub). Inside a write transaction (encryptAll) or on a store
+ * with a key: the index is dropped, since pooling never runs there. Otherwise (scrub on a plain store) it is dropped and,
+ * when pooling is on, built again from the notes that exist now. The caller's PRAGMA secure_delete / VACUUM clear the pages.
+ */
+export function scrubPassages(store: Store): void {
+  if (store.db.isTransaction || store.sealsWrites()) {
+    if (!tableExists(store)) return;
+    store.db.exec(`DROP TABLE IF EXISTS ${TABLE}`);
+    store.db.prepare("DELETE FROM _meta WHERE key = ?").run(SEQ_KEY);
+    return;
+  }
+  if (!tableExists(store)) return;
+  dropPassages(store);
+  if (passagePoolingOn(store)) syncPassages(store);
 }
 
 /** Passages in the index (0 when there is none). */

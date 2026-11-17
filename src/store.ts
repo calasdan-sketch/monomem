@@ -130,6 +130,7 @@ import type { WriterCounts, WriterEvent } from "./store/reputation.js";
 export type { FlaggedItem, NoteFlag, WriterCounts, WriterEvent };
 import { tagsToStorage, parseTags, dueBase, needsHumanConfirm, sealQuarantineCol, openQuarantineCol, isoOrNull, clampInt, envCount, floodWritesPerHour, isOperatorWrite, isPlainObject } from "./store/rows.js";
 import { recordNoteReads, purgeNoteReads } from "./store/note-reads.js";
+import { scrubPassages } from "./store/passages.js";
 export { dueBase, needsHumanConfirm, clampInt, floodWritesPerHour };
 export { ValidationError, NoteUnreadableError, StaleWriteError, RebuildBusyError, CandidateScanError, QuarantinedError, WriterPausedError };
 
@@ -4395,10 +4396,8 @@ export class Store {
    * pass. Rows are read INSIDE the write transaction (in id-ordered pages, so
    * memory stays bounded on big stores): reading first and locking later
    * would encrypt a stale body and silently overwrite a concurrent edit.
-   * Returns the number of notes newly encrypted.
-   *
-   * Afterwards the plaintext words are scrubbed from the FTS segments and
-   * free pages (see scrubPlaintext).
+   * Returns the number of notes newly encrypted. Afterwards the plaintext words are scrubbed from the FTS segments and
+   * free pages (see scrubPlaintext); the passage index (pooling) is dropped inside the transaction.
    */
   encryptAll(key: Buffer): number {
     // Overwrite freed pages so dropped plaintext is not left in the file.
@@ -4438,6 +4437,7 @@ export class Store {
       this.sealHistory(key);
       this.sealCaptureEvents(key);
       this.sealAccessLog(key, true);
+      scrubPassages(this); // pooling never runs with a key: drop its plain passage index (store/passages.ts)
       this.commitTx();
     } catch (e) {
       try {
