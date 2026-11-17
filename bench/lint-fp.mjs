@@ -11,7 +11,12 @@
 //   - LongMemEval-S cleaned and LoCoMo-10 (chat), one note per turn, from the
 //     cache the retrieval benchmark uses (~/.cache/monomem-bench).
 //   - This repo's CHANGELOG bullets and docs paragraphs, minus files that quote
-//     attacks on purpose (memory-linter.md, BENCHMARK.md, SECURITY.md, evals/).
+//     attacks on purpose (memory-linter.md, BENCHMARK.md, SECURITY.md,
+//     security-scorecard.md, evals/).
+//   - bench/dev-notes-fp.txt: hand-written developer and personal notes that use
+//     the words attacks use (send, email, transfer, password, 2FA, "before you"),
+//     written before the 2026-11-17 linter patterns, one note per paragraph.
+// Prints the mean lint time per note for each corpus.
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -20,7 +25,7 @@ import { longMemEvalHaystacks, locomoHaystacks } from "../dist/src/bench/retriev
 
 const SHOW = process.argv.includes("--show-held");
 const CACHE = join(homedir(), ".cache", "monomem-bench");
-const EXCLUDE = new Set(["memory-linter.md", "BENCHMARK.md", "SECURITY.md"]);
+const EXCLUDE = new Set(["memory-linter.md", "BENCHMARK.md", "SECURITY.md", "security-scorecard.md"]);
 
 function chat(file, load) {
   const p = join(CACHE, file);
@@ -51,6 +56,7 @@ function run(name, texts) {
   if (!texts) return console.log(`${name}: not in ${CACHE}, skipped`);
   const count = { refused: 0, held: 0, warned: 0 };
   const labels = {};
+  const t0 = performance.now();
   for (const body of texts) {
     const f = lintContent({ body });
     const held = f.some((x) => x.category === "injection");
@@ -63,7 +69,8 @@ function run(name, texts) {
   }
   const n = texts.length;
   const pct = (k) => ((100 * k) / n).toFixed(3) + "%";
-  console.log(`${name}: ${n} notes — refused ${count.refused} (${pct(count.refused)}), held ${count.held} (${pct(count.held)}), warned only ${count.warned} (${pct(count.warned)})`);
+  const perNote = ((performance.now() - t0) * 1000) / n; // includes --show-held printing
+  console.log(`${name}: ${n} notes — refused ${count.refused} (${pct(count.refused)}), held ${count.held} (${pct(count.held)}), warned only ${count.warned} (${pct(count.warned)}); ${perNote.toFixed(0)} µs/note`);
   for (const [l, k] of Object.entries(labels).sort((a, b) => b[1] - a[1])) console.log(`    ${k}\t${l}`);
 }
 
@@ -74,3 +81,4 @@ if (Object.keys(process.env).some((k) => k.startsWith("MONOMEM_TOKEN") || k.star
 run("LongMemEval-S (chat turns)", chat("longmemeval_s_cleaned.json", longMemEvalHaystacks));
 run("LoCoMo-10 (chat turns)", chat("locomo10.json", locomoHaystacks));
 run("Monomem CHANGELOG + docs (technical prose)", repoText());
+run("Developer and personal notes (bench/dev-notes-fp.txt)", readFileSync("bench/dev-notes-fp.txt", "utf8").split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean));
