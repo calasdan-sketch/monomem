@@ -2005,7 +2005,7 @@ function askYesNo(prompt: string): Promise<boolean> {
 async function main(): Promise<void> {
   // 1.6 words (check, review <part>, activity, tidy, keys, settings, replace) become the command that does the work.
   {
-    const { translateVerb, oldNameNote, TIDY_HELP } = await import("./cli/verbs.js");
+    const { translateVerb, oldNameNoteOnce, TIDY_HELP } = await import("./cli/verbs.js");
     const typed = process.argv.slice(2);
     const t = typed.length ? translateVerb(typed) : null;
     if (t?.[0] === "tidy") {
@@ -2014,7 +2014,9 @@ async function main(): Promise<void> {
     }
     if (t) process.argv = [...process.argv.slice(0, 2), ...t];
     else if (typed[0] && process.stderr.isTTY && !typed.includes("--json")) {
-      const note = oldNameNote(typed[0], typed[1]);
+      const { join } = await import("node:path");
+      const { DATA_DIR } = await import("./config.js");
+      const note = oldNameNoteOnce(typed[0], typed[1], join(DATA_DIR, "old-names-seen.json"));
       if (note) console.error(note);
     }
   }
