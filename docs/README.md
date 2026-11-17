@@ -12,6 +12,7 @@ Pick by what you want to do. Everything here is also linked from the main [READM
 | mark a note `private` so only some apps see it | [sensitivity-labels.md](./sensitivity-labels.md) |
 | keep one app inside one folder of notes | [token-namespaces.md](./token-namespaces.md) |
 | reach Monomem from my phone or the web | [INFRA.md](../INFRA.md) |
+| connect claude.ai or ChatGPT over the internet (off by default) | [oauth.md](./oauth.md) |
 | have Claude Code recall notes at the start of a session | [sessionstart-hook.md](./sessionstart-hook.md) |
 | move notes in or out, or keep them in git | [file-sync.md](./file-sync.md), [switching.md](./switching.md) |
 | replace a wrong note, or undo an edit | [replacing-memories.md](./replacing-memories.md) |
