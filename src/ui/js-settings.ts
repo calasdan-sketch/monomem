@@ -69,8 +69,22 @@ function syncSection(){
 function loadSync(){
   api("/ui/sync").then(function(j){
     var el = $("sync_now"); if(!el){ return; }
-    el.textContent = j.set ? "Set up on this computer (" + (j.kind === "git" ? "git: " : "folder: ") + j.where + "). " + (j.auto ? "Syncs by itself every " + j.every_minutes + " minutes." : "Run monomem sync to sync.") : "Not set up on this computer yet.";
+    var line = j.set ? "Set up on this computer (" + (j.kind === "git" ? "git: " : "folder: ") + esc(j.where) + "). " : "Not set up on this computer yet.";
+    var p = j.problem;
+    // A failed or late sync: what happened, when, and what to do, with a button (Needs you sends the person here).
+    el.innerHTML = !p ? line + (j.set ? (j.auto ? "Syncs by itself every " + Number(j.every_minutes) + " minutes." : "Press Sync now when you switch computers.") + " <button class='plain' onclick='syncNow()'>Sync now</button>" : "")
+      : line + "<span class='err'>" + (p.kind === "failed" ? "The last sync failed " + esc(ago(p.at)) + (p.error ? ": " + esc(String(p.error).replace(/[.\\s]+$/, "")) : "") + "."
+        : "Automatic sync is on, but the last one was " + esc(ago(p.at)) + ".") + "</span> " +
+        (p.kind === "failed" ? "Check that this computer can reach the shared folder or the git address, then press Sync now."
+          : "It only runs while Monomem is running: turn on Start Monomem with my computer above, or press Sync now.") +
+        " <button onclick='syncNow()'>Sync now</button>";
   }).catch(function(e){ var el = $("sync_now"); if(el){ el.textContent = localMissing(e) ? "To set this up from here, open Monomem from " + whereEntry() + ", or run monomem open on this computer." : ""; } });
+}
+function syncNow(){
+  toast("Syncing...");
+  return api("/ui/sync/now", { method:"POST" }).then(function(r){
+    showOut("sync_out", r); toast(r.ok ? "Synced." : "The sync did not finish; see the details."); loadSync(); loadNeeds();
+  }).catch(function(e){ say(e.message, true); });
 }
 function syncSetup(){
   var t = ($("sync_target").value || "").trim(), n = ($("sync_name").value || "").trim();
@@ -93,7 +107,7 @@ function appRow(a, welcome){
   var right = a.connected ? "<span class='lbl ok'>Connected</span>"
     : a.declined && !welcome ? "<span class='muted t-foot'>Skipped</span> <button class='plain' onclick='connectApp(&quot;"+id+"&quot;)'>Connect</button>"
     : "<span class='row'><button onclick='connectApp(&quot;"+id+"&quot;)'>Connect</button><button class='plain' onclick='declineApp(&quot;"+id+"&quot;)'>Not this one</button></span>";
-  return "<div class='app'><div><b>"+esc(a.label)+"</b>"+(a.new && !a.connected ? " <span class='lbl'>New</span>" : "")+(a.connected ? "<div class='help'>"+esc(restartHint(a.id))+"</div>" : "")+"</div>"+right+"</div>";
+  return "<div class='app'><div><b>"+esc(a.label)+"</b>"+(a.new && !a.connected ? " <span class='lbl'>New<span class='sr'>: installed after Monomem was set up</span></span>" : "")+(a.connected ? "<div class='help'>"+esc(restartHint(a.id))+"</div>" : "")+"</div>"+right+"</div>";
 }
 function restartHint(id){
   return { "claude-code":"Quit Claude Code (type /exit) and start it again.", "cursor":"In Cursor, open Settings, then MCP, and switch Monomem on.", "claude-desktop":"Quit Claude Desktop from the tray or menu bar, then open it again." }[id] || "Quit the app and open it again.";
@@ -142,7 +156,7 @@ function doUpdate(){
 }
 function waitUpdate(n){
   var out = $("upd_out");
-  if(n >= 180){ if(out){ out.innerHTML += "<p class='help'>Still restarting. Reload this page in a moment (a service set to start with Windows can take up to 5 minutes).</p>"; } return; }
+  if(n >= 180){ if(out){ out.innerHTML += "<p class='help'>Still restarting. Reload this page in a moment (when Monomem is set to start with " + osName() + ", it can take up to 5 minutes).</p>"; } return; }
   setTimeout(function(){
     fetch("/health").then(function(r){ return r.json(); }).then(function(h){
       if(h.version && h.version !== STATE.version){ location.reload(); return; }

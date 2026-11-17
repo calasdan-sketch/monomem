@@ -59,14 +59,20 @@ function labelsOf(n){
   if(n.code_changed){ out.push(["caution", "Code changed", "The code this note describes changed since it was written."]); }
   if(n.claims_failed){ out.push(["caution", "No longer true in code", "A check or cited lines this note carries no longer match the files."]); }
   if(n.unconfirmed){ out.push(["caution", "Not confirmed", "From outside content; nobody confirmed it yet, so it is kept out of session start."]); }
+  if(n.new_writer){ out.push(["caution", "New writer", "Monomem saw this app for the first time. Its notes do not count as a second source yet."]); }
+  if(n.basis === "inferred"){ out.push(["", "Inferred", "The app cited nothing it saw."]); }
   if(n.built_on_distrusted){ out.push(["caution", "Built on a distrusted note", "It was written after reading a note from a writer an owner distrusts."]); }
   if(n.disputed){ out.push(["caution", "Disputed", "Another app says something different."]); }
   if(n.expired){ out.push(["", "Check again", "Not re-confirmed in time: check it is still true."]); }
   if(n.restated_by){ out.push(["", "Said again", "An app said this again. That is not a second source."]); }
   if(n.pinned){ out.push(["brand", "Pinned", "Shown first at every session start. Apps cannot change it."]); }
   if((n.tags||[]).indexOf("never-show") >= 0){ out.push(["", "Not shown at start", "Kept out of session start; still searchable."]); }
+  // Observed is the calm case: it is listed in the menu only (the 4th field marks it), so the two-label row stays quiet.
+  var ev = n.basis === "observed" && n.evidence && n.evidence[0];
+  if(ev){ out.push(["", "Observed", "The app says it saw: " + ev.kind + " " + ev.ref + (n.evidence.length > 1 ? " (and " + (n.evidence.length - 1) + " more)" : "") + ". Monomem did not check it.", true]); }
   return out;
 }
+function cardLabels(n){ return labelsOf(n).filter(function(l){ return !l[3]; }); }
 function lbl(l){ return "<span class='lbl "+l[0]+"'>"+esc(l[1])+(l[2] ? "<span class='sr'>: "+esc(l[2])+"</span>" : "")+"</span>"; }
 function needsPerson(n){ return (n.tags||[]).some(function(t){ return String(t).indexOf("obs.origin:") === 0; }) && !(n.confirmed_kind === "human" && n.confirmed_rev === n.rev); }
 var LVL_OPT = { "public":"Everyone (public)", "internal":"Normal (internal)", "private":"Private (hidden from apps you limited)" };
@@ -92,7 +98,7 @@ function noteMenu(n){
   return "<details class='menu'><summary aria-label='More for note #"+id+"' title='More'>&middot;&middot;&middot;</summary><div class='pop' role='menu'>"+items.join("")+"</div></details>";
 }
 function noteCard(n, extra){
-  var labels = labelsOf(n);
+  var labels = cardLabels(n);
   return "<article class='card' id='note"+Number(n.id)+"'><div class='nhead'><h3 class='t-head'>"+esc(n.title)+"</h3>"+noteMenu(n)+"</div>"+
     "<div class='meta'>"+chip(n.written_by || "")+" &middot; "+esc(n.namespace)+" &middot; "+esc(ago(n.updated_at))+" &middot; #"+Number(n.id)+"</div>"+
     chipsRow(labels.slice(0, 2).map(lbl).join("") + tagsInner(n.tags))+
@@ -157,19 +163,54 @@ function restoreNote(id){
 }
 // "What did this touch?": who read the note and what was built on it (proven apart from likely), then an optional rollback by
 // note: the server's plan first, one confirm, all or nothing. Likely items are only listed, never undone from here.
-function touchedPre(t){ return "<pre class='t-foot' style='white-space:pre-wrap;margin:8px 0 0'>"+esc(t)+"</pre>"; }
+// "What did this touch?": the server's JSON (blast-radius.ts) as short sentences with calm times; the CLI text is not shown.
+function noteRef(n){ return "#" + Number(n.id) + " &ldquo;" + esc(n.title) + "&rdquo;"; }
+function ulist(rows, f){ return "<ul class='t-callout'>" + rows.slice(0, 20).map(function(r){ return "<li>" + f(r) + "</li>"; }).join("") + (rows.length > 20 ? "<li>and " + (rows.length - 20) + " more</li>" : "") + "</ul>"; }
+function touchedHtml(t){
+  var out = ["<p><b>Note " + noteRef(t) + "</b>" + (t.namespace && t.namespace !== "default" ? " in project " + esc(t.namespace) : "") + "</p>"];
+  if(!t.reads_total){ out.push("<p>No app read it in the last " + plural(t.retention_days, "day", "days") + ".</p>"); }
+  else {
+    var by = {}, order = [];
+    (t.reads || []).forEach(function(r){
+      var e = by[r.reader]; if(!e){ e = by[r.reader] = { n: 0, last: r.at, start: false }; order.push(r.reader); }
+      e.n++; if(String(r.at) > String(e.last)){ e.last = r.at; } if(r.session_id){ e.start = true; }
+    });
+    out.push("<p>Read " + plural(t.reads_total, "time", "times") + " (recorded):</p>" + ulist(order, function(w){ var e = by[w];
+      return chip(w) + " " + plural(e.n, "time", "times") + ", last " + esc(ago(e.last)) + (e.start ? ", also at session start" : ""); }));
+  }
+  var built = t.built_on || [], proven = built.filter(function(n){ return n.basis === "proven"; }), likely = built.filter(function(n){ return n.basis !== "proven"; });
+  var line = function(n){ return noteRef(n) + (n.task ? " (task)" : "") + " by " + chip(n.by) + ", " + esc(ago(n.at)); };
+  if(proven.length){ out.push("<p>Built on it (the app said so when it saved):</p>" + ulist(proven, line)); }
+  if(likely.length){ out.push("<p>Written after reading it (maybe: the same app, within " + plural(t.window_hours, "hour", "hours") + "; check by hand):</p>" + ulist(likely, line)); }
+  if((t.claimed_tasks || []).length){ out.push("<p>Tasks taken after reading it (maybe):</p>" + ulist(t.claimed_tasks, line)); }
+  if((t.replaced || []).length){ out.push("<p>Notes it replaced:</p>" + ulist(t.replaced, line)); }
+  if(!built.length && !(t.claimed_tasks || []).length && !(t.replaced || []).length){ out.push("<p>Nothing recorded was built on it.</p>"); }
+  if(t.hidden){ out.push("<p>" + plural(t.hidden, "more note you cannot see here is", "more notes you cannot see here are") + " not listed.</p>"); }
+  out.push("<p class='help'>Not shown: reads older than " + plural(t.retention_days, "day", "days") + ", reads while read logging was off, and what an app did with the note outside Monomem. &ldquo;Maybe&rdquo; means the same app wrote after reading it; it does not prove the app used this note.</p>");
+  return out.join("");
+}
+var SKIP_WORDS = { conflict:"someone else changed it later", cannot_fully_undo:"it cannot be fully undone", operator_only:"pinned, or in a project where you approve first", replaced:"already replaced", archived:"already archived" };
+function planHtml(p){
+  var acts = p.actions || [], of = function(k){ return acts.filter(function(a){ return a.action === k; }); }, out = [];
+  var parts = [["archive", "Archive", "note", "notes"], ["restore", "Put back the earlier text of", "note", "notes"], ["unreplace", "Bring back", "note it replaced", "notes it replaced"], ["unflag", "Clear the flags on", "note", "notes"], ["release", "Release", "task it took", "tasks it took"]];
+  parts.forEach(function(x){ var rows = of(x[0]); if(rows.length){ out.push("<p>" + x[1] + " " + plural(rows.length, x[2], x[3]) + ":</p>" + ulist(rows, noteRef)); } });
+  if((p.skipped || []).length){ out.push("<p>Left as " + (p.skipped.length === 1 ? "it is" : "they are") + ":</p>" + ulist(p.skipped, function(k){ return noteRef(k) + ": " + esc(SKIP_WORDS[k.reason] || "left as it is"); })); }
+  out.push("<p class='help'>Nothing is deleted: archived notes can be restored from Archived notes (Settings), and each changed note keeps its old text in its history.</p>");
+  return out.join("");
+}
 function touchedNote(id){
   closeMenus();
-  api("/notes/" + Number(id) + "/touched").then(function(t){
-    ask("Note #" + Number(id) + ": who read it and what was built on it.", "Undo it and what was built on it", function(){
-      api("/rollback/preview", { method:"POST", body: JSON.stringify({ note: Number(id) }) }).then(function(p){
+  id = Number(id);
+  api("/notes/" + id + "/touched").then(function(t){
+    ask("", "Undo it and what was built on it", function(){
+      api("/rollback/preview", { method:"POST", body: JSON.stringify({ note: id }) }).then(function(p){
         if(!p.actions || !p.actions.length){ toast("Nothing to undo."); return; }
-        ask("The plan, nothing changed yet:", "Undo", function(){
-          api("/rollback/confirm", { method:"POST", body: JSON.stringify({ note: Number(id), token: p.token }) })
+        ask("", "Undo", function(){
+          api("/rollback/confirm", { method:"POST", body: JSON.stringify({ note: id, token: p.token }) })
             .then(function(r){ refreshView(); loadNeeds(); toast(r && r.message ? r.message : "Undone."); }).catch(fail);
-        }, touchedPre(p.warning || ""));
+        }, planHtml(p), { title: "Undo note #" + id + " and what was built on it?", cls: "destructive fill" });
       }).catch(fail);
-    }, touchedPre(t.text || ""));
+    }, touchedHtml(t), { title: "What did this touch?", cls: "", close: true });
   }).catch(fail);
 }
 function refreshView(){ var f = { list: load, review: loadReview, held: loadHeld, archived: loadArchived, quality: loadQuality }[VIEW]; if(f){ f(); } }

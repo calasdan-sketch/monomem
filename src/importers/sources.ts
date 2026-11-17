@@ -23,12 +23,13 @@ export function importArgs(id: FoundSource["id"]): string[] {
 export async function findSources(e: Pick<SetupEnv, "home" | "env" | "cwd">, dbPath: string): Promise<FoundSource[]> {
   const out: FoundSource[] = [];
   const claude = await bridgeStatus(e, dbPath, true);
-  if (claude.files) out.push({ id: "claude", label: "Claude Code's own memory", where: `${claude.files} file(s) (CLAUDE.md and auto memory)${claude.last_import ? `, ${claude.changed} changed since the last import` : ""}` });
+  const files = (n: number, what = "file"): string => `${n} ${what}${n === 1 ? "" : "s"}`;
+  if (claude.files) out.push({ id: "claude", label: "Claude Code's own memory", where: `${files(claude.files)} (CLAUDE.md and auto memory)${claude.last_import ? `, ${claude.changed} changed since the last import` : ""}` });
   for (const [id, label] of [["claude-mem", "claude-mem"], ["basic-memory", "basic-memory"], ["mcp-memory", "The MCP memory server"]] as const) {
     const p = defaultPath(id, e);
     if (p && existsSync(p)) out.push({ id, label, where: p });
   }
   const codex = findCodexMemoryFiles(codexHome(e), MAX_FILE_BYTES);
-  if (codex.length) out.push({ id: "codex", label: "Codex memories", where: codexHome(e) });
+  if (codex.length) out.push({ id: "codex", label: "Codex memories", where: files(codex.length, "memory file") });
   return out;
 }

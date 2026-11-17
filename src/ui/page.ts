@@ -106,7 +106,7 @@ export const PAGE_HTML = `<!doctype html>
   <div class="sheet">
     <h2 id="cf_h" class="t-title" style="margin-bottom:12px"></h2>
     <div id="cf_body"></div>
-    <div class="row" style="justify-content:flex-end;margin-top:16px"><button class="plain" onclick="closeSheet('confirmsheet')">Cancel</button><button id="cf_ok" class="primary"></button></div>
+    <div class="row" style="justify-content:flex-end;margin-top:16px"><button id="cf_no" class="plain" onclick="closeSheet('confirmsheet')">Cancel</button><button id="cf_ok" class="primary"></button></div>
   </div>
 </dialog>
 

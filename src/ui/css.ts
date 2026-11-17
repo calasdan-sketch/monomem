@@ -99,7 +99,7 @@ main{max-width:760px;margin:0 auto;padding:var(--s5) var(--s4) var(--s7)}
 .viewhead p{margin:var(--s1) 0 0;max-width:62ch}
 .back{margin:0 0 var(--s2) calc(-1 * var(--s2))}
 .filters{margin:0 0 var(--s4)}
-.filters summary{cursor:pointer;color:var(--action);font-weight:500;min-height:var(--tap);display:inline-flex;align-items:center}
+.filters summary{cursor:pointer;color:var(--action);font-weight:500;min-height:var(--tap);display:inline-flex;align-items:center;min-width:var(--tap)}
 .filters .row{align-items:flex-end;gap:var(--s3);padding-top:var(--s2)}
 .filters .field{margin:0}
 .chk{display:flex;gap:var(--s2);align-items:center;min-height:var(--tap);font-size:.875rem}
@@ -222,6 +222,7 @@ kbd{font:600 .75rem var(--mono);border:1px solid var(--separator);border-bottom-
 .steps li[aria-current=step]{background:var(--action);width:24px;border-radius:4px}
 .app{display:flex;align-items:center;justify-content:space-between;gap:var(--s3);padding:var(--s3) 0;border-top:1px solid var(--separator);flex-wrap:wrap}
 .app:first-child{border-top:0}
+.app>div{min-width:0}.app .help{overflow-wrap:anywhere}
 .say{font:600 .9375rem var(--mono);background:var(--surface-2);border-radius:var(--r-ctl);padding:var(--s3);overflow-wrap:anywhere}
 footer.foot{max-width:760px;margin:0 auto;padding:0 var(--s4) var(--s6);color:var(--text-2);font-size:.75rem}
 
