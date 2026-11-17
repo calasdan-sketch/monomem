@@ -340,7 +340,7 @@ None of the controls above stops an agent that can run commands as you. These do
   `gh attestation verify <file> --repo calasdan-sketch/monomem`: it shows whether this project's GitHub build made the
   file ([INSTALL.md](./INSTALL.md#download-no-nodejs-needed)). Monomem itself is not code-signed yet; the download's only
   program is Node's official, signed `node`.
-- **Importing Claude Code's memory.** `monomem import --claude` stores each section of your `CLAUDE.md` files and Claude
+- **Importing Claude Code's memory.** `monomem import --claude` stores each section of your `CLAUDE.md` files and Claude Code's auto memory as a note written by `import:claude` and tagged `claude-import`. Every imported note is held as outside content until you read it: `monomem review` lists them and `monomem confirm <id>` trusts one. Until then they stay out of session start and prompt recall. Read the `--dry-run` list first, especially for files another tool or person could have edited.
   Code's auto memory as an ordinary note, written by `import:claude` and tagged `claude-import`. Only sections the write
   check flags are held (`monomem review held`); the others are not held for you to confirm first, so read the
   `--dry-run` list before you import, especially for files another tool or person could have edited.
