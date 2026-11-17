@@ -1,5 +1,5 @@
 // `monomem drill`: replays the poisoning attacks on a COPY of the user's store with the user's own settings.
-import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
+import { slow } from "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
@@ -145,7 +145,8 @@ describe("monomem drill", () => {
       const t = Date.now();
       const r = await runDrill({ dbPath: db });
       assert.equal(r.ok, true);
-      assert.ok(Date.now() - t < 60000, `took ${Date.now() - t} ms`);
+      // Wrapped in slow() like every other wall-clock bound here: a loaded Windows runner once took 61 s (10-15 s is normal).
+      assert.ok(Date.now() - t < slow(60000), `took ${Date.now() - t} ms`);
     } finally {
       tidy(dir);
     }
