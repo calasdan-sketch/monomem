@@ -233,6 +233,14 @@ describe("import --claude: running it", () => {
     assert.ok(notes.some((n) => n.title === "Project Atlas / Deploy" && n.body.includes("Thursday")));
     assert.match(x.all(), /written by "import:claude"/);
   });
+  test("imported notes are held (not trusted) until a person confirms them, and the output says how (r3 security L6)", async () => {
+    const f = fixture();
+    const x = io();
+    assert.equal(await runClaudeImport(f.e, x, o(f.db)), 0);
+    const notes = allNotes(f.db);
+    assert.ok(notes.length > 0 && notes.every((n) => n.unconfirmed === true), "every imported note is held");
+    assert.match(x.all(), /held[\s\S]*monomem confirm/);
+  });
   test("without a terminal and without --yes it refuses and writes nothing", async () => {
     const f = fixture();
     const x = io();
