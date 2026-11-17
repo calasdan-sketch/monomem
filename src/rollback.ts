@@ -22,7 +22,7 @@
 // the change log and the history reason "rollback".
 // Writer names match exactly; "stdio" also means every stdio:<app> (the same family rule the distrust list uses).
 import { createHash, randomBytes } from "node:crypto";
-import { currentWriter, cleanWriter } from "./actor.js";
+import { currentWriter, cleanWriter, isWriterMarker } from "./actor.js";
 import { audit, scopeAllows } from "./security.js";
 import { Store, StaleWriteError, historyLimits, type NoteRecord } from "./store.js";
 import { SupersedeError, callerKey, supersedeTtlSeconds, type Caller } from "./supersede.js";
@@ -166,9 +166,17 @@ function planSideEffects(
         WHERE f.cleared_at IS NULL AND ${f.sql} AND f.at >= ?${nsSql} GROUP BY f.note_id ORDER BY f.note_id`
     )
     .all(...f.params, w.since, ...ns) as Array<{ id: number; c: number }>;
+  // A flag raised at this computer (the person at the CLI, or a local app) can hold a task for a person: an app key must not
+  // clear it through rollback, or it could then approve the task the flag was holding (r3 security S1).
+  const localFlagger = !w.operator && (isWriterMarker(w.writer) || w.writer.startsWith("stdio:"));
   for (const r of flags) {
     const n = store.read(Number(r.id)); // gate-ok: operator rollback side effects (admin), confined to the caller's namespaces by the query
-    if (n) actions.push({ ...base(n), rev: n.rev, action: "unflag", flags: Number(r.c) });
+    if (!n || operatorOnly(n)) continue;
+    if (localFlagger) {
+      skipped.push({ ...base(n), reason: "operator_only", detail: "a person or local app on this computer raised this flag: only the monomem CLI can clear it" });
+      continue;
+    }
+    actions.push({ ...base(n), rev: n.rev, action: "unflag", flags: Number(r.c) });
   }
   const now = Date.now();
   const sinceMs = Date.parse(w.since);

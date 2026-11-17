@@ -80,6 +80,9 @@ Since 1.5.0, body search still works on an encrypted store, from a second index 
   while bodies are sealed (over the cap, a search inside a write before the index is built, or a failed build) says so in
   its reply: a `body_search` field on REST `/search` and `/relevant` and on MCP replies. Each is counted; `GET /status`
   (admin) and `monomem check --setup` show the count and the last reason.
+- **Automatic backups keep it longer.** A deleted or purged note stays in the daily backups (`<data folder>/backups/`, 7 daily
+  plus 4 weekly copies) until they rotate out, up to about 5 weeks. To remove it now, delete the `backups/` folder (or the dated
+  folders made since the note was written).
 - **After a purge.** A purged note leaves the index at once, so search cannot return it. Its words can still sit in the
   server's in-memory index (search no longer finds them, but its stored data is not rewritten at once) until that server restarts; restart the servers after a purge you care
   about. A store that was over the 100,000 cap and is purged back under it gets its index again after the server restarts.

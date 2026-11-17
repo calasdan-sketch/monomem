@@ -166,7 +166,8 @@ export async function runUpdate(flags: { check: boolean }, d: UpdateDeps): Promi
     return offline("look for an update", e);
   }
   const latest = String(release.tag_name ?? "").replace(/^v/, "");
-  if (!/^\d+\.\d+\.\d+/.test(latest)) {
+  // Whole tag anchored: `latest` becomes part of a folder name that is later removed (`.update-<v>`).
+  if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/.test(latest)) {
     d.err("The latest release on github.com has no version number I understand. Nothing was changed.");
     return 1;
   }

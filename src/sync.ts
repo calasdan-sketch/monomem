@@ -540,17 +540,21 @@ export function exportMarkdown(
         continue; // another machine's file we never imported, or not ours to judge
       }
       const rel = relative(dir, p);
+      // Our own tombstone (its body is blank, so it no longer matches the hash): done, nothing to say.
+      if (tombstone && markerOf(parsed.fm)?.by === self) continue;
       if (!stale) {
         skipped.push({ file: rel, detail: "not pruned: file was edited since the last sync; import it first" });
         continue;
       }
       try {
         if (tombstone) {
-          // A hard delete here reaches the other computers as an archive (never a delete): same file, plus the marker.
+          // A hard delete here reaches the other computers as an archive (never a delete): same file, plus the marker, with
+          // the body blanked: a hard delete is how a person takes text (a pasted secret) out, so it must leave the folder too.
+          // The other computers apply the empty text, then archive (their history keeps the old text, as for any edit).
           if (markerOf(parsed.fm)) continue;
           const markedText = addMarker(raw, { at: new Date().toISOString(), by: self });
           if (markedText === null) continue;
-          safeWrite(dir, p, markedText);
+          safeWrite(dir, p, markedText.slice(0, markedText.indexOf("\n---\n", 3) + 5));
           written++;
           continue;
         }
@@ -693,7 +697,9 @@ export async function importMarkdown(
     // front-matter hash only when this store has never synced it (another
     // machine's export carries that machine's base, not ours).
     const baseHash = (local ? store.syncBase(local.id) : null) ?? fmHash;
-    const fileChanged = baseHash === null || fileHash !== baseHash;
+    // Our own hard-delete tombstone (blank body) is not an edit: it must not bring the deleted note back here.
+    const ownTomb = local === null && markerOf(fm)?.by === self;
+    const fileChanged = !ownTomb && (baseHash === null || fileHash !== baseHash);
     const remember = (id: number, hash: string): void => {
       if (!dry) store.setSyncBase(id, hash);
     };
@@ -800,7 +806,7 @@ export async function importMarkdown(
     const deletedBase = hasIdentity && origin !== self && localId === null ? store.syncDeleted(origin!, originId!) : undefined;
     if (deletedBase !== undefined) {
       const base = deletedBase ?? fmHash;
-      if (base === null || fileHash !== base) await attempt(createFrom, "restored", "note was deleted here but the file was edited");
+      if (!ownTomb && (base === null || fileHash !== base)) await attempt(createFrom, "restored", "note was deleted here but the file was edited");
       else push("skipped", { detail: "note was deleted in this store" });
       continue;
     }

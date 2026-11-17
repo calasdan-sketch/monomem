@@ -520,10 +520,11 @@ export async function runClaudeImport(e: Pick<SetupEnv, "home" | "env" | "cwd">,
     for (const t of todo) {
       try {
         if (t.action === "create") {
-          target.create({ namespace: opts.namespace, title: t.c.title, body: t.c.body, tags: t.c.tags, source: t.c.source }, { writtenBy: IMPORT_WRITER, skipEdges: false });
+          // Held, not trusted (r3 security L6): text from files any app on this computer can write waits for a person's confirm.
+          target.create({ namespace: opts.namespace, title: t.c.title, body: t.c.body, tags: t.c.tags, source: t.c.source, outside: true }, { writtenBy: IMPORT_WRITER, skipEdges: false });
           created++;
         } else {
-          target.update(t.id!, { title: t.c.title, body: t.c.body, source: t.c.source }, { writtenBy: IMPORT_WRITER });
+          target.update(t.id!, { title: t.c.title, body: t.c.body, source: t.c.source, outside: true }, { writtenBy: IMPORT_WRITER });
           refreshed++;
         }
       } catch (err) {
@@ -536,6 +537,7 @@ export async function runClaudeImport(e: Pick<SetupEnv, "home" | "env" | "cwd">,
     if (held) writeHeld(opts.dbPath, heldBefore);
     io.out(`\nImported ${created} new note(s)${refreshed ? `, refreshed ${refreshed}` : ""}. They are tagged "${IMPORT_TAG}" and written by "${IMPORT_WRITER}".`);
     io.out("Claude Code's own session-start notes leave these out (it already reads CLAUDE.md and its auto-memory); search and your other apps still see them.");
+    if (created || refreshed) io.out("They are held (marked as from outside) until you read them: `monomem review` lists them, `monomem confirm <id>` trusts one.");
     if (held) io.out(`${held} section(s) were held by the memory linter (it saw something that reads like an instruction to an AI): see \`monomem review held\`.`);
     if (failed) {
       io.err(`${failed} section(s) could not be stored.`);
