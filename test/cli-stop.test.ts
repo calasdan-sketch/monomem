@@ -55,6 +55,18 @@ async function fakeServer(): Promise<{ child: ChildProcess; port: number }> {
 const runCli = (env: NodeJS.ProcessEnv, ...args: string[]) =>
   spawnSync(process.execPath, [CLI, ...args], { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: slow(30_000) });
 
+/** Like runCli, but the test keeps running while the CLI works: on Linux and macOS a stopped child stays a zombie (and
+ * process.kill(pid, 0) still succeeds) until its parent reaps it, and a parent blocked in spawnSync never does. In real
+ * use `monomem open` has already exited, so the server is reaped by the system. */
+const runCliAsync = (env: NodeJS.ProcessEnv, ...args: string[]): Promise<{ status: number | null; stdout: string; stderr: string }> =>
+  new Promise((res) => {
+    const c = spawn(process.execPath, [CLI, ...args], { env, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "", stderr = "";
+    c.stdout!.on("data", (d) => (stdout += String(d)));
+    c.stderr!.on("data", (d) => (stderr += String(d)));
+    c.on("close", (status) => res({ status, stdout, stderr }));
+  });
+
 describe("monomem stop", () => {
   test("stops the server monomem open recorded for this store and forgets it", async () => {
     const { child, port } = await fakeServer();
@@ -62,7 +74,7 @@ describe("monomem stop", () => {
     const file = pidFile(join(home, "data", "state.db"));
     writeFileSync(file, JSON.stringify({ pid: child.pid, port }));
     const exited = new Promise<void>((r) => child.once("exit", () => r()));
-    const r = runCli(env, "stop");
+    const r = await runCliAsync(env, "stop");
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /Stopped Monomem/);
     await exited; // the stand-in really ended (the test times out if not)
