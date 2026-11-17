@@ -41,7 +41,7 @@ report higher ones, are in [BENCHMARK.md](./BENCHMARK.md).
 - **Install.** Engram and Vestige ship one compiled program. Monomem's download is a folder that runs Node's official
   program (Task Manager shows "Node.js JavaScript Runtime"), and it is not code-signed yet: see
   [INSTALL.md](../INSTALL.md#download-no-nodejs-needed).
-- **How many apps setup connects.** `monomem setup` connects eight apps. Engram documents fourteen, and agentmemory
+- **How many apps setup connects.** `monomem setup` connects seventeen apps ([apps.md](./apps.md)). Engram documents fourteen, and agentmemory
   about thirty.
 - **Hosted chat apps.** claude.ai and the Claude and ChatGPT phone apps need OAuth sign-in, which Monomem does not have
   yet. Notion covers them today.

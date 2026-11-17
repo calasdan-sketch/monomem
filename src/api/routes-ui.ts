@@ -19,7 +19,7 @@ import { readBody } from "../http-common.js";
 import { sendJson } from "./shared.js";
 import type { ApiCtx, ApiReq } from "./context.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { DB_PATH, PACKAGE_VERSION } from "../config.js";
+import { DATA_DIR, DB_PATH, PACKAGE_VERSION } from "../config.js";
 import { selfCommand } from "../self.js";
 import { needsYou } from "../ui/needs-you.js";
 import { readUiSettings, updateUiSettings, readBackupStatus, writeBackupStatus } from "../ui/settings.js";
@@ -189,13 +189,19 @@ export async function uiRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
   if (req.method === "GET" && path === "/ui/apps") {
     if (needLocal()) return true;
     const { detectClients, connectedApps, realEnv, readHistory } = await import("../setup.js");
+    const { appsNeedingYou } = await import("../app-detect.js");
     const e = realEnv(PACKAGE_VERSION);
     const connected = new Set(connectedApps(e).connected);
     const declined = new Set(readUiSettings().declined_apps);
+    // From the server's daily check (app-detect.ts): installed later (new), or a connection that would not start (problem: Repair).
+    const waiting = appsNeedingYou(DATA_DIR, [...declined]);
     const seen = new Set<string>();
     const apps = detectClients(e)
       .filter((a) => a.present && a.id !== "project" && !seen.has(a.label) && seen.add(a.label))
-      .map((a) => ({ id: a.id, label: a.label, connected: connected.has(a.label), declined: declined.has(a.id) }));
+      .map((a) => {
+        const problem = waiting.repair.find((r) => r.id === a.id)?.problem;
+        return { id: a.id, label: a.label, connected: connected.has(a.label), declined: declined.has(a.id), new: waiting.new.some((n) => n.id === a.id), ...(problem ? { problem } : {}) };
+      });
     // can_undo: Settings shows "Undo the last connect" only when setup has a change left to put back.
     sendJson(res, 200, { apps, can_undo: readHistory(e).some((h) => !h.undone) });
     return true;
@@ -212,6 +218,15 @@ export async function uiRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
       args = ["setup", "--only", id, "--yes", "--no-test-note", "--no-doctor"];
     }
     const out = await runner(args, 120_000);
+    // Connect and Repair settle the app's "Needs you" item now, not at tomorrow's check.
+    if (out.code === 0) {
+      try {
+        const [{ checkApps }, { realEnv }] = await Promise.all([import("../app-detect.js"), import("../setup.js")]);
+        await checkApps(realEnv(PACKAGE_VERSION), DATA_DIR);
+      } catch (e) {
+        console.error(`[monomem] app check after connect failed: ${(e as Error).message}`);
+      }
+    }
     sendJson(res, out.code === 0 ? 200 : 500, { ok: out.code === 0, ...out });
     return true;
   }

@@ -268,8 +268,10 @@ describe("A3: connect / open / setup", () => {
       assert.equal(d.status, 0, String(d.stderr));
       assert.match(String(d.stdout), /Paste this/);
       assert.ok(!existsSync(join(f.home, ".config", "zed")), "no settings file was written");
-      const w = f.run("connect", "windsurf");
-      assert.match(String(w.stdout), /Windsurf: I cannot check where its settings file lives/);
+      // Windsurf's file is documented now (setup/targets.ts): a dry run shows the plan for it and writes nothing.
+      const w = f.run("connect", "windsurf", "--dry-run");
+      assert.match(String(w.stdout), /mcp_config\.json/);
+      assert.ok(!existsSync(join(f.home, ".codeium")), "a dry run writes nothing");
     } finally {
       rmSync(f.home, { recursive: true, force: true });
     }

@@ -83,13 +83,17 @@ function syncSetup(){
     if(r.ok){ loadSync(); }
   }).catch(function(e){ say(e.message, true); });
 }
-// Detected apps with Connect / Not this one (the same detection and setup as monomem setup).
+// Detected apps with Connect / Not this one (the same detection and setup as monomem setup). Repair: a connection the
+// server's daily check (app-detect.ts) found would not start; it runs the same setup for that app (backup + undo).
 function appRow(a, welcome){
   var id = esc(a.id);
+  if(a.problem){
+    return "<div class='app'><div><b>"+esc(a.label)+"</b><div class='help'>Needs repair: "+esc(a.problem)+"</div></div><button onclick='connectApp(&quot;"+id+"&quot;)'>Repair</button></div>";
+  }
   var right = a.connected ? "<span class='lbl ok'>Connected</span>"
     : a.declined && !welcome ? "<span class='muted t-foot'>Skipped</span> <button class='plain' onclick='connectApp(&quot;"+id+"&quot;)'>Connect</button>"
     : "<span class='row'><button onclick='connectApp(&quot;"+id+"&quot;)'>Connect</button><button class='plain' onclick='declineApp(&quot;"+id+"&quot;)'>Not this one</button></span>";
-  return "<div class='app'><div><b>"+esc(a.label)+"</b>"+(a.connected ? "<div class='help'>"+esc(restartHint(a.id))+"</div>" : "")+"</div>"+right+"</div>";
+  return "<div class='app'><div><b>"+esc(a.label)+"</b>"+(a.new && !a.connected ? " <span class='lbl'>New</span>" : "")+(a.connected ? "<div class='help'>"+esc(restartHint(a.id))+"</div>" : "")+"</div>"+right+"</div>";
 }
 function restartHint(id){
   return { "claude-code":"Quit Claude Code (type /exit) and start it again.", "cursor":"In Cursor, open Settings, then MCP, and switch Monomem on.", "claude-desktop":"Quit Claude Desktop from the tray or menu bar, then open it again." }[id] || "Quit the app and open it again.";

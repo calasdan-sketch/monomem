@@ -11,7 +11,7 @@ npx monomem setup --dry-run     # shows exactly what it would change; writes not
 npx monomem setup               # does it, after you type y; backs up every file; --undo reverses it
 ```
 
-It finds Claude Code, Claude Desktop, Cursor, Codex CLI, Gemini CLI, Muse, VS Code and Zed, adds only the Monomem entry, and can move an old `claude-bridge` entry across keeping your data.
+It finds Claude Code, Claude Desktop, Cursor, Codex CLI, Gemini CLI, Muse, VS Code, Zed, Windsurf, Devin, Kiro, Cline CLI, GitHub Copilot CLI, Antigravity, Qwen Code, OpenCode and Kilo Code ([where each keeps its settings](./docs/apps.md)), adds only the Monomem entry, and can move an old `claude-bridge` entry across keeping your data.
 Details and troubleshooting: [docs/live-claude-code.md](./docs/live-claude-code.md). The manual steps for each app follow.
 
 To give one app its own key and a limit on what it can see, use `monomem connect <app> --max internal` instead; see
