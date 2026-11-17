@@ -222,3 +222,33 @@ describe("1.6 tools", () => {
     }
   });
 });
+
+describe("memory_usage health (PLAN I: Fix it with your agent)", () => {
+  const text = (r: unknown): string => ((r as { content: Array<{ text: string }> }).content)[0].text;
+  test("admin connection: the monomem check lines, read-only; a read-only key is refused", async () => {
+    const store = new Store(":memory:");
+    const client = await connect(store, "all");
+    const prior = process.env.MONOMEM_TOOLS;
+    process.env.MONOMEM_TOOLS = "all";
+    const server = createMcpServer(store, "read", {}, {});
+    if (prior === undefined) delete process.env.MONOMEM_TOOLS;
+    else process.env.MONOMEM_TOOLS = prior;
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const reader = new Client({ name: "r", version: "1.0.0" });
+    await Promise.all([reader.connect(ct), server.connect(st)]);
+    try {
+      const r = await client.callTool({ name: "memory_usage", arguments: { action: "health" } });
+      assert.ok(!r.isError, text(r));
+      assert.match(text(r), /^monomem check\n/);
+      assert.match(text(r), /\nGrade [A-F]\n/);
+      for (const [i, l] of text(r).split("\n").entries()) if (/^\s+\[(warn|fail)\]/.test(l)) assert.match(text(r).split("\n")[i + 1], /^\s+Ask your agent: "/);
+      const denied = await reader.callTool({ name: "memory_usage", arguments: { action: "health" } });
+      assert.ok(denied.isError);
+      assert.match(text(denied), /admin/);
+    } finally {
+      await client.close();
+      await reader.close();
+      store.close();
+    }
+  });
+});

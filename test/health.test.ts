@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { Store } from "../src/store.js";
-import { gradeOf, healthMain, renderHealthCard, runHealth, type HealthReport, type HealthOpts } from "../src/health.js";
+import { gradeOf, healthMain, renderHealth, renderHealthCard, runHealth, type HealthReport, type HealthOpts } from "../src/health.js";
 import type { DrillReport } from "../src/drill.js";
 
 const drillOk = async (): Promise<DrillReport> => ({ notes: 0, attacks: 20, rows: [], reached: [{ id: "E16", title: "", verdict: "reached", known_miss: true }, { id: "SELF", title: "", verdict: "reached", known_miss: true }], unexpected: [], ok: true, elapsed_ms: 1, approve_first: false });
@@ -248,5 +248,55 @@ describe("exposure check", () => {
       if (saved === undefined) delete process.env.MONOMEM_TOKENS; else process.env.MONOMEM_TOKENS = saved;
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("Fix it with your agent (PLAN I)", () => {
+  test("every warn and fail line ends with a sentence to paste to an agent; ok and info lines get none", async () => {
+    const { dir, opts } = setup();
+    const prior = process.env.MONOMEM_LINT;
+    process.env.MONOMEM_LINT = "warn";
+    try {
+      const r = await runHealth({ ...opts, drill: drillBad, bindHost: "0.0.0.0" });
+      const bad = r.checks.filter((c) => c.status === "warn" || c.status === "fail");
+      assert.ok(bad.length >= 3, JSON.stringify(r.checks));
+      for (const c of r.checks) {
+        if (c.status === "warn" || c.status === "fail") assert.match(c.ask ?? "", /^Run monomem .*Ask me|^Check .*Ask me|Do not change any settings|Do not edit or delete|Let me decide/, c.id);
+        else assert.equal(c.ask, undefined, c.id);
+      }
+      const out = renderHealth(r, false).split("\n");
+      for (const c of bad) {
+        const i = out.findIndex((l) => l.includes(`${c.label}: ${c.text}`));
+        assert.ok(i >= 0, c.id);
+        assert.equal(out[i + 1], `         Ask your agent: "${c.ask}"`);
+      }
+    } finally {
+      if (prior === undefined) delete process.env.MONOMEM_LINT;
+      else process.env.MONOMEM_LINT = prior;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("readOnly (the MCP health action): no attack replay and no audit-log marker written", async () => {
+    const { dir, opts, store } = setup();
+    try {
+      const s = store();
+      s.create({ title: "a", body: "b" });
+      s.close();
+      const L1 = '{"op":"a","prev":"p0"}';
+      writeFileSync(opts.auditPath!, `${L1}
+{"op":"b","prev":"${createHash("sha256").update(L1).digest("hex")}"}
+`);
+      let drilled = false;
+      const r = await runHealth({ ...opts, readOnly: true, drill: async () => ((drilled = true), drillOk()) });
+      assert.equal(drilled, false);
+      assert.match(find(r, "drill").text, /not run here: run monomem check --attacks/);
+      assert.equal(find(r, "audit").status, "ok", find(r, "audit").text);
+      const s2 = store();
+      try {
+        const row = s2.captureDb().prepare("SELECT value FROM _meta WHERE key = 'health_audit_seen'").get();
+        assert.equal(row, undefined, "readOnly wrote the audit-log marker");
+      } finally { s2.close(); }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });
