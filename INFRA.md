@@ -5,8 +5,9 @@ status: active
 # Monomem — Infra & Ops Guide
 
 Setup and operations guide for exposing Monomem over the public internet to
-clients that can send its bearer token. **claude.ai and the Claude mobile app
-cannot connect yet** (see section 3): their connectors need OAuth. This document covers the
+clients that can send its bearer token. **claude.ai, the Claude mobile app and ChatGPT** connect over OAuth, which is
+off by default and a preview (one internal security review, no outside review); turning it on, and the HTTPS address it
+needs, are in [docs/oauth.md](./docs/oauth.md). This document covers the
 infra side only — tunnel setup, auth verification, connector setup, and a
 smoke test. See the main [README](./README.md) for what the project is and
 how to build/run it locally.
@@ -311,25 +312,18 @@ Either works; local stdio is faster and doesn't depend on the tunnel being
 up. Check your installed version's settings UI directly — menu placement
 moves between releases.
 
-### Claude web (remote, HTTPS)
+### Claude web, Claude mobile and ChatGPT (remote, HTTPS)
 
-**Not supported yet (checked 2026-11-10).** Claude web and mobile add remote
-MCP servers as custom connectors, and those connectors sign in with OAuth
-(dynamic client registration or CIMD). Sending a fixed `Authorization` header
-is a beta limited to some organisations
-([Anthropic: connector authentication](https://claude.com/docs/connectors/building/authentication.md)).
-Monomem only accepts a bearer token, so a personal plan has no way to send it,
-and a login page in front (Cloudflare Access) blocks the connector before it
-reaches Monomem. Never run the endpoint without auth to work around this.
+Since 1.6.0 these connect over OAuth, which is **off by default and a preview** (one internal security review, no outside
+review). Claude web and mobile add remote MCP servers as custom connectors, and those connectors sign in with OAuth;
+Monomem answers that sign-in itself on the MCP port, and you approve each app with a pairing code from your terminal.
+Point the tunnel at the MCP port (`8791`), keep `MONOMEM_BIND` at `127.0.0.1`, and follow
+[docs/oauth.md](./docs/oauth.md) (`monomem oauth on <your https address>`, then `monomem oauth pair`). A login page in
+front (Cloudflare Access) blocks the connector before it reaches Monomem, so use a tunnel without one for this host.
+Never run the endpoint without auth.
 
-Until Monomem can verify a signed-in identity itself, use Claude Code's remote
-control on the phone (it runs Claude Code on your computer, which already has
-Monomem), or a client that can send the bearer token.
-
-### Claude mobile (remote, HTTPS)
-
-Same as Claude web: not supported yet, for the same reason. A connector added
-on claude.ai is the one the mobile app uses.
+A connector added on claude.ai is the one the mobile app uses. Without OAuth, use Claude Code's remote control on the
+phone (it runs Claude Code on your computer, which already has Monomem), or a client that can send the app key.
 
 ---
 
@@ -337,7 +331,7 @@ on claude.ai is the one the mobile app uses.
 
 The real acceptance test: *write a note from Claude Code on the desktop,
 then read that same note back from a second, remote client.* (Claude mobile
-cannot be that client yet; see section 3.) Run it exactly like
+can be that client only with OAuth switched on; see section 3 and docs/oauth.md.) Run it exactly like
 this once both halves are live — don't accept a partial pass.
 
 ### Preconditions (all must be true first)

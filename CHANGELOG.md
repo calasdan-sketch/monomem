@@ -51,8 +51,8 @@ schema v22), so going back to 1.5.0 needs no restore.
   `consolidate`, `rebuild-edges`, `reindex`, `decay`, `scrub`), `keys` (was `token`), `settings` (was `config`), `replace`
   (was `supersede`). `monomem help --all` lists everything. See Upgrading for how the old names behave.
 - **Automatic daily backups.** While the server runs, it makes one backup a day in `<data folder>/backups` and keeps the 7
-  newest days plus one from each of the 4 weeks before them. The copy runs on a worker thread, so serving does not pause
-  (10,000 notes: a 3.0 s pause before, 8 ms after). The encryption key is never copied into them. `monomem backup restore
+  newest days plus one from each of the 4 weeks before them. The copy runs on a worker thread, so serving barely pauses
+  (a 10,000-note store of 23.7 MB: 324-351 ms before, 19-29 ms after; a 64 MB store: 3.0 s before, 8 ms after). The encryption key is never copied into them. `monomem backup restore
   <folder>` puts one back (a dry run until you add `--yes`; it copies the current database aside first). Turn them off
   in Settings or with `MONOMEM_AUTO_BACKUP=off`. A note you delete stays in these backups for up to 5 weeks.
   `monomem check` no longer lowers the grade just because no backup was made, and it warns when a backup or its clean-up
@@ -90,11 +90,12 @@ schema v22), so going back to 1.5.0 needs no restore.
   original's unconfirmed status, and does not count as a second source. It is a label only; nothing is refused. Measured on
   50 hand-written pairs (reported half): precision 1.00 (5 of 5), recall 0.42 (5 of 12). It misses most reworded
   restatements; docs/trust.md has the details.
-- **New writers are on probation.** A writer Monomem has not seen before (a new app key name or a new `stdio:<app>` name)
-  has its notes shown at once with a `[new writer]` label, but its confirms of other writers' notes do not count and
+- **New writers are on probation.** A writer Monomem has not seen before (a new app key name, or a local app name that
+  setup did not connect) has its notes shown at once with a `[new writer]` label, but its confirms of other writers' notes do not count and
   `monomem facts` does not count it as agreeing, until it has 5 notes at least 24 hours old that nobody replaced, archived
-  or flagged, or a person runs `monomem trust confirm-writer <name>`. An admin key's confirm still counts. Upgrading puts
-  no existing writer on probation.
+  or flagged, or a person runs `monomem trust confirm-writer <name>`. An admin key's confirm still counts. Only notes the
+  writer created count, not notes it edited. Apps you connected with `monomem setup` or `monomem connect` are not put on
+  probation, and upgrading puts no existing writer on probation.
   `monomem settings set probation-notes 0` turns it off.
 - **Observed evidence.** `memory_save` takes an optional `evidence` list (a test, a file, a command, a URL or a short
   output the agent observed). Reads label the note `[observed: ...; cited by the writer, not checked]`, or
@@ -103,7 +104,8 @@ schema v22), so going back to 1.5.0 needs no restore.
   evidence not count.
 - **Claim checks and hashed line citations.** `memory_save` takes optional `claims`: a file holds an exact text, a JSON
   file lists a dependency, a file exists, or a line range (stored as a SHA-256 hash of those lines). Each claim must hold
-  when the note is written. When one stops holding, reads and session start label the note "no longer true in code" or
+  when the note is written. Claims are checked only against files git tracks, and are refused from connections with no
+  folder of their own (HTTP, REST, OAuth); a refused claim does not say which part failed. When one stops holding, reads and session start label the note "no longer true in code" or
   "cited code changed"; the note is not hidden or changed. Monomem reads the files only; it never runs a command. See
   docs/claim-checks.md.
 - **Branch memory and the commit trail.** Notes a local agent saves inside a git repository record the branch. Session
@@ -181,7 +183,8 @@ schema v22), so going back to 1.5.0 needs no restore.
 - **Session start says "run `monomem setup`"** when the database is newer than the hook, instead of coming back empty
   without a word. (Hooks from 1.5.x cannot do this; see Upgrading.)
 - **Quieter `monomem check`** at a terminal: warnings and the verdict only (`--verbose` shows everything). The grade line
-  says "N blocked, M stored with a warning". Errors use one form: `Error: ...` then `Fix: ...`. The first-run key line
+  counts each outcome, for example "24 of 26 known attacks did not reach an agent as trusted content
+  (8 held, 12 blocked, 4 stored with a warning)". Errors use one form: `Error: ...` then `Fix: ...`. The first-run key line
   prints after the output.
 - **One word per concept** in CLI output, errors, the dashboard and hints (held, replace, app key, duplicate, from
   outside), checked by a test.
@@ -257,9 +260,28 @@ schema v22), so going back to 1.5.0 needs no restore.
 - **`monomem` with no command prints the help.** In 1.5 it started the server. Use `monomem start`, or `monomem open` for
   the dashboard.
 - **Going back to 1.5.0** needs no restore: the schema is still v22. 1.6.0 adds a few side tables that 1.5.0 ignores.
-  Install the older version and run `monomem setup` again.
+  **If you switched OAuth on, run `monomem oauth off` before you go back**: 1.5.0 does not know an OAuth key's one-hour
+  expiry or its MCP-only limit, so a key left in `tokens.json` would keep working there as a write key, on both ports.
+  Then install the older version and run `monomem setup` again. docs/upgrading.md lists what else 1.5.0 does not keep up
+  to date while it runs.
 - **Syncing computers:** while one computer still runs 1.5.x, each sync makes one extra commit or file write per archived
   note until both are upgraded. Nothing in your notes is lost. docs/upgrading.md has the details.
+
+### Not in 1.6.0
+
+Planned or considered, and consciously left for later:
+
+- **Research, not started:** the held-back-note experiment (holding some notes back to measure whether memory helps) and
+  direct sync between computers without a shared folder or git (P2P). Both need a design review first.
+- **Dashboard checks not yet run:** a Lighthouse installability run and a screen-reader pass. Not built yet: an unseen-notes
+  filter (notes from other agents you have not looked at yet), and a live "start with my computer" state in Settings.
+- **Imports and connectors:** no Supermemory importer. OAuth offers registration only, not Client ID Metadata Documents
+  (CIMD), because CIMD makes Monomem fetch a URL during sign-in (docs/oauth.md). `mcp_tool` hooks were checked and not used
+  yet: their only gain is speed (docs/apps.md).
+- **Code structure, after release:** splitting `rec()` (it decodes rows and also adds labels) and one shared
+  side-table helper (each new side table checks for itself and keeps its own cache today).
+- **Field tests:** the download on a PC with Windows Smart App Control switched on, on a Mac, and `monomem update` against
+  a real published release.
 
 ## [1.5.0] - 2026-11-16
 
