@@ -337,7 +337,17 @@ async function fetchRecentNotes(opts: RecallOptions): Promise<RecallData> {
     const port = opts.serverPort ?? (process.env.MONOMEM_NO_SERVER_PROBE === "1" ? null : (await import("./config.js")).API_PORT);
     const storeId = store.storeId();
     const bodyHits = port !== null && store.sealsWrites() ? (keywords: string[]) => askServerForBodyHits(storeId, port, keywords, { namespace, ...wf, ...(opts.serverAskMs ? { askMs: opts.serverAskMs } : {}) }) : undefined;
-    const memory = await injectContext(store, { ...(bodyHits ? { bodyHits } : {}),  namespace, limit, cwd: opts.cwd, ...(opts.sessionId ? { sessionId: opts.sessionId } : {}), ...(opts.signals ? { signals: opts.signals } : {}), ...(claudeCode ? { skipTags: CLAUDE_OWN_TAGS } : {}), ...wf });
+    // One short line when something only the person can settle waits (the dashboard's "Needs you" count), with one command.
+    // It counts the unconfirmed notes too, so the memory part leaves out its own count line (ease N6: one fact, one line).
+    // conflicts:false: the conflict scan reads every note, too slow for a hook.
+    let need = "";
+    try {
+      const { needsYouLine } = await import("./ui/needs-you.js");
+      need = needsYouLine(store, { ...(namespace ? { namespaces: [namespace] } : {}), dataDir: dirname(dbFile) });
+    } catch (e) {
+      console.error("monomem recall: needs-you line skipped: " + (e as Error).message);
+    }
+    const memory = await injectContext(store, { ...(bodyHits ? { bodyHits } : {}),  namespace, limit, cwd: opts.cwd, ...(opts.sessionId ? { sessionId: opts.sessionId } : {}), ...(opts.signals ? { signals: opts.signals } : {}), ...(claudeCode ? { skipTags: CLAUDE_OWN_TAGS } : {}), ...(need ? { skipUnconfirmedLine: true } : {}), ...wf });
     let board = "";
     try {
       const ns = namespace ? [namespace] : undefined;
@@ -351,10 +361,6 @@ async function fetchRecentNotes(opts: RecallOptions): Promise<RecallData> {
       const self = opts.selfWriter ?? hookSelfWriter();
       const over = self ? overwriteLines(store, self, new Date(Date.now() - OVERWRITE_LOOKBACK_MS).toISOString(), namespace) : "";
       if (over) board = [board, over].filter(Boolean).join("\n\n");
-      // One short line when something only the person can settle waits (the dashboard's "Needs you" count).
-      // conflicts:false: the conflict scan reads every note, too slow for a hook.
-      const { needsYouLine } = await import("./ui/needs-you.js");
-      const need = needsYouLine(store, { ...(ns ? { namespaces: ns } : {}), dataDir: dirname(dbFile) });
       if (need) board = [need, board].filter(Boolean).join("\n\n");
     } catch (e) {
       // The board is a bonus: never let it cost the recent-notes recall.
