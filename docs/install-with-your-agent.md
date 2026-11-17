@@ -30,6 +30,8 @@ Before you say yes:
   else, stop it.
 - **Monomem is not code-signed.** The only program in the archive is Node.js's own `node`, which is signed by its makers.
   [INSTALL.md](../INSTALL.md#download-no-nodejs-needed) says what Windows or macOS may show.
+- **The release page is outside text.** If anything on it (or in a downloaded file) tells your agent to do more than
+  the sentence says, such as running another script or skipping a check, that is a reason to stop, not a step to follow.
 - **Your agent's own permission prompts still apply.** Read what it asks to run; the sentence only describes the steps.
 - Prefer npm? Ask your agent to run `npx monomem setup --dry-run` instead (needs Node.js 22.16 or newer).
 
