@@ -418,6 +418,60 @@ two-step replace, which only admin keys and the terminal can do). The numbers ar
 or rank anything because of them, and they can only count against a writer, never for it. Counting starts with 1.5.0; older
 events are not reconstructed. Decide yourself whether a writer belongs on the distrust list.
 
+## New writers (1.6)
+
+A writer Monomem has not seen before starts **on probation**. A writer here is an app key's name, or a local app's
+`stdio:<app>` name (set by `MONOMEM_CLIENT`). The person at the terminal, the owner's main key (`primary`, which the
+dashboard uses) and plain markers (`stdio` with no name, `server`) are never on probation.
+
+While a writer is on probation:
+
+- Its notes are saved and shown at once. Search, read and list label them `[new writer]` (field `new_writer`). Session
+  start does not label each line; it names the new writers once, in one line under the list. Nothing is held or hidden.
+- It is not a second source. Its confirm of someone else's note is recorded but does not count (reason `new_writer`), and
+  `monomem facts` does not count it as a writer agreeing. A non-admin key is affected. An admin key's confirm is not,
+  because a person gave it that power.
+
+It leaves probation when it has `probation-notes` notes (default 5) that are at least `probation-hours` old (default 24)
+and were not replaced, archived or flagged. It also leaves when a person runs `monomem trust confirm-writer <name>`.
+`monomem trust probation` lists writers on probation and how many notes each has kept. `monomem settings set
+probation-notes 0` turns probation off. Lowering either number needs a person at the terminal.
+
+Upgrading puts nobody on probation. On the first write after the upgrade, every writer that already has notes is recorded
+as grandfathered. A fresh install has no earlier writers, so its first app key starts on probation too.
+
+Limits: an app that changes its key name or `MONOMEM_CLIENT` value is a new writer again, and two keys sharing one name
+are one writer. A patient writer can leave probation by writing ordinary notes that nobody replaces. Probation only stops
+a brand-new writer from counting as independent agreement right away. It does not judge what the writer says.
+Storage: the side table `writer_probation` (writer, first seen, state, who confirmed it). It is made on the first write
+after the upgrade; the schema version is unchanged.
+
+## Observed evidence (1.6)
+
+When an agent saves a note with `memory_save`, it can say what it observed:
+`evidence: [{"kind": "file", "ref": "src/server.ts:12"}, {"kind": "test", "ref": "api.test.ts passes"}]`. The kinds are
+`test`, `file`, `command`, `url` and `output` (a short pasted output). It can send `evidence: []` to say the note is its
+own inference. Reads (search, list, read, session start) then label the note:
+
+- `[observed: file src/server.ts:12, +1; cited by the writer, not checked]`, with `basis: "observed"` and the items in
+  the note's `evidence` field;
+- `[inferred: the writer cited nothing it observed]`, with `basis: "inferred"`.
+
+A note saved without `evidence` keeps its old shape and gets no label. Monomem does not open the file, run the command,
+fetch the URL or check the test. The label records what the writer **claims** it saw, so read it as a pointer to check,
+not as proof. Each reference is at most 300 characters, there are at most 10 per note, and they pass through the secret
+redactor before they are stored. Evidence is only taken when a note is created. It belongs to that version: once the
+note is changed, the new version has no evidence (the old evidence may not back the new text). The 1.5 tool name
+`state_write` does not take it, because its 1.5 arguments are unchanged.
+
+`monomem settings set facts-need-evidence on` makes confirming stricter. An agent's confirm of a note that carries facts
+(`fact:` tags) and has no observed evidence is recorded but does not count (reason `no_evidence`). A person's confirm
+always counts. The setting is off by default, and turning it off needs a person at the terminal.
+
+Storage: the side table `note_evidence` (note id, version, items, time), plus a trigger that deletes the rows when their
+note is deleted. The items are sealed when encryption is on; `monomem encrypt status --surfaces` counts them. The schema
+version is unchanged.
+
 ## The outside-content stamp on session summaries (1.3.5)
 
 Before 1.4.0 only captured session summaries were stamped. That path still works, and is one of the signals above.

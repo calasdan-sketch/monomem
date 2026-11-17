@@ -63,6 +63,10 @@ function specs(nsActive: boolean): Spec[] {
         sensitivity: z.enum(["public", "internal", "private"]).optional().describe("private: personal or sensitive."),
         if_rev: num().optional().describe("Change only if the note is still at this rev."),
         files: z.array(z.string()).optional().describe("Repo files the note is about."),
+        evidence: z
+          .array(z.object({ kind: z.enum(["test", "file", "command", "url", "output"]), ref: z.string() }))
+          .optional()
+          .describe("What you saw (a.ts:12, a test, a URL). [] = your inference."),
         detail,
       },
     },
@@ -322,7 +326,10 @@ export function registerV16Tools(c: McpCtx): void {
         if (oldName === "memory_supersede_confirm") delete oldArgs.new_id;
         const parsed = old.schema ? old.schema.safeParse(oldArgs) : { success: true as const, data: oldArgs };
         if (!parsed.success) return errorResult(`invalid arguments for ${s.name}${single ? "" : ` (${action})`}: ${z.prettifyError(parsed.error)}`);
-        const out = await old.cb(parsed.data, extra);
+        // 1.6 (PLAN D): `evidence` is memory_save's own; the 1.5 state_write schema stays as it was (its wrapper drops
+        // arguments it does not list), so the value rides on the request context instead.
+        const ctx = oldName === "state_write" && rest.evidence !== undefined ? { ...(extra as object), monomemEvidence: rest.evidence } : extra;
+        const out = await old.cb(parsed.data, ctx);
         return v16Result(out, { compact: s.compact === true && want !== "full", query: typeof rest.query === "string" ? rest.query : undefined, oldName, newName: s.name });
       }
     );

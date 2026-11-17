@@ -67,6 +67,8 @@ test("facts: an echo does not make two writers agree", async () => {
   const { factsTable } = await import("../src/facts.js");
   const s = new Store(":memory:");
   try {
+    // Two established writers (notes from before 1.6), so writer probation (test/probation.test.ts) is not what decides here.
+    for (const w of ["claude-code", "codex"]) s.create({ title: "earlier", body: "before the upgrade" }, { writtenBy: w });
     const a = actorStore.run({ label: "claude-code", authed: true }, () => s.create({ title: "deploy", body: "x", tags: ["fact:deploy_target=fly.io"] }));
     const b = actorStore.run({ label: "codex", authed: true }, () => s.create({ title: "deploy", body: "y", tags: ["fact:deploy_target=fly.io"] }));
     assert.equal(factsTable([s.read(a.id)!, s.read(b.id)!]).default[0].agreed, true);

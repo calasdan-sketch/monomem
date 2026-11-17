@@ -1460,21 +1460,24 @@ async function taintCmd(args: string[]): Promise<void> {
 }
 
 async function configCmd(args: string[]): Promise<void> {
-  const usage = "Usage: monomem settings [get | set confirm-days <n> | set confirm-mode off|label|enforce | set passage_pooling on|off | known-hosts [add|remove <host>]]";
+  const usage = "Usage: monomem settings [get | set confirm-days <n> | set confirm-mode off|label|enforce | set passage_pooling on|off | set probation-notes|probation-hours <n> | set facts-need-evidence on|off | known-hosts [add|remove <host>]]";
   const [verb = "get", key, value, ...extra] = args;
-  if (extra.length || (verb !== "get" && verb !== "set") || (verb === "get" && key !== undefined) || (verb === "set" && (value === undefined || (key !== "confirm-days" && key !== "confirm-mode" && key !== "passage_pooling")))) {
+  const trustKeys = (await import("./cli/trust-settings.js")).TRUST_SETTING_KEYS;
+  if (extra.length || (verb !== "get" && verb !== "set") || (verb === "get" && key !== undefined) || (verb === "set" && (value === undefined || (key !== "confirm-days" && key !== "confirm-mode" && key !== "passage_pooling" && !trustKeys.includes(key))))) {
     console.error(usage);
     process.exit(1);
   }
   const { DB_PATH } = await import("./config.js");
   const { Store, ValidationError } = await import("./store.js");
   const store = new Store(DB_PATH);
+  const ts = await import("./cli/trust-settings.js");
   try {
     const show = (): void => {
       const c = store.confirmSettings();
       console.log(`confirm-mode: ${c.mode}${c.set_at ? ` (since ${c.set_at.slice(0, 16).replace("T", " ")})` : " (default)"}`);
       console.log(`confirm-days: ${c.days}`);
       console.log(pp.passagePoolingLine(store));
+      ts.showTrustSettings(store);
     };
     const pp = await import("./cli/passages.js");
     if (verb === "get") return show();
@@ -1489,7 +1492,8 @@ async function configCmd(args: string[]): Promise<void> {
     const before = store.confirmSettings();
     const RANK: Record<string, number> = { off: 0, label: 1, enforce: 2 };
     try {
-      if (key === "confirm-mode") {
+      if (trustKeys.includes(key)) await ts.setTrustSetting(store, key, value);
+      else if (key === "confirm-mode") {
         if (!(value in RANK)) throw new ValidationError("confirm-mode must be one of: off, label, enforce");
         if (RANK[value] < RANK[before.mode]) await requireOperator(`lower re-confirmation expiry from ${before.mode} to ${value}`);
         store.setConfirmSettings({ mode: value as "off" | "label" | "enforce" });

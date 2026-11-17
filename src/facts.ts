@@ -346,7 +346,8 @@ export function factsTable(notes: readonly NoteRecord[]): Record<string, FactRow
     for (const [sk, mine] of stated) {
       const [key, w] = sk.split("\u0000");
       // r2-innovation #1: a writer whose every note on this key is an echo of a note it was shown is not a second source.
-      if (!mine.every((m) => m.n.echo_of !== undefined)) (writersOfKey.get(key) ?? writersOfKey.set(key, new Set()).get(key)!).add(w);
+      // PLAN D: nor is a writer on probation (store/probation.ts).
+      if (!mine.every((m) => m.n.echo_of !== undefined || m.n.new_writer === true)) (writersOfKey.get(key) ?? writersOfKey.set(key, new Set()).get(key)!).add(w);
       mine.sort((a, b) => newestFirst(a.n, b.n));
       if (!mine.some((m) => m.norm !== mine[0].norm)) continue;
       keys.get(key)!.get(mine[0].norm)!.current = true;

@@ -4,7 +4,7 @@
 
 **Seven tools are shown by default:** `memory_save`, `memory_search`, `memory_read`, `memory_list`,
 `memory_archive`, `memory_replace` and `memory_catch_up`. Over a local (stdio) connection, which is what
-`monomem setup` connects, their schemas are 5,410 characters in `tools/list`: about 1,350 tokens, estimated at
+`monomem setup` connects, their schemas are 5,678 characters in `tools/list`: about 1,420 tokens, estimated at
 4 characters a token, not counted with a tokenizer. The nine default tools of 1.5 were 21,114 characters (about 5,280
 tokens). A client that loads every tool's schema up front pays this on each request, so the other tools are operator
 tooling you switch on yourself:
