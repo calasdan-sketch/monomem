@@ -578,7 +578,7 @@ export function authenticateEntry(
   const providedHash = sha256Hex(provided); // 1.5.0: a hashed entry (tokens.json) is compared on the hash, a plain one on the key
   for (const t of tokens) {
     const hit = t.token_sha256 !== undefined ? constantTimeEqual(providedHash, t.token_sha256.toLowerCase()) : constantTimeEqual(provided, t.token ?? "");
-    if (hit) found = t;
+    if (hit && !(t.expires_at !== undefined && !(Date.parse(t.expires_at) > Date.now()))) found = t; // an expired OAuth key is no key
   }
   return found;
 }

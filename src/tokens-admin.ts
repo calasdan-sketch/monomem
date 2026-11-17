@@ -56,7 +56,12 @@ function readRaw(): RawEntry[] {
  * dashboard doing the same, or one change is lost. A lock directory (like the audit-log rotation uses) serialises them.
  */
 function withLock<T>(fn: () => T): T {
-  const lock = tokensPath() + ".lock";
+  return withFileLock(tokensPath(), fn);
+}
+
+/** The same lock for another file in the data folder (oauth.json uses it; take oauth.json's lock before tokens.json's). */
+export function withFileLock<T>(file: string, fn: () => T): T {
+  const lock = file + ".lock";
   try {
     mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
   } catch (e) {
@@ -245,6 +250,38 @@ export function plainKeyCount(): number {
   } catch {
     return 0;
   }
+}
+
+/**
+ * OAuth (src/oauth): put the key of one grant into tokens.json, replacing the entry with the same label, or remove it
+ * (entry null). Only the key's hash is written. Returns false when `mustExist` is set and the entry is gone (the person
+ * removed the app with `monomem keys remove` or the dashboard), so a refresh cannot bring a removed app back.
+ */
+export function setOAuthKey(label: string, entry: { token_sha256: string; scope: "read" | "write"; expires_at: string } | null, mustExist = false): boolean {
+  return withLock(() => {
+    const entries = readRaw();
+    const i = entries.findIndex((e) => e?.label === label);
+    if (mustExist && i < 0) return false;
+    if (!entry) {
+      if (i < 0) return false;
+      writeRaw(entries.filter((_, j) => j !== i), { keepBackup: false });
+      return true;
+    }
+    const row: RawEntry = { token_sha256: entry.token_sha256, scope: entry.scope, label, max_sensitivity: DEFAULT_SENSITIVITY, reads_outside: true, expires_at: entry.expires_at, created_at: entries[i]?.created_at ?? new Date().toISOString() };
+    writeRaw(i < 0 ? [...entries, row] : entries.map((e, j) => (j === i ? row : e)));
+    return true;
+  });
+}
+
+/** Labels already used by any key (tokens.json, MONOMEM_TOKENS, the main key), lower case. */
+export function takenLabels(): Set<string> {
+  let file: RawEntry[] = [];
+  try {
+    file = readRaw();
+  } catch {
+    /* a broken file: resolveTokens reports it */
+  }
+  return new Set([...file.map((e) => String(e?.label ?? "").toLowerCase()), ...resolveTokens().map((t) => (t.label ?? "").toLowerCase()), "primary"]);
 }
 
 export function removeApp(label: string, by = "cli"): boolean {
