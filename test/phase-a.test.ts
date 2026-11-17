@@ -356,7 +356,7 @@ describe("A4: errors and CLI polish", () => {
     try {
       const short = String(s.run("help").stdout);
       assert.ok(short.split("\n").length < 70, "short help is one grouped page");
-      assert.match(short, /Get started[\s\S]*Daily[\s\S]*Trust[\s\S]*Maintenance/);
+      assert.match(short, /Get started[\s\S]*Notes[\s\S]*Review[\s\S]*Data and settings/);
       assert.match(short, /connect <app>[\s\S]*open /);
       assert.match(short, /monomem help --all/);
       assert.match(String(s.run("help", "--all").stdout), /rebuild-edges \[--threshold/);

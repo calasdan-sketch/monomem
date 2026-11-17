@@ -9,7 +9,7 @@ import { actorStore, setProcessWriter } from "./actor.js";
 import type { RestatedNote } from "./search-service.js";
 import { type Sensitivity, mayEmbed, DEFAULT_SENSITIVITY, SENSITIVITY_HELP, SENSITIVITY_LEVELS, parseSensitivity } from "./sensitivity.js";
 // monomem CLI: one command to run, check, or wire up the bridge.
-//   monomem [start]   start the API + dashboard AND MCP-over-HTTP (default)
+//   monomem start     start the API + dashboard AND MCP-over-HTTP (no command: help in a terminal, the dashboard otherwise)
 //   monomem mcp       start the MCP server over stdio (for Claude Code/Cursor/...)
 //   monomem doctor    check Node, database, and token
 //   monomem init      print the config snippet to wire it into your agent
@@ -23,6 +23,7 @@ const COMMANDS = [
   "encrypt", "meter", "receipts", "why", "never-show", "supersede", "history", "pin", "unpin", "rollback", "bench", "drill", "health", "audit", "verify-receipt",
   "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet", "confirm", "review", "taint", "config", "service", "stale", "project-rules", "update",
   "help", "--help", "-h", "--version", "-v", "version",
+  "check", "activity", "tidy", "keys", "settings", "replace",
 ];
 
 /** Plain edit distance; the command list is tiny, so the simple version is fine. */
@@ -73,57 +74,44 @@ function suggestCommand(cmd: string): string | undefined {
 function shortUsage(): void {
   console.log(
     [
-      "monomem <command>      (the most-used commands; 'monomem help --all' lists every one)",
+      "monomem <command>      ('monomem help --all' lists every command and option)",
       "",
       "Get started",
-      "  demo                    A short tour on a throwaway store (never touches your notes)",
       "  setup [--dry-run]       Connect Monomem to the AI apps on this computer (shows the changes, asks first)",
-      "  connect <app> [--restricted]   Connect one app (add --restricted to keep it away from private notes)",
-      "  open                    Open my notes in the browser (starts Monomem if needed)",
-      "  doctor                  Check Node, the database, the token and the setup",
-      "  import --claude         Bring in what Claude Code already remembers (add --dry-run to look first)",
-      "  start                   Run the dashboard, REST API and MCP-over-HTTP",
-      "  update [--check]        Get the newest version (the standalone download; npm installs print the npm command)",
-      "  mcp                     Run the MCP server over stdio (what your apps launch)",
+      "  connect <app>           Connect one app (add --restricted to keep it away from private notes)",
+      "  open                    Open my notes in the browser",
+      "  check [--verbose]       Is everything working? A grade A-F and only what needs a look (--setup: the install)",
+      "  demo                    A short tour on a throwaway store (never touches your notes)",
+      "  update [--check]        Get the newest version",
       "",
-      "Daily",
-      "  relevant \"message\"      Show the notes that relate to a sentence (search \"words\" does the same)",
-      "  search|relevant \"message\" --as-of 7d [--json]   The same, as memory stood then (ISO time or 7d/2h; no message lists notes)",
-      "  changes                 What changed while you were away",
-      "  history <id>            A note's earlier versions (history restore <id> <version> puts one back)",
-      "  add \"text\" [--title T] [--ns work] [--tag a,b] [--private]   Save a note (\"-\" reads the text from a pipe)",
-      "  show <id> | ls [--ns x] [--limit 20] [--archived] | edit <id> [-] | forget <id>   Look at, list, change or archive notes (forget can be undone with restore; ls --archived lists them)",
+      "Notes",
+      "  add \"text\" [--title T]  Save a note (\"-\" reads the text from a pipe)",
+      "  search \"words\"          Find notes (a whole sentence works too)",
+      "  show <id> | ls          Read one note, or list them",
+      "  edit <id>               Change a note",
+      "  archive <id>            Hide a note (restore <id> brings it back); delete <id> removes it for good",
+      "  replace --old <ids>     Replace out-of-date notes with a newer one (shows what changes, asks first)",
+      "  history <id>            A note's earlier versions",
       "  pin <id> | unpin <id>   Pin a note so agents can read it but not change it",
       "",
-      "Trust",
-      "  quarantine              Review writes that were held (by the linter or an approve-first namespace)",
-      "  confirm <id> [--source \"what you checked\"]   Confirm a note from outside content after checking it (asks you to type yes)",
-      "  review                  List notes waiting for a person: unconfirmed outside content and notes past re-confirmation",
-      "  stale --code            Notes about files that changed in git since they were written",
-      "  project-rules [--dry-run]   Copy notes a person confirmed or pinned into this repo's AGENTS.md block (asks first)",
-      "  config                  Show or change settings kept in the store (re-confirmation expiry)",
-      "  approve-first           Hold every agent write to a namespace until you approve it",
-      "  trust                   Distrust a writer; decide which other servers' exports to believe",
-      "  token                   Make, list or remove access tokens for your apps (add needs a terminal)",
-      "  rollback --writer w --since 2h   Undo what one writer did (shows a plan first)",
-      "  why <id> [--json]       The story of one note: who wrote it, versions, replacements, holds, sessions shown it",
-      "  receipts [session] [--json]   Which notes a session start showed, and why (ids and tags, never note text)",
-      "  conflicts               Notes from different writers that disagree (flag only)",
-      "  facts [--check]         The decisions agents recorded; --check exits 1 if writers disagree (for CI)",
-      "  access                  Who read memory, and when",
-      "  drill [--json]          Replay known memory-poisoning attacks on a copy of your store and your settings",
-      "  health [--json] [--card [file.svg]]   One grade A-F with the reason: setup, settings, drill, audit chain, held writes (rule: health --help)",
+      "Review",
+      "  review [held|duplicates|conflicts|code|facts]   What needs a person: held writes, duplicates, disagreements",
+      "  confirm <id>            Confirm a note from outside after checking it",
+      "  activity [--follow]     What changed, and who did it (--reads: who read memory)",
+      "  why <id>                The story of one note",
       "",
-      "Maintenance",
-      "  backup [--out <dir>]    Copy the database safely, even while the server runs (the server also makes one a day by itself)",
-      "  backup restore <folder> Put a backup back as your database (the current one is kept, so it can be undone)",
-      "  service install|status|uninstall [--print]   Keep the server running in the background after you sign in",
-      "  export | import         Move notes in and out (JSON or Markdown)",
-      "  quality                 Duplicates, stale notes and flagged notes worth a look",
-      "  delete <id>             Delete a note permanently, with its earlier versions",
+      "Data and settings",
+      "  backup | backup restore <folder>   Copy the database, or put a copy back",
+      "  export | import         Move notes in and out (import --claude brings in what Claude Code remembers)",
+      "  sync                    Use Monomem on your other computers",
+      "  keys                    App keys: make, list or remove them",
+      "  trust                   Distrust a writer; decide which signing keys to believe",
+      "  settings                Settings kept in the store",
+      "  tidy <job>              Maintenance: merge duplicates, rebuild links, scrub deleted text",
+      "  service install         Keep Monomem running in the background",
       "  uninstall               Take Monomem out of every app setup connected",
       "",
-      "Per-command options: 'monomem help --all'. Docs: https://github.com/calasdan-sketch/monomem",
+      "Docs: https://github.com/calasdan-sketch/monomem",
       "",
     ].join("\n")
   );
@@ -134,6 +122,33 @@ function usage(all = false): void {
   console.log(
     [
       "monomem <command>",
+      "",
+      "  check [--verbose] [--json] [--card [file.svg]]",
+      "            One grade A-F and only the lines that need a look (--verbose: every line, the grade rule and the limits).",
+      "            --setup: the install (Node, database, app key, connected apps). --attacks: replay known memory-poisoning",
+      "            attacks on a copy. --usage: what Monomem costs, as numbers. --report --out report.html: a one-page check-up.",
+      "  review [held | duplicates | conflicts | code | facts] [options of that part]",
+      "            No part: notes waiting for a person. held: writes held for you to approve or reject. duplicates: near-",
+      "            duplicates and other notes worth a look. conflicts: writers that disagree. code: notes about files that",
+      "            changed in git. facts: the recorded decisions (--check exits 1 if writers disagree).",
+      "  activity [--follow | --reads | --summary | --writes] [--since 24h]",
+      "            What changed while you were away. --follow: print changes as they happen. --reads: who read memory.",
+      "            --summary: in plain words. --writes: who changed what, from the change log.",
+      "  tidy merge | edges | reindex | decay | scrub",
+      "            Maintenance you rarely need: merge near-duplicates, rebuild the similar-notes links, add meaning-search",
+      "            vectors, archive old captured observations, remove the text of long-deleted notes from the file.",
+      "  keys [add --label <name> --scope read|write|admin | list | remove <name>]",
+      "            App keys: one per app, so you can see who wrote what and limit what each app sees.",
+      "  settings [get | set <name> <value>]",
+      "            Settings kept in the store (how often a note needs re-checking).",
+      "  replace --old <ids> (--title T --body B | --new-id N)  |  replace undo <id>",
+      "            Replace out-of-date notes with a newer one: shows what would change and asks first. Nothing is deleted.",
+      "",
+      "  Old names still work: doctor = check --setup, health = check, drill = check --attacks, meter = check --usage,",
+      "  safety-report = check --report, quarantine = review held, quality = review duplicates, conflicts = review conflicts,",
+      "  stale --code = review code, changes = activity, watch = activity --follow, access = activity --reads,",
+      "  digest = activity --summary, consolidate = tidy merge, rebuild-edges = tidy edges, decay / reindex / scrub = tidy <same>,",
+      "  token = keys, config = settings, supersede = replace, forget = archive, relevant = search. Their options follow.",
       "",
       "  start     Start the API + dashboard AND MCP-over-HTTP.",
       "            When: always-on. Local by default (127.0.0.1); to reach it from a phone or claude.ai,",
@@ -157,7 +172,8 @@ function usage(all = false): void {
       "            Open my notes in the browser with a one-time sign-in code (starts Monomem if needed).",
       "  service install|status|uninstall [--print]",
       "            Run the server in the background from sign-in: a Task Scheduler task (Windows), a LaunchAgent (macOS) or a",
-      "            systemd --user unit (Linux), each running this node with this cli.js; output in <data>/server.log.",
+      "            systemd --user unit (Linux), each running Monomem as installed (npm: node with cli.js; the download: its own",
+      "            runtime, or the single program); output in <data>/server.log.",
       "            --print shows the file and the commands and changes nothing. setup never installs one.",
       "  uninstall [--dry-run] [--yes] [--purge] [--no-backup]",
       "            Take Monomem out of every app setup connected (same as setup --undo, for every setup run).",
@@ -2382,6 +2398,21 @@ function helpFor(cmd: string): string | null {
 }
 
 async function main(): Promise<void> {
+  // 1.6 words (check, review <part>, activity, tidy, keys, settings, replace) become the command that does the work.
+  {
+    const { translateVerb, oldNameNote, TIDY_HELP } = await import("./cli/verbs.js");
+    const typed = process.argv.slice(2);
+    const t = typed.length ? translateVerb(typed) : null;
+    if (t?.[0] === "tidy") {
+      console.log(TIDY_HELP);
+      return;
+    }
+    if (t) process.argv = [...process.argv.slice(0, 2), ...t];
+    else if (typed[0] && process.stderr.isTTY && !typed.includes("--json")) {
+      const note = oldNameNote(typed[0], typed[1]);
+      if (note) console.error(note);
+    }
+  }
   // No command: a terminal gets the help; a launch with no terminal (Start menu, Explorer, Finder) opens the dashboard
   // (the Welcome screen hooks in there, in openCmd).
   const cmd = process.argv[2] || (await import("./install.js")).defaultCommand(!!process.stdin.isTTY, !!process.stdout.isTTY);
