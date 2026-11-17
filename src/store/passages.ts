@@ -219,7 +219,9 @@ export function passageHits(
         b = { note, score: -Infinity, parts: passagesOf(note.body) };
         best.set(id, b);
       }
-      const sc = Number(r.p_score) * weigh(b.parts[Number(r.p_rowid) % SLOT] ?? "");
+      // The passage is weighed with its note's title: a passage is read in its note's context, and a query word only the
+      // title holds must count (without it a flood of short look-alike notes outranked the real answer: drill E14).
+      const sc = Number(r.p_score) * weigh(`${b.note.title}\n${b.parts[Number(r.p_rowid) % SLOT] ?? ""}`);
       if (sc > b.score) b.score = sc;
     }
     return [...best.values()]

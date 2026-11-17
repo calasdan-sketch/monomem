@@ -549,6 +549,11 @@ not tuned; the 0.5 / 0.5 blend was set once. Soft-max pooling was not tried. Hal
 | LoCoMo-10 turn | 64.6 / 65.0 | **55.4 / 55.2** | 73.2 / 73.8 | 62.4 / 62.9 | 50.6 / 49.8 | 48.4 / 46.9 | 3.8 / 6.6 to 8.1 / 13.6 ms |
 | LoCoMo-10 session | 89.8 / 90.6 | **81.3 / 81.2** | 95.0 / 94.6 | 87.5 / 87.5 | 79.5 / 81.2 | 77.8 / 80.3 | 1.9 / 2.9 to 5.7 / 8.6 ms |
 
+Since 1.6.0's fix round, a passage is weighed together with its note's title (a query word only the title holds counts;
+without it a flood of short look-alike notes outranked the real answer, `monomem drill` E14). Half b re-run with it on,
+2026-11-17: LongMemEval-S unchanged (97.5 / **86.2** / 98.7 / 93.3 / 91.2 / 92.2), LoCoMo-10 by session unchanged, LoCoMo-10
+by turn 65.0 / **55.3** / 73.9 / 63.2 / 50.2 / 47.4 (R@5 / Rall@5 / R@10 / Rall@10 / nDCG@10 / MRR, on).
+
 Half a gained on every dataset; half b mostly did not, so most of the half-a gain did not carry over. Half b of
 LongMemEval-S has 239 questions, so 1.2 points is about 3 questions: small, but in the wrong direction on the headline
 strict number.
