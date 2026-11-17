@@ -5,10 +5,13 @@ import { requireOperator } from "../operator-gate.js";
 import { didYouMean } from "../suggest.js";
 import { parseFlags, str, terminalIO } from "./shared.js";
 import { selfCommand, selfFacts } from "../self.js";
+import { EXTRA_CLIENT_IDS } from "../setup/targets.js";
 
-const CONNECT_APPS = ["claude-code", "claude-desktop", "cursor", "codex", "gemini", "muse", "vscode", "zed", "windsurf"] as const;
+const CONNECT_APPS = ["claude-code", "claude-desktop", "cursor", "codex", "gemini", "muse", "vscode", "zed", ...EXTRA_CLIENT_IDS] as const;
+/** Apps whose config takes a key-based (HTTP) entry setup can write (setup.ts HTTP_CAPABLE); the rest get a paste-in block. */
+const HTTP_WRITABLE = ["claude-code", "cursor", "vscode"];
 
-const APP_ALIASES: Record<string, string> = { claude: "claude-code", "claudecode": "claude-code", desktop: "claude-desktop", "claude desktop": "claude-desktop", code: "vscode", "vs-code": "vscode", "visual-studio-code": "vscode", gemini_cli: "gemini", "codex-cli": "codex" };
+const APP_ALIASES: Record<string, string> = { claude: "claude-code", "claudecode": "claude-code", desktop: "claude-desktop", "claude desktop": "claude-desktop", code: "vscode", "vs-code": "vscode", "visual-studio-code": "vscode", gemini_cli: "gemini", "codex-cli": "codex", copilot: "copilot-cli", "github-copilot": "copilot-cli", "qwen-code": "qwen", "kilo-code": "kilo", kilocode: "kilo", "cline-cli": "cline" };
 
 // `monomem connect <app> [--max level] [--restricted] [--print]`: wire one app, optionally with its own key and limit.
 export async function connectCmd(cliPath: string): Promise<void> {
@@ -27,14 +30,6 @@ export async function connectCmd(cliPath: string): Promise<void> {
   const restricted = flags.restricted === true || str(flags.max) !== undefined;
   const t = await import("../tokens-admin.js");
   if (!restricted && flags.print !== true) {
-    if (app === "windsurf") {
-      console.log("Windsurf: I cannot check where its settings file lives, so I will not guess. Open Windsurf's MCP settings and add this server:\n");
-      const { buildServerEntry, realEnv } = await import("../setup.js");
-      const { PACKAGE_VERSION, DATA_DIR, DATA_DIR_SOURCE } = await import("../config.js");
-      const env = { MONOMEM_CLIENT: "windsurf", ...(DATA_DIR_SOURCE === "env" ? { MONOMEM_HOME: DATA_DIR } : {}) };
-      console.log(JSON.stringify({ mcpServers: { monomem: buildServerEntry(realEnv(PACKAGE_VERSION, cliPath), { command: "auto" }, env) } }, null, 2));
-      return;
-    }
     process.argv.splice(2, process.argv.length - 2, "setup", "--only", app, ...(flags["dry-run"] === true ? ["--dry-run"] : []), ...(flags.yes === true ? ["--yes"] : []), "--no-hook", "--no-capture", "--no-path", "--terse", "--no-test-note", "--no-embeddings");
     await setupCmd(cliPath);
     if (!process.exitCode && flags["dry-run"] === true) console.log(`\nDry run: run the same command without --dry-run to connect ${app}.`);
@@ -70,7 +65,7 @@ export async function connectCmd(cliPath: string): Promise<void> {
   void API_PORT;
   console.log(dry ? `[dry run] Would make a key for "${label}" and nothing has been created. ${t.describeAccess(made.app)}` : `Made a key for "${label}". ${t.describeAccess(made.app)}`);
   if (made.ceilingWasDefault) console.log("(Limit: internal, because you did not choose one. Change it with --max public|internal|private.)");
-  if (flags.print === true || app === "windsurf" || app === "claude-desktop" || app === "codex" || app === "gemini" || app === "muse" || app === "zed") {
+  if (flags.print === true || !HTTP_WRITABLE.includes(app)) {
     console.log(`\nI am not writing this app's settings file for you (${flags.print === true ? "you asked for --print" : "its format for key-based connections is not one I can check"}). Paste this into its MCP settings:\n`);
     console.log(t.connectionSnippet(made.token));
     console.log(`\nStart the server when you use it:  monomem start`);

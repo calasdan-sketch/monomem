@@ -1,4 +1,5 @@
-// `monomem setup`: connect Monomem to Claude Code, Claude Desktop, Cursor, Codex CLI, Gemini CLI, Muse, VS Code and Zed
+// `monomem setup`: connect Monomem to Claude Code, Claude Desktop, Cursor, Codex CLI, Gemini CLI, Muse, VS Code, Zed and the
+// apps in setup/targets.ts (Windsurf, Devin, Kiro, Cline CLI, Copilot CLI, Antigravity, Qwen Code, OpenCode, Kilo Code)
 // without hand-editing JSON (or TOML, for Codex).
 //
 // The promises, in the order a nervous person would ask for them:
@@ -25,6 +26,7 @@ import { EMBEDDINGS_OFFER_ENV, embeddingsOfferLine } from "./embeddings-offer.js
 import { privateDir } from "./private-dir.js";
 import { addToPath, installDir, pathPlan, removeFromPath, samePath, windowsUserPath, type PathEntry } from "./install.js";
 import { subagentMemoryOn } from "./prompt/switches.js";
+import { EXTRA_CLIENT_IDS, EXTRA_TARGETS, extraFound, extraTarget, shapeEntry, stdView } from "./setup/targets.js";
 import { SELF_CLI, quoteShellArg, selfCommand, selfFacts, selfShellLine, type SelfFacts, type SelfMode } from "./self.js";
 
 // ---- environment (injectable, so tests never touch a real configuration) ---------------------------------------------
@@ -123,7 +125,7 @@ export const DEFAULT_OPTIONS: SetupOptions = { dryRun: false, yes: false, undo: 
 const EMPTY_FILE_MSG = (file: string): string =>
   `${file} exists but is completely empty (0 bytes). A program may have been cut off while saving it, and replacing it could lose settings. Look for a backup next to it, or if you are sure it is empty run setup again with --force-empty.`;
 
-export const CLIENT_IDS = ["claude-code", "claude-desktop", "cursor", "codex", "gemini", "muse", "vscode", "zed", "project"] as const;
+export const CLIENT_IDS = ["claude-code", "claude-desktop", "cursor", "codex", "gemini", "muse", "vscode", "zed", ...EXTRA_CLIENT_IDS, "project"] as const;
 export type ClientId = (typeof CLIENT_IDS)[number];
 
 // ---- detection ---------------------------------------------------------------------------------------------------------
@@ -180,6 +182,7 @@ export function detectClients(e: SetupEnv): ClientTarget[] {
   add("muse", "Muse", join(xdgConfig(e), "muse", "settings.json"));
   add("vscode", "VS Code", join(e.platform === "win32" ? appData(e) : e.platform === "darwin" ? join(e.home, "Library", "Application Support") : xdgConfig(e), "Code", "User", "mcp.json"));
   add("zed", "Zed", e.platform === "win32" ? join(appData(e), "Zed", "settings.json") : join(xdgConfig(e), "zed", "settings.json"));
+  for (const t of EXTRA_TARGETS) out.push({ id: t.id, label: t.label, ...extraFound(e, t) });
   const proj = join(e.cwd, ".mcp.json");
   out.push({ id: "project", label: "This folder's .mcp.json", file: proj, exists: existsSync(proj), present: existsSync(proj) });
   return out;
@@ -244,7 +247,7 @@ export const NPX_LATENCY_NOTE = (version: string): string =>
   "    (b) keep npx and accept the delay on every prompt and read (the background hooks are not affected).\n" +
   "  I do not install anything for you.";
 
-const CLIENT_LABEL: Record<string, string> = { "claude-code": "Claude Code", "claude-desktop": "Claude Desktop", cursor: "Cursor", codex: "Codex", gemini: "Gemini CLI", muse: "Muse", vscode: "VS Code", zed: "Zed" };
+const CLIENT_LABEL: Record<string, string> = { "claude-code": "Claude Code", "claude-desktop": "Claude Desktop", cursor: "Cursor", codex: "Codex", gemini: "Gemini CLI", muse: "Muse", vscode: "VS Code", zed: "Zed", ...Object.fromEntries(EXTRA_TARGETS.map((t) => [t.id, t.label])) };
 
 /** "Claude Code and Cursor": the apps whose files setup is about to change (a running app can rewrite its own file). */
 export function closeList(ids: string[]): string {
@@ -407,7 +410,7 @@ function pickLegacyKeepers(
     groups.set(at(s), list);
   }
   for (const all of groups.values()) {
-    const where = all[0].s.path.length === 1 ? "" : ` (project ${all[0].s.path[1]})`;
+    const where = all[0].s.path[0] !== "projects" ? "" : ` (project ${all[0].s.path[1]})`;
     const mono = servers.find((x) => x.name === "monomem" && at(x) === at(all[0].s));
     const others = all.filter((x) => !x.bridgeDb);
     for (const x of all) {
@@ -589,7 +592,7 @@ interface FoundServer {
   end: number;
 }
 
-function findServers(text: string, includeProjects: boolean, key = "mcpServers"): FoundServer[] {
+function findServers(text: string, includeProjects: boolean, key: string | readonly string[] = "mcpServers"): FoundServer[] {
   const doc = parseDoc(text);
   const res: FoundServer[] = [];
   const add = (path: string[]): void => {
@@ -597,7 +600,7 @@ function findServers(text: string, includeProjects: boolean, key = "mcpServers")
     if (!node || node.kind !== "object") return;
     for (const m of node.members!) res.push({ path, name: m.key, start: m.value.start, end: m.value.end });
   };
-  add([key]);
+  add(typeof key === "string" ? [key] : [...key]);
   if (includeProjects) {
     const projects = getPath(doc, ["projects"]);
     if (projects && projects.kind === "object") for (const p of projects.members!) add(["projects", p.key, "mcpServers"]);
@@ -610,7 +613,9 @@ function findServers(text: string, includeProjects: boolean, key = "mcpServers")
  * "mcp_servers" (Meta's docs) but "mcpServers" is also seen and accepted as a legacy spelling, so an existing
  * "mcpServers" is kept rather than adding a second block.
  */
-function serversKey(id: ClientId, text: string): string {
+function serversKey(id: ClientId, text: string): string | readonly string[] {
+  const extra = extraTarget(id);
+  if (extra) return extra.key;
   if (id === "vscode") return "servers";
   if (id === "zed") return "context_servers";
   if (id === "muse") return text.trim() && !getPath(parseDoc(text), ["mcp_servers"]) && getPath(parseDoc(text), ["mcpServers"]) ? "mcpServers" : "mcp_servers";
@@ -740,10 +745,11 @@ export function appEntryProblems(e: SetupEnv): string[] {
       continue;
     }
     for (const s of servers) {
-      const entry = safeParseEntry(text, s);
+      const raw = safeParseEntry(text, s);
+      const entry = raw && stdView(raw);
       if (!entry || classifyEntry(s.name, entry) !== "monomem") continue;
       const r = entryProblem(entry, e.version, existsSync, e);
-      if (r) out.push(`${c.label}: "${s.name}"${s.path.length === 1 ? "" : ` (project ${s.path[1]})`} ${r}`);
+      if (r) out.push(`${c.label}: "${s.name}"${s.path[0] !== "projects" ? "" : ` (project ${s.path[1]})`} ${r}`);
     }
   }
   for (const h of hookHosts(e)) {
@@ -910,7 +916,7 @@ export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, 
   const inverse: Op[] = [];
   const withType = target.id === "claude-code" || target.id === "project" || target.id === "vscode";
   const servers = base.trim() === "" ? [] : findServers(base, target.id === "claude-code", key);
-  const top = servers.filter((s) => s.path.length === 1);
+  const top = servers.filter((s) => s.path[0] !== "projects");
   const hasOneTop = top.some((s) => classifyEntry(s.name, safeParseEntry(base, s) ?? {}) === "monomem");
   let migrated = 0;
   let labelled = 0;
@@ -931,7 +937,7 @@ export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, 
       continue;
     }
     const kind = classifyEntry(s.name, entry);
-    const where = s.path.length === 1 ? "" : ` (project ${s.path[1]})`;
+    const where = s.path[0] !== "projects" ? "" : ` (project ${s.path[1]})`;
     if (replacedMono.has(s)) continue; // an empty "monomem" that an old entry with notes replaces (below)
     if (kind === "monomem" && opts.httpEntry) {
       // Monomem's OWN entry (the one setup wrote, with no key) is replaced by the limited one. The change is shown, the file
@@ -949,6 +955,22 @@ export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, 
       inverse.unshift({ op: "set", path: s.path, key: s.name, value: entry });
       lines.push(`replace Monomem's own "${s.name}" entry${where}: it connected this app to ALL your notes with no key and no limit; the new entry uses its own key and limit`);
       replaced++;
+      continue;
+    }
+    const shaped = extraTarget(target.id);
+    if (kind === "monomem" && shaped && shaped.shape !== "std" && shaped.shape !== "copilot") {
+      // OpenCode / Kilo write the command as one array: read it back as command + args, rewrite only a stale entry.
+      const std = stdView(entry);
+      const problem = typeof std.command === "string" && std.command ? entryProblem(std, e.version, existsSync, e) : null;
+      if (!problem) {
+        already.push(`${target.label}: "${s.name}" is already set up`);
+        continue;
+      }
+      const env = std.env && typeof std.env === "object" ? (std.env as Record<string, string>) : {};
+      ops.push({ op: "set", path: s.path, key: s.name, value: { ...entry, ...shapeEntry(shaped.shape, buildServerEntry(e, opts, env)) } });
+      inverse.unshift({ op: "set", path: s.path, key: s.name, value: entry });
+      lines.push(`rewrite "${s.name}": it ${problem}`);
+      labelled++;
       continue;
     }
     if (kind === "monomem") {
@@ -1072,8 +1094,10 @@ export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, 
       ops.push({ op: "set", path: [], key: "schema_version", value: 1 });
       inverse.unshift({ op: "remove", path: [], key: "schema_version" });
     }
-    ops.push({ op: "set", path: [key], key: "monomem", value: entry });
-    inverse.unshift({ op: "remove", path: [key], key: "monomem" });
+    const extra = extraTarget(target.id);
+    const at = typeof key === "string" ? [key] : [...key];
+    ops.push({ op: "set", path: at, key: "monomem", value: extra ? shapeEntry(extra.shape, entry) : entry });
+    inverse.unshift({ op: "remove", path: at, key: "monomem" });
     lines.push(`add the "monomem" memory server${opts.db ? ` (database ${opts.db})` : ""}`);
     if (opts.db) shared.dbs.add(opts.db);
   }
@@ -1933,7 +1957,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   if (plan.changes.length === 0 && plan.conflicts.length === 0 && !extra) {
     if (plan.already.length === 0) {
         io.out("I found no app to connect on this computer (none of the supported apps is installed), so nothing was changed. That is fine. What to do next:");
-        io.out("  1. If you use one of these, name it and I will create its settings file:  monomem connect claude-code   (also: claude-desktop, cursor, codex, gemini, muse, vscode, zed)");
+        io.out(`  1. If you use one of these, name it and I will create its settings file:  monomem connect claude-code   (also: ${CLIENT_IDS.filter((i) => i !== "project" && i !== "claude-code").join(", ")})`);
         io.out("  2. Or connect an app by hand: it needs the command  monomem mcp  (see INSTALL.md), or for a web connection run  monomem keys add <app-name>  and paste what it prints.");
         io.out("  3. Not sure? Run  monomem check --setup  to see what Monomem can find.");
       }

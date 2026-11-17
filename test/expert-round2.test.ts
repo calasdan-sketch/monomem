@@ -129,11 +129,11 @@ describe("2. setup and MONOMEM_HOME", () => {
     assert.equal(r.dir, join(homedir(), "x"));
   });
 
-  test("connect windsurf prints a real entry with MONOMEM_CLIENT=windsurf and the data folder", () => {
+  test("connect windsurf writes a real entry with MONOMEM_CLIENT=windsurf and the data folder (its documented file)", () => {
     const home = tmp("om-r2-ws-");
-    const r = cli(home, ["connect", "windsurf"]);
+    const r = cli(home, ["connect", "windsurf", "--yes"], { HOME: home, USERPROFILE: home, APPDATA: join(home, "AppData") });
     assert.equal(r.status, 0, r.stderr);
-    const json = JSON.parse(r.stdout.slice(r.stdout.indexOf("{")));
+    const json = JSON.parse(readFileSync(join(home, ".codeium", "windsurf", "mcp_config.json"), "utf8"));
     assert.equal(json.mcpServers.monomem.env.MONOMEM_CLIENT, "windsurf");
     assert.equal(json.mcpServers.monomem.env.MONOMEM_HOME, resolve(home));
     assert.notEqual(json.mcpServers.monomem.command, "monomem");
