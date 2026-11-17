@@ -15,6 +15,11 @@ on (titles and tags are not: see the caveat under Security). There is no new tab
 default tools. The 1.5 names (formerly `task_put`, `task_get`, `task_list`, `task_claim`, `task_approve`,
 `runner_status`, `session_handoff`, `catch_up`, `memory_since`) still answer for one release.
 
+**From a terminal.** `monomem tasks` lists the open tasks, overdue first, one line each (`--all` adds done ones,
+`--status`, `--owner`, `--ns`, `--json`). `monomem tasks show <id>` prints one in full, `monomem tasks done <id>` marks
+it done, `monomem tasks handoff` prints the latest handoff, and `monomem tasks handoff "what I finished" --next "what
+comes next" --pending "a;b"` writes one (written by `cli`). They use the same checks as the tools above.
+
 ## 1. Tasks
 
 A task is a note tagged `task`. Fields:
