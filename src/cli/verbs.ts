@@ -1,7 +1,9 @@
 // 1.6 command names. Five words replace about twenty commands (check, review <part>, activity, tidy <job>, keys,
 // settings, replace); each turns into the command that does the work, so there is one implementation. Every old name
-// still works. Typed at a terminal it also prints one line naming the new form on stderr; piped or redirected output
+// still works. Typed at a terminal it also prints one line naming the new form on stderr (once per name per session); piped or redirected output
 // is unchanged, so no script breaks.
+
+import { readFileSync, writeFileSync } from "node:fs";
 
 /** Old command -> the 1.6 way to say it. */
 export const OLD_COMMANDS: Readonly<Record<string, string>> = {
@@ -92,4 +94,32 @@ export function oldNameNote(cmd: string, sub?: string): string | null {
   if (!Object.hasOwn(OLD_COMMANDS, cmd)) return null;
   if (cmd === "stale" && sub !== "--code") return null;
   return `(monomem ${cmd} is now: monomem ${OLD_COMMANDS[cmd]}. The old name still works.)`;
+}
+
+/** How long one old-name line keeps quiet: about a working session. */
+const OLD_NAME_QUIET_MS = 12 * 3600_000;
+
+/**
+ * oldNameNote, once per old name per session: `seenFile` remembers when each name last printed its line. A missing or
+ * broken file, or one that cannot be written, prints the line (never hides it for good).
+ */
+// ponytail: a 12-hour window stands in for "session" (a terminal has no id that survives the npm .cmd shim's new parent).
+export function oldNameNoteOnce(cmd: string, sub: string | undefined, seenFile: string, now: number = Date.now()): string | null {
+  const note = oldNameNote(cmd, sub);
+  if (!note) return null;
+  let seen: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(seenFile, "utf8"));
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) seen = parsed as Record<string, unknown>;
+  } catch {
+    /* no file yet, or unreadable: print */
+  }
+  const last = seen[cmd];
+  if (typeof last === "number" && now >= last && now - last < OLD_NAME_QUIET_MS) return null;
+  try {
+    writeFileSync(seenFile, JSON.stringify({ ...seen, [cmd]: now }));
+  } catch {
+    /* data folder missing or read-only: the line just prints again next time */
+  }
+  return note;
 }

@@ -18,6 +18,12 @@ import { toolProfile, newName, NEW_TOOLS, type ToolProfile } from "./tool-names.
 import { SERVER_INSTRUCTIONS } from "./instructions.js";
 import { withComputer } from "../sync/marks.js";
 
+/**
+ * The 1.5 names each agent was already told the new name of. Keyed by the read-taint set: one per stdio process, one
+ * per token writer over HTTP (mcp-http.ts makes a new server per request but keeps that set per writer).
+ */
+const renameHintsShown = new WeakMap<ReadTaint, Set<string>>();
+
 export function mcpContext(store: Store, scope: Scope, opts: ServerNamespaceOpts, conn: ConnectionCtx) {
   const server = new McpServer({ name: "monomem", version: PACKAGE_VERSION }, { instructions: SERVER_INSTRUCTIONS });
 
@@ -69,7 +75,22 @@ export function mcpContext(store: Store, scope: Scope, opts: ServerNamespaceOpts
     oldTools.set(name as string, { schema: (looseCfg as { inputSchema?: z.ZodType }).inputSchema, cb });
     // A 1.6 tool with the same name (memory_history) answers for it, except under legacy-1.5. memory_rollback is both.
     if (!profile.legacy && newNames.has(name as string) && name !== "memory_rollback") return undefined;
-    return registerRaw(name, looseCfg, cb);
+    const renamed = newName(name as string);
+    if (profile.legacy || renamed === name) return registerRaw(name, looseCfg, cb);
+    // A 1.5 name called directly: its reply is unchanged, plus (once per agent) a line naming the 1.6 tool.
+    const line = `(${name as string} is now ${renamed}. The old name still works.)`;
+    const seen = renameHintsShown.get(taintedReads) ?? new Set<string>();
+    renameHintsShown.set(taintedReads, seen);
+    const withHint = (r: unknown): unknown => {
+      const res = r as { content?: unknown[] } | null;
+      if (seen.has(name as string) || !res || !Array.isArray(res.content)) return r;
+      seen.add(name as string);
+      return { ...res, content: [...res.content, { type: "text", text: line }] };
+    };
+    return registerRaw(name, looseCfg, (...a: unknown[]) => {
+      const out = cb(...a);
+      return out instanceof Promise ? out.then(withHint) : withHint(out);
+    });
   };
 
   const runTool = (name: string, handler: unknown, args: unknown[]): unknown => {

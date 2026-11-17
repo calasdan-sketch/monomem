@@ -6,7 +6,9 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { PROJECT_ROOT } from "../src/config.js";
-import { translateVerb, oldNameNote, OLD_COMMANDS } from "../src/cli/verbs.js";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { translateVerb, oldNameNote, oldNameNoteOnce, OLD_COMMANDS } from "../src/cli/verbs.js";
 
 const CLI = join(PROJECT_ROOT, "dist", "src", "cli.js");
 const run = (args: string[]) => spawnSync(process.execPath, [CLI, ...args], { encoding: "utf8", env: { ...process.env, NO_COLOR: "1" } });
@@ -42,6 +44,24 @@ describe("translateVerb", () => {
     assert.match(oldNameNote("quarantine")!, /monomem review held/);
     assert.match(oldNameNote("stale", "--code")!, /review code/);
     for (const c of ["check", "review", "add", "history", "archive"]) assert.equal(oldNameNote(c), null, c);
+  });
+
+  test("the pointer prints once per old name per session (12 hours), not on every run", () => {
+    const dir = mkdtempSync(join(tmpdir(), "verbs-seen-"));
+    try {
+      const f = join(dir, "old-names-seen.json");
+      const t0 = Date.UTC(2026, 10, 16, 9);
+      assert.match(oldNameNoteOnce("doctor", undefined, f, t0)!, /monomem check --setup/);
+      assert.equal(oldNameNoteOnce("doctor", undefined, f, t0 + 60_000), null, "same session: quiet");
+      assert.match(oldNameNoteOnce("health", undefined, f, t0 + 60_000)!, /monomem check/, "another old name still gets its line");
+      assert.match(oldNameNoteOnce("doctor", undefined, f, t0 + 13 * 3600_000)!, /check --setup/, "a later session: once more");
+      assert.equal(oldNameNoteOnce("add", undefined, f, t0), null, "not renamed: nothing, nothing stored");
+      writeFileSync(f, "not json");
+      assert.match(oldNameNoteOnce("doctor", undefined, f, t0)!, /check --setup/, "a broken marker file never hides the line for good");
+      assert.match(oldNameNoteOnce("doctor", undefined, join(dir, "no", "such", "dir.json"), t0)!, /check --setup/, "unwritable: still prints");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

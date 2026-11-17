@@ -111,6 +111,29 @@ describe("1.5 names still answer, with the 1.5 result shape", () => {
     }
   });
 
+  test("a 1.5 name says its new name once per connection, after the unchanged 1.5 reply; legacy-1.5 never does", async () => {
+    const store = new Store(":memory:");
+    const texts = (r: unknown): string[] => (r as { content: Array<{ text: string }> }).content.map((c) => c.text);
+    const hint = /\(state_write is now memory_save\. The old name still works\.\)/;
+    const client = await connect(store, undefined);
+    const legacy = await connect(store, "legacy-1.5");
+    try {
+      const first = await client.callTool({ name: "state_write", arguments: { title: "A", body: "alpha one" } });
+      assert.ok("note" in payload(first), "content[0] is still the 1.5 reply");
+      assert.equal(texts(first).filter((t) => hint.test(t)).length, 1, texts(first).join("\n"));
+      const again = await client.callTool({ name: "state_write", arguments: { title: "B", body: "beta two" } });
+      assert.ok(!texts(again).some((t) => hint.test(t)), "only the first call carries the line");
+      const saved = await client.callTool({ name: "memory_save", arguments: { title: "C", body: "gamma three" } });
+      assert.ok(!texts(saved).some((t) => /is now memory_/.test(t)), "a 1.6 name never gets the line");
+      const old = await legacy.callTool({ name: "state_write", arguments: { title: "D", body: "delta four" } });
+      assert.ok(!texts(old).some((t) => /is now memory_/.test(t)), "legacy-1.5 asked for the old names");
+    } finally {
+      await client.close();
+      await legacy.close();
+      store.close();
+    }
+  });
+
   test("an operator tool's 1.5 name stays off when its 1.6 tool is off", async () => {
     const store = new Store(":memory:");
     const client = await connect(store, undefined);
