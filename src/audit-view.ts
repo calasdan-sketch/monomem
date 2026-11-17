@@ -71,9 +71,17 @@ const OP_WORDS: Record<string, string> = {
 };
 const opWord = (op: string): string => OP_WORDS[op] ?? op.replace(/[._-]+/g, " ");
 
+/** Who, in plain words: a keyless local app by its name (stdio:claude-code), else the key's label, else the person. */
+function byWho(label: string | undefined): string {
+  if (!label) return "by you (command line) or the server";
+  if (label === "stdio") return "by an app with no key (local)";
+  if (label.startsWith("stdio:")) return `by ${printable(label.slice(6), 40)} (local app, no key)`;
+  return `by ${printable(label, 80)}`;
+}
+
 export function renderAudit(entries: AuditEntry[]): string {
   if (!entries.length) return "No matching entries.";
   return entries
-    .map((e) => `${e.ts.slice(0, 19).replace("T", " ")}  ${opWord(e.op).padEnd(22)} ${e.label ? `by ${printable(e.label, 80)}` : "by you (command line) or the server"}${e.namespace ? `  [${printable(e.namespace, 100)}]` : ""}${e.id !== undefined ? `  #${e.id}` : ""}${e.kind === "read" || e.kind === "search" ? `  ${e.bytes ?? 0} result(s)` : ""}`)
+    .map((e) => `${e.ts.slice(0, 19).replace("T", " ")}  ${opWord(e.op).padEnd(22)} ${byWho(e.label)}${e.namespace ? `  [${printable(e.namespace, 100)}]` : ""}${e.id !== undefined ? `  #${e.id}` : ""}${e.kind === "read" || e.kind === "search" ? `  ${e.bytes ?? 0} result(s)` : ""}`)
     .join("\n");
 }

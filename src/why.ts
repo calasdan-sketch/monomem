@@ -221,10 +221,13 @@ export async function whyCmd(args: string[]): Promise<void> {
 
 /** PLAN I: `why <id> --commits`: commits made in sessions that were shown or wrote the note (git-trail.ts). */
 async function commitsOf(store: Store, id: number, title: string, json: boolean): Promise<void> {
-  const { commitsUsing } = await import("./git-trail.js");
-  const hits = await commitsUsing(store.captureDb(), id);
-  if (json) return console.log(JSON.stringify({ id, commits: hits }, null, 2));
+  const { commitsUsing, GIT_NO_ANSWER } = await import("./git-trail.js");
+  const noAnswer: string[] = [];
+  const hits = await commitsUsing(store.captureDb(), id, new Date(), noAnswer);
+  const silent = [...new Set(noAnswer)];
+  if (json) return console.log(JSON.stringify({ id, commits: hits, ...(silent.length ? { git_did_not_answer: silent } : {}) }, null, 2));
   console.log(`#${id} "${printable(title)}": ${plural(hits.length, "commit")} made in sessions that used it`);
+  if (silent.length) console.log(`  ${GIT_NO_ANSWER} in ${silent.map((f) => printable(f, 80)).join(", ")}: commits made there are not counted (not "no commits"). Try again later.`);
   for (const h of hits) console.log(`  ${h.commit.hash.slice(0, 10)}  ${localTime(h.commit.at)}  ${printable(h.commit.subject, 70)}  (session ${printable(h.session, 40)}: ${h.how.join(", ")})`);
-  console.log("Found from session receipts (kept MONOMEM_ACCESS_LOG_DAYS) and git log in each session's folder: commits by this machine's git identity made while the session ran. A commit with a Monomem-Notes line counts only if the line names the note.");
+  console.log(`Found from session receipts (kept ${accessLogDays()} days, like the access log) and git log in each session's folder: commits by this machine's git identity made while the session ran. A commit with a Monomem-Notes line counts only if the line names the note.`);
 }

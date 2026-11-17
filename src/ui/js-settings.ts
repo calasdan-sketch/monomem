@@ -13,7 +13,7 @@ function autoSwitches(s){
   s = s || {};
   return onOffSwitch("sw_backups", "Back up my notes every day", "A copy of your notes in your Monomem folder each day. Your encryption key is never copied.", s.daily_backups !== "off", "setSetting(&quot;daily_backups&quot;,this.checked)")+
     onOffSwitch("sw_recall", "Add matching notes to each prompt", "At each prompt, up to 3 notes that match it are added for your app. Off by default.", s.prompt_recall === "on", "setSetting(&quot;prompt_recall&quot;,this.checked)")+
-    onOffSwitch("sw_claude", "Bring in Claude Code's memory as it changes", "While Monomem runs, files Claude Code changed are copied in every 10 minutes, held until you confirm them. Off by default.", s.claude_refresh === "on", "setSetting(&quot;claude_refresh&quot;,this.checked)")+
+    onOffSwitch("sw_claude", "Bring in Claude Code's memory as it changes", "While Monomem runs, files Claude Code changed are copied in every 10 minutes, unconfirmed (from outside) until you confirm them. Off by default.", s.claude_refresh === "on", "setSetting(&quot;claude_refresh&quot;,this.checked)")+
     "<div class='switch'><span><span>Start Monomem with my computer</span><span class='help' style='display:block'>Keeps this page and backups available. Your apps start Monomem themselves either way.</span></span>"+
     "<span class='row'><button onclick='setService(true)'>Turn on</button><button class='plain' onclick='setService(false)'>Turn off</button></span></div>";
 }
@@ -199,7 +199,7 @@ function showWelcome(n){
     w.innerHTML = wcard(0, "Welcome to Monomem", "<p>Monomem gives your AI apps one shared memory. Connect the apps you use:</p><div id='wl_apps'><p class='muted'>Looking for apps...</p></div>"+
       "<p class='help'>Monomem adds one entry to each app's settings and keeps a copy of every file it changes. Changed your mind? Settings, then Undo the last connect, puts it back.</p>"+
       "<p style='margin-top:16px'><b>Bring in memories</b> from other tools on this computer (optional):</p><div id='wl_mem'><p class='muted'>Looking...</p></div>"+
-      "<p class='help'>Each note comes in held: your apps do not get it at session start until you confirm it. A Notion export or a mem0 file: <code>monomem import --from notion --path &lt;export.zip&gt;</code> (or <code>--from mem0</code>).</p>",
+      "<p class='help'>Each note comes in unconfirmed (from outside): your apps do not get it at session start until you confirm it (the Review tab, or <code>monomem confirm &lt;id&gt;</code>). A Notion export or a mem0 file: <code>monomem import --from notion --path &lt;export.zip&gt;</code> (or <code>--from mem0</code>).</p>",
       "<button class='plain' onclick='finishWelcome()'>Skip</button><button class='primary' onclick='showWelcome(1)'>Next</button>");
     loadApps2("wl_apps", true);
     loadMemSources();
@@ -230,7 +230,7 @@ function loadMemSources(){
   }).catch(function(e){ var box = $("wl_mem"); if(box){ box.innerHTML = "<p class='muted'>" + (localMissing(e) ? "To look for them, open Monomem from " + whereEntry() + ", or run monomem open on this computer." : esc(e.message)) + "</p>"; } });
 }
 function bringIn(id, label){
-  ask("Copy " + label + " into Monomem? Nothing leaves this computer. Anything that looks like a secret is skipped, and every note is held until you confirm it (the Review tab).", "Bring in", function(){
+  ask("Copy " + label + " into Monomem? Nothing leaves this computer. Anything that looks like a secret is skipped, and every note stays unconfirmed (from outside) until you confirm it (the Review tab).", "Bring in", function(){
     toast("Bringing in...");
     api("/ui/import", { method:"POST", body: JSON.stringify({ id: id }) }).then(function(r){ showOut("wl_out", r); toast(r.ok ? "Done. The notes wait in Review." : "That did not finish; see the details."); loadMemSources(); loadNeeds(); })
       .catch(function(e){ say(e.message, true); });

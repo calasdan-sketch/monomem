@@ -7665,7 +7665,7 @@ export class Store {
     if (this.dbPath === ":memory:" && !process.env.MONOMEM_AUDIT_LOG) return;
     if (receipt) this.ensureAuditKey();
     // Name the key that made the change (a label, never the key itself) so `monomem audit` can say who did what.
-    const who = actorStore.getStore()?.label;
+    const who = actorStore.getStore()?.label || (currentWriter().startsWith("stdio") ? currentWriter() : undefined); // a keyless local app: its stdio:<app> name
     const e = entry.label === undefined && who ? { ...entry, label: who } : entry;
     // Inside a transaction the write may still be rolled back: the line is written only once it commits (commitTx).
     if (this.db.isTransaction) return void this.pendingAudit.push([e, receipt]);

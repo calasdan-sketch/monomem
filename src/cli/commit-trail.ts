@@ -10,7 +10,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
-import { TRAILER_KEY, commitsBetween, gitRun, sessionNotes, trailerValue, type SessionRow } from "../git-trail.js";
+import { GIT_NO_ANSWER, TRAILER_KEY, commitsBetween, gitRun, sessionNotes, trailerValue, type SessionRow } from "../git-trail.js";
 import { quoteShellArg, selfCommand, type SelfFacts } from "../self.js";
 import { printable } from "../security.js";
 import { errorLine, terminalIO } from "./shared.js";
@@ -124,8 +124,8 @@ async function listCmd(json: boolean): Promise<void> {
     if (!out.length) return console.log("No sessions with a folder yet: they are recorded by the automatic memory hooks (monomem setup --capture).");
     for (const r of out) {
       console.log(`session ${printable(r.session_id, 40)}  ${r.started_at.slice(0, 16).replace("T", " ")} UTC  ${printable(r.cwd, 80)}`);
-      console.log(`  notes shown ${r.shown.length}, written ${r.written.length}; ${r.commits.length} commit${r.commits.length === 1 ? "" : "s"} while it ran`);
-      for (const c of r.commits.slice(0, 5)) console.log(`  ${c.hash.slice(0, 10)}  ${printable(c.subject, 70)}${c.listed ? `  (${TRAILER_KEY}: ${c.listed.map((n) => "#" + n).join(" ")})` : ""}`);
+      console.log(`  notes shown ${r.shown.length}, written ${r.written.length}; ${r.commits === null ? `${GIT_NO_ANSWER}, so its commits are not known` : `${r.commits.length} commit${r.commits.length === 1 ? "" : "s"} while it ran`}`);
+      for (const c of (r.commits ?? []).slice(0, 5)) console.log(`  ${c.hash.slice(0, 10)}  ${printable(c.subject, 70)}${c.listed ? `  (${TRAILER_KEY}: ${c.listed.map((n) => "#" + n).join(" ")})` : ""}`);
     }
     console.log("Commits are those made in the session's repository between its start and end, by this machine's git identity.");
   } finally {

@@ -73,8 +73,8 @@ export interface Touched {
 }
 
 export const TOUCHED_NOT_RECORDED =
-  "Not recorded: reads older than the access-log retention, reads while the access log was off (MONOMEM_ACCESS_LOG_DAYS=0), " +
-  "what an app did with a note outside Monomem, and links an app did not declare with derived_from. " +
+  "Not recorded: reads older than the access-log retention, reads while the access log was switched off, " +
+  "what an app did with a note outside Monomem, and notes an app built on it without saying so when it saved them. " +
   "\"likely\" means the same writer wrote after reading; it is not proof that it used this note.";
 
 export interface TouchedOpts {
@@ -201,7 +201,7 @@ export function noteTouched(store: Store, root: NoteRecord, opts: TouchedOpts): 
       by: l.added_by,
       at: l.added_at,
       change: n.created_by === l.added_by && n.created_at <= l.added_at ? "created" : "changed",
-      why: l.depth === 1 ? `saved with derived_from #${root.id}` : `saved with derived_from #${l.parent}, which is built on #${root.id}`,
+      why: l.depth === 1 ? `saved as built on #${root.id}` : `saved as built on #${l.parent}, which is built on #${root.id}`,
     }));
   }
   const windows = windowsOf(reads, hours);
@@ -273,7 +273,7 @@ export function touchedText(t: Touched): string {
   const line = (n: { id: number; namespace: string; title: string }): string => `note #${n.id} [${p(n.namespace, 40)}] "${p(n.title)}"`;
   const proven = t.built_on.filter((n) => n.basis === "proven");
   const likely = t.built_on.filter((n) => n.basis === "likely");
-  if (proven.length) out.push("Built on it (proven: saved with derived_from):", ...proven.map((n) => `  - ${line(n)}${n.task ? " (task)" : ""}: ${p(n.why, 120)}`));
+  if (proven.length) out.push("Built on it (proven: the app said so when it saved them):", ...proven.map((n) => `  - ${line(n)}${n.task ? " (task)" : ""}: ${p(n.why, 120)}`));
   if (likely.length) out.push(`Written after reading it (likely: same writer, within ${t.window_hours}h; check by hand):`, ...likely.map((n) => `  - ${line(n)}${n.task ? " (task)" : ""}: ${p(n.why, 120)}`));
   if (t.claimed_tasks.length) out.push("Tasks claimed after reading it (likely):", ...t.claimed_tasks.map((c) => `  - ${line(c)}: ${p(c.why, 120)}`));
   if (t.replaced.length) out.push("Notes it replaced (proven: replacement log):", ...t.replaced.map((r) => `  - ${line(r)}, replaced by ${p(r.by || "unknown", 60)}`));

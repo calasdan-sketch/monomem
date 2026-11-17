@@ -202,7 +202,7 @@ export function registerSupersedeTools(c: McpCtx): void {
         "Admin only, operator tool. Without code: a preview of undoing everything one writer did since a time (notes it created are archived, " +
         "notes whose text it changed get their earlier text back) plus a one-time code; nothing changes. With code: applies exactly that preview, " +
         "all or nothing. Notes another writer changed later are skipped unless include_conflicts. Pinned notes and approve-first namespaces " +
-        "are skipped here (the monomem CLI does those). With note instead: undo that note and what was built on it (memory_why touched lists it). " +
+        "are skipped here (the monomem CLI does those). With note instead: undo that note and what was built on it (memory_usage why with touched lists it). " +
         "Show the preview to the person and ask before confirming.",
       inputSchema: {
         writer: z.string().optional().describe('The exact writer name (written_by), e.g. "token:ci" or "stdio:cursor"; "stdio" means every local app.'),

@@ -1006,7 +1006,7 @@ export const PASSAGE_POOL = 50;
 export const PASSAGE_WHOLE_WEIGHT = 0.5;
 
 /**
- * Keyword hits, with passage pooling when it is switched on (`monomem settings set passage_pooling on`; store/passages.ts).
+ * Keyword hits, with passage pooling when it is switched on (`monomem settings set passage-pooling on`; store/passages.ts).
  * A note's passage score is its best passage (max pooling): passage bm25 x the rarity-weighted share of the query's
  * keywords that passage holds (the any-keyword search's weighting, on the passage). The whole-note ranking
  * (keywordWithFallback) and the passage ranking are min-max scaled and blended 0.5 / 0.5 (blendHybrid). Tried on half a

@@ -39,7 +39,7 @@ export function openToolName(): string {
 }
 import { meterAdd } from "./meter.js";
 import { receiptAdd } from "./receipts.js";
-import { branchLabel, gitHead, gitRun, hasOtherBranchNotes, insideFolder, noteScopes, unmergedBranches } from "./git-trail.js";
+import { GIT_NO_ANSWER, branchLabel, gitHead, gitRun, hasOtherBranchNotes, insideFolder, noteScopes, unmergedBranches } from "./git-trail.js";
 import { currentWriter, stdioWriter } from "./actor.js";
 import { overwritesOf } from "./store/overwrites.js";
 import { noteComputer } from "./sync/marks.js";
@@ -91,6 +91,8 @@ export interface InjectOptions {
    * local server for the same store). Every id is re-read and re-filtered here; null = not available.
    */
   bodyHits?: (keywords: string[]) => Promise<number[] | null>;
+  /** The caller already shows the unconfirmed count (session start's one "Needs you" line): leave this block's out. */
+  skipUnconfirmedLine?: boolean;
 }
 
 /** "Open any with ..." naming only a tool this install registers. Every line already starts with its #id. */
@@ -234,7 +236,7 @@ export function overwriteLines(store: Store, writer: string, sinceIso: string, n
   if (!over.length) return "";
   return [
     "Another writer replaced text you wrote (read the note and its history if the change looks wrong, and tell the user):",
-    ...over.map((o) => `#${o.id} ${o.held ? "(held: from outside content or flagged, title not shown)" : `"${neutral(o.title).slice(0, 80)}"`} by ${neutral(o.by).slice(0, 24) || "(no writer)"}, ${o.at.slice(0, 10)}`),
+    ...over.map((o) => `#${o.id} ${o.held ? "(unconfirmed or flagged, title not shown)" : `"${neutral(o.title).slice(0, 80)}"`} by ${neutral(o.by).slice(0, 24) || "(no writer)"}, ${o.at.slice(0, 10)}`),
   ].join("\n");
 }
 
@@ -329,7 +331,7 @@ export function projectFactsLine(factNotes: readonly NoteRecord[], maxChars = FA
 export async function rankContext(
   store: Store,
   opts: InjectOptions = {}
-): Promise<{ ranked: NoteRecord[]; total: number; latestSummary: NoteRecord | null; why: Map<number, Set<string>>; pinned: NoteRecord[]; factNotes: NoteRecord[]; otherBranch: Map<number, string> }> {
+): Promise<{ ranked: NoteRecord[]; total: number; latestSummary: NoteRecord | null; why: Map<number, Set<string>>; pinned: NoteRecord[]; factNotes: NoteRecord[]; otherBranch: Map<number, string>; gitSilent?: boolean }> {
   const ns = opts.namespace;
   const wf = {
     ...(opts.writtenBy ? { writtenBy: opts.writtenBy } : {}),
@@ -442,12 +444,15 @@ export async function rankContext(
   const here: number[] = [];
   const onBranch: number[] = [];
   const otherBranch = new Map<number, string>();
+  let gitSilent = false;
   if (signals.root && byRecency.length) {
     const scopes = noteScopes(db, byRecency);
     const repo = repoHere;
     const cur = signals.branch || null;
     const sameRepo = (id: number): boolean => insideFolder(scopes.get(id)?.cwd, signals.root) || (!!repo && scopes.get(id)?.repo === repo);
-    const live = liveBranches ? await liveBranches : new Set<string>();
+    const answered = liveBranches ? await liveBranches : new Set<string>();
+    gitSilent = answered === null; // silent L2: git did not answer, so other branches' notes are not told apart; said below
+    const live = answered ?? new Set<string>();
     const elsewhere = new Set<number>();
     const matched = (id: number): boolean => !!(why.get(id)?.has("kw") || why.get(id)?.has("files"));
     for (const id of byRecency) {
@@ -475,15 +480,15 @@ export async function rankContext(
   const pinnedIds = new Set(pinned.map((n) => n.id));
   const ranked = rankHits(store, [...fused.entries()].filter(([id]) => !pinnedIds.has(id)).map(([id, score]) => ({ note: pool.get(id)!, score })));
   const summary = latestSummary && pinnedIds.has(latestSummary.id) ? null : latestSummary;
-  return { ranked, total: store.list({ ...base, limit: 1, countCap: SESSION_COUNT_CAP }).total, latestSummary: summary, why, pinned, factNotes, otherBranch };
+  return { ranked, total: store.list({ ...base, limit: 1, countCap: SESSION_COUNT_CAP }).total, latestSummary: summary, why, pinned, factNotes, otherBranch, ...(gitSilent ? { gitSilent } : {}) };
 }
 
 /** The packed context text ("" when there is nothing to say). */
 export async function injectContext(store: Store, opts: InjectOptions = {}): Promise<string> {
-  const { ranked, total, latestSummary, why, pinned, factNotes, otherBranch } = await rankContext(store, opts);
+  const { ranked, total, latestSummary, why, pinned, factNotes, otherBranch, gitSilent } = await rankContext(store, opts);
   // 1.4.0: one count line for the notes held back as unconfirmed outside content; never their titles or text.
   const nsList = opts.namespace !== undefined ? [opts.namespace] : undefined;
-  const heldLine = [unconfirmedCountLine(store.unconfirmedBreakdown(nsList)), ...(opts.cwd !== undefined ? store.openWindowLines(opts.cwd) : []), expiryEnforced(store) ? expiredCountLine(store.expiredCount(nsList), store.confirmSettings().days) : ""].filter(Boolean).join("\n");
+  const heldLine = [opts.skipUnconfirmedLine ? "" : unconfirmedCountLine(store.unconfirmedBreakdown(nsList)), ...(opts.cwd !== undefined ? store.openWindowLines(opts.cwd) : []), expiryEnforced(store) ? expiredCountLine(store.expiredCount(nsList), store.confirmSettings().days) : ""].filter(Boolean).join("\n");
   // Always shown when there are facts: about 20-40 tokens, and the one thing a busy writer must never push out.
   const factsLine = projectFactsLine(factNotes);
   if (!ranked.length && !latestSummary && !pinned.length) return [factsLine, heldLine].filter(Boolean).join("\n\n");
@@ -592,12 +597,15 @@ export async function injectContext(store: Store, opts: InjectOptions = {}): Pro
   if (lines.length) parts.push(`${header}\n${lines.join("\n")}`);
   if (!shown.length) return heldLine;
   if (heldLine) parts.push(heldLine);
-  if (shown.some((n) => n !== latestSummary)) parts.push(WHY_LEGEND);
+  // The legend (~230 characters) only when a reason other than "recent" shows: {recent Nd} explains itself.
+  const reasonsOf = (n: NoteRecord): string[] => tagOf(n).slice(1, -1).split(" ").slice(0, -1).join(" ").split(",").filter(Boolean);
+  if (shown.some((n) => n !== latestSummary && reasonsOf(n).some((r) => r !== "recent"))) parts.push(WHY_LEGEND);
   if ([...pinLines, ...lines].some((l) => /^#\d+ by /.test(l))) parts.push(WRITER_LEGEND);
   const legend = originLegend(shown); // only the label kinds shown; "" when none (as in 1.3.5)
   if (legend) parts.push(legend);
+  if (gitSilent) parts.push(`Branch scope: ${GIT_NO_ANSWER}, so notes written on other branches are not told apart this time.`);
   const fresh = [...new Set(shown.filter((n) => n.new_writer).map((n) => neutral(n.written_by).slice(0, 24)))];
-  if (fresh.length) parts.push(`New writers, not a second source yet: ${fresh.slice(0, 5).join(", ")}${fresh.length > 5 ? `, +${fresh.length - 5}` : ""} (monomem trust probation).`);
+  if (fresh.length) parts.push(`New writers, not a second source yet: ${fresh.slice(0, 5).join(", ")}${fresh.length > 5 ? `, +${fresh.length - 5}` : ""}.`);
   const ns = opts.namespace;
   const captured = Number(
     (

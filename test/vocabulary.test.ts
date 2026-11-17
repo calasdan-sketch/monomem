@@ -17,7 +17,8 @@ import { Store } from "../src/store.js";
 import { createMcpServer } from "../src/mcp-server-core.js";
 import { DASHBOARD_HTML, DASHBOARD_JS } from "../src/dashboard.js";
 
-const BANNED = /quarantin\w*|supersed\w*|bearer token|stale[ _-]?twin|access key|admin token|\btaint\w*/gi;
+// "held" is only for writes waiting in the Held queue; an imported note is unconfirmed (from outside), and reading does not confirm it.
+const BANNED = /quarantin\w*|supersed\w*|bearer token|stale[ _-]?twin|access key|admin token|\btaint\w*|held until you (?:confirm|read)|held \(marked as from outside\)|comes in held|imported note\(s\) held/gi;
 const ALLOW = /formerly|old name|\(was:|legacy-1\.5/i;
 const CLI = join(PROJECT_ROOT, "dist", "src", "cli.js");
 

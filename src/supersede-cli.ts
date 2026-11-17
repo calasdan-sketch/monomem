@@ -275,7 +275,10 @@ export async function pinCli(store: Store, kind: "pin" | "unpin", args: string[]
 /** `monomem rollback --writer <name> --since <iso|duration> [--include-conflicts] [--yes] [--json]` */
 export async function rollbackCli(store: Store, args: string[], io: CliIO, caller: Caller = OWNER): Promise<number> {
   try {
-    const { flags } = parseArgs(args);
+    // --dry-run = the preview only (what rollback does without --yes anyway); taken out here so no other command accepts it silently.
+    const dryRun = args.includes("--dry-run");
+    const { flags } = parseArgs(args.filter((a) => a !== "--dry-run"));
+    if (dryRun) flags["dry-run"] = true;
     if (flags.note !== undefined) return (await import("./cli/forensics.js")).noteRollbackCli(store, flags, io, caller);
     const json = flags.json === true;
     if (!s(flags.since)?.trim()) {
@@ -283,10 +286,11 @@ export async function rollbackCli(store: Store, args: string[], io: CliIO, calle
       io.err(`Error: --since is required: how far back to undo, an ISO time or a duration (30m, 2h, 7d). Example: monomem rollback --writer ${w} --since 2h`);
       return 1;
     }
-    const how = flags.yes === true || io.interactive ? "" : "Nothing was changed. Run it again at a terminal, or add --yes, to go ahead.";
+    const how = dryRun ? "Dry run: nothing was changed." : flags.yes === true || io.interactive ? "" : "Nothing was changed. Run it again at a terminal, or add --yes, to go ahead.";
     const preview = rollbackPreview(store, caller, { writer: s(flags.writer), since: s(flags.since), include_conflicts: flags["include-conflicts"] === true }, how);
     io.out(json ? JSON.stringify(preview, null, 2) : preview.warning);
     if (preview.actions.length === 0) return preview.did_you_mean ? 1 : 0;
+    if (dryRun) return 0;
     if (flags.yes !== true) {
       if (!io.interactive) return 2;
       const a = await io.ask(`

@@ -510,7 +510,7 @@ allowed in its sandbox). LongMemEval-S hybrid was not re-run on 1.5.0: its lates
 halves of both datasets gain at least 0.5 point and size and speed are acceptable. They do not. On held-out half **b**,
 LongMemEval-S strict `Rall@5` went **down 1.2** (any-hit `R@5` unchanged), LoCoMo-10 `R@5` went up 0.4 (by turn) and 0.8 (by
 session) with `Rall@5` down 0.1-0.2, the database grows by about 37 %, and keyword search with common words is about 12 times
-slower at 10,000 notes. You can still switch it on (`monomem settings set passage_pooling on`); the numbers below are what
+slower at 10,000 notes. You can still switch it on (`monomem settings set passage-pooling on`); the numbers below are what
 to expect.
 
 **What it does.** Each note body is also cut into passages: its lines (a line over 600 characters is cut into pieces of

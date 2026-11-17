@@ -1857,7 +1857,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
     );
     return 1;
   }
-  if (opts.undo) return undoLast(e, io);
+  if (opts.undo) return opts.dryRun ? (await import("./setup/undo-preview.js")).undoPreview(e, io) : undoLast(e, io);
   if (opts.actionGuard) return (await import("./action-guard-setup.js")).runActionGuardSetup(e, io, opts);
   // The standalone download: app settings and hooks must name the folder's permanent home (install.ts), not the folder it
   // was unpacked in (Downloads, a temp copy of a zip). Everything below plans with the home's paths; the copy is a listed step.
@@ -1916,9 +1916,11 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   if (!opts.terse) {
     io.out("What I found:");
     for (const t of found) {
-      if (t.id === "project" && !t.exists) continue;
-      io.out(`  ${t.label.padEnd(26)} ${(t.exists ? "found" : t.present ? "installed, no config file yet" : "not found").padEnd(30)}  ${t.present ? t.file : ""}`.trimEnd());
+      if ((t.id === "project" && !t.exists) || (!t.exists && !t.present)) continue;
+      io.out(`  ${t.label.padEnd(26)} ${(t.exists ? "found" : "installed, no config file yet").padEnd(30)}  ${t.present ? t.file : ""}`.trimEnd());
     }
+    const missing = found.filter((t) => t.id !== "project" && !t.exists && !t.present).map((t) => t.label); // one line, not one row each
+    if (missing.length) io.out(`  Not found: ${missing.join(", ")}`);
     io.out("");
   }
 

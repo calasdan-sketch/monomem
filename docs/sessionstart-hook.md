@@ -63,10 +63,16 @@ Why shown, in {}: files = linked to files you changed, kw = matches your branch,
   tagged `convention`, the files memory mentions most, the last session and
   the open-task count. It is capped by `MONOMEM_PROFILE_TOKENS` (default
   300, never more than half the budget); `MONOMEM_PROFILE=off` drops it.
+- The "Why shown" line explains the reason tags. It is left out when every line
+  shown is only `{recent Nd}`.
+- **Needs you** is one line at the top when something only the person can settle
+  waits, with one command: for example `Monomem: 3 unconfirmed notes (from
+  outside content, not shown) wait for the user: monomem review.` Unconfirmed notes are
+  counted there once, never as a second line.
 - **Project facts** is one line with the current value of every recorded fact
   (`facts` on a write; `monomem facts` lists them all), with the note and its
   writer. It is always shown when there are facts. A disputed key is left to
-  the "writers disagree" line; a held note (unconfirmed outside content) never
+  the "writers disagree" line; an unconfirmed note (from outside) never
   reaches it. Notes that carry facts rank with decisions, not as just "recent".
 - **Busy writers:** when two or more writers are in the pool, one writer gets
   at most 3 of the "Recent memory" lines and 20 of the index lines; the rest is

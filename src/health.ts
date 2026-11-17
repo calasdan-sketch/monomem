@@ -74,7 +74,7 @@ export interface HealthReport {
 
 const LETTERS = ["A", "B", "C", "D", "E", "F"];
 export const GRADE_RULE =
-  "Start at A. Each warn lowers it one step (A to F). Any fail caps it at D. Unexpected drill reach (an attack other than the two known misses got through) is F. Info lines never change the grade. A to C exits 0, D to F exits 1.";
+  "Start at A. Each warn lowers it one step (A to F). Any fail caps it at D. An unexpected attack in the attack replay (one other than the two known misses got through) is F. Info lines never change the grade. A to C exits 0, D to F exits 1.";
 export const NOT_COVERED = "Not covered: the injection check is a pattern linter; reworded attacks and self-poisoning still get through. " + DRILL_SCOPE;
 
 /** The grade, computed only from the check statuses (the drill check failing is the F case). */

@@ -432,6 +432,29 @@ describe("setup: undo", () => {
     assert.match(io.all(), /restored from/);
     assert.equal(readHistory(s.e)[0].undone, true);
   });
+  test("the app list collapses the apps not found into one line (ease LOW)", async () => {
+    const s = sandbox();
+    write(ccFile(s.home), REAL_CLAUDE_JSON);
+    const io = makeIO();
+    await runSetup(s.e, io, opts({ dryRun: true, db: s.db, noTestNote: true }));
+    assert.equal(io.lines.filter((l) => /\bnot found\b/.test(l)).length, 0, io.all());
+    const notFound = io.lines.filter((l) => /^ {2}Not found: /.test(l));
+    assert.equal(notFound.length, 1, io.all());
+    assert.match(notFound[0], /Cursor/);
+    assert.ok(io.lines.some((l) => /Claude Code\s+found/.test(l)), io.all());
+  });
+  test("--undo --dry-run only shows what it would undo (ease N9: it used to undo)", async () => {
+    const s = sandbox();
+    write(ccFile(s.home), REAL_CLAUDE_JSON);
+    await runSetup(s.e, makeIO(), opts({ yes: true, db: s.db, noTestNote: true }));
+    const after = readFileSync(ccFile(s.home), "utf8");
+    const io = makeIO();
+    assert.equal(await runSetup(s.e, io, opts({ undo: true, dryRun: true })), 0);
+    assert.equal(readFileSync(ccFile(s.home), "utf8"), after, "the file is unchanged");
+    assert.equal(readHistory(s.e)[0].undone, undefined, "the session is not marked undone");
+    assert.match(io.all(), /Dry run: nothing was changed/);
+    assert.match(io.all(), /\.claude\.json: put back as it was before setup/);
+  });
   test("if Claude Code changed the file since, only OUR change comes out", async () => {
     const s = sandbox();
     write(ccFile(s.home), REAL_CLAUDE_JSON);

@@ -487,7 +487,7 @@ export async function runForeignImport(e: Pick<SetupEnv, "home" | "env" | "cwd">
     }
     if (held) writeHeld(opts.dbPath, heldBefore);
     io.out(`\nImported ${created} new note(s). They are tagged "${tagFor(from)}" and written by "${writerFor(from)}".`);
-    if (created) io.out("They are held (marked as from outside) until you read them: `monomem review` lists them, `monomem confirm <id>` trusts one.");
+    if (created) io.out("They are unconfirmed (from outside) until you confirm them; reading them does not confirm them. `monomem review` lists them, `monomem confirm <id>` confirms one.");
     if (held) io.out(`${held} item(s) were held by the memory linter (it saw something that reads like an instruction to an AI): see \`monomem review held\`.`);
     if (failed) {
       io.err(`${failed} item(s) could not be stored.`);

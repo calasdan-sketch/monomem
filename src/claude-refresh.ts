@@ -107,8 +107,8 @@ export function heldImports(s: Store, tag = IMPORT_TAG): number {
 /** The `monomem check` line, or null when Claude Code keeps no memory here and nothing was ever imported. */
 export async function bridgeLine(e: Pick<SetupEnv, "home" | "env" | "cwd">, dbPath: string, held: number): Promise<string | null> {
   const st = await bridgeStatus(e, dbPath);
-  if (!st.last_import) return st.files ? `Claude Code keeps its own memory here (${st.files} file(s)) that your other apps do not see: monomem import --claude brings a copy in, held until you confirm it` : null;
-  return `last import ${st.last_import.slice(0, 16).replace("T", " ")}; ${st.changed} file(s) new or changed since${st.gone ? `, ${st.gone} gone (Monomem still has their notes)` : ""}; ${held} imported note(s) held until you confirm them (monomem review)`;
+  if (!st.last_import) return st.files ? `Claude Code keeps its own memory here (${st.files} file(s)) that your other apps do not see: monomem import --claude brings a copy in, unconfirmed (from outside) until you confirm it` : null;
+  return `last import ${st.last_import.slice(0, 16).replace("T", " ")}; ${st.changed} file(s) new or changed since${st.gone ? `, ${st.gone} gone (Monomem still has their notes)` : ""}; ${held} imported note(s) unconfirmed (from outside) until you confirm them (monomem review; monomem confirm <id>)`;
 }
 
 /** One refresh while the server runs: only when switched on and a file changed or went away. Never throws. */
@@ -137,13 +137,13 @@ export async function offerClaudeMemoryImport(e: SetupEnv, io: SetupIO, yes: boo
   if (!st.files || st.last_import) return;
   const intro = `Claude Code keeps its own memory on this computer (${st.files} file(s): CLAUDE.md and its auto memory), which your other apps do not see.`;
   if (!io.interactive || yes) {
-    io.out(`\n${intro} To bring a copy in, held until you confirm it: monomem import --claude`);
+    io.out(`\n${intro} To bring a copy in, unconfirmed (from outside) until you confirm it: monomem import --claude`);
     return;
   }
   io.out(`\n${intro}`);
   io.out("  Monomem copies what is in those files, on this computer only. Claude Code itself still loads only the first 200 lines");
   io.out("  (25 KB) of MEMORY.md, keeps auto memory per machine, and does not write it from subagents.");
-  const a = (await io.ask("Bring a copy into Monomem now? Each note is held until you confirm it. Type y, or press Enter to skip: ")).trim().toLowerCase();
+  const a = (await io.ask("Bring a copy into Monomem now? Each note stays unconfirmed (from outside) until you confirm it. Type y, or press Enter to skip: ")).trim().toLowerCase();
   if (a !== "y" && a !== "yes") return;
   const { runClaudeImport } = await import("./claude-import.js");
   await runClaudeImport(e, io, { dryRun: false, yes: true, update: false, projects: [], noProject: true, includeIndex: false, dbPath: db });

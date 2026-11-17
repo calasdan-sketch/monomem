@@ -238,8 +238,8 @@ describe("import --claude: running it", () => {
     const x = io();
     assert.equal(await runClaudeImport(f.e, x, o(f.db)), 0);
     const notes = allNotes(f.db);
-    assert.ok(notes.length > 0 && notes.every((n) => n.unconfirmed === true), "every imported note is held");
-    assert.match(x.all(), /held[\s\S]*monomem confirm/);
+    assert.ok(notes.length > 0 && notes.every((n) => n.unconfirmed === true), "every imported note is unconfirmed");
+    assert.match(x.all(), /unconfirmed \(from outside\)[\s\S]*monomem confirm/);
   });
   test("without a terminal and without --yes it refuses and writes nothing", async () => {
     const f = fixture();

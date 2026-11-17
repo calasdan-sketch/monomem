@@ -22,16 +22,25 @@ export const TRAILER_KEY = "Monomem-Notes";
 const GIT_TIMEOUT_MS = 400;
 const LOG_TIMEOUT_MS = 3000;
 
-/** stdout of a read-only git command ("" on any failure or timeout). */
-export function gitRun(cwd: string, args: string[], timeout = GIT_TIMEOUT_MS): Promise<string> {
+/**
+ * stdout of a read-only git command; "" when git answered with an error (not a repository, no such ref); null when git did
+ * not answer: it timed out or is not installed (silent L2: say so, never "no commits").
+ */
+export function gitTry(cwd: string, args: string[], timeout = GIT_TIMEOUT_MS): Promise<string | null> {
   return new Promise((done) => {
     try {
-      execFile("git", ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=", ...args], { cwd, timeout, windowsHide: true, maxBuffer: 4 << 20 }, (err, out) => done(err ? "" : String(out)));
+      execFile("git", ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=", ...args], { cwd, timeout, windowsHide: true, maxBuffer: 4 << 20 }, (err, out) => done(!err ? String(out) : err.killed || (err as NodeJS.ErrnoException).code === "ENOENT" ? null : ""));
     } catch {
-      done("");
+      done(null);
     }
   });
 }
+
+/** stdout of a read-only git command ("" on any failure or timeout). */
+export const gitRun = async (cwd: string, args: string[], timeout = GIT_TIMEOUT_MS): Promise<string> => (await gitTry(cwd, args, timeout)) ?? "";
+
+/** What a person reads when git did not answer (a timeout, an error, git missing). */
+export const GIT_NO_ANSWER = "git did not answer";
 
 /** A folder in comparable form: real path (git reports /private/var for macOS /var), "/" separators, no trailing "/", lowercased on Windows. */
 const realDirs = new Map<string, string>();
@@ -159,9 +168,10 @@ export function hasOtherBranchNotes(db: DatabaseSync, repo: string, current: str
   return hasBranchTable(db) && !!db.prepare("SELECT 1 FROM note_branches WHERE repo = ? AND branch IS NOT NULL AND branch <> ? LIMIT 1").get(repo, current ?? "");
 }
 
-/** Local branches not merged into HEAD (one git call). A merged or deleted branch is not in it. Empty when git fails. */
-export async function unmergedBranches(root: string): Promise<Set<string>> {
-  const out = await gitRun(root, ["for-each-ref", "--no-merged=HEAD", "--format=%(refname:short)", "refs/heads/"]);
+/** Local branches not merged into HEAD (one git call). A merged or deleted branch is not in it. null when git did not answer. */
+export async function unmergedBranches(root: string): Promise<Set<string> | null> {
+  const out = await gitTry(root, ["for-each-ref", "--no-merged=HEAD", "--format=%(refname:short)", "refs/heads/"]);
+  if (out === null) return null;
   return new Set(out.split("\n").map((s) => cleanBranch(s.trim())).filter(Boolean));
 }
 
@@ -227,8 +237,8 @@ export function sessionsUsing(db: DatabaseSync, noteId: number, limit = 30): Arr
 
 const iso = (t: string): string | null => (Number.isFinite(Date.parse(t)) ? new Date(Date.parse(t)).toISOString() : null);
 
-/** Commits by this machine's git identity in `cwd`'s repository, committed between `from` and `to` (local branches only). */
-export async function commitsBetween(cwd: string, from: string, to: string): Promise<Commit[]> {
+/** Commits by this machine's git identity in `cwd`'s repository, committed between `from` and `to` (local branches only). null: git did not answer. */
+export async function commitsBetween(cwd: string, from: string, to: string): Promise<Commit[] | null> {
   const since = iso(from);
   const until = iso(to);
   if (!since || !until) return [];
@@ -239,11 +249,12 @@ export async function commitsBetween(cwd: string, from: string, to: string): Pro
   }
   // A pulled commit keeps its own committer, so filtering on ours keeps other people's work out of the window.
   const me = (await gitRun(cwd, ["config", "user.email"])).trim();
-  const out = await gitRun(
+  const out = await gitTry(
     cwd,
     ["log", "--branches", "--no-merges", "-n", "200", `--since=${since}`, `--until=${until}`, `--format=%H%x1f%cI%x1f%ce%x1f%s%x1f%(trailers:key=${TRAILER_KEY},valueonly,separator=%x20)%x1e`],
     LOG_TIMEOUT_MS
   );
+  if (out === null) return null;
   const commits: Commit[] = [];
   for (const rec of out.split("\x1e")) {
     const [hash, at, email, subject, trailer] = rec.replace(/^\s+/, "").split("\x1f");
@@ -265,10 +276,12 @@ export interface TrailHit {
  * The commits that used a note: made during a session that was shown it or wrote it. A commit whose Monomem-Notes line
  * does not name the note is left out (the line says what that commit's session used); one that names it says so.
  */
-export async function commitsUsing(db: DatabaseSync, noteId: number, now = new Date()): Promise<TrailHit[]> {
+export async function commitsUsing(db: DatabaseSync, noteId: number, now = new Date(), noAnswer: string[] = []): Promise<TrailHit[]> {
   const hits = new Map<string, TrailHit>();
   for (const s of sessionsUsing(db, noteId)) {
-    for (const c of await commitsBetween(s.cwd, s.started_at, s.ended_at ?? now.toISOString())) {
+    const commits = await commitsBetween(s.cwd, s.started_at, s.ended_at ?? now.toISOString());
+    if (commits === null) noAnswer.push(s.cwd); // the caller says "git did not answer" for these folders
+    for (const c of commits ?? []) {
       if (c.listed && !c.listed.includes(noteId)) continue;
       const how = [...s.how, ...(c.listed ? (["commit line"] as const) : [])];
       const prev = hits.get(c.hash);

@@ -42,9 +42,9 @@ schema v22), so going back to 1.5.0 needs no restore.
   with its own window.
 - **New tool and command names, and a much smaller tool list.** The 37 MCP tools of 1.5 are now 16 `memory_*` tools, and
   7 of them are shown by default (`memory_save`, `memory_search`, `memory_read`, `memory_list`, `memory_archive`,
-  `memory_replace`, `memory_catch_up`). Measured over a local stdio connection, the default 7 cost 5,678 characters of
-  tool descriptions (about 1,420 tokens; 1.5's 9 default tools were 21,114). `MONOMEM_TOOLS=all` over stdio is 13 tools,
-  8,576 characters; with an admin app key over HTTP (or `MONOMEM_STDIO_ADMIN_TOOLS=1`) all 16 tools are 11,207 characters
+  `memory_replace`, `memory_catch_up`). Measured over a local stdio connection, the default 7 cost 6,160 characters of
+  tool descriptions (about 1,540 tokens; 1.5's 9 default tools were 21,114). `MONOMEM_TOOLS=all` over stdio is 13 tools,
+  9,150 characters; with an admin app key over HTTP (or `MONOMEM_STDIO_ADMIN_TOOLS=1`) all 16 tools are 11,792 characters
   (1.5's 37 tools were 64,501). A test pins these numbers. The short `monomem help` lists about 30 commands, with new
   names: `check` (was `health`), `check --setup` (was `doctor`), `check --attacks` (was `drill`), `review held` (was
   `quarantine`), `review duplicates`, `review conflicts`, `review code`, `activity` (was `changes`), `tidy <job>` (was
@@ -125,7 +125,7 @@ schema v22), so going back to 1.5.0 needs no restore.
   setup (it asks). Optional, off by default: while the server runs, it can look every 10 minutes for files Claude Code
   changed (Settings, or `MONOMEM_CLAUDE_REFRESH=on`).
 - **Imports from Codex and Notion:** `monomem import --from codex` (Codex's local memories) and `monomem import --from
-  notion --path <export.zip>`. Like every import from another tool, these notes are held until a person confirms them.
+  notion --path <export.zip>`. Like every import from another tool, these notes are unconfirmed (from outside) until a person confirms them.
 - **17 apps in setup.** Setup and `monomem connect` now also handle Windsurf, Devin, Kiro, Cline CLI, GitHub Copilot CLI,
   Antigravity, Qwen Code, OpenCode and Kilo Code, besides Claude Code, Claude Desktop, Cursor, Codex CLI, Gemini CLI, Muse,
   VS Code and Zed. docs/apps.md lists each file and the apps left out, with the reason.
@@ -145,7 +145,7 @@ schema v22), so going back to 1.5.0 needs no restore.
   lasts one hour and works only on the MCP port; and redirects go only to claude.ai, chatgpt.com or this computer unless
   you allow another site at a terminal. You need your own HTTPS address that reaches your computer. This feature has had
   one dedicated security review (its findings are fixed) and no outside review: treat it as a preview. See docs/oauth.md.
-- **Passage pooling for keyword search (opt-in, off by default).** `monomem settings set passage_pooling on` also ranks
+- **Passage pooling for keyword search (opt-in, off by default).** `monomem settings set passage-pooling on` also ranks
   long notes by their best passage. It stays off because the measurement did not justify it: on the held-out half,
   LongMemEval-S strict Rall@5 went down 1.2 points and LoCoMo-10 R@5 went up 0.4-0.8; the database grows about 37 %; and a
   keyword search with common words is about 12 times slower at 10,000 notes. Not available on an encrypted store.
@@ -198,9 +198,9 @@ schema v22), so going back to 1.5.0 needs no restore.
   does not count. Revoking always works, and a mark added after approval stops the run.
   `monomem check --attacks` checks that an admin key cannot approve a command task built from an outside page.
 - **A hard delete takes the note's text out of the sync folder.** The marker file left for other computers keeps no body.
-- **Overwrite notices never show a held note's title.**
+- **Overwrite notices never show the title of a note kept out of session start** (unconfirmed or flagged).
 - **`monomem update` refuses a release tag that is not exactly a version.**
-- **Notes brought in by `import --claude` are held** until a person confirms them, like every other import from another
+- **Notes brought in by `import --claude` are unconfirmed (from outside)** until a person confirms them, like every other import from another
   tool, and the prompt step never shows notes brought in from Claude Code's own memory files.
 - **An MCP app that names several folders** keeps the folder it was started in for outside-content marks; adopting one of
   its folders is written to the audit log.
@@ -224,7 +224,15 @@ schema v22), so going back to 1.5.0 needs no restore.
 - **`monomem update`** skips leftover folders it cannot remove, and `--check` keeps the rollback copy. The dashboard's
   Update button runs the update outside the server it restarts.
 - **The setup proof step** says "Save to Monomem: ..." (Claude Code's own memory caught the old "Remember: ..." wording).
-- **Session start** shows the restated label on an older note its writer restated.
+- **Session start** shows the restated label on an older note its writer restated. It names notes waiting for the user in
+  one "Needs you" line with one command (`monomem review` for held writes and unconfirmed notes), not twice.
+- **`monomem setup --undo --dry-run`** only shows what it would undo. Before, it undid the last setup (this dates back to
+  1.x). `monomem rollback --dry-run` is accepted too and only shows the plan.
+- **`memory_save` with `evidence`** no longer says the argument was ignored. `claims` and `derived_from` are now listed
+  in its schema, so agents can see them.
+- **`activity --writes`** names the local app that wrote (for example `claude-code`), not "you".
+- **When git does not answer** (a timeout, or git is missing), `why --commits`, `activity --commits` and session start's
+  branch scope say so instead of reporting no commits.
 - **Small fixes:** the Linux service file escapes `%`, the Windows task runs at normal priority, and a PATH undo on Windows
   puts the value back byte for byte.
 
@@ -242,8 +250,10 @@ schema v22), so going back to 1.5.0 needs no restore.
   `mcp__monomem__memory_search`, ...). Add them, or `mcp__monomem` for all of Monomem's tools.
 - **`monomem connect windsurf` now writes Windsurf's settings file** (`~/.codeium/windsurf/mcp_config.json`, with a backup
   and undo). In 1.5 it only printed the entry for you to paste.
-- **Notes imported from other tools are now held** until a person confirms them (`monomem review`, `monomem confirm
-  <id>`): `import --claude` and every `import --from ...`. They stay out of session start until then.
+- **Notes imported from other tools are now unconfirmed (from outside)** until a person confirms them (`monomem review`,
+  `monomem confirm <id>`): `import --claude` and every `import --from ...`. They stay out of session start until then;
+  reading them does not confirm them. They are saved notes, not held writes (`monomem review held` is for writes that
+  were not saved).
 - **`monomem` with no command prints the help.** In 1.5 it started the server. Use `monomem start`, or `monomem open` for
   the dashboard.
 - **Going back to 1.5.0** needs no restore: the schema is still v22. 1.6.0 adds a few side tables that 1.5.0 ignores.

@@ -2,10 +2,11 @@
 import { requireOperator } from "../operator-gate.js";
 
 export async function configCmd(args: string[]): Promise<void> {
-  const usage = "Usage: monomem settings [get | set confirm-days <n> | set confirm-mode off|label|enforce | set passage_pooling on|off | set probation-notes|probation-hours <n> | set facts-need-evidence on|off | known-hosts [add|remove <host>]]";
-  const [verb = "get", key, value, ...extra] = args;
+  const usage = "Usage: monomem settings [get | set confirm-days <n> | set confirm-mode off|label|enforce | set passage-pooling on|off | set probation-notes|probation-hours <n> | set facts-need-evidence on|off | known-hosts [add|remove <host>]]";
+  const [verb = "get", rawKey, value, ...extra] = args;
+  const key = rawKey === "passage_pooling" ? "passage-pooling" : rawKey; // the 1.6 preview spelling still works
   const trustKeys = (await import("../cli/trust-settings.js")).TRUST_SETTING_KEYS;
-  if (extra.length || (verb !== "get" && verb !== "set") || (verb === "get" && key !== undefined) || (verb === "set" && (value === undefined || (key !== "confirm-days" && key !== "confirm-mode" && key !== "passage_pooling" && !trustKeys.includes(key))))) {
+  if (extra.length || (verb !== "get" && verb !== "set") || (verb === "get" && key !== undefined) || (verb === "set" && (value === undefined || (key !== "confirm-days" && key !== "confirm-mode" && key !== "passage-pooling" && !trustKeys.includes(key))))) {
     console.error(usage);
     process.exit(1);
   }
@@ -23,7 +24,7 @@ export async function configCmd(args: string[]): Promise<void> {
     };
     const pp = await import("../cli/passages.js");
     if (verb === "get") return show();
-    if (key === "passage_pooling") {
+    if (key === "passage-pooling") {
       try {
         return console.log(pp.setPassagePooling(store, value));
       } catch (e) {
