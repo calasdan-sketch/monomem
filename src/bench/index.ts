@@ -85,7 +85,7 @@ export const BENCH_USAGE = [
   "  --help               This text.",
   "",
   "monomem bench --longmemeval | --locomo [--data file] [--limit N] [--mode keyword|hybrid]",
-  "                [--granularity session|turn] [--encrypted] [--split a|b] [--json]",
+  "                [--granularity session|turn] [--encrypted] [--split a|b] [--passages] [--json]",
   "",
   "  Retrieval benchmark on LongMemEval-S or LoCoMo (downloaded once to ~/.cache/monomem-bench unless --data):",
   "  recall@5/10, recall_all@10, nDCG@10, MRR per question type, search latency, indexing time. No LLM.",

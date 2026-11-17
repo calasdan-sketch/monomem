@@ -16,6 +16,7 @@ import { ensureKey } from "../crypto.js";
 import { LIMITS } from "../security.js";
 import { embed, embeddingsEnabled } from "../embeddings.js";
 import { maybeEmbed, runRelevantSearch, runSearch } from "../search-service.js";
+import { PASSAGE_SETTING, syncPassages } from "../store/passages.js";
 import { aggregate, dedupe, percentile, scoreQuestion, type MetricRow, type QuestionScore } from "./retrieval-metrics.js";
 
 const SOURCES = {
@@ -185,6 +186,8 @@ export interface RetrievalOptions {
   encrypted?: boolean;
   /** Only the tuning (a) or held-out (b) half: see splitHaystacks. */
   split?: Split;
+  /** Passage pooling on in every throwaway store (store/passages.ts); its index is built inside the indexing time. */
+  passages?: boolean;
 }
 
 interface ModeResult {
@@ -197,6 +200,7 @@ export interface RetrievalReport {
   granularity: Granularity;
   encrypted: boolean;
   split?: Split;
+  passages?: boolean;
   questions: number;
   haystacks: number;
   notes: number;
@@ -265,6 +269,10 @@ export async function runRetrieval(o: RetrievalOptions): Promise<RetrievalReport
           return n;
         })
       );
+      if (o.passages) {
+        store.setMeta(PASSAGE_SETTING, "on");
+        syncPassages(store);
+      }
       if (useHybrid) for (const n of created) await maybeEmbed(store, n);
       indexTimes.push(performance.now() - t0);
       notes += created.length;
@@ -299,6 +307,7 @@ export async function runRetrieval(o: RetrievalOptions): Promise<RetrievalReport
     granularity: o.granularity,
     encrypted: o.encrypted === true,
     ...(o.split ? { split: o.split } : {}),
+    ...(o.passages ? { passages: true } : {}),
     questions: nq,
     haystacks: stacks.length,
     notes,
@@ -316,7 +325,7 @@ const pct = (x: number): string => (x * 100).toFixed(1).padStart(6);
 
 export function renderRetrieval(r: RetrievalReport): string {
   const lines = [
-    `${r.dataset}, ${r.granularity} granularity${r.encrypted ? ", ENCRYPTED store (key file on)" : ""}${r.split ? `, split ${r.split} only` : ""}: ${r.questions} questions over ${r.haystacks} haystacks, ${r.notes} notes` +
+    `${r.dataset}, ${r.granularity} granularity${r.encrypted ? ", ENCRYPTED store (key file on)" : ""}${r.split ? `, split ${r.split} only` : ""}${r.passages ? ", passage pooling ON" : ""}: ${r.questions} questions over ${r.haystacks} haystacks, ${r.notes} notes` +
       (r.truncatedBodies ? ` (${r.truncatedBodies} bodies cut to ${LIMITS.body} chars)` : ""),
     `indexing: ${(r.indexMs.total / 1000).toFixed(1)} s total, p50 ${r.indexMs.p50PerHaystack.toFixed(1)} ms per haystack`,
   ];
@@ -352,6 +361,7 @@ export async function retrievalMain(argv: string[], out: (s: string) => void = c
       if (a === "--longmemeval" || a === "--locomo" || a === "--") continue;
       else if (a === "--json") json = true;
       else if (a === "--encrypted") o.encrypted = true;
+      else if (a === "--passages") o.passages = true;
       else if (a === "--split") {
         const v = take(i++, a);
         if (v !== "a" && v !== "b") throw new Error("--split must be a or b");

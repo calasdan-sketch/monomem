@@ -8,6 +8,7 @@ import { ensureKey } from "../crypto.js";
 import { Store } from "../store.js";
 import { injectContext } from "../context-inject.js";
 import { runSearch } from "../search-service.js";
+import { PASSAGE_SETTING, passageCount, syncPassages } from "../store/passages.js";
 import { percentile } from "./retrieval-metrics.js";
 import { spawnSync } from "node:child_process";
 import { selfCommand } from "../self.js";
@@ -47,6 +48,8 @@ export interface ModeTimings {
   sealedBodies: number;
   /** C-06, encrypted only: the in-memory body index the search store builds (the session-start store never does). */
   bodyIndex?: { buildMs: number; notes: number; rssMb: number };
+  /** --passages, plain only: passage pooling switched on after the timings above, its index built, the searches re-timed. */
+  passages?: { buildMs: number; passages: number; dbMbBefore: number; dbMbAfter: number; search: Timing; searchRealistic: Timing };
 }
 export interface ScaleReport {
   notes: number;
@@ -123,7 +126,7 @@ function hookRuns(db: string, runs: number): number[] {
   return out;
 }
 
-async function runMode(notes: number, encrypted: boolean, o: { iterations: number; writes: number; hookRuns: number }): Promise<ModeTimings> {
+async function runMode(notes: number, encrypted: boolean, o: { iterations: number; writes: number; hookRuns: number; passages?: boolean }): Promise<ModeTimings> {
   const dir = join(BENCH_HOME, encrypted ? "scale-enc" : "scale-plain");
   mkdirSync(dir, { recursive: true });
   if (encrypted) ensureKey(dir); // the key file beside the DB is what turns encryption on
@@ -181,9 +184,23 @@ async function runMode(notes: number, encrypted: boolean, o: { iterations: numbe
       const rare = [...df].filter(([, n]) => n < notes * 0.05).map(([w]) => w).sort();
       const pick = (): string => rare[Math.floor(q() * rare.length)] ?? word(q);
       const searchRealistic = await timed(o.iterations * 5, () => runSearch(store, `${pick()} ${pick()}`, { mode: "keyword", namespace: ns, limit: 10 }));
+      let passages: ModeTimings["passages"];
+      if (o.passages && !encrypted) {
+        const dbMbBefore = dbFacts(store, db).dbMb;
+        store.setMeta(PASSAGE_SETTING, "on");
+        const tp = performance.now();
+        syncPassages(store);
+        const buildMs = performance.now() - tp;
+        const dbMbAfter = dbFacts(store, db).dbMb;
+        const q2 = rng(7); // the same query draws as above
+        const pick2 = (): string => rare[Math.floor(q2() * rare.length)] ?? word(q2);
+        const ps = await timed(o.iterations * 5, () => runSearch(store, `${word(q2)} ${word(q2)}`, { mode: "keyword", namespace: ns, limit: 10 }));
+        const pr = await timed(o.iterations * 5, () => runSearch(store, `${pick2()} ${pick2()}`, { mode: "keyword", namespace: ns, limit: 10 }));
+        passages = { buildMs, passages: passageCount(store), dbMbBefore, dbMbAfter, search: timing(ps), searchRealistic: timing(pr) };
+      }
       const w = rng(9);
       const write = await timed(o.writes, () => store.create({ namespace: ns, title: words(w, 5), body: body(w) }));
-      return { sessionStart: timing(session), openAndSessionStart: timing(open), search: timing(search), searchRealistic: timing(searchRealistic), write: timing(write), hookPrompt, buildMs, ...dbFacts(store, db), ...(bodyIndex ? { bodyIndex } : {}) };
+      return { sessionStart: timing(session), openAndSessionStart: timing(open), search: timing(search), searchRealistic: timing(searchRealistic), write: timing(write), hookPrompt, buildMs, ...dbFacts(store, db), ...(bodyIndex ? { bodyIndex } : {}), ...(passages ? { passages } : {}) };
     } finally {
       store.close();
     }
@@ -204,8 +221,8 @@ function dbFacts(store: Store, db: string): { dbMb: number; sealedBodies: number
   }
 }
 
-export async function runScale(o: { notes: number; iterations?: number; writes?: number; hookRuns?: number }): Promise<ScaleReport> {
-  const opts = { iterations: o.iterations ?? 30, writes: o.writes ?? 200, hookRuns: o.hookRuns ?? 9 };
+export async function runScale(o: { notes: number; iterations?: number; writes?: number; hookRuns?: number; passages?: boolean }): Promise<ScaleReport> {
+  const opts = { iterations: o.iterations ?? 30, writes: o.writes ?? 200, hookRuns: o.hookRuns ?? 9, passages: o.passages };
   const plain = await runMode(o.notes, false, opts);
   const encrypted = await runMode(o.notes, true, opts);
   const p50 = encrypted.sessionStart.p50;
@@ -239,6 +256,11 @@ export function renderScale(r: ScaleReport): string {
     `DB ${r.plain.dbMb} MB / ${r.encrypted.dbMb} MB`);
   const bi = r.encrypted.bodyIndex;
   if (bi) lines.push(`encrypted body search index (in memory, C-06): ${bi.notes} notes in ${(bi.buildMs / 1000).toFixed(2)} s, RSS +${bi.rssMb} MB`);
+  const pp = r.plain.passages;
+  if (pp) {
+    lines.push(`passage pooling ON (plain): ${pp.passages} passages built in ${(pp.buildMs / 1000).toFixed(2)} s; DB ${pp.dbMbBefore} -> ${pp.dbMbAfter} MB (+${(((pp.dbMbAfter - pp.dbMbBefore) / pp.dbMbBefore) * 100).toFixed(0)} %)`);
+    lines.push(`${"  keyword search, 2 common words".padEnd(34)}${f(pp.search)}`, `${"  keyword search, 2 realistic words".padEnd(34)}${f(pp.searchRealistic)}`);
+  }
   lines.push("(common: drawn from a small Zipf vocabulary, most match most notes; realistic: each word in under 5% of notes. Keyword search cost grows with the notes that match, not the store size.)");
   if (r.gate) {
     lines.push(`release gate: ${r.notes}-note encrypted session start p50 ${r.gate.encryptedSessionStartP50.toFixed(1)} ms ` +
@@ -252,7 +274,7 @@ export async function scaleMain(argv: string[], out: (s: string) => void = conso
     const i = argv.indexOf("--scale");
     const v = argv[i + 1];
     if (v === undefined || v.startsWith("--")) throw new Error("--scale needs a note count, for example --scale 10k");
-    const r = await runScale({ notes: parseScale(v) });
+    const r = await runScale({ notes: parseScale(v), passages: argv.includes("--passages") });
     out(argv.includes("--json") ? JSON.stringify(r, null, 2) : renderScale(r));
     return r.gate && !r.gate.pass ? 1 : 0;
   } catch (e) {
