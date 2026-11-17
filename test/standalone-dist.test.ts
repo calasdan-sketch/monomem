@@ -162,6 +162,45 @@ describe("setup from the unpacked download", () => {
     assert.doesNotMatch(io.all(), /Copy Monomem|Add a "Monomem" entry/);
   });
 
+  test("over an npm install: check warns, setup asks to move the apps to the download, undo puts them back", async () => {
+    const s = sandbox();
+    const npmCli = join(s.root, "npm", "node_modules", "monomem", "dist", "src", "cli.js");
+    put(npmCli, "// monomem 1.5.0 from npm");
+    const data = join(s.root, "data");
+    const cfg = JSON.stringify({ mcpServers: { monomem: { command: process.execPath, args: [npmCli, "mcp"], env: { MONOMEM_CLIENT: "claude-code", MONOMEM_HOME: data } } } }, null, 2) + "\n";
+    put(join(s.home, ".claude.json"), cfg);
+    const hookCmd = `node "${npmCli.replace(/\\/g, "/")}" recall --budget-ms 800`;
+    const settings = JSON.stringify({ hooks: { SessionStart: [{ matcher: "startup|clear|compact", hooks: [{ type: "command", command: hookCmd }] }] } }, null, 2) + "\n";
+    put(join(s.home, ".claude", "settings.json"), settings);
+    const { appEntryProblems } = await import("../src/setup.js");
+    const e = { ...s.e, home: s.home };
+    const warn = appEntryProblems(e).join("\n");
+    assert.match(warn, /Claude Code: "monomem" runs another Monomem copy .*not this download/);
+    assert.match(warn, /a Monomem hook runs another Monomem copy/);
+    const oo = { ...o, hook: "yes" as const, only: ["claude-code"] };
+    // asked first: answering no changes nothing
+    const no = makeIO(["n"]);
+    await runSetup(e, no, oo);
+    assert.match(no.all(), /rewrite "monomem": it runs another Monomem copy/);
+    assert.match(no.all(), /move Claude's Monomem hooks \(1\) to this download, same place and settings: a hook runs another Monomem copy/);
+    assert.doesNotMatch(no.all(), /onememory-mcp/, "not mistaken for the old package");
+    assert.equal(readFileSync(join(s.home, ".claude.json"), "utf8"), cfg);
+    assert.equal(readFileSync(join(s.home, ".claude", "settings.json"), "utf8"), settings);
+    assert.equal(await runSetup(e, makeIO(["y", "y"]), oo), 0);
+    const cc = JSON.parse(readFileSync(join(s.home, ".claude.json"), "utf8")).mcpServers.monomem;
+    assert.equal(cc.command, join(s.inst, "runtime", "node"));
+    assert.deepEqual(cc.args, [join(s.inst, "dist", "src", "cli.js"), "mcp"]);
+    assert.equal(cc.env.MONOMEM_HOME, data, "same data folder");
+    const hooks = JSON.parse(readFileSync(join(s.home, ".claude", "settings.json"), "utf8")).hooks.SessionStart;
+    assert.equal(hooks.length, 1);
+    assert.equal(hooks[0].matcher, "startup|clear|compact");
+    assert.match(hooks[0].hooks[0].command, /runtime\/node" ".*share\/monomem\/dist\/src\/cli\.js" recall --budget-ms 800$/);
+    assert.deepEqual(appEntryProblems(e), []);
+    assert.equal(await runSetup(e, makeIO(), { ...o, undo: true }), 0);
+    assert.deepEqual(JSON.parse(readFileSync(join(s.home, ".claude", "settings.json"), "utf8")), JSON.parse(settings));
+    assert.deepEqual(JSON.parse(readFileSync(join(s.home, ".claude.json"), "utf8")), JSON.parse(cfg));
+  });
+
   test("an older copy at home is replaced (rename-aside), not merged", () => {
     const root = scratch();
     const home = fakeBundle(join(root, "home"), "1.6.0");
