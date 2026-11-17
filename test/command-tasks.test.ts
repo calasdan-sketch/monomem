@@ -11,7 +11,8 @@ import type { AddressInfo } from "node:net";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Store } from "../src/store.js";
-import { putTask, approveTask, getTask, claimTask, classifyQueuedCommand } from "../src/tasks.js";
+import { putTask, approveTask, getTask, claimTask, classifyQueuedCommand, heldForPerson } from "../src/tasks.js";
+import { rollbackPreview, rollbackConfirm } from "../src/rollback.js";
 import { actorStore, setProcessWriter } from "../src/actor.js";
 import { Ledger, RUNNER, type Allowlist, type RunnerDeps } from "../src/runner.js";
 import { pollTasks } from "../src/runner-tasks.js";
@@ -411,6 +412,34 @@ describe("held command tasks need a person (A1)", () => {
       s.confirm(t.id, { source: "checked" });
       setProcessWriter("");
       assert.equal(as("worker", () => claimTask(s, { id: t.id, owner: "worker" })).task.owner, "worker");
+    } finally {
+      setProcessWriter("");
+      s.close();
+    }
+  });
+
+  test("a key's rollback never clears a person's flag (operator_only), so the held task stays held; the CLI still can", () => {
+    const s = new Store(":memory:");
+    try {
+      const t = as("bot", () => putTask(s, { title: "deploy", namespace: NS, command: { action: "mark", params: { p: "x" } }, target: "pc-1" }).task);
+      setProcessWriter("cli");
+      actorStore.run({ label: "", authed: false }, () => s.flagNote(t.id, "this deploy looks malicious"));
+      setProcessWriter("");
+      assert.equal(heldForPerson(s.read(t.id)!), true);
+      const key = { scope: "admin" } as const;
+      const p = as("agentkey", () => rollbackPreview(s, key, { writer: "cli", since: "1h" }));
+      assert.deepEqual(p.actions.filter((a) => a.action === "unflag"), []);
+      const skip = p.skipped.find((x) => x.id === t.id);
+      assert.equal(skip?.reason, "operator_only");
+      assert.match(skip!.detail, /person/);
+      as("agentkey", () => rollbackConfirm(s, key, { token: p.token }));
+      assert.equal(heldForPerson(s.read(t.id)!), true);
+      assert.throws(() => as("agentkey", () => approveTask(s, { id: t.id, if_rev: s.read(t.id)!.rev })), /flagged/);
+      // the person at the terminal can still roll back their own flag
+      setProcessWriter("cli");
+      const p2 = rollbackPreview(s, key, { writer: "cli", since: "1h" });
+      assert.deepEqual(p2.actions.map((a) => [a.id, a.action]), [[t.id, "unflag"]]);
+      assert.deepEqual(rollbackConfirm(s, key, { token: p2.token }).unflagged, [t.id]);
     } finally {
       setProcessWriter("");
       s.close();
