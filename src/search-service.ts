@@ -17,6 +17,7 @@ import { TIME_ZONE } from "./config.js";
 import { extractKeywords, searchStem } from "./keywords.js";
 import { UNCONFIRMED_FACTOR, heldFromSessionStart } from "./taint.js";
 import { factClash } from "./facts.js";
+import { passageHits, passagePoolingOn } from "./store/passages.js";
 import {
   stalenessConfig,
   stalePenaltyFactor,
@@ -723,7 +724,7 @@ async function runSearchInner(
   // better match). Identical documents score identically, so the access
   // boost breaks ties toward the note actually read most often.
   const keyword = (fetchLimit: number): Array<{ note: NoteRecord; score: number }> =>
-    keywordWithFallback(store, query, fetchLimit, { namespace: opts.namespace, ...rangeOpts });
+    keywordPooled(store, query, fetchLimit, { namespace: opts.namespace, ...rangeOpts });
 
   /** Boost, stale-penalize, truncate to the result limit, bump access. */
   const win = range === undefined ? queryTimeWindow(query, opts.asOf) : null;
@@ -815,7 +816,7 @@ async function runSearchExplainedInner(
   }
 
   const keyword = (fetchLimit: number): Array<{ note: NoteRecord; score: number }> =>
-    keywordWithFallback(store, query, fetchLimit, { namespace: opts.namespace, ...rangeOpts });
+    keywordPooled(store, query, fetchLimit, { namespace: opts.namespace, ...rangeOpts });
 
   const win = range === undefined ? queryTimeWindow(query, opts.asOf) : null;
   const finalize = (hits: Array<{ note: NoteRecord; score: number }>): ExplainedHit[] =>
@@ -997,6 +998,36 @@ export function keywordWithFallback(
   const floor = strict.length ? Math.min(...strict.map((h) => h.score)) : 1;
   const top = loose.length && loose[0].score > 0 ? loose[0].score : 1; // never divide by 0
   return [...strict, ...loose.map((h) => ({ note: h.note, score: (floor * 0.5 * h.score) / top }))];
+}
+
+/** Candidates per ranking before passage fusion (whole notes and best passages). */
+export const PASSAGE_POOL = 50;
+/** Weight of the whole-note side in the passage blend (the best-passage side gets 1 - this). Set once, not tuned. */
+export const PASSAGE_WHOLE_WEIGHT = 0.5;
+
+/**
+ * Keyword hits, with passage pooling when it is switched on (`monomem settings set passage_pooling on`; store/passages.ts).
+ * A note's passage score is its best passage (max pooling): passage bm25 x the rarity-weighted share of the query's
+ * keywords that passage holds (the any-keyword search's weighting, on the passage). The whole-note ranking
+ * (keywordWithFallback) and the passage ranking are min-max scaled and blended 0.5 / 0.5 (blendHybrid). Tried on half a
+ * only: equal-weight RRF lost 4-5 points R@5 on LoCoMo sessions (rank-only scores let the access boost reorder them) and
+ * passages alone lost 2.1 Rall@5 on LongMemEval-S. Off (the default), or on an encrypted store: exactly
+ * keywordWithFallback, nothing else runs.
+ */
+function keywordPooled(
+  store: Store,
+  query: string,
+  limit: number,
+  opts: Parameters<Store["searchRanked"]>[1]
+): Array<{ note: NoteRecord; score: number }> {
+  if (!passagePoolingOn(store)) return keywordWithFallback(store, query, limit, opts);
+  const depth = Math.max(limit, PASSAGE_POOL);
+  const whole = keywordWithFallback(store, query, depth, opts);
+  const keywords = extractKeywords(query);
+  const cover = rarityCoverage(store, keywords);
+  const weigh = (text: string): number => Math.max(cover({ title: "", body: text, tags: [] } as unknown as NoteRecord), 1 / Math.max(keywords.length, 1));
+  const passages = passageHits(store, query, depth, opts, weigh);
+  return passages.length === 0 ? whole : blendHybrid(whole, passages, PASSAGE_WHOLE_WEIGHT);
 }
 
 const WORD_CHAR = /[\p{L}\p{N}]/u;

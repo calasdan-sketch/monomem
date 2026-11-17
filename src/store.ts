@@ -2879,7 +2879,7 @@ export class Store {
    * export/neighbors) funnels through here, so callers never see ciphertext
    * and never need to know encryption is on.
    */
-  private rec(row: NoteRow): NoteRecord {
+  /** @internal */ rec(row: NoteRow): NoteRecord {
     const r = rowToRecord(row, this.serverIdValue);
     if (row.body_enc) {
       // DecryptIfEncrypted throws on auth failure (wrong/tampered key) --
