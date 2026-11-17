@@ -19,8 +19,10 @@ schema v22), so going back to 1.5.0 needs no restore.
   Monomem entry to the Start menu / Applications / the Linux applications menu, and offers to put it on your PATH (one
   step you say yes to; `setup --undo` takes out exactly that entry). **The download is not code-signed.** Each release
   has a `SHA256SUMS` file and a GitHub build attestation you can check (`gh attestation verify`). On Windows the program
-  that runs is Node's own `node.exe`, which is signed by the OpenJS Foundation, so SmartScreen normally lets it run; if
-  Windows still blocks it, INSTALL.md has the Unblock steps. On a Mac, Gatekeeper may say it "cannot check" the download;
+  that runs is Node's own `node.exe`, signed by the OpenJS Foundation and named `monomem-node.exe` in the folder (renaming
+  keeps the signature valid; Task Manager's Processes tab still says "Node.js JavaScript Runtime"). Unblock the zip before
+  you unpack it and Windows does not stop to ask about `monomem.cmd` (INSTALL.md has the steps). Setup's Start menu entry
+  has the Monomem icon, and the copy setup installs carries no download mark. On a Mac, Gatekeeper may say it "cannot check" the download;
   INSTALL.md has the two ways to allow it. We have not yet tested the download on a PC with Smart App Control switched on,
   or on a Mac. npm (`npx monomem setup`, Node 22.16 or newer) still works as before.
 - **`monomem update`.** It downloads the newest release for your computer, checks its SHA-256 against the release's

@@ -11,7 +11,7 @@ Tell Claude Code something once, and Cursor, Codex, Gemini CLI and your other as
 [![Download for Mac](https://img.shields.io/badge/Download-Mac-0B2E45?style=for-the-badge)](https://github.com/calasdan-sketch/monomem/releases/latest)
 [![Download for Linux](https://img.shields.io/badge/Download-Linux-0B2E45?style=for-the-badge)](https://github.com/calasdan-sketch/monomem/releases/latest)
 
-One download, nothing else to install (no Node needed): each release has one archive per computer and a `SHA256SUMS` file to check it. Unpack it, then run this one command from the unpacked folder (`.\Monomem\monomem.cmd setup` on Windows):
+One download, nothing else to install (no Node needed): each release has one archive per computer (a zip of about 40 MB on Windows) and a `SHA256SUMS` file to check it. Node is inside the folder (Node's own signed program, about 96 MB of the 105 MB unpacked), so you do not install Node. On Windows: right-click the zip, **Properties**, tick **Unblock**, **OK**; then **Extract All**, open the `Monomem` folder and double-click `monomem` to open your notes. The download is not code-signed yet: if you skip Unblock, Windows may ask before it runs `monomem.cmd` (INSTALL.md shows what you will see). To connect your apps, run this one command from the folder you unpacked into (`.\Monomem\monomem.cmd setup` on Windows):
 
 ```bash
 ./Monomem/monomem setup

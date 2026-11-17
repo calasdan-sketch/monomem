@@ -45,23 +45,41 @@ Each [GitHub release](https://github.com/calasdan-sketch/monomem/releases) carri
 
 Not listed: Windows on ARM, Linux on ARM and Alpine (musl). Use npm or Docker there.
 
-Each archive holds one `Monomem` folder: Node.js's own official program (`runtime/node.exe` or `runtime/node`, copied unchanged
-from nodejs.org after its checksum was checked; `runtime/SOURCE.txt` says which build), Monomem's code (`dist/`), these docs
-and a small launcher (`monomem.cmd` on Windows, `monomem` on Mac and Linux). Monomem itself is not code-signed (signing
-costs money we have not spent yet). The only program in the folder is Node's, which is signed by its makers.
+It is a normal archive (about 40 MB; about 105 MB once unpacked), not a single program file. Inside is one `Monomem`
+folder: Node.js's own official program, so you do not need to install Node (`runtime/monomem-node.exe` on Windows,
+`runtime/node` on Mac and Linux: about 96 MB of the folder, copied from nodejs.org after its checksum was checked, its bytes
+unchanged; on Windows only its file name is changed, which keeps Node's signature valid; `runtime/SOURCE.txt` says which
+build), Monomem's code (`dist/`, with the Monomem icon), these docs and a small launcher (`monomem.cmd` on Windows,
+`monomem` on Mac and Linux). Monomem itself is not code-signed (signing costs money we have not spent yet). The only
+program in the folder is Node's, which is signed by its makers.
 
 **Install**
 
-1. Unpack the archive (on Windows: right-click it, **Extract All**; do not run it from inside the zip).
-2. In a terminal, run setup from the unpacked folder:
-   - Windows: `.\Monomem\monomem.cmd setup`
-   - Mac / Linux: `./Monomem/monomem setup`
-3. Setup shows its plan and asks before it changes anything. Its first two steps:
+What you will see on Windows, step by step:
+
+1. Right-click the downloaded zip, choose **Properties**, tick **Unblock** at the bottom, click **OK**. (Windows marks
+   files from the internet. Unblocking the zip before you unpack it means none of the unpacked files carry that mark, so
+   Windows does not stop to ask about `monomem.cmd`.)
+2. Right-click the zip again, choose **Extract All**, then **Extract**. Do not run anything from inside the zip.
+3. Open the `Monomem` folder and double-click `monomem` (the file `monomem.cmd`, shown as "Windows Command Script").
+   It opens your notes in the browser. To connect your apps, run setup in a terminal (PowerShell or Command Prompt)
+   from the folder that holds `Monomem`: `.\Monomem\monomem.cmd setup`. If you skipped step 1, Windows may first show "Open File - Security Warning"
+   or "Windows protected your PC" for `monomem.cmd`: check that it is the file you unpacked, then click **Run** (or
+   **More info**, then **Run anyway**).
+
+On a Mac or Linux, unpack the archive and run `./Monomem/monomem setup` in a terminal.
+
+Setup (Windows, Mac and Linux):
+
+1. Setup shows its plan and asks before it changes anything. Its first two steps:
    - It copies the folder to its home, so app settings never point into your Downloads folder. No admin rights are needed.
      Windows: `%LOCALAPPDATA%\Programs\Monomem`. Mac: `~/Applications/Monomem`. Linux: `~/.local/share/monomem`.
-   - It adds a **Monomem** entry that opens your notes in the browser: in the Windows Start menu, in `~/Applications` on a
-     Mac, and in the Linux applications menu. `monomem setup --undo` and `monomem uninstall` remove it.
-4. Then it connects your apps as usual. You can delete the downloaded archive and folder afterwards.
+     On Windows the copy does not keep the download mark, as an installer's files do not, so the Start menu entry opens
+     without a warning. The unpacked folder in Downloads keeps its mark.
+   - It adds a **Monomem** entry, with the Monomem icon, that opens your notes in the browser: in the Windows Start menu,
+     in `~/Applications` on a Mac, and in the Linux applications menu. `monomem setup --undo` and `monomem uninstall`
+     remove it.
+2. Then it connects your apps as usual. You can delete the downloaded archive and folder afterwards.
 
 Had the npm version? Setup lists moving your apps and hooks from it to this download as a step you say yes to (same data
 folder, and `monomem setup --undo` puts them back). After that, `npm rm -g monomem` is safe; until then
@@ -83,11 +101,14 @@ changes nothing.
 
 **What your computer may say (no code signing yet)**
 
-- **Windows.** The zip comes from the internet, so Windows marks it. The program that runs is Node's `node.exe`, which is
-  signed by the OpenJS Foundation, so SmartScreen and Smart App Control normally let it run. If Windows still blocks
-  `monomem.cmd`, right-click the zip, choose **Properties**, tick **Unblock**, click **OK**, and extract again. Do not turn
-  Smart App Control off. Task Manager shows Monomem as "Node.js JavaScript Runtime". We have not yet tested this on a
-  computer with Smart App Control switched on.
+- **Windows.** The zip comes from the internet, so Windows marks it, and **Extract All** passes the mark to every
+  unpacked file. `monomem.cmd` is a type of file Windows asks about when it carries the mark; Unblock the zip first (step 1
+  above) and it does not. The program that runs is Node's (`runtime\monomem-node.exe`), signed by the OpenJS Foundation:
+  Microsoft's documentation says Smart App Control lets signed programs run, and it does not check `.cmd` files
+  themselves, only the programs they start. If Windows still blocks `monomem.cmd`, Unblock the zip and extract again. Do
+  not turn Smart App Control off. In Task Manager, the Details tab shows `monomem-node.exe`, but the Processes tab still
+  shows "Node.js JavaScript Runtime" (that name is inside Node's signed file, which we do not change). We have not yet
+  tested this on a computer with Smart App Control switched on.
 - **Mac.** A browser download gets a download mark (`com.apple.quarantine`), and macOS Gatekeeper checks marked programs. Node's `runtime/node`
   is signed by its makers; the `monomem` launcher is a plain text script and is not signed. If you see "cannot be opened
   because Apple cannot check it for malicious software" (or "from an unidentified developer"):
