@@ -5,7 +5,9 @@ name: Standalone download
 # home, summed (SHA256SUMS) and given GitHub build attestations. On a v* tag the files go to that tag's GitHub release (a
 # DRAFT is created when none exists: publishing it stays a person's click). By hand (workflow_dispatch) it only builds.
 # A single-file SEA build runs too, as an artifact only: it is unsigned, and Windows Smart App Control blocks unsigned
-# exes with no override, so it is kept ready for the day code signing is bought (add a signing step here, nothing else).
+# exes with no override. Shipping it signed needs a signing step here AND three code changes: setup.ts (copy to the
+# permanent home + Start-menu entry run only in "bundle" mode), install.ts shortcutPlan (hard-codes runtime/node +
+# dist/src/cli.js) and update.ts (SEA mode says it cannot update itself yet).
 on:
   push:
     tags: ["v*"]
