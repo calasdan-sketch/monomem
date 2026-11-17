@@ -131,13 +131,21 @@ describe("the Monomem icon", () => {
     assert.equal(readFileSync(join(p.createdDir!, "Contents", "Resources", "monomem.icns"), "utf8"), "ICNS");
     assert.match(readFileSync(join(p.createdDir!, "Contents", "Info.plist"), "utf8"), /<key>CFBundleIconFile<\/key><string>monomem<\/string>/);
   });
-  test("Windows: the Start menu .lnk carries the icon", { skip: process.platform !== "win32" }, () => {
+  test("Windows: the Start menu .lnk carries the icon", { skip: process.platform !== "win32" }, (t) => {
     const root = scratch();
     const inst = join(root, "Monomem");
     put(join(inst, "dist", "monomem.ico"), Buffer.from([0, 0, 1, 0]));
     const p = shortcutPlan({ platform: "win32", home: root, env: { APPDATA: join(root, "Roaming") } }, inst);
-    createShortcut(p, "win32");
-    const icon = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "(New-Object -ComObject WScript.Shell).CreateShortcut($env:MM_LNK).IconLocation"], { env: { ...process.env, MM_LNK: p.file }, encoding: "utf8" }).trim();
+    // A loaded CI runner once took over 30 s just to start PowerShell (createShortcut's own limit). Setup already
+    // turns that into "Could not add the Start menu entry ... Everything else is done", so a timeout here says
+    // nothing about the icon: skip, loudly. Any other error still fails.
+    try {
+      createShortcut(p, "win32");
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ETIMEDOUT") return t.skip("PowerShell did not start within 30 s on this machine");
+      throw e;
+    }
+    const icon = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "(New-Object -ComObject WScript.Shell).CreateShortcut($env:MM_LNK).IconLocation"], { env: { ...process.env, MM_LNK: p.file }, encoding: "utf8", timeout: 60_000 }).trim();
     assert.equal(icon.toLowerCase(), `${join(inst, "dist", "monomem.ico")},0`.toLowerCase());
   });
 });
