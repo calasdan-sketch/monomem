@@ -27,6 +27,7 @@ import { originAllowed, hostAllowed, hostRefusal, RateLimiter, AuthTarpit, clien
 import { type TokenEntry, tokenId } from "./config.js";
 import { type ServerNamespaceOpts, resolveRequestNamespace } from "./namespace.js";
 import { PayloadTooLargeError, readBody, normalizeTokens, exitOnListenError, applyServerLimits, healthBody } from "./http-common.js";
+import { handleOAuth, oauthChallenge } from "./oauth/routes.js";
 
 // Small JSON writer that never writes to an already-finished response.
 function sendJson(res: ServerResponse, status: number, payload: unknown): void {
@@ -80,6 +81,9 @@ export function createMcpHttpServer(
       sendJson(res, 403, hostRefusal(req));
       return;
     }
+    // OAuth (off by default: its routes answer 404 until `monomem oauth on`). Before the Origin check: the consent form
+    // posts from the public origin, and /authorize checks Origin itself.
+    if (await handleOAuth(req, res, url, tokens)) return;
     if (!originAllowed(req)) {
       sendJson(res, 403, { error: "origin not allowed" });
       return;
@@ -94,7 +98,11 @@ export function createMcpHttpServer(
       const ckey = clientKey(req);
       const proceed = await tarpit.failed(ckey);
       if (!proceed || !authFailures.check(ckey)) sendJson(res, 429, { error: "rate limit exceeded" });
-      else sendJson(res, 401, { error: "unauthorized", hint: "Send your key as the header  Authorization: Bearer <key>.  Your keys: monomem keys list." });
+      else {
+        const challenge = oauthChallenge();
+        if (challenge) res.setHeader("WWW-Authenticate", challenge);
+        sendJson(res, 401, { error: "unauthorized", hint: "Send your key as the header  Authorization: Bearer <key>.  Your keys: monomem keys list." });
+      }
       return;
     }
     if (!perToken.check(tokenKey(tokenId(principal)))) {
