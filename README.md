@@ -53,12 +53,12 @@ git clone https://github.com/calasdan-sketch/monomem && cd monomem && cp .env.ex
 
 ```bash
 npx monomem setup
-npx monomem drill   # replays 26 known poisoning attacks on a copy of your store
+npx monomem check --attacks   # replays 26 known poisoning attacks on a copy of your store
 ```
 
 `setup` finds Claude Code, Claude Desktop, Cursor, Codex, Gemini CLI, Muse, VS Code and Zed on this computer, shows you in plain words what it will do and the exact
 lines it will change, saves a backup of each file, and writes only after you type `y`. Then it writes a first test note, reads it
-back, runs `monomem doctor` and tells you how to check it inside Claude Code (type `/mcp`). To look first: `npx monomem setup
+back, runs `monomem check --setup` (formerly `monomem doctor`) and tells you how to check it inside Claude Code (type `/mcp`). To look first: `npx monomem setup
 --dry-run`. To go back: `monomem setup --undo`. It changes only the Monomem entry; your other servers and settings stay as they
 are. Step by step, with troubleshooting: [docs/live-claude-code.md](./docs/live-claude-code.md).
 
@@ -83,7 +83,7 @@ The manual way, if you prefer:
 ```bash
 npm i -g monomem                           # 1. install
 claude mcp add monomem -- monomem mcp        # 2. wire it into Claude Code (stdio)
-monomem doctor                                 # 3. verify Node, database, token
+monomem check --setup                          # 3. verify Node, database, app key
 ```
 
 Then, in Claude, say **"remember that my staging server is on port 8443"**,
@@ -97,11 +97,11 @@ No global install: `claude mcp add monomem -- npx -y monomem mcp`.
 [INSTALL.md](./INSTALL.md) has every client.
 
 `monomem start` serves the dashboard and REST API on `:8790` and
-MCP-over-HTTP on `:8791` (bound to `127.0.0.1`). Clients that can send a
-bearer token (Claude Code, scripts, your own apps) can reach it remotely
+MCP-over-HTTP on `:8791` (bound to `127.0.0.1`). Clients that can send an
+app key in an `Authorization: Bearer` header (Claude Code, scripts, your own apps) can reach it remotely
 through a private network or tunnel you control — see [INFRA.md](./INFRA.md).
 **claude.ai and the Claude mobile app do not work with it yet:** their custom
-connectors sign in with OAuth, Monomem only accepts a bearer token, and a
+connectors sign in with OAuth, Monomem only accepts an app key, and a
 login page such as Cloudflare Access blocks the connector. On a phone, use
 Claude Code's remote control, which runs on your computer.
 
@@ -122,7 +122,7 @@ package, so `npm update` and npx cache cleanups never touch it. Set
 `MONOMEM_HOME` to put it elsewhere, or `MONOMEM_DB_PATH` for just the
 database. On macOS/Linux the folder is owner-only (`0700`, files `0600`).
 A from-source git checkout that already has `./data/state.db` keeps using
-it. `monomem doctor` shows which directory is in use. Upgrading or moving from another tool:
+it. `monomem check --setup` shows which directory is in use. Upgrading or moving from another tool:
 [docs/upgrading.md](./docs/upgrading.md), [docs/switching.md](./docs/switching.md).
 
 ### Docker
@@ -145,7 +145,7 @@ monomem backup --out ~/om-backup     # consistent hot copy; safe while the serve
 at-rest encryption is on, a copy of the `.key` file. **Keep the key apart from
 the backup**: a backup without its key is unreadable, and one stored next to it
 is not encrypted. See [INFRA.md](./INFRA.md#7-backups). The JSON route (admin
-token) also works:
+key) also works:
 
 ```bash
 TOKEN=$(cat ~/.monomem/.token)
@@ -173,7 +173,7 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/jso
   stays at rev 26, so `if_rev` guards and the change feed stay accurate).
   Imports over 200 notes land in seconds and defer the O(n²) similarity-graph
   rebuild — the response says so and search works immediately; run
-  `monomem rebuild-edges` when you want neighbor ranking back. Restored
+  `monomem tidy edges` when you want neighbor ranking back. Restored
   notes are re-embedded automatically when semantic search is enabled.
 - Markdown (one file per note, git-friendly) is a separate path:
   `monomem export --format md --dir ~/memory` — see
@@ -187,15 +187,15 @@ Notes keep their earlier versions (up to 20 per note by default), so replacing o
 
 | Command | What it shows | What it can't catch |
 |---|---|---|
-| `monomem drill` | Replays known poisoning attacks on a copy of your store and says which reached an agent | Only attacks it already knows about |
-| `monomem health` | One grade A-F with the reason: setup, settings, drill, audit chain, held writes | It grades what it checks, not everything in your notes |
+| `monomem check --attacks` | Replays known poisoning attacks on a copy of your store and says which reached an agent | Only attacks it already knows about |
+| `monomem check` | One grade A-F with the reason: setup, settings, attack replay, audit chain, held writes | It grades what it checks, not everything in your notes |
 | `monomem why 42` | The story of note #42: who wrote each version, what replaced it, which sessions were shown it | Who read the note (only a count and the last read time are kept), and versions older than the kept history (20 by default) |
-| `monomem conflicts` | Disagreements between writers: exact ones from attached facts, then a "possible" tier guessed from `key: value` lines in the text. It only flags and never changes a note | A reworded disagreement with no fact or `key: value` line is missed |
+| `monomem review conflicts` | Disagreements between writers: exact ones from attached facts, then a "possible" tier guessed from `key: value` lines in the text. It only flags and never changes a note | A reworded disagreement with no fact or `key: value` line is missed |
 | `monomem facts` | The decisions agents recorded as facts, with who wrote them; disputed keys marked | Decisions nobody recorded as a fact |
 | `monomem receipts` | Which notes recent session starts showed, and why (give a session id for one session's list) | Notes an agent found later by searching, and sessions older than the receipt window (30 days by default) |
 | `monomem search --as-of <time>` | What your memory held at an earlier time, rebuilt from history | Notes deleted for good, and text older than the kept versions |
 
-Agents that record decisions as `facts` (deploy_target, package_manager ...) get an exact match: a different value from another writer is flagged on write and, at session start, shown as a short "writers disagree" line. `health` opens your store (an older database file is upgraded once) and writes one small row noting how long the audit log was, so the next run can see lines removed. These are local commands: `drill` and `health` run the drill with embeddings forced off, so they make no embedding call (and no call to any other machine; the drill talks only to a temporary server on 127.0.0.1) even when `MONOMEM_EMBEDDINGS` and a remote `MONOMEM_EMBED_URL` are set (`health` only reports that such a URL is configured).
+Agents that record decisions as `facts` (deploy_target, package_manager ...) get an exact match: a different value from another writer is flagged on write and, at session start, shown as a short "writers disagree" line. `check` (formerly `health`; `check --attacks` was `drill`) opens your store (an older database file is upgraded once) and writes one small row noting how long the audit log was, so the next run can see lines removed. These are local commands: `check --attacks` and `check` replay the attacks with embeddings forced off, so they make no embedding call (and no call to any other machine; the replay talks only to a temporary server on 127.0.0.1) even when `MONOMEM_EMBEDDINGS` and a remote `MONOMEM_EMBED_URL` are set (`check` only reports that such a URL is configured).
 
 ## Automatic memory
 
@@ -211,8 +211,8 @@ monomem setup --capture        # or answer y to "Also record what <agent> does i
 - **What is kept:** a free, deterministic distiller (no model call) turns each session into a few **observations**
   (a commit typed by its `fix:` / `feat:` / `refactor:` prefix, a test that failed and then passed, a decision you
   stated, a secret that was kept out) and one **session summary** (request, files, commands, outcome, next step).
-  They are ordinary notes with a `kind`, so lint, quarantine, history, search and the trust policy apply to them,
-  and they never show up in `state_list` / `state_search` unless asked for.
+  They are ordinary notes with a `kind`, so lint, holding, history, search and the trust policy apply to them,
+  and they never show up in `memory_list` / `memory_search` unless asked for.
 - **Private by default:** `<private>...</private>` blocks are dropped and secrets are replaced with
   `[REDACTED:<type>]` *before* anything is stored. `MONOMEM_CAPTURE=off` stops it; `MONOMEM_CAPTURE_EXCLUDE`
   skips folders; `MONOMEM_CAPTURE_SKIP_TOOLS` skips tools.
@@ -222,8 +222,8 @@ monomem setup --capture        # or answer y to "Also record what <agent> does i
   files, recent work), packed into `MONOMEM_RECALL_TOKENS` (1500), and ends with what it stands in for.
 - **During a session:** new notes from other agents show up as one-line titles on your next message (at most 5, then
   "and N more"; distrusted writers and captured rows left out; nothing when there are none).
-- **Looking things up:** `memory_index` (compact rows) → `memory_timeline` (what happened around one) →
-  `memory_get` (full text, cite as `om:#id`), plus `session_list`. REST: `GET /index`, `GET /timeline`, `POST /get`,
+- **Looking things up:** `memory_sessions` with action `index` (compact rows) → action `timeline` (what happened around one) →
+  `memory_read` (full text, cite as `om:#id`), plus action `list` for sessions (`memory_sessions` is not shown by default: `MONOMEM_TOOLS=memory_sessions`). REST: `GET /index`, `GET /timeline`, `POST /get`,
   `GET /sessions`, `GET /files/timeline?path=`. The [monomem-mem skill](./skills/monomem-mem/SKILL.md) teaches
   an agent this order.
 - **Before a file is read (Claude Code only):** a `PreToolUse` hook on `Read` (`monomem hook file-context`, installed with
@@ -243,19 +243,19 @@ monomem setup --capture        # or answer y to "Also record what <agent> does i
   summary stays.
 - **Moves with your data:** export / import and the Markdown vault sync carry an observation's kind, session, type
   and files; `monomem encrypt enable` seals the bodies of captured rows too (with the key present they get fixed titles and no word tags, and the capture spool is sealed; file paths and working folders stay plain text: see [what is protected](https://github.com/calasdan-sketch/monomem/blob/main/docs/encryption-retention.md#what-is-protected-and-what-is-not)). Captured rows are left out of the stale
-  count, `memory_stats` totals and consolidation.
+  count, `memory_usage` totals and merging.
 - **Old captured rows fade out:** an observation nobody updated or read for 30 days (`MONOMEM_DECAY_DAYS`; summaries
   180, `MONOMEM_DECAY_SUMMARY_DAYS`) is archived, never deleted, by the expiry sweep or at session end. Your own notes,
-  decisions and anything tagged `pinned` never decay. `monomem decay --dry-run` shows what would go; `monomem
-  restore <id>` brings one back; `memory_stats` reports the counts.
-- **Memory quality:** `monomem quality [--json]` (and the dashboard's **Quality** tab, admin token, `GET /quality`)
-  lists near-duplicates, stale notes with a newer twin, quarantined writes, notes the linter flags and rows about to
+  decisions and anything tagged `pinned` never decay. `monomem tidy decay --dry-run` shows what would go; `monomem
+  restore <id>` brings one back; `memory_usage` reports the counts.
+- **Memory quality:** `monomem review duplicates [--json]` (formerly `monomem quality`; also the dashboard's **Quality** tab, admin key, `GET /quality`)
+  lists near-duplicates, older duplicates of a newer note, held writes, notes the linter flags and rows about to
   decay, each with the command or button that fixes it. Every fix previews or asks first and can be undone.
 
 **Semantic search when available:** `MONOMEM_EMBEDDINGS=auto` uses your local embedding endpoint when it answers
 and quietly stays on keyword search when it does not (it retries once a minute).
 
-`monomem doctor` shows whether the hooks are wired, the last captured event and the spool size;
+`monomem check --setup` shows whether the hooks are wired, the last captured event and the spool size;
 `monomem setup --undo` takes the hooks out again.
 
 **At session start**, notes you pin are shown at the start of every session, first, within a fixed size limit
@@ -278,7 +278,7 @@ prompt or note text is recorded):
 - tokens the local summarizer used (0 while it is off);
 - capture events recorded and the database size on disk.
 
-See it in `monomem doctor` (the `footprint:` line), `GET /stats` and `memory_stats` (the `meter` field), and the
+See it in `monomem check --usage`, `monomem check --setup` (the `footprint:` line), `GET /stats` and `memory_usage` (the `meter` field), and the
 dashboard's **Usage** view. Tokens are estimates at about 4 characters a token.
 
 ---
@@ -289,19 +289,19 @@ dashboard's **Usage** view. Tokens are estimates at about 4 characters a token.
   dependencies** (`@modelcontextprotocol/sdk`, `zod`; ~94 packages installed
   in total, mostly the MCP SDK's own), no native modules, no vector database,
   no Python. Back it up by copying one file.
-- **Change feed.** `memory_since` / `GET /changes`: "what changed while I was
+- **Change feed.** `memory_catch_up` with action `changes` / `GET /changes` / `monomem activity`: "what changed while I was
   away" — created, updated **and deleted** notes grouped by the writer that made them, with a
   per-device "since I last looked" marker. Driven by a local change log, so
   restores, file-sync imports and deletes are never missed. → [docs/change-feed.md](./docs/change-feed.md)
-- **Live wait.** `GET /changes?wait=25` / `memory_since { wait_seconds: 25 }` parks
+- **Live wait.** `GET /changes?wait=25` / `memory_catch_up { action: "changes", wait_seconds: 25 }` parks
   until something changes in your scope, so a session sees an idea added from
   your phone within moments instead of on its next poll. **Use 25, not the 55
   maximum:** many proxies and tunnels cut an idle response at 30s (a 55s wait
-  behind one died at 30.0s). Bounded (16 per token), and a dropped client or a
+  behind one died at 30.0s). Bounded (16 per app key), and a dropped client or a
   server shutdown frees its slot; `ack_mode: "manual"` makes delivery
   at-least-once. → [docs/change-feed.md](./docs/change-feed.md#live-wait)
-- **Task board, handoffs, catch-up.** `task_put` / `task_get` / `task_list` /
-  `task_claim`, `session_handoff`, and one `catch_up` call (changes since you last looked +
+- **Task board, handoffs, catch-up.** `memory_tasks` (actions `put`, `get`, `list`,
+  `claim`), `memory_sessions` with action `handoff`, and one `memory_catch_up` call (changes since you last looked +
   open tasks + latest handoff). Built on plain notes, so it is encrypted,
   namespaced and searchable like the rest; `monomem recall` includes open
   tasks and the latest handoff at session start. A task whose `due` date has passed is listed
@@ -310,7 +310,7 @@ dashboard's **Usage** view. Tokens are estimates at about 4 characters a token.
 - **Memory linter.** Every write is scanned for secrets (API keys, JWTs,
   private keys, high-entropy tokens) and prompt-injection instructions
   ("ignore previous instructions", chat-template markers, tool-call
-  coercion). Secrets are blocked; injection is quarantined for admin review
+  coercion). Secrets are blocked; injection is held for admin review
   and invisible to search and recall until approved. It is a pattern
   linter, so expect misses. On 190,000 ordinary chat turns it held 21 (all
   containing real override wording) and refused 27 (mostly code examples with a
@@ -321,11 +321,11 @@ dashboard's **Usage** view. Tokens are estimates at about 4 characters a token.
   git-friendly; `monomem import --dir` merges edits back three-way — newer
   wins, conflicts reported and the losing version kept, never silently lost.
   Works across machines through GitHub or Syncthing. → [docs/file-sync.md](./docs/file-sync.md)
-- **Scoped tokens.** `read` / `write` / `admin` bearer tokens, enforced
-  identically on REST and MCP — give your phone a read token and a leaked
-  token can't wipe the store.
+- **Scoped app keys.** `read` / `write` / `admin` app keys, enforced
+  identically on REST and MCP — give your phone a read key and a leaked
+  key can't wipe the store.
 - **Sensitivity labels.** Mark a note `public`, `internal` (the default) or `private`, and give each app a ceiling
-  (`monomem token add --label cursor --scope write --max internal`, or `monomem connect cursor --restricted`). Above its
+  (`monomem keys add --label cursor --scope write --max internal`, or `monomem connect cursor --restricted`). Above its
   ceiling a note is not found, searched, listed, counted, exported or injected, and looks the same as a note that does
   not exist. → [docs/sensitivity-labels.md](./docs/sensitivity-labels.md), [docs/give-an-app-limited-access.md](./docs/give-an-app-limited-access.md)
 - **MCP *and* a plain REST API** on the same store, plus a small dashboard.
@@ -357,9 +357,9 @@ the left column against [its README](https://github.com/modelcontextprotocol/ser
 
 | | Official MCP memory server | Monomem |
 |---|---|---|
-| Who wrote each note | Its README documents no author on a stored observation | Every note has a `written_by`: stamped by the server for token callers, a label from the app's config file for local apps ([Who wrote this?](#who-wrote-this)) |
+| Who wrote each note | Its README documents no author on a stored observation | Every note has a `written_by`: stamped by the server for callers with an app key, a label from the app's config file for local apps ([Who wrote this?](#who-wrote-this)) |
 | History and undo | Its README documents delete tools and no undo or version history | Earlier versions kept (20 per note by default) and restorable; a permanent delete is deliberate and cannot be undone |
-| Holding suspicious writes (quarantine) | Its README documents none | Suspicious writes wait for your approval, and a namespace can be approve-first ([docs/memory-linter.md](./docs/memory-linter.md)) |
+| Holding suspicious writes | Its README documents none | Suspicious writes wait for your approval, and a namespace can be approve-first ([docs/memory-linter.md](./docs/memory-linter.md)) |
 | REST API | Its README documents MCP tools and one MCP resource, no REST | REST API and dashboard next to MCP over stdio and HTTP |
 | Several apps on one memory | Yes: its README describes several clients sharing one file, with a lock so writes take turns | Yes, and each app or token gets its own writer name; `setup` wires eight clients |
 | Import | Not documented | `monomem import --from mcp-memory` reads its file ([docs/switching.md](./docs/switching.md)) |
@@ -380,36 +380,41 @@ encryption of note bodies. See [SECURITY.md](./SECURITY.md) for what it does
 
 ## MCP tools
 
-**Nine of these are registered by default:** `state_write`, `state_read`, `state_search`,
-`state_list`, `state_delete`, `catch_up`, `memory_supersede_preview`, `memory_supersede_confirm`,
-`memory_supersede_undo`. Their schemas are about 21,000 characters (roughly 5,000 tokens; measured with `tools/list`
-on 1.5.0 and counted as characters divided by 4, not with a tokenizer). A client that loads every tool's schema up front
-pays that on each request, so the rest are operator tooling you opt into with
-`MONOMEM_TOOLS=all`, or by naming them: `MONOMEM_TOOLS=memory_index,memory_timeline`. See
-[docs/configuration.md](./docs/configuration.md). The command runner (`task_*`, `runner_status`) is **not
-shipped in the npm package** — build it from the repo.
+**Seven of these are shown by default:** `memory_save`, `memory_search`, `memory_read`, `memory_list`,
+`memory_archive`, `memory_replace` and `memory_catch_up`. Their schemas are 5,291 characters in `tools/list`
+(about 1,320 tokens, estimated at 4 characters a token, not with a tokenizer), against 21,114 characters (about 5,280
+tokens) for the nine default tools of 1.5. A client that loads every tool's schema up front pays that on each request,
+so the other nine are operator tooling you opt into with `MONOMEM_TOOLS=all` (all 16 tools: 10,329 characters, about
+2,580 tokens, against 64,501 characters for the 37 tools of 1.5), or by naming them:
+`MONOMEM_TOOLS=memory_sessions,memory_held`. See [docs/configuration.md](./docs/configuration.md).
 
-| Tool | Scope | |
-|---|---|---|
-| `state_write` / `state_read` / `state_delete` | write / read / admin | Write with compare-and-swap (`if_rev`) and provenance (`source`); `client_key` makes a create retry-safe (also on REST `POST /notes`); read; forget. `state_delete` archives (restorable); a permanent delete is for a person, in the dashboard or with `monomem delete <id>` |
-| `state_search` / `state_relevant` / `state_list` | read | keyword, semantic or hybrid search, or vague-message recall with `mode: "relevant"`; listing. `state_relevant` does the same recall as its own tool and is no longer registered by default |
-| `memory_since` | read | change feed (`wait_seconds` = live wait) |
-| `task_put` / `task_list` / `task_get` | write / read / read | shared task board across devices and models; `client_key` makes a create retry-safe |
-| `task_claim` | write | take / heartbeat / release a task with a lease (compare-and-swap) |
-| `task_approve` | admin | approve a command task so the PC's runner may run it ([RUNNER.md](https://github.com/calasdan-sketch/monomem/blob/main/docs/RUNNER.md)) |
-| `runner_status` | read | is the PC's runner listening, and how many approved commands are waiting for it (`monomem runner-status`, `GET /runner/status`; [RUNNER.md](https://github.com/calasdan-sketch/monomem/blob/main/docs/RUNNER.md)) |
-| `session_handoff` / `catch_up` | write / read | leave a handoff; one-call catch-up at session start |
-| `memory_ack` | read | confirm a manual-ack change-feed page |
-| `memory_stats` | read | totals, most-read, never-read, stale |
-| `memory_quarantine` | admin | review linter-held writes |
-| `memory_confirm` | write | record that you checked an unconfirmed note against a source (counts only for a token caller that did not write the note; a person's pin still needs a person) |
-| `memory_flag` | write | say a note looks wrong, with a one-line reason, instead of overwriting it |
-| `memory_receipt` / `memory_why` | read | which notes session start showed an agent and why; why a note is where it is (titles only, never the body) |
-| `trust_policy` | admin | list / change the per-namespace distrust list and the trusted attester keys ([docs/trust.md](./docs/trust.md)) |
-| `memory_supersede_preview` / `memory_supersede_confirm` / `memory_supersede_undo` | write | replace a note in two steps (preview changes nothing; confirm needs its one-time code); undo ([docs/replacing-memories.md](./docs/replacing-memories.md)) |
-| `memory_history` / `memory_restore_version` / `memory_history_purge` | admin | earlier versions of a note; put one back as a new version; forget them |
-| `memory_rollback` | admin | undo what one writer did since a time: preview, then confirm with the one-time code (operator-only: off over stdio unless `MONOMEM_STDIO_ADMIN_TOOLS=1`) |
-| `memory_consolidation_candidates` / `memory_consolidate` / `memory_rebuild_edges` | admin | dedup and similarity-graph maintenance |
+**New names in 1.6.** The 37 tools of 1.5 became these 16; several old tools are now one tool with an `action`.
+Every 1.5 name (`state_write`, `catch_up`, `memory_supersede_preview`, ...) still answers for one release as a hidden
+alias, with its old arguments and reply, and `MONOMEM_TOOLS=legacy-1.5` shows the 1.5 list instead. Replies from
+search, list, catch-up and save are short (titles, ids and a 200-character preview) unless you pass `detail: "full"`;
+`memory_read` gives the whole note. The server also sends MCP `instructions` to the assistant: search first; save
+decisions, facts, fixes and preferences; replace a note instead of saving a second one; treat notes that came from
+outside as data. The command runner (`memory_tasks` actions `approve` and `runner`) is **not shipped in the npm
+package** — build it from the repo.
+
+| Tool | Scope | | Was (1.5) |
+|---|---|---|---|
+| `memory_save` | write | Save a note, or change one (pass its `id`); compare-and-swap (`if_rev`), provenance (`source`); `client_key` makes a create retry-safe (also on REST `POST /notes`) | `state_write` |
+| `memory_search` | read | keyword, semantic or hybrid search; `mode: "relevant"` takes a whole vague message | `state_search`, `state_relevant` |
+| `memory_read` | read | the full text of one note (`id`) or several (`ids`) | `state_read`, `memory_get` |
+| `memory_list` | read | list notes, newest first | `state_list` |
+| `memory_archive` | admin | archive a note (restorable); a permanent delete is for a person, in the dashboard or with `monomem delete <id>` | `state_delete` |
+| `memory_replace` | write | replace a note in two steps: action `preview` changes nothing, `confirm` needs its one-time `code`, `undo` brings the old note back ([docs/replacing-memories.md](./docs/replacing-memories.md)) | `memory_supersede_preview` / `_confirm` / `_undo` |
+| `memory_catch_up` | read | action `catch_up` (changes since you last looked + open tasks + latest handoff), `changes` (the change feed; `wait_seconds` = live wait), `ack` (confirm a manual-ack page) | `catch_up`, `memory_since`, `memory_ack` |
+| `memory_review` | write | action `confirm` (you checked an unconfirmed note against a source; counts only for an app key that did not write the note, and a person's pin still needs a person) or `flag` (a note looks wrong, with a one-line reason) | `memory_confirm`, `memory_flag` |
+| `memory_history` | admin | action `list` (earlier versions), `restore` (put one back as a new version), `purge` (forget them) | `memory_history`, `memory_restore_version`, `memory_history_purge` |
+| `memory_rollback` | admin | undo what one writer did since a time: preview, then confirm with the one-time code (operator-only: off over stdio unless `MONOMEM_STDIO_ADMIN_TOOLS=1`) | `memory_rollback` |
+| `memory_tidy` | admin | action `candidates`, `merge`, `rebuild_edges`: near-duplicates and similarity-graph upkeep | `memory_consolidation_candidates`, `memory_consolidate`, `memory_rebuild_edges` |
+| `memory_held` | admin | review writes the linter held: list, context, approve, keep_history, reject | `memory_quarantine` |
+| `memory_usage` | read | action `stats` (totals, most-read, never-read, stale), `receipt` (which notes a session start showed and why), `why` (why a note is where it is; titles only, never the body) | `memory_stats`, `memory_receipt`, `memory_why` |
+| `memory_sessions` | read / write | action `list`, `handoff` (leave a handoff), `index` (compact rows), `timeline` (what happened around one) | `session_list`, `session_handoff`, `memory_index`, `memory_timeline` |
+| `memory_tasks` | read / write / admin | shared task board: `list`, `get`, `put`, `claim` (a lease, compare-and-swap), `approve` (admin: let the PC's runner run a command task), `runner` (is the runner listening; [RUNNER.md](https://github.com/calasdan-sketch/monomem/blob/main/docs/RUNNER.md)) | `task_put` / `_get` / `_list` / `_claim` / `_approve`, `runner_status` |
+| `memory_trust` | admin | list / change the per-namespace distrust list and the trusted signing keys ([docs/trust.md](./docs/trust.md)) | `trust_policy` |
 
 REST mirrors them (`/notes`, `/search`, `/relevant`, `/changes`, `/tasks`, `/handoffs`, `/catch-up`, `/stats`,
 `/export`, `/import`, …). Full reference: [docs/architecture.md](./docs/architecture.md).
@@ -417,38 +422,38 @@ REST mirrors them (`/notes`, `/search`, `/relevant`, `/changes`, `/tasks`, `/han
 ## CLI
 
 ```
-monomem start | mcp | doctor | init
+monomem start | mcp | check [--setup | --attacks | --usage | --report --out report.html] | connect <app> --print
 monomem setup [--dry-run] [--yes] [--only claude-code,claude-desktop,cursor,codex,gemini,muse,vscode,zed] [--hook|--no-hook] [--undo]   # connect your apps; safe, backed up, undoable (--yes also adds the Claude Code start-of-session hook unless --no-hook)
 monomem import --claude [--dry-run] [--update] [--project <folder>]   # bring in CLAUDE.md files and Claude Code auto memory
 monomem import --from claude-mem|mem0|basic-memory|mcp-memory [--path p] [--dry-run]   # switch from another memory tool (docs/switching.md)
 monomem import --from claude-code-chats [--dry-run]   # make past Claude Code conversations searchable (docs/switching.md)
 monomem sync --git ~/my-private-memory-repo [--encrypt]   # keep your computers in step through YOUR private git repository
-monomem changes --since last --consumer laptop
+monomem activity --since last --consumer laptop     # what changed (was: changes)
 monomem runner-status                           # is each PC's runner listening? commands waiting?
 monomem trust [list | distrust <w> | undistrust <w> | identity | attester-add <key> --server-id <id> | attester-remove <id> | attester-revoke <id>]
 monomem trust [export-key --out <file> | rotate]         # EXPERIMENTAL: signed attestations (docs/trust.md)
-monomem watch --consumer pc [--exec program args...]     # react to changes as they land
+monomem activity --follow --consumer pc [--exec program args...]     # react to changes as they land
 monomem backup [--out dir] [--include-approval-key] [--include-attest-key]   # hot copy of the database (+ keys)
 monomem export --format md --dir ~/memory     monomem import --dir ~/memory
 monomem export --format json [--attest] --out a.json     monomem import --file a.json [--require-attestation]
-monomem supersede --old 12 --title "..." --body "..."   # replace a note: shows what you would lose, asks you to type the count
-monomem supersede undo <id>     monomem history <id>     monomem history restore <id> <version>     monomem history purge <id>
-monomem quarantine [list | approve <id> | reject <id>]
+monomem replace --old 12 --title "..." --body "..."   # replace a note: shows what you would lose, asks you to type the count
+monomem replace undo <id>     monomem history <id>     monomem history restore <id> <version>     monomem history purge <id>
+monomem review held [list | approve <id> | reject <id>]     monomem review [duplicates | conflicts | code | facts]
 monomem approve-first [<namespace> on|off | --all on|off]   # hold every agent write (one namespace, or all) for your approval
 monomem pin [<id>]     monomem unpin <id>     # agents can read a pinned note; only this CLI can change it
 monomem rollback --writer stdio:cursor --since 2h [--include-conflicts]   # undo one writer's changes (preview, then confirm)
-monomem access [--since 24h] [--writer label]   # who read memory, with which tool (never note text)
+monomem activity --reads [--since 24h] [--writer label]   # who read memory, with which tool (never note text)
 monomem flood     monomem resume <label>         # writers paused for too many writes in an hour
-monomem quality [--json]     monomem decay [--dry-run]     monomem archive <id> | restore <id>
+monomem archive <id> | restore <id>     monomem keys [add --label x --scope read | list | remove x]     monomem settings
 monomem label <id> [public|internal|private]    # show or set a note's sensitivity label
 monomem connect <app> [--restricted]     monomem open     # one app with its own key and limit; open the dashboard signed in
-monomem pii scan     monomem digest [--since 24h]     monomem scrub     monomem safety-report --out report.html     # checkups (docs/checkups.md)
-monomem consolidate | rebuild-edges | reindex | relevant "…" | recall
+monomem pii scan     monomem activity --summary [--since 24h]     monomem activity --writes --since 24h     # checkups (docs/checkups.md)
+monomem tidy merge | edges | reindex | decay [--dry-run] | scrub     monomem search "…"     monomem recall
 monomem bench [--json] [--suite stale|contradiction|isolation|provenance|poison] [--strict-gaps]   # provenance benchmark (docs/BENCHMARK.md)
 ```
 
-`monomem help` explains each. Upgrading an existing OneMemory 1.3.x install (the earlier name of this project, not monomem 1.2.0): [docs/upgrading.md](./docs/upgrading.md). The CLI runs with full local trust (no
-token).
+`monomem help` explains each (`monomem help --all` also lists the old names, which all still work). Upgrading an existing OneMemory 1.3.x install (the earlier name of this project, not monomem 1.2.0): [docs/upgrading.md](./docs/upgrading.md). The CLI runs with full local trust (no
+app key).
 
 ---
 
@@ -476,14 +481,14 @@ there, but it is only what the writer *claims*, so anyone can put anything in it
 
 A note written by Claude Code and one written by Cursor are therefore no longer
 identical on read-back. MCP results add a "who wrote this" block under the untrusted-data
-banner, the session-start recall names the writer, and `state_list`, `state_search` and
-`memory_since` take `written_by` / `not_written_by` (REST: `?written_by=`) so an agent can
+banner, the session-start recall names the writer, and `memory_list`, `memory_search` and
+`memory_catch_up` (action `changes`) take `written_by` / `not_written_by` (REST: `?written_by=`) so an agent can
 ignore its own writes or distrust a client.
 Details and limits: [docs/provenance.md](./docs/provenance.md).
 
 **Trust.** `writer_id` (`<server_id>/<label>`) says which server a label came from. An admin can put a
 writer on a per-namespace **distrust list** (`monomem trust distrust <writer> --namespace work`, the
-`trust_policy` MCP tool, `/trust` REST): its notes, tasks, handoffs and feed entries are then left out of every
+`memory_trust` MCP tool, `/trust` REST): its notes, tasks, handoffs and feed entries are then left out of every
 read path unless an **admin** passes `include_distrusted`, they stay hidden after anyone else edits them, and a
 distrusted command task is never run. `monomem ls` and `monomem search` say how many notes they left out this way,
 and `--include-distrusted` shows them, marked. A local app's notes are written by `stdio:<app>` (`stdio:cursor`, not
@@ -497,7 +502,7 @@ Monomem can see it** (Claude Code's hooks, a connection that read an unconfirmed
 **unconfirmed**: labelled, kept out of session start, and never pinned until a person runs `monomem confirm <id>`. Another
 agent's confirm, with its own key and a different stated source, is corroboration, not verification. Not seen: `Read`,
 `Bash`, and apps without the hooks. Notes can also say what they were built from (`derived_from`), and notes nobody
-re-confirmed in 30 days are labelled `[expired - ...]` (labels only by default; `monomem config`). `monomem review` lists
+re-confirmed in 30 days are labelled `[expired - ...]` (labels only by default; `monomem settings`). `monomem review` lists
 what waits for you. Details and limits: [docs/trust.md](./docs/trust.md#outside-content-limits-first-140),
 [docs/search.md](./docs/search.md#re-confirmation-expiry).
 
@@ -514,7 +519,7 @@ It has five suites, as plain JSON scenario files you can extend in [`bench/scena
 | B  Contradiction recovery | 31 | writer A vs writer B, then a trusted correction; distrusting the bad writer; weak overwrite of a trusted note; restoring the trusted text from history; the trust guard on replacing | resolved to the correction, loser stays visible, overwrite protected |
 | C  Permission isolation | 27 | cross-tenant read/write/search/export/import/merge/sweep, token scopes, admin-only flags, signed imports, and that one tenant cannot read another's history, preview, undo or reuse a confirmation code | `leakage-count` (must be 0), `unexpected-denials` |
 | D  Provenance retention | 19 | source, writer, creator, timestamps, deletion deadline, confidence after export, import, merge, update | `fields-lost` |
-| E  Memory poisoning | 22 | injected or malicious memories never reach an agent as trusted content: prompt-injection (plain, forged tags, zero-width-obfuscated, hidden in invisible Unicode tag characters, a booking-policy override) is quarantined; a sleeper trigger or curl-pipe-to-shell note is stored with a warning; a reworded override that passes the gate leaves all four booking answers once its writer is distrusted; a distrusted/low-trust writer cannot outrank or silently overwrite a trusted fact; secrets are redacted (capture) or blocked (write); a forged writer/namespace is stamped with the real one; an unsigned import cannot pose as verified; a captured web fetch is not trusted memory; a trusted writer claiming its note is its own is still checked; a trusted writer's paraphrase of a web page, or an agent's summary of an unconfirmed note, is marked and cannot be pinned; SessionStart injection carries the untrusted-data banner and leaves distrusted notes out; mass near-duplicate flooding cannot bury the answer | `poison-reach-count` (must be 0) |
+| E  Memory poisoning | 22 | injected or malicious memories never reach an agent as trusted content: prompt-injection (plain, forged tags, zero-width-obfuscated, hidden in invisible Unicode tag characters, a booking-policy override) is held; a sleeper trigger or curl-pipe-to-shell note is stored with a warning; a reworded override that passes the gate leaves all four booking answers once its writer is distrusted; a distrusted/low-trust writer cannot outrank or silently overwrite a trusted fact; secrets are redacted (capture) or blocked (write); a forged writer/namespace is stamped with the real one; an unsigned import cannot pose as verified; a captured web fetch is not trusted memory; a trusted writer claiming its note is its own is still checked; a trusted writer's paraphrase of a web page, or an agent's summary of an unconfirmed note, is marked and cannot be pinned; SessionStart injection carries the untrusted-data banner and leaves distrusted notes out; mass near-duplicate flooding cannot bury the answer | `poison-reach-count` (must be 0) |
 
 **Retrieval quality.** `monomem bench --longmemeval` and `--locomo` score retrieval on the public datasets, with no model
 and no judge (does the right conversation come back?). On one Windows PC, 2026-11-15, keyword search (the default, no model).
@@ -560,7 +565,7 @@ Limits no scenario can show (what the benchmark cannot see) are listed next, und
 
 ## Known limits
 
-- The write check is pattern matching. A reworded attack it does not know passes; `monomem drill` replays the attacks it does know.
+- The write check is pattern matching. A reworded attack it does not know passes; `monomem check --attacks` replays the attacks it does know.
 - Monomem guards what goes through it. A program that can run shell commands, or open the database file itself, is not stopped.
 - Local apps connected over stdio have no key, so a limit on other apps does not apply to them. A note marked `private` is hidden from
   apps given a limit; apps with no limit (including your main Claude connection) still see it.
@@ -585,13 +590,13 @@ Limits no scenario can show (what the benchmark cannot see) are listed next, und
   from a QA pass, not from the benchmark above: treat them as a rough guide and test on your own notes.
 - **What it adds at the start of a session.** A store of 60 short notes at the default setting (`MONOMEM_RECALL_TOKENS` = 1,500) produced
   about 5,900 characters, roughly **1,500 tokens** (estimated at 4 characters a token), listing all 60 notes (measured 2026-11-09 with
-  `node bench/recall-size.mjs`, which you can run yourself). The block is capped at 8,000 characters. `monomem meter` shows what yours actually costs and saves, as estimates.
+  `node bench/recall-size.mjs`, which you can run yourself). The block is capped at 8,000 characters. `monomem check --usage` shows what yours actually costs and saves, as estimates.
 
 ## Security in one paragraph
 
 Loopback by default and fail-closed: it refuses to bind a public interface
-without an explicit `MONOMEM_TOKEN`. Constant-time bearer auth on every
-data route, scoped tokens, DNS-rebinding Origin checks, per-client rate
+without an explicit `MONOMEM_TOKEN`. Constant-time app-key checks on every
+data route, scoped app keys, DNS-rebinding Origin checks, per-client rate
 limits, size caps, an append-only audit log without note content (hash-chained and, since 1.5.0, Ed25519-signed with
 the store's key; every note write, including a held or refused one, answers with a signed receipt you can check
 offline with only the public key, using `monomem verify-receipt --pubkey` or the standalone
@@ -606,7 +611,7 @@ tags, timestamps and embeddings stay readable; body search then runs from an ind
 TTL with reversible soft-archive, and `?explain=1` so a caller can see why
 a memory was retrieved. **Per-token namespace permissions** pin a token to
 one namespace so a single shared bridge stays isolated per agent — a pinned
-admin token is still confined. Your notes stay in one
+admin key is still confined. Your notes stay in one
 file on your machine; a tunnel only carries requests. Details and known
 limits: [SECURITY.md](./SECURITY.md),
 [docs/token-namespaces.md](./docs/token-namespaces.md), and
@@ -614,7 +619,7 @@ limits: [SECURITY.md](./SECURITY.md),
 
 **About the retrieval eval.** `evals/cross-device-tasks.json` is 10 tasks over
 10 notes and lexically easy; its perfect score is a regression gate in CI,
-not evidence of retrieval quality. Keyword-only `state_search` scores 1.00
+not evidence of retrieval quality. Keyword-only `memory_search` scores 1.00
 recall@1 on it. See [docs/encryption-retention.md](./docs/encryption-retention.md#the-evaluation-set).
 
 ## Leaves no trace
@@ -633,11 +638,11 @@ remove it: [docs/footprint.md](./docs/footprint.md).
 | [INSTALL.md](./INSTALL.md) | every MCP client |
 | [INFRA.md](./INFRA.md) | tunnels, phone/web access, n8n |
 | [docs/configuration.md](./docs/configuration.md) | all environment variables, server-side namespace resolution |
-| [docs/search.md](./docs/search.md) | semantic, time-aware and relevant search; staleness; consolidation |
-| [docs/change-feed.md](./docs/change-feed.md) | `memory_since` / `GET /changes` |
+| [docs/search.md](./docs/search.md) | semantic, time-aware and relevant search; staleness; merging duplicates |
+| [docs/change-feed.md](./docs/change-feed.md) | `memory_catch_up` (action `changes`) / `GET /changes` / `monomem activity` |
 | [docs/tasks.md](./docs/tasks.md) | task board, claims, command tasks, handoffs, one-call catch-up |
-| [docs/memory-linter.md](./docs/memory-linter.md) | `MONOMEM_LINT`, detection rules, quarantine |
-| [docs/access-log.md](./docs/access-log.md) | read access log (`monomem access`), flood guard (`monomem flood` / `resume`) |
+| [docs/memory-linter.md](./docs/memory-linter.md) | `MONOMEM_LINT`, detection rules, held writes (`monomem review held`) |
+| [docs/access-log.md](./docs/access-log.md) | read access log (`monomem activity --reads`), flood guard (`monomem flood` / `resume`) |
 | [docs/live-claude-code.md](./docs/live-claude-code.md) | `monomem setup` step by step, checking it in live Claude Code, troubleshooting |
 | [docs/file-sync.md](./docs/file-sync.md) | Markdown export/import, `sync --git` (optionally sealed), GitHub and Syncthing workflows |
 | [docs/sessionstart-hook.md](./docs/sessionstart-hook.md) | automatic recall at Claude Code session start |
@@ -648,7 +653,7 @@ remove it: [docs/footprint.md](./docs/footprint.md).
 | [docs/sensitivity-labels.md](./docs/sensitivity-labels.md) | public / internal / private labels and per-token ceilings; what a hidden note looks like |
 | [docs/give-an-app-limited-access.md](./docs/give-an-app-limited-access.md) | give one app its own key and a limit, step by step |
 | [docs/two-developers-one-server.md](./docs/two-developers-one-server.md) | two people, one Docker server, a key each, private notes kept apart |
-| [docs/checkups.md](./docs/checkups.md) | `pii scan`, `digest`, `scrub`, `safety-report`, `audit` |
+| [docs/checkups.md](./docs/checkups.md) | `pii scan`, `activity --summary`, `tidy scrub`, `check --report`, `audit` |
 | [docs/token-namespaces.md](./docs/token-namespaces.md) | per-token namespace permissions — one shared bridge, isolated agents |
 | [docs/replacing-memories.md](./docs/replacing-memories.md) | replacing a note in two steps, undo, version history and restore, confidence, the trust guard |
 | [docs/BENCHMARK.md](./docs/BENCHMARK.md) | `monomem bench`: stale memory, contradiction recovery, permission isolation, provenance retention, memory poisoning; scenario format; adapting it to another memory system |

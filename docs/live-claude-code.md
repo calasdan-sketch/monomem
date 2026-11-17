@@ -26,7 +26,7 @@ What it does, in order:
    configuration file is touched.
 6. Saves a copy of each file it changes beside it (`<file>.monomem-backup-<time>`), writes the change atomically (a temporary file, then
    a rename), reads it back, and checks again a moment later.
-7. Runs `monomem doctor` and prints what to check in Claude Code.
+7. Runs `monomem check --setup` (formerly `monomem doctor`) and prints what to check in Claude Code.
 
 It changes only the Monomem entry. Other servers, other settings, comments, number formats, line endings and key order in the file
 stay exactly as they were. A file it cannot read safely (broken JSON) stops everything and is not modified. If Claude Code writes the
@@ -62,7 +62,7 @@ When you are happy, `monomem backup --prune-premigration` removes the safety cop
 
 1. Close every Claude Code window and open Claude Code again (it reads the server list when it starts).
 2. Type `/mcp`. You should see **monomem** in the list, connected. (`claude mcp list` in a terminal shows the same, with a health check.)
-3. Ask: `Search my memory for "Monomem is connected"`. Claude should call `state_search` and show the test note.
+3. Ask: `Search my memory for "Monomem is connected"`. Claude should call `memory_search` and show the test note.
 4. Ask: `Remember that my favourite editor is Neovim`, start a new session and ask `What is my favourite editor?`.
 5. If you installed the hook: a new session starts with a short "Recent memory" summary (check with `monomem recall`).
 6. Optional: `monomem start`, then open http://localhost:8790 and paste the token from `~/.monomem/.token` (Windows
@@ -72,7 +72,7 @@ When you are happy, `monomem backup --prune-premigration` removes the safety cop
 
 | What you see | What to do |
 |---|---|
-| `/mcp` shows monomem as failed | Run the command from the entry yourself: `node "<path to cli.js>" mcp`. It should sit silently waiting (press Ctrl+C). An error there is the real problem. `monomem doctor` checks Node, the database and the token. |
+| `/mcp` shows monomem as failed | Run the command from the entry yourself: `node "<path to cli.js>" mcp`. It should sit silently waiting (press Ctrl+C). An error there is the real problem. `monomem check --setup` checks Node, the database and the app key. |
 | monomem is not in `/mcp` at all | Claude Code was still running and rewrote its file. Close it completely, run `monomem setup` again, then open Claude Code. In a project, a `.mcp.json` server must be approved the first time Claude Code asks. |
 | "needs Node.js 22.16.0 or newer" | Install Node 22.16+ or 24 LTS from nodejs.org, open a **new** terminal, check `node -v`, run setup again. |
 | Windows: a server started through `npx` fails | On native Windows, `npx` is a `.cmd` script, and wrapping it as `cmd /c npx ...` is commonly needed; the Claude Code MCP docs do not say so (checked), so this is not confirmed there. Setup writes that form when it is run through npx; check with `/mcp`. |
@@ -81,7 +81,7 @@ When you are happy, `monomem backup --prune-premigration` removes the safety cop
 | An old claude-bridge process still runs | Close Claude Code first. A process of the old program that has the database open will fail once it is upgraded; that is expected. |
 | `Stopped: ... keeps being rewritten by another program` | Close Claude Code (and Claude Desktop), then run setup again. |
 | Rename refused (`EPERM`/`EBUSY`) on Windows | Antivirus or a file indexer had the file open. Setup retries for about 2 seconds (about 7 on Windows); if it still fails, nothing was changed. |
-| The hook shows nothing | `monomem doctor` reports whether the hook is wired and whether it runs. Hooks that fail stay silent by design. Check `claude --version` supports `SessionStart` hooks. |
+| The hook shows nothing | `monomem check --setup` reports whether the hook is wired and whether it runs. Hooks that fail stay silent by design. Check `claude --version` supports `SessionStart` hooks. |
 | `... exists but is completely empty (0 bytes)` | Setup will not replace an empty config file, because a program may have been cut off while saving it. Look for a backup beside it; if you are sure, run setup again with `--force-empty`. |
 | I want it all gone | `monomem setup --undo`; delete `~/.monomem` only if you also want to delete your notes. |
 

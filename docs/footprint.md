@@ -13,7 +13,7 @@ backup). Both show the plan first and change nothing until you type `y`; `--dry-
 ## The data folder
 
 `MONOMEM_HOME`, else `~/.monomem` (in a git checkout of Monomem that already has `./data/state.db`, that `data`
-folder). `monomem doctor` prints which one, and its size.
+folder). `monomem check --setup` prints which one, and its size.
 
 | File | Written when | Remove |
 |---|---|---|
@@ -21,7 +21,7 @@ folder). `monomem doctor` prints which one, and its size.
 | `state.db.pre-v<N>-backup[-<time>]` | once per schema upgrade: the database as it was before | `backup --prune-premigration` |
 | `backups/<YYYY-MM-DD>/` (`state.db`, `README.txt`) | automatic daily backup (1.6.0) while the server runs (`monomem start`, `open`, `service`): checked a minute after start, then hourly, at most one a day. Keeps the 7 newest days plus the newest of each of the 4 weeks before them, so at most 11 copies of the database. The encryption key is never copied (the server says once where it is and that it needs its own copy). The dashboard's Settings switch or `MONOMEM_AUTO_BACKUP=off` (wins when set) turns it off | older ones by itself; all: delete the folder, or `uninstall --purge` |
 | `state.db.before-restore-<time>` | `backup restore`: the database as it was before the restore (the undo) | by hand |
-| `.last-backup`, `backup-status.json`, `.backup-key-warned` | each backup / how the last automatic or dashboard backup went (a failure shows in `monomem health`, the dashboard's Needs you and at session start, until the next good one) / the one-time key reminder | `uninstall --purge` |
+| `.last-backup`, `backup-status.json`, `.backup-key-warned` | each backup / how the last automatic or dashboard backup went (a failure shows in `monomem check`, the dashboard's Needs you and at session start, until the next good one) / the one-time key reminder | `uninstall --purge` |
 | `ui-settings.json` | the dashboard's Welcome and Settings (prompt-time recall and daily backups switches, apps you said no to); no secrets | `uninstall --purge` |
 | `.token`, `tokens.json` | first start (the API token) / by you | `uninstall --purge` |
 | `.key`, `.attest-key`, `.sync-key` | `encrypt enable` / first signed export / first `sync --git --encrypt` (`MONOMEM_KEY_FILE`, `MONOMEM_ATTEST_KEY_FILE`, `MONOMEM_SYNC_KEY_FILE` move them) | `uninstall --purge` (a key moved elsewhere: by hand) |
@@ -92,7 +92,7 @@ leaves it running. On Windows the task is found by its `monomem-task.xml` in the
 | `monomem open` (`src/cli/connect.ts`) | running the command | `http://127.0.0.1:<api port>/health`, to see whether your own server is up |
 | `monomem backup restore` (`src/cli.ts`) | running the command | `http://127.0.0.1:<api port>/health`, only to print a hint when something answers there (whether the database is in use is judged by its lock) |
 | `monomem setup` (`src/embeddings-offer.ts`) | running the command (not `--no-embeddings`, `--undo`, or with `MONOMEM_EMBEDDINGS` / `MONOMEM_EMBED_URL` already set) | `http://127.0.0.1:11434/api/tags`, to see whether a local Ollama has `nomic-embed-text`; if so, new app entries get `MONOMEM_EMBEDDINGS=auto` (0.8 s timeout) |
-| `monomem doctor` (`src/doctor/server.ts`) | running the command | `http://127.0.0.1:<api port>/health`, to warn when the server running there is older than the CLI (`MONOMEM_NO_SERVER_PROBE=1` skips it) |
+| `monomem check --setup` (`src/doctor/server.ts`) | running the command | `http://127.0.0.1:<api port>/health`, to warn when the server running there is older than the CLI (`MONOMEM_NO_SERVER_PROBE=1` skips it) |
 | Encrypted session start (`src/local-server.ts`, `src/recall.ts`) | the store is encrypted and a Monomem server for this store runs on this computer | that server on `127.0.0.1`: `GET /proof` (to check it holds the same main key; the key itself is never sent) and `POST /relevant` (to match note bodies; falls back to titles and tags if nothing answers) |
 | `monomem update` (`src/update.ts`) | typing the command (never automatic, never in a hook) | `api.github.com` for the latest release of `calasdan-sketch/monomem`, then that release's archive for this platform and its `SHA256SUMS` (checked before anything is replaced); an npm install only prints the npm command and calls nothing |
 
@@ -125,5 +125,5 @@ minutes) and exits. Every retry is bounded:
 - **daily backup** (server only): one `VACUUM INTO` copy a day, checked hourly; a failure is recorded, not retried until the
   next hourly check. The copy runs on the server thread, so a very large store pauses serving briefly once a day.
 
-`monomem doctor` reports the data folder size (warns over 1 GB), the spool size (warns when anything is waiting, and
+`monomem check --setup` reports the data folder size (warns over 1 GB), the spool size (warns when anything is waiting, and
 when it is full) and the capture backlog: events no session summary has taken in yet (warns over 10,000).

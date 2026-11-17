@@ -7,11 +7,18 @@
    it was set up with (`npx -y monomem@1.5.0 ...`). Those keep launching the old copy after you upgrade. Once the new version
    has upgraded the database, an old hook cannot open it and session start comes back **empty, without an error**. Setup again
    re-points every entry and hook at this version (it shows the change and asks first; `monomem setup --undo` reverses it).
-3. `monomem doctor`: it warns `... launches monomem X, this is Y` (with "run monomem setup") while anything still names the old
+3. `monomem check --setup` (formerly `monomem doctor`): it warns `... launches monomem X, this is Y` (with "run monomem setup") while anything still names the old
    version.
 
 Since 1.6.0 the server also makes a backup every day by itself (`<data>/backups`, see [footprint.md](./footprint.md)), and a
 backup goes back with `monomem backup restore <folder>` (it was `monomem restore <folder>`, which still works for now).
+
+**New names in 1.6.0.** Several commands and MCP tools have new names; every old one still works (old commands for good,
+old MCP tool names for one release). Commands: `check` (was `health`), `check --setup` (was `doctor`), `check --attacks`
+(was `drill`), `review held` (formerly `quarantine`), `activity` (was `changes`), `tidy edges` (was `rebuild-edges`),
+`keys` (was `token`), `settings` (was `config`), `replace` (formerly `supersede`); `monomem help --all` lists them all.
+MCP: 16 `memory_*` tools, seven shown by default; `MONOMEM_TOOLS=legacy-1.5` shows the 1.5 tool list. See
+[configuration.md](./configuration.md) (`MONOMEM_TOOLS`).
 
 **Syncing computers (`monomem sync` / `sync --git` / a shared folder)?** Since 1.6.0 a forgotten or deleted note keeps its
 sync file with two extra lines (`archived_at`, `archived_by`) instead of the file being removed, and the other computer archives
@@ -27,26 +34,26 @@ Applies to Monomem 1.3.x (and to a development build that already made the store
 - **Close every app that uses Monomem first** (Claude Code, Claude Desktop, Cursor, Codex, the server), then upgrade and start
   them again. An app still running the old version keeps writing in the old shape after the file is upgraded; 1.3.x and 1.4.x
   cannot notice that. From 1.5.0 on, a running Monomem notices a newer upgrade and refuses to save ("restart this app") until
-  you restart it. `monomem doctor` only reports an older database; it never upgrades it.
+  you restart it. `monomem check --setup` only reports an older database; it never upgrades it.
 
 - **What changes.** The first start migrates the database from schema v19 to **v22** (1.4.0 and 1.5.0 ship as one step): new columns on notes (when the upgrade ran,
   who approved a held write and when, the latest confirm), two on held writes (their forget date and confidence), one on capture
   sessions, and two new tables (confirms, and "derived from" links between notes), and, from 1.5.0, when a note's title or body last changed (the re-confirmation clock starts there, not at any edit) and the folder of the local process that wrote it, plus three small tables (agents' "this looks wrong" flags, the retry keys that stop a repeated write from saving a note twice, and the per-writer counts `monomem trust` shows) and two index changes. No note text is rewritten. Every note that exists
   at the upgrade is marked with the upgrade time, so nothing that showed before the upgrade is hidden after it.
 - **A verified backup is made first**, at `<database>.pre-v22-backup`. The upgrade does not run if that copy cannot be made.
-  Remove it when you are happy: `monomem backup --prune-premigration`. `monomem doctor` warns once a copy is more than 14 days old.
+  Remove it when you are happy: `monomem backup --prune-premigration`. `monomem check --setup` warns once a copy is more than 14 days old.
 - **Your app keys are hashed on the first start of 1.5.0 (automatic).** Each plain-text key in `tokens.json` is replaced by its
   one-way hash; the rewrite is atomic, `tokens.json.bak` (which held the plain text) is deleted, and starting again changes nothing.
   Your apps keep working: they still send the key in their own config. The main key in `.token` stays in plain text (the CLI
   and the dashboard sign-in need it). **Going back is the catch:** Monomem 1.4.x and older cannot read a hashed entry, so after
   a downgrade those apps are refused until you run `monomem connect <app>` again to make each a new key. (Restoring the
-  `.pre-v22-backup` database does not bring back the old `tokens.json`.) `monomem token harden` hashes by hand; `monomem doctor`
+  `.pre-v22-backup` database does not bring back the old `tokens.json`.) `monomem keys harden` hashes by hand; `monomem check --setup`
   warns if a key is still in plain text.
 - **One way only.** Monomem 1.3.x and older refuse a v22 database instead of opening it. If several machines share one database,
   upgrade all of them.
 - **To go back to 1.3.x:** close every app that uses Monomem and stop the server, then `monomem restore <database>.pre-v22-backup --yes`
   and install the older version (`npm i -g monomem@1.3.5`). Anything written after the upgrade is not in the backup; the copy-aside keeps it.
-- Afterwards run `monomem doctor`, then `monomem health`. What is new: [CHANGELOG.md](../CHANGELOG.md).
+- Afterwards run `monomem check --setup`, then `monomem check`. What is new: [CHANGELOG.md](../CHANGELOG.md).
 
 **Day 1.** Session start, search and lists show the same notes as before. Notes that existed at the upgrade are exempt from the
 outside-content hold (unless a later edit marks them). One change: an old note that carries a 1.3.5 outside-content stamp (a
@@ -55,7 +62,7 @@ pin` in a terminal still can, after you type yes. Also new: `monomem add` run fr
 script (not a terminal) is marked like any other writer's notes. What is new: notes written from now on after an agent read a web page or another MCP server's output
 (when Monomem can see it) land **unconfirmed**. They are labelled, kept out of session start, and one line says how many:
 `Monomem: N notes from outside content wait for confirmation (not shown). Review: monomem review`. See
-[trust.md](./trust.md#outside-content-and-taint-140).
+[trust.md](./trust.md#outside-content-140).
 
 **About day 31.** Re-confirmation expiry is on in **label** mode by default. Notes nobody edited or confirmed in the 30
 days since the upgrade start showing `[expired - not re-confirmed in 30 days]` in search and in session-start index lines.
@@ -63,8 +70,8 @@ Nothing is hidden or deleted, and their ranking does not change. You can:
 
 - leave it, and confirm notes as you check them: `monomem review`, then `monomem confirm <id> --source "..."` (or
   `monomem review --confirm-all` after reading the list);
-- turn the label off: `monomem config set confirm-mode off` (asks you to type yes);
-- make expired notes stay out of session start: `monomem config set confirm-mode enforce`. Changing the mode restarts
+- turn the label off: `monomem settings set confirm-mode off` (asks you to type yes);
+- make expired notes stay out of session start: `monomem settings set confirm-mode enforce`. Changing the mode restarts
   every note's clock, so nothing expires for another 30 days.
 
 Details: [search.md](./search.md#re-confirmation-expiry).
@@ -86,7 +93,7 @@ Applies to Monomem 1.2.x. A fresh install needs none of this.
   (`<database>.before-restore-<time>`), removes the stale `-wal`/`-shm` files and checks the result. Then install the older version
   (`npm i -g monomem@1.2.1`) and start it. Anything written after the upgrade is not in the backup; the copy-aside keeps it.
   Without the `restore` command (an old build): put the backup in place of `state.db` by hand and delete `state.db-wal` and `state.db-shm`.
-- Afterwards run `monomem doctor`, then `monomem health`. What is new: [CHANGELOG.md](../CHANGELOG.md).
+- Afterwards run `monomem check --setup`, then `monomem check`. What is new: [CHANGELOG.md](../CHANGELOG.md).
 
 ## Monomem 1.2.0 (database schema v16 to v18)
 
@@ -99,7 +106,7 @@ Applies to Monomem 1.1.x and OneMemory 2.x. A fresh install needs none of this.
 - **One way only.** An older Monomem or OneMemory cannot open a v18 database. If several machines share one database, upgrade all of them.
 - **To go back:** stop every Monomem process (server, MCP clients, runners, the CLI). Put `<database>.pre-v18-backup` back
   as the database and delete the `-wal` and `-shm` files beside it. Install the older version and start it. Anything written after the upgrade is not in the backup.
-- Afterwards run `monomem doctor`, then `monomem health`. What is new: [CHANGELOG.md](../CHANGELOG.md).
+- Afterwards run `monomem check --setup`, then `monomem check`. What is new: [CHANGELOG.md](../CHANGELOG.md).
 
 ## Older upgrade notes (OneMemory)
 
@@ -150,7 +157,7 @@ distrust list and writer labels are the stable part. See [trust.md](./trust.md).
    the stored labels of older notes (and any distrust rule) that this changes, so a rule keeps matching them.
    It is automatic, runs once and touches only rows that change.
 
-Run `monomem doctor` afterwards: it lists the pre-migration copies with size and age, and warns about
+Run `monomem check --setup` afterwards: it lists the pre-migration copies with size and age, and warns about
 leftover `.partial` files.
 
 ## Rolling back (older versions: OneMemory 1.4.x and the v19 upgrade)
@@ -178,12 +185,12 @@ automatically.
   signed envelope; `import` accepts the plain object, the envelope and a bare array.
 - **Import streams.** `monomem import --file` reads the file in batches instead of loading it whole.
   For a file with several batches the similarity edges are not rebuilt per batch: run
-  `monomem rebuild-edges` afterwards (the command prints that hint).
+  `monomem tidy edges` afterwards (the command prints that hint).
 - **Notes imported without a verified attestation** are marked `imported_unverified: true` and the agent
   banner says so. The default still accepts them. To refuse them, use `--require-attestation`,
   `require_attestation` over the API, or `MONOMEM_IMPORT_REQUIRE_ATTESTATION=1`.
 - **`include_distrusted`** is admin-only, and for a namespace-pinned admin with read grants it applies to
-  that token's own namespace only. The primary `MONOMEM_TOKEN` is always an admin.
+  that key's own namespace only. The main app key (`MONOMEM_TOKEN`) is always an admin key.
 - **New variables** (all optional, documented in [configuration.md](./configuration.md)):
   `MONOMEM_ATTEST_MIN_VERSION`, `MONOMEM_IMPORT_REQUIRE_ATTESTATION`, `MONOMEM_TRUSTED_ATTESTERS`,
   `MONOMEM_ATTEST_KEY_FILE`.
@@ -192,7 +199,7 @@ automatically.
 
 1. `monomem backup --out <dir>` yourself as well; the automatic copy is only the pre-upgrade state.
 2. Check free disk space (database size, plus the same again for the copy).
-3. Upgrade, start, wait for the migration, run `monomem doctor`.
+3. Upgrade, start, wait for the migration, run `monomem check --setup`.
 4. If you use several servers: read [trust.md](./trust.md), decide whether you want attestations at all
    (they are EXPERIMENTAL), and back up the signing key (`trust export-key --out <file>`,
    `backup --include-attest-key`).

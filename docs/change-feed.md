@@ -6,11 +6,15 @@ counts. Useful at the start of a session on a second device, or for an agent
 that wants to catch up before acting.
 
 ```
-memory_since({ since: "24h" })
-memory_since({ since: "last", consumer: "phone" })
+memory_catch_up({ action: "changes", since: "24h" })
+memory_catch_up({ action: "changes", since: "last", consumer: "phone" })
 GET  /changes?since=2026-10-15T09:00:00Z&namespace=work&limit=50
-monomem changes --since last --consumer laptop
+monomem activity --since last --consumer laptop
 ```
+
+Over MCP the feed is `memory_catch_up` with `action: "changes"` (one of the seven default tools; formerly
+`memory_since`, and `memory_ack` is now action `ack`). On the command line it is `monomem activity` (formerly
+`monomem changes`). The old names still work.
 
 The dashboard has a **Changes** button (last 24 hours).
 
@@ -25,7 +29,7 @@ The dashboard has a **Changes** button (last 24 hours).
 | `cursor` | `nextCursor` from the previous page (then `since` is not needed). |
 | `namespace` | Restrict to one namespace. Under server-side namespace resolution it is an untrusted hint, intersected with the readable set, exactly like `/search`. |
 | `source` | Only notes with this provenance `source`. |
-| `written_by` / `not_written_by` | Keep / drop change **events** written by this writer (label or `<server_id>/<label>`). Also `catch_up`. See [Filtering by writer](#filtering-by-writer). |
+| `written_by` / `not_written_by` | Keep / drop change **events** written by this writer (label or `<server_id>/<label>`). Also `memory_catch_up` action `catch_up`. See [Filtering by writer](#filtering-by-writer). |
 | `note_written_by` / `not_note_written_by` | Keep / drop entries whose note is **currently** held by this writer. |
 | `include_distrusted` | Show entries about notes from writers on the namespace's distrust list (hidden by default; marked `distrusted: true`). See [trust.md](./trust.md). |
 | `limit` | Page size, default 100, max 500. |
@@ -62,7 +66,7 @@ Scope: **read** (REST and MCP).
 }
 ```
 
-- **Titles only, never bodies** — read a note (`state_read`) for its content.
+- **Titles only, never bodies** — read a note (`memory_read`) for its content.
   Over MCP the payload carries the untrusted-data banner (titles are
   attacker-writable).
 - Entries are oldest first. A note created *and* edited in the window shows
@@ -70,9 +74,9 @@ Scope: **read** (REST and MCP).
   the delete. Consolidation shows as one `created` plus the deleted sources.
 - `counts` / `bySource` / `byWriter` cover the **whole window**, not just the page.
   `source` is what the writer *claims*; `byWriter` groups by the writer the server stamped (`written_by`), which is
-  what `monomem changes` prints (each line shows `by <writer>` and, when set, `claims "<source>"`; a note created in the
+  what `monomem activity` prints (each line shows `by <writer>` and, when set, `claims "<source>"`; a note created in the
   window and changed since says `new in this window and changed since; last by <writer>, source "<source>"`).
-  `quarantined` counts linter-held writes queued in the window (they are not
+  `quarantined` counts held writes queued in the window (they are not
   notes; see [memory-linter.md](./memory-linter.md)).
 - The window is frozen when the first page is requested (it ends at the
   newest change at that moment) and travels inside the cursor, so writes
@@ -113,7 +117,7 @@ changes in your scope:
 
 ```
 GET /changes?since=last&consumer=pc&wait=25
-memory_since({ since: "last", consumer: "pc", wait_seconds: 25 })
+memory_catch_up({ action: "changes", since: "last", consumer: "pc", wait_seconds: 25 })
 ```
 
 - Something new already? You get it immediately. Otherwise the call is held
@@ -135,8 +139,8 @@ memory_since({ since: "last", consumer: "pc", wait_seconds: 25 })
 - Writes made through this server wake waiters immediately; writes made by
   another process on the same database (e.g. the CLI) are noticed within
   about a second (`MONOMEM_WAIT_POLL_MS`).
-- Limits: at most 16 parked requests per token (`MONOMEM_WAIT_MAX_PER_TOKEN`),
-  32 per namespace scope across all tokens (`MONOMEM_WAIT_MAX_PER_NAMESPACE`)
+- Limits: at most 16 parked requests per app key (`MONOMEM_WAIT_MAX_PER_TOKEN`),
+  32 per namespace scope across all app keys (`MONOMEM_WAIT_MAX_PER_NAMESPACE`)
   and 64 per process (`MONOMEM_WAIT_MAX_TOTAL`). Past that REST answers 429
   and MCP returns a tool error whose text names the limit that was hit and the
   variable that raises it. A parked request holds its slot until it returns, times
@@ -159,7 +163,7 @@ again. When that matters, ask for manual acks:
 GET /changes?since=last&consumer=pc&ack_mode=manual&wait=25   ->  { ..., "ack_token": "..." }
 GET /changes?since=last&consumer=pc&ack_mode=manual&ack_token=<token>   (acks, then reads on)
 POST /ack  { "consumer": "pc", "ack_token": "<token>" }
-memory_since({ since: "last", consumer: "pc", ack_mode: "manual", ack_token })   memory_ack({ consumer, ack_token })
+memory_catch_up({ action: "changes", since: "last", consumer: "pc", ack_mode: "manual", ack_token })   memory_catch_up({ action: "ack", consumer, ack_token })
 ```
 
 The marker then moves only when the token comes back, so an unprocessed page is
@@ -167,26 +171,26 @@ delivered again. Tokens are signed by the store, bound to the consumer and the
 namespace/source scope they were issued for, and never move a marker backwards.
 The default stays "auto" so existing clients behave exactly as before; the
 trade-off is at-most-once (auto) versus at-least-once (manual: handle changes
-idempotently). `catch_up` takes the same `ack_mode` / `ack_token`.
+idempotently). `memory_catch_up` action `catch_up` takes the same `ack_mode` / `ack_token`.
 
-`exclude_self=1` (`exclude_self: true`) hides changes **written by** the token (or
+`exclude_self=1` (`exclude_self: true`) hides changes **written by** the app key (or
 MCP connection) whose label equals the `consumer` label, so a device does not wake
 itself with its own writes. The server records the writer itself (`change_log.actor`,
 schema v12); the note's `source` is free text any client can set, so it is not what
 is compared, except for writes with no recorded writer (CLI, scripts, rows from
-before v12), which fall back to `source`. Give each device its own token label and
+before v12), which fall back to `source`. Give each device its own app key label and
 use that label as its `consumer`; devices sharing a label hide each other's writes.
 
-Since 1.3.3 every change entry carries `written_by` (the server-stamped writer: token
+Since 1.3.3 every change entry carries `written_by` (the server-stamped writer: app key
 label, or `stdio` / `cli` / `server`; `""` for rows before schema v13), and the feed
-takes `written_by=` / `not_written_by=` (MCP `memory_since`, `memory_ack`; REST
+takes `written_by=` / `not_written_by=` (MCP `memory_catch_up` actions `changes` and `ack`; REST
 `GET /changes`, `POST /ack`) to keep or drop one writer's changes. The filter matches the
 *event* writer (`written_by` on the entry: whose content the note held when that change
 was logged; for a delete, whoever deleted). A note created by A and edited by B shows as
 A's create under `not_written_by=B`, so each entry also carries `note_written_by`, who
 holds the note **now** (absent for a delete); use it when you distrust a writer. A
 metadata-only change (tags, claim, approve) keeps the note's writer on its event; the
-token that made it is in `change_log.actor`. Rows from before schema v13 have `""`, so a
+app key that made it is in `change_log.actor`. Rows from before schema v13 have `""`, so a
 `written_by=` feed does not list them. A cursor, `last` marker or `ack_token` is bound to the filter it was
 issued for. See [provenance.md](./provenance.md).
 
@@ -194,12 +198,14 @@ A consumer whose `last` marker is older than the change-log retention (90 days) 
 `markerReset: true` with whatever is still retained, rather than silently skipping
 the purged events.
 
-### React from a script: `monomem watch`
+### React from a script: `monomem activity --follow`
 
 ```
-monomem watch --consumer pc                       # print each change as it lands
-monomem watch --consumer pc --exec notify-send Monomem
+monomem activity --follow --consumer pc                       # print each change as it lands
+monomem activity --follow --consumer pc --exec notify-send Monomem
 ```
+
+(formerly `monomem watch`, which still works.)
 
 A long-poll loop on the local store. With `--exec`, the program (and its
 arguments, taken verbatim from the command line) runs once per batch **without
@@ -222,7 +228,7 @@ note blanks its older titles, so the log only ever holds a note's current
 title. Rows older than 90 days are pruned periodically (at most hourly,
 never per write). The running server also prunes on its own hourly timer, so
 the log stays bounded even if nobody reads the feed. An admin can empty the whole log (and every `last`
-marker) at once with `monomem changes --purge`.
+marker) at once with `monomem activity --purge`.
 `since=<time>` maps to the first change stamped at or after that time.
 
 ## How `last` works
@@ -241,9 +247,9 @@ dropped. Markers read within the last 7 days are never evicted -- if all
 256 are that fresh, a new label's marker is simply not stored (its next
 read reports `markerReset` again).
 
-Why a caller-chosen label instead of "per token": Monomem tokens are bare
+Why a caller-chosen label instead of "per app key": Monomem app keys are bare
 secrets with a scope, not identities, and several devices often share one
-token. A label also lets one device keep separate markers for separate jobs.
+key. A label also lets one device keep separate markers for separate jobs.
 Anyone who can read the feed can move a label's marker; that only affects
 what *that label* sees next as "new" — it never hides or deletes data.
 

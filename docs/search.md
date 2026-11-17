@@ -10,12 +10,12 @@ meaning-based search and the bridge will also embed each note so a query like
 export MONOMEM_EMBEDDINGS=on
 export MONOMEM_EMBED_URL=http://localhost:11434/v1/embeddings  # Ollama default
 export MONOMEM_EMBED_MODEL=nomic-embed-text
-node dist/src/cli.js reindex   # backfill embeddings for existing notes
+monomem tidy reindex   # backfill embeddings for existing notes
 ```
 
 Embeddings come from **your own** OpenAI-compatible endpoint (local Ollama,
 or any OpenAI-shaped `/v1/embeddings` API) — still zero native modules, still
-nothing sent to a third party you didn't configure. `state_search` /
+nothing sent to a third party you didn't configure. `memory_search` /
 `GET /search` then accept `mode=keyword | semantic | hybrid` (hybrid fuses
 both with Reciprocal Rank Fusion). If the endpoint is unavailable, search and
 writes silently fall back to keyword — an optional embedder can never fail a
@@ -23,14 +23,14 @@ write or a query.
 
 ## Time-aware search
 
-`state_search` takes an optional `when` parameter (and `GET /search` takes
+`memory_search` takes an optional `when` parameter (and `GET /search` takes
 `?when=`) with a natural-language time phrase. It scopes results to notes
 **created** in that window; keywords still rank within it. An unrecognized
 phrase is ignored — the query runs unscoped rather than erroring.
 
 ```
-state_search({ query: "budget", when: "yesterday evening" })
-state_search({ query: "",      when: "last week" })   # time-only: newest-first list of the range
+memory_search({ query: "budget", when: "yesterday evening" })
+memory_search({ query: "",      when: "last week" })   # time-only: newest-first list of the range
 GET /search?q=invoice&when=Oct+14
 ```
 
@@ -55,7 +55,7 @@ Day boundaries are computed in your timezone: set `MONOMEM_TIMEZONE`
 
 ## Time travel (`--as-of`)
 
-`monomem search "deploy region" --as-of 7d` shows memory as it stood then (an ISO time, `2h`, `2026-10-01`). `monomem relevant ... --as-of` is the same flag on the same code, so the two read alike. With no words it lists the notes. Add `--json` for machine output. Times are printed in your local time with the UTC offset. `monomem why` and `monomem receipts` print times the same way. JSON output and MCP replies keep ISO 8601 times in UTC (`2026-11-05T18:03:00.000Z`). The MCP tool `state_search` takes the same thing as `as_of`, for an admin token only: a past view brings back earlier versions (which can hold text that was taken out on purpose) and notes that were forgotten since, the same reason note history is admin-only. It only reads; nothing is written.
+`monomem search "deploy region" --as-of 7d` shows memory as it stood then (an ISO time, `2h`, `2026-10-01`). `monomem relevant` (the old name) runs the same code with the same flag. With no words it lists the notes. Add `--json` for machine output. Times are printed in your local time with the UTC offset. `monomem why` and `monomem receipts` print times the same way. JSON output and MCP replies keep ISO 8601 times in UTC (`2026-11-05T18:03:00.000Z`). The MCP tool `memory_search` takes the same thing as `as_of`, for an admin key only: a past view brings back earlier versions (which can hold text that was taken out on purpose) and notes that were archived since, the same reason note history is admin-only. It only reads; nothing is written.
 
 Each hit shows a short snippet of the old text, an `[edited since]` marker when the note changed after that time, and `writer then:`. For old text the writer and version number come from the note's history (the same record `monomem why` reads), never from today's note. When history does not say, the line reads "writer then: not recorded" (in JSON and MCP the `written_by` and `rev` fields are left out and `writer_then` says "not recorded").
 
@@ -72,36 +72,39 @@ What it cannot do, and says so:
 
 ## Long notes in search results (1.5.0)
 
-`state_search` and `state_list` cut a body longer than 600 characters (`body_truncated: true`, `body_chars` = the full
+`memory_search` and `memory_list` cut a body longer than 600 characters (`body_truncated: true`, `body_chars` = the full
 length). In a **search** the 600 characters shown are the part of the note with the most of your query words (counted at
 word starts, accents ignored, like the index), not simply its opening; `body_offset` says where that part starts, so
-`state_read` with `offset` continues from there. When no part beats the opening, or the call is `state_list` (no query),
+`memory_read` with `offset` continues from there. When no part beats the opening, or the call is `memory_list` (no query),
 you get the first 600 characters as before. Encrypted notes work the same way: the part is chosen from the body after it
-is decrypted in memory for the result, and only from that one note's own text. REST `/search` and `state_read` return
+is decrypted in memory for the result, and only from that one note's own text. REST `/search` and `memory_read` return
 whole bodies and are unchanged.
+
+In 1.6 the MCP replies of `memory_search`, `memory_list`, `memory_catch_up` and `memory_save` are compact by default:
+titles, ids and a 200-character preview of the body. Pass `detail: "full"` for the longer form above, or read the
+whole note with `memory_read`.
 
 ## Relevant-memory search
 
-Don't know the exact wording? `state_search` with `mode: "relevant"` (or the
-separate `state_relevant` tool, which is no longer registered by default) takes a natural conversational
+Don't know the exact wording? `memory_search` with `mode: "relevant"` takes a natural conversational
 message, extracts keywords from it (lowercase, stop-words removed, hashtags
 like `#status` kept as-is), and returns notes matching **any** of them —
-a deliberately permissive OR search, unlike `state_search`'s AND conjunction.
+a deliberately permissive OR search, unlike the AND conjunction of the other modes.
 Results rank by most keyword hits first, then newest. The extracted keywords
 are returned alongside the results so you can see what was searched.
 
 ```
-state_search({ query: "what did we decide about the acme launch?", mode: "relevant" })
-# same as state_relevant({ message: "..." }); `when`, `explain` and `include_superseded` do not apply
+memory_search({ query: "what did we decide about the acme launch?", mode: "relevant" })
+# `when`, `explain` and `include_replaced` do not apply
 # -> { keywords: ["decide", "acme", "launch"], results: [...] }
 ```
 
 Same over HTTP: `POST /relevant` with `{ message, limit?, namespace? }`
-(read-scoped), and on the CLI: `monomem relevant "some message" [--limit 5]`.
+(read-scoped), and on the CLI: `monomem search "some message" [--limit 5]`.
 
 ## Staleness detection
 
-Facts go stale. `state_read` and `state_search` (and `GET /notes/:id`,
+Facts go stale. `memory_read` and `memory_search` (and `GET /notes/:id`,
 `GET /search`) annotate every note with `stale: boolean` and
 `ageDays: number` (whole days since `updated_at` — the most recent write
 wins). When a note is stale, a `staleWarning` string is included, e.g.:
@@ -114,9 +117,9 @@ ranks them slightly lower (their score is multiplied by 0.9), so a fresh
 note with comparable relevance wins. Agents should verify a stale note
 against current state before acting on it.
 
-**A stale note stays behind its newer twin (1.6.0).** The 0.9 factor is mild, so a 200-day-old note that matches the words better could still
+**A stale note stays behind its newer duplicate (1.6.0).** The 0.9 factor is mild, so a 200-day-old note that matches the words better could still
 come first. Now, when a stale note has a newer, fresh note that is *about the same thing* (the two are linked as similar notes), the stale one is
-placed right behind the lowest-ranked of its fresh newer twins. It is still returned and still flagged, and `explain` says "Kept behind the newer note #N on the same topic."
+placed right behind the lowest-ranked of those fresh newer notes. It is still returned and still flagged, and `explain` says "Kept behind the newer note #N on the same topic."
 A stale note that people keep reading (a clearly active read signal) keeps the place its reads earned. Notes that are not similar to anything are
 untouched. To remove an out-of-date note from search entirely, replace it ([replacing-memories.md](./replacing-memories.md)).
 
@@ -125,9 +128,9 @@ when the **same writer** wrote both, the newer one was written after the older o
 with another value, or a similarity link of at least 0.6), they match the query about equally well (the older score is at most 1.5 times the
 newer one), and the newer note is in the results you get. The older note is still returned, with `restated_by: <id>` and `restated_label`;
 `explain` adds "Kept behind #N, a newer note by the same writer on the same subject. Not replaced: to retire this one, use
-memory_supersede_preview." It never happens for a different writer (both notes show a dispute label instead), over a note a person
+memory_replace." It never happens for a different writer (both notes show a dispute label instead), over a note a person
 confirmed (unless the newer one is confirmed too), behind unconfirmed outside content or a flagged, replaced or distrusted note, or when the
-older note is read clearly more than the newer one. Applies to search, `state_relevant` / `POST /relevant` and session start.
+older note is read clearly more than the newer one. Applies to search (also `mode: "relevant"` and `POST /relevant`) and session start.
 
 Thresholds (env vars, read live — no restart needed to retune):
 
@@ -149,7 +152,7 @@ a field on the record (only when set), so a program can check it:
 
 | Label | Field | Meaning | In search | At session start |
 |---|---|---|---|---|
-| `[unconfirmed - from outside content]` | `unconfirmed`, `unconfirmed_label` | Written after an outside read Monomem could see; nobody has confirmed this version ([trust.md](./trust.md#outside-content-and-taint-140)) | returned, score x0.9 | left out; one count line |
+| `[unconfirmed - from outside content]` | `unconfirmed`, `unconfirmed_label` | Written after an outside read Monomem could see; nobody has confirmed this version ([trust.md](./trust.md#outside-content-140)) | returned, score x0.9 | left out; one count line |
 | `[expired - not re-confirmed in 30 days]` | `expired`, `expired_label` | Nobody changed or confirmed it within the re-confirmation period (the number follows `confirm-days`) | returned; x0.9 only in `enforce` | shown with the label; left out only in `enforce` |
 | `[built on a distrusted writer]` | `built_on_distrusted`, `built_on_distrusted_label` | Its `derived_from` names a note a distrusted writer touched (one hop) | returned | left out |
 
@@ -158,14 +161,14 @@ most x0.81.
 
 **Disputed facts (1.5.0).** A note whose `facts` another writer's live note contradicts (the same key, or a synonym such as
 `hosting` for `deploy_target`, with a different value) carries `disputed: [{id, key, value, written_by, confirmed}]` on every
-read: REST `GET /notes/:id`, `/notes`, `/search`, `/index`, `POST /get`, and MCP `state_read`, `state_search`, `state_list`,
-`memory_get`, `memory_index`. A note a person confirmed is listed first; when the other side is confirmed by a person and
+read: REST `GET /notes/:id`, `/notes`, `/search`, `/index`, `POST /get`, and MCP `memory_read`, `memory_search`, `memory_list`
+and `memory_sessions` (action `index`). A note a person confirmed is listed first; when the other side is confirmed by a person and
 this note is not, it also carries `disputed_label: "disputed by a confirmed note"`. MCP adds one line per dispute to the
 "who wrote this" block: `DISPUTED deploy_target: #12 says "fly" ("stdio:cursor", unconfirmed)`. Both notes stay; nothing is
 hidden or re-ranked. Only notes the reader may read count: a note above its sensitivity ceiling, in another namespace or
 from a distrusted writer is never named, and the reply is the same as when there is no dispute. A writer's own older note
 with another value is not a dispute (as at session start). Not covered yet: the looser "key: value" matches that `monomem
-conflicts` lists as possible (they need a scan of the whole namespace on every read).
+review conflicts` lists as possible (they need a scan of the whole namespace on every read).
 
 ## Re-confirmation expiry
 
@@ -181,9 +184,9 @@ every so often.
 
 It is computed on every read, never stored. Pinned, archived and replaced notes and captured rows (observations, session
 summaries), tasks and handoffs never expire. A confirm by another agent (corroboration) is recorded but never restarts the clock. A content change by an agent
-DOES restart it: the note is re-stamped to that agent, a new claim under a new name (and if it is tainted it waits for confirmation anyway).
+DOES restart it: the note is re-stamped to that agent, a new claim under a new name (and if it is marked as from outside it waits for confirmation anyway).
 
-**Modes.** Set with `monomem config set confirm-mode <mode>` ([configuration.md](./configuration.md#settings-kept-in-the-store-monomem-config)):
+**Modes.** Set with `monomem settings set confirm-mode <mode>` ([configuration.md](./configuration.md#settings-kept-in-the-store-monomem-settings-formerly-monomem-config)):
 
 | Mode | What an expired note gets |
 |---|---|
@@ -195,19 +198,19 @@ No mode ever archives or deletes a note for being expired.
 
 **What this means after an upgrade.** Nothing changes on day 1. About 30 days after upgrading, notes that nobody edited
 or confirmed since start showing `[expired - not re-confirmed in 30 days]`. They are still shown and ranked as before. To
-turn the label off: `monomem config set confirm-mode off` (asks you to type yes). To make expiry hide notes from session
-start: `monomem config set confirm-mode enforce`. Switching between `label` and `enforce` keeps every due date; turning expiry on from `off` starts the clock for every note.
+turn the label off: `monomem settings set confirm-mode off` (asks you to type yes). To make expiry hide notes from session
+start: `monomem settings set confirm-mode enforce`. Switching between `label` and `enforce` keeps every due date; turning expiry on from `off` starts the clock for every note.
 
 **Re-confirming.** `monomem confirm <id> --source "what you checked"` (a person; see [trust.md](./trust.md#confirming-notes)),
 or `monomem review` to see every expired and unconfirmed note with the reason, and `monomem review --confirm-all` to
 confirm them all as you after one typed yes. A confirm's reply ends with `Next check due YYYY-MM-DD.` while expiry is on.
 The same writer can confirm the same version again once its last confirm is older than the period.
 
-`monomem doctor` and `monomem health` print the mode, the period and how many notes are past due.
+`monomem check --setup` and `monomem check` print the mode, the period and how many notes are past due.
 
 Not yet: per-tag or per-writer periods, per-namespace `enforce`, and a warning before notes expire (not yet built).
 
-## Consolidation (dedup)
+## Merging duplicates (`monomem tidy merge`)
 
 Agents re-storing the same fact ("our API base URL is …" saved three times
 in slightly different words) bloats the store and muddies search results.
@@ -222,20 +225,20 @@ isolation boundary, so a pair is only ever suggested when both notes live in
 the same one. Detection is O(n²) and capped: beyond 2,000 notes (or ~2 MB
 of title + body text) only the most recently created notes are scanned.
 
-MCP tools:
+MCP tool `memory_tidy` (not shown by default: `MONOMEM_TOOLS=memory_tidy`):
 
-| Tool | Scope | What it does |
+| Action | Scope | What it does |
 |---|---|---|
-| `memory_consolidation_candidates` | **admin** | Lists near-duplicate pairs (score ≥ threshold, default 0.95) with both titles so the model can judge. Admin because the scan is O(n²) CPU; one scan runs at a time, under a 15 s budget, and stops if the client disconnects |
-| `memory_consolidate` | **admin** | Merges 2+ ids into one note. `dry_run: true` previews the merge without writing; `keep_sources: true` skips deleting the originals. Gated at admin because it deletes, like `state_delete`. |
+| `candidates` | **admin** | Lists near-duplicate pairs (score ≥ threshold, default 0.95) with both titles so the model can judge. Admin because the scan is O(n²) CPU; one scan runs at a time, under a 15 s budget, and stops if the client disconnects |
+| `merge` | **admin** | Merges 2+ ids into one note. `dry_run: true` previews the merge without writing; `keep_sources: true` skips deleting the originals. Gated at admin because it deletes. |
 
 CLI (safe by default — reports only, unless you opt in):
 
 ```bash
-node dist/src/cli.js consolidate                          # list candidates
-node dist/src/cli.js consolidate --dry-run                # preview each merge
-node dist/src/cli.js consolidate --yes                    # actually merge
-node dist/src/cli.js consolidate --threshold 0.98 --namespace acme
+monomem tidy merge                          # list candidates (formerly: monomem consolidate)
+monomem tidy merge --dry-run                # preview each merge
+monomem tidy merge --yes                    # actually merge
+monomem tidy merge --threshold 0.98 --namespace acme
 ```
 
 **Scheduled auto-consolidation** (opt-in):
@@ -248,5 +251,5 @@ When set, `monomem start` runs a background pass on that interval that
 **logs** every candidate pair ≥ 0.95 for review — and only auto-merges pairs
 scoring **≥ 0.99** (near-identical notes, e.g. the same fact saved twice
 verbatim). Weaker duplicates are never merged blindly; review them with
-`memory_consolidation_candidates` or the CLI. The scheduler never throws: a
+`memory_tidy` action `candidates` or the CLI. The scheduler never throws: a
 background janitor must not take down the server.

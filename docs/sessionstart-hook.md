@@ -53,7 +53,7 @@ Project facts: package_manager=pnpm (#12 by claude-code), deploy_target=fly.io (
 Recent memory (1 note):
 - [Release cadence] {recent 3d}: Ship weekly on Thursdays
 
-Memory index (most relevant first; open with memory_get):
+Memory index (most relevant first; open with memory_read):
 #41 [bugfix] Fixed the tokenizer for CJK (2026-10-11, ~40 tok) {kw,files 20d}
 
 Why shown, in {}: files = linked to files you changed, kw = matches your branch, ...
@@ -101,11 +101,11 @@ With the capture hooks installed (`monomem setup`), each message you send runs o
 capture:
 
 - **New since your last message** (always on): titles of notes other apps saved since your previous message. An app that
-  saved more than 3 is summed up in one line ("bot saved 60 notes (#3014-#3073); memory_since lists them").
+  saved more than 3 is summed up in one line ("bot saved 60 notes (#3014-#3073); memory_catch_up lists them").
   A note that restates one its writer was shown carries the label `[echo of #N: ...; not a second source]` here and at
   session start ([trust.md](./trust.md#echoes)).
 - **Another writer replaced text you wrote** (always on): a note whose text this app's agent wrote and another writer
-  replaced since your previous message (session start says the same for the last 7 days, as `catch_up` does). "This app"
+  replaced since your previous message (session start says the same for the last 7 days, as `memory_catch_up` does). "This app"
   is the app named by `MONOMEM_CLIENT` in the hook's environment, or `stdio:claude-code` when Claude Code runs the hook;
   with neither, there is no such line.
 - **Off by default** (`MONOMEM_PROMPT_RECALL=on` turns them on):
@@ -239,7 +239,7 @@ working `recall` that never runs:
    If it mentions `hook-probe-9417`, the hook fired. If not, re-check the
    command row from the prerequisites table — the usual cause is
    `monomem` not resolving on the hook's PATH.
-4. `monomem doctor` also runs a recall smoke test, a budget check, and
+4. `monomem check --setup` also runs a recall smoke test, a budget check, and
    reports whether the SessionStart hook is present in
    `~/.claude/settings.json`.
 
