@@ -275,6 +275,53 @@ describe("rename-aside swap", () => {
     assert.equal(readFileSync(join(root, "runtime", "node"), "utf8"), "node for 1.6.0");
     assert.equal(readFileSync(join(staged, "runtime", "node"), "utf8"), "node for 1.7.0");
   });
+  test("an undo step that fails is reported (path and error), never 'every file was put back'", async () => {
+    const root = fakeBundle(scratch(), "1.6.0");
+    const staged = fakeBundle(join(root, ".update-1.7.0", "Monomem"), "1.7.0");
+    let n = 0;
+    const flaky = (a: string, b: string): void => {
+      n++;
+      if (n === 4) throw Object.assign(new Error("disk said no"), { code: "EIO" });
+      if (n === 5) throw Object.assign(new Error("still locked"), { code: "EBUSY" }); // the first undo step
+      renameReal(a, b);
+    };
+    let err: Error & { undoFailed?: string[] } = new Error("none");
+    try {
+      swapIn(root, staged, join(root, ".old-1.6.0"), flaky);
+    } catch (e) {
+      err = e as typeof err;
+    }
+    assert.match(err.message, /disk said no/);
+    assert.equal(err.undoFailed?.length, 1);
+    assert.match(err.undoFailed![0], /still locked/);
+    // runUpdate says which, and does not claim everything was put back
+    const r2 = fakeBundle(scratch(), "1.6.0");
+    const lines: string[] = [];
+    let m = 0;
+    const code = await runUpdate({ check: false }, {
+      mode: "bundle", root: r2, version: "1.6.0", platform: "linux", arch: "x64", env: {},
+      fetch: (async (url: string | URL) => {
+        const u = String(url);
+        const archive = Buffer.from("a");
+        if (u.includes("/releases/latest")) return new Response(JSON.stringify({ tag_name: "v1.7.0", assets: [{ name: "monomem-1.7.0-linux-x64.tar.gz", browser_download_url: "https://dl/a" }, { name: "SHA256SUMS", browser_download_url: "https://dl/s" }] }));
+        if (u === "https://dl/s") return new Response(`${createHash("sha256").update(archive).digest("hex")}  monomem-1.7.0-linux-x64.tar.gz\n`);
+        return new Response(archive);
+      }) as typeof fetch,
+      out: (l) => void lines.push(l), err: (l) => void lines.push(l),
+      unpack: (_a, into) => void fakeBundle(join(into, "Monomem"), "1.7.0"),
+      run: (cmd) => ({ status: 0, stdout: readFileSync(cmd, "utf8").replace("node for ", "") + "\n" }),
+      rename: (a, b) => {
+        m++;
+        if (m === 4) throw Object.assign(new Error("disk said no"), { code: "EIO" });
+        if (m === 5) throw Object.assign(new Error("still locked"), { code: "EBUSY" });
+        renameReal(a, b);
+      },
+    });
+    assert.equal(code, 1);
+    const all = lines.join("\n");
+    assert.doesNotMatch(all, /every file was put back/);
+    assert.match(all, /could not be put back.*still locked/s);
+  });
   test("Windows: works while the folder's node.exe is running (it is renamed, never overwritten)", { skip: process.platform !== "win32" }, async () => {
     const root = scratch();
     fakeBundle(root, "1.6.0", "win32");

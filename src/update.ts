@@ -63,24 +63,26 @@ export type RenameFn = (from: string, to: string) => void;
 /**
  * Move every top-level entry of `staged` into `root`, putting the entry it replaces into `aside` first. A folder that
  * cannot be renamed as a whole (Windows: it holds a running node.exe) is moved file by file. On any failure every step
- * done so far is undone, in reverse, and the error is thrown: the install folder is as it was.
+ * done so far is undone, in reverse, and the error is thrown: the install folder is as it was, unless an undo step failed
+ * too; those are listed on the error as `undoFailed` ("<path>: <error>").
  */
 export function swapIn(root: string, staged: string, aside: string, rename: RenameFn = renameSync): void {
-  const undo: Array<() => void> = [];
+  // Each undo step names what it puts back, so a step that fails can be reported.
+  const undo: Array<[string, () => void]> = [];
   const moveAside = (src: string, dst: string): void => {
     try {
       rename(src, dst);
-      undo.push(() => rename(dst, src));
+      undo.push([src, () => rename(dst, src)]);
       return;
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code ?? "";
       if (!statSync(src).isDirectory() || !["EPERM", "EACCES", "EBUSY"].includes(code)) throw err;
     }
     mkdirSync(dst);
-    undo.push(() => rmdirSync(dst));
+    undo.push([dst, () => rmdirSync(dst)]);
     for (const c of readdirSync(src)) moveAside(join(src, c), join(dst, c));
     rmdirSync(src);
-    undo.push(() => mkdirSync(src));
+    undo.push([src, () => mkdirSync(src)]);
   };
   try {
     mkdirSync(aside, { recursive: true });
@@ -88,16 +90,18 @@ export function swapIn(root: string, staged: string, aside: string, rename: Rena
       const dst = join(root, name);
       if (existsSync(dst)) moveAside(dst, join(aside, name));
       rename(join(staged, name), dst);
-      undo.push(() => rename(dst, join(staged, name)));
+      undo.push([join(staged, name), () => rename(dst, join(staged, name))]);
     }
   } catch (err) {
-    for (const u of undo.reverse()) {
+    const undoFailed: string[] = [];
+    for (const [what, u] of undo.reverse()) {
       try {
         u();
-      } catch {
-        /* keep undoing the rest */
+      } catch (e) {
+        undoFailed.push(`${what}: ${e instanceof Error ? e.message : String(e)}`); // keep undoing the rest
       }
     }
+    if (undoFailed.length) Object.assign(err as object, { undoFailed });
     throw err;
   }
 }
@@ -258,7 +262,14 @@ export async function runUpdate(flags: { check: boolean }, d: UpdateDeps): Promi
   try {
     swapIn(d.root, fresh, aside, d.rename);
   } catch (e) {
-    return fail(`Could not put the new version in place (${e instanceof Error ? e.message : String(e)}); every file was put back.`);
+    const why = e instanceof Error ? e.message : String(e);
+    const undoFailed = (e as { undoFailed?: string[] }).undoFailed ?? [];
+    if (!undoFailed.length) return fail(`Could not put the new version in place (${why}); every file was put back.`);
+    // Not "nothing was changed": say which entries are not back, and keep the download and the aside copy for them.
+    d.err(`Could not put the new version in place (${why}), and ${undoFailed.length} item(s) could not be put back:`);
+    for (const u of undoFailed) d.err(`  ${u}`);
+    d.err(`Close your apps, then move them back from ${aside} and ${staging} into ${d.root}.`);
+    return 1;
   }
   d.out(`Installed Monomem ${latest} in ${d.root} (the old ${d.version} is in ${aside} until the next update).`);
   tryRemove(staging, d.remove);
