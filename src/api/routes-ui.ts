@@ -12,7 +12,8 @@
 // The computer-touching actions run the ordinary commands (setup, update, uninstall, service) as a child process, so
 // their own backups, undo history and checks apply unchanged.
 import { randomBytes } from "node:crypto";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { closeSync, existsSync, openSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { readBody } from "../http-common.js";
 import { sendJson } from "./shared.js";
@@ -69,6 +70,25 @@ let runner: UiRunner = realRunner;
 export function setUiRunner(r: UiRunner | null): void {
   runner = r ?? realRunner;
 }
+/**
+ * Start a command in the background, detached from this server, its output into `logFile`. The Update button uses it: the
+ * update stops this server and starts the new version, so it cannot be a child the server waits on.
+ */
+export type UiStarter = (args: string[], logFile: string) => void;
+const realStarter: UiStarter = (args, logFile) => {
+  const self = selfCommand(args);
+  const fd = openSync(logFile, "w");
+  try {
+    spawn(self.command, self.args, { detached: true, stdio: ["ignore", fd, fd], windowsHide: true }).unref();
+  } finally {
+    closeSync(fd);
+  }
+};
+let starter: UiStarter = realStarter;
+export function setUiStarter(s: UiStarter | null): void {
+  starter = s ?? realStarter;
+}
+const updateLog = (): string => join(dirname(DB_PATH), "update.log");
 
 // ---- the installable app (no key) -------------------------------------------------------------------------------------
 const ASSETS: Record<string, { type: string; body: string | Buffer }> = {
@@ -189,12 +209,31 @@ export async function uiRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
     sendJson(res, out.code === 0 ? 200 : 500, { ok: out.code === 0, ...out });
     return true;
   }
-  // POST /ui/update { check } -> `monomem update --check` / `monomem update`. Only when the person presses the button.
+  // POST /ui/update { check } -> `monomem update --check` (answers its output), or `monomem update --restart-server <pid>`
+  // started in the background (answers at once; the page reads GET /ui/update/log and waits for the new version on /health).
+  // Only when the person presses the button.
   if (req.method === "POST" && path === "/ui/update") {
     if (needLocal()) return true;
     const b = (await jsonBody(req)) ?? {};
-    const out = await runner(b.check === true ? ["update", "--check"] : ["update"], 600_000);
-    sendJson(res, 200, { ok: out.code === 0, ...out });
+    if (b.check === true) {
+      const out = await runner(["update", "--check"], 120_000);
+      sendJson(res, 200, { ok: out.code === 0, ...out });
+      return true;
+    }
+    try {
+      starter(["update", "--restart-server", String(process.pid)], updateLog());
+      sendJson(res, 202, { ok: true, started: true });
+    } catch (e) {
+      sendJson(res, 500, { ok: false, error: "The update could not start: " + (e as Error).message });
+    }
+    return true;
+  }
+  // GET /ui/update/log -> what the update started by the button printed so far; `done` is its exit code once it ended.
+  if (req.method === "GET" && path === "/ui/update/log") {
+    if (needLocal()) return true;
+    const text = existsSync(updateLog()) ? tidy(readFileSync(updateLog(), "utf8")) : "";
+    const end = /\(update ended with exit code (\d+)\)/.exec(text);
+    sendJson(res, 200, { output: text, done: end ? Number(end[1]) : null });
     return true;
   }
   // POST /ui/remove -> `monomem uninstall --yes`: takes Monomem out of every app; the notes stay (never --purge from here).
@@ -245,8 +284,9 @@ export async function uiRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
     const at = new Date().toISOString();
     const dir = join(dirname(DB_PATH), "backups", at.replace(/[:.]/g, "-"));
     try {
-      const { backupStore } = await import("../backup.js");
-      const b = backupStore(store, DB_PATH, dir);
+      const { backupStore, backupStoreOffThread } = await import("../backup.js");
+      // The server's database file is copied on a worker thread (serving does not pause); a store with no file (tests) directly.
+      const b = existsSync(DB_PATH) ? await backupStoreOffThread(DB_PATH, dir) : backupStore(store, DB_PATH, dir);
       writeBackupStatus({ ok: true, at, dir }, dirname(DB_PATH));
       sendJson(res, 200, { ok: true, at, dir, notes: b.notes, key_left_out: b.keyLeftOut });
     } catch (e) {

@@ -128,10 +128,24 @@ function checkUpdate(){
     if(out){ out.innerHTML = "<pre class='out'>"+esc(r.output || "")+"</pre>" + (newer ? "<div class='acts'><button class='primary' onclick='doUpdate()'>Update now</button></div>" : ""); }
   }).catch(function(e){ if(out){ out.innerHTML = "<p class='err'>"+esc(e.message)+"</p>"; } });
 }
+// The update runs apart from this server, then stops it and starts the new version: show its output, reload on the new one.
 function doUpdate(){
-  var out = $("upd_out"); if(out){ out.innerHTML = "<p class='help'>Updating. This page reconnects when Monomem restarts.</p>"; }
-  api("/ui/update", { method:"POST", body: JSON.stringify({ check: false }) }).then(function(r){ if(out){ out.innerHTML = "<pre class='out'>"+esc(r.output || "")+"</pre>"; } })
+  var out = $("upd_out"); if(out){ out.innerHTML = "<p class='help'>Updating. Monomem restarts by itself; this page reloads when the new version answers.</p>"; }
+  api("/ui/update", { method:"POST", body: JSON.stringify({ check: false }) }).then(function(){ waitUpdate(0); })
     .catch(function(e){ if(out){ out.innerHTML = "<p class='err'>"+esc(e.message)+"</p>"; } });
+}
+function waitUpdate(n){
+  var out = $("upd_out");
+  if(n >= 180){ if(out){ out.innerHTML += "<p class='help'>Still restarting. Reload this page in a moment (a service set to start with Windows can take up to 5 minutes).</p>"; } return; }
+  setTimeout(function(){
+    fetch("/health").then(function(r){ return r.json(); }).then(function(h){
+      if(h.version && h.version !== STATE.version){ location.reload(); return; }
+      return api("/ui/update/log").then(function(l){
+        if(out){ out.innerHTML = "<pre class='out'>"+esc(l.output || "")+"</pre>"; }
+        if(l.done === null || l.done === 0){ waitUpdate(n+1); }
+      });
+    }).catch(function(){ waitUpdate(n+1); });
+  }, 2000);
 }
 function backupNow(){
   api("/ui/backup", { method:"POST" }).then(function(r){

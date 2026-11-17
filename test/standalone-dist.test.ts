@@ -10,7 +10,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdir
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { assetName, cleanupOld, isNewer, parseSums, runUpdate, swapIn, targetOf, type UpdateDeps } from "../src/update.js";
+import { assetName, cleanupOld, isNewer, parseSums, restartServerAfterUpdate, runUpdate, swapIn, targetOf, type RestartDeps, type UpdateDeps } from "../src/update.js";
 import { bundleRoot, copyToInstall, installDir, samePath, shortcutPlan } from "../src/install.js";
 import { DEFAULT_OPTIONS, readHistory, runSetup, type SetupEnv, type SetupIO } from "../src/setup.js";
 
@@ -59,6 +59,10 @@ describe("names and versions", () => {
     assert.ok(isNewer("1.6.0", "1.5.9") && isNewer("1.10.0", "1.9.0") && isNewer("v2.0.0", "1.99.99"));
     assert.ok(!isNewer("1.6.0", "1.6.0") && !isNewer("1.5.0", "1.6.0"));
     assert.ok(isNewer("1.6.0", "1.6.0-rc.1") && !isNewer("1.6.0-rc.1", "1.6.0"));
+    // semver: numeric pre-release parts compare as numbers, numbers sort before words, more parts sort after fewer
+    assert.ok(isNewer("1.6.0-rc.10", "1.6.0-rc.9") && !isNewer("1.6.0-rc.9", "1.6.0-rc.10"));
+    assert.ok(isNewer("1.6.0-rc.1", "1.6.0-beta.2") && isNewer("1.6.0-alpha", "1.6.0-1") && isNewer("1.6.0-rc.1.1", "1.6.0-rc.1"));
+    assert.ok(!isNewer("1.6.0-rc.1", "1.6.0-rc.1"));
   });
 });
 
@@ -162,6 +166,45 @@ describe("setup from the unpacked download", () => {
     assert.doesNotMatch(io.all(), /Copy Monomem|Add a "Monomem" entry/);
   });
 
+  test("over an npm install: check warns, setup asks to move the apps to the download, undo puts them back", async () => {
+    const s = sandbox();
+    const npmCli = join(s.root, "npm", "node_modules", "monomem", "dist", "src", "cli.js");
+    put(npmCli, "// monomem 1.5.0 from npm");
+    const data = join(s.root, "data");
+    const cfg = JSON.stringify({ mcpServers: { monomem: { command: process.execPath, args: [npmCli, "mcp"], env: { MONOMEM_CLIENT: "claude-code", MONOMEM_HOME: data } } } }, null, 2) + "\n";
+    put(join(s.home, ".claude.json"), cfg);
+    const hookCmd = `node "${npmCli.replace(/\\/g, "/")}" recall --budget-ms 800`;
+    const settings = JSON.stringify({ hooks: { SessionStart: [{ matcher: "startup|clear|compact", hooks: [{ type: "command", command: hookCmd }] }] } }, null, 2) + "\n";
+    put(join(s.home, ".claude", "settings.json"), settings);
+    const { appEntryProblems } = await import("../src/setup.js");
+    const e = { ...s.e, home: s.home };
+    const warn = appEntryProblems(e).join("\n");
+    assert.match(warn, /Claude Code: "monomem" runs another Monomem copy .*not this download/);
+    assert.match(warn, /a Monomem hook runs another Monomem copy/);
+    const oo = { ...o, hook: "yes" as const, only: ["claude-code"] };
+    // asked first: answering no changes nothing
+    const no = makeIO(["n"]);
+    await runSetup(e, no, oo);
+    assert.match(no.all(), /rewrite "monomem": it runs another Monomem copy/);
+    assert.match(no.all(), /move Claude's Monomem hooks \(1\) to this download, same place and settings: a hook runs another Monomem copy/);
+    assert.doesNotMatch(no.all(), /onememory-mcp/, "not mistaken for the old package");
+    assert.equal(readFileSync(join(s.home, ".claude.json"), "utf8"), cfg);
+    assert.equal(readFileSync(join(s.home, ".claude", "settings.json"), "utf8"), settings);
+    assert.equal(await runSetup(e, makeIO(["y", "y"]), oo), 0);
+    const cc = JSON.parse(readFileSync(join(s.home, ".claude.json"), "utf8")).mcpServers.monomem;
+    assert.equal(cc.command, join(s.inst, "runtime", "node"));
+    assert.deepEqual(cc.args, [join(s.inst, "dist", "src", "cli.js"), "mcp"]);
+    assert.equal(cc.env.MONOMEM_HOME, data, "same data folder");
+    const hooks = JSON.parse(readFileSync(join(s.home, ".claude", "settings.json"), "utf8")).hooks.SessionStart;
+    assert.equal(hooks.length, 1);
+    assert.equal(hooks[0].matcher, "startup|clear|compact");
+    assert.match(hooks[0].hooks[0].command, /runtime\/node" ".*share\/monomem\/dist\/src\/cli\.js" recall --budget-ms 800$/);
+    assert.deepEqual(appEntryProblems(e), []);
+    assert.equal(await runSetup(e, makeIO(), { ...o, undo: true }), 0);
+    assert.deepEqual(JSON.parse(readFileSync(join(s.home, ".claude", "settings.json"), "utf8")), JSON.parse(settings));
+    assert.deepEqual(JSON.parse(readFileSync(join(s.home, ".claude.json"), "utf8")), JSON.parse(cfg));
+  });
+
   test("an older copy at home is replaced (rename-aside), not merged", () => {
     const root = scratch();
     const home = fakeBundle(join(root, "home"), "1.6.0");
@@ -231,6 +274,24 @@ describe("setup puts the launcher folder on PATH (asked, recorded, undone exactl
     assert.equal(s.reg.v, "C:\Tools;%USERPROFILE%\bin;D:\Later");
   });
 
+  test("Windows: undo is byte-exact (a trailing ';' stays; a Path value setup created is removed again)", async () => {
+    const { addToPath, removeFromPath } = await import("../src/install.js");
+    const dir = "C:\\Users\\a\\AppData\\Local\\Programs\\Monomem";
+    const fake = (v: string | null) => ({ v, get(): string | null { return this.v; }, set(x: string | null): void { this.v = x; } });
+    for (const start of ["C:\\a;C:\\b;", "C:\\a;C:\\b", "", "%USERPROFILE%\\bin"]) {
+      const reg = fake(start);
+      const added = addToPath({ kind: "registry", dir, where: "PATH" }, reg);
+      assert.ok(reg.v!.endsWith(dir));
+      assert.equal(removeFromPath(JSON.parse(JSON.stringify(added)), reg), true); // the step as kept in the history file
+      assert.equal(reg.v, start, JSON.stringify(start));
+    }
+    const none = fake(null);
+    const added = addToPath({ kind: "registry", dir, where: "PATH" }, none);
+    assert.equal(none.v, dir);
+    removeFromPath(added, none);
+    assert.equal(none.v, null, "no Path value before: none after");
+  });
+
   test("--yes alone does not change PATH (it says how); --path adds it; already on PATH: not offered", async () => {
     const s = sandbox("win32", { Path: "C:\Windows" });
     const io = makeIO();
@@ -275,6 +336,53 @@ describe("rename-aside swap", () => {
     assert.equal(readFileSync(join(root, "runtime", "node"), "utf8"), "node for 1.6.0");
     assert.equal(readFileSync(join(staged, "runtime", "node"), "utf8"), "node for 1.7.0");
   });
+  test("an undo step that fails is reported (path and error), never 'every file was put back'", async () => {
+    const root = fakeBundle(scratch(), "1.6.0");
+    const staged = fakeBundle(join(root, ".update-1.7.0", "Monomem"), "1.7.0");
+    let n = 0;
+    const flaky = (a: string, b: string): void => {
+      n++;
+      if (n === 4) throw Object.assign(new Error("disk said no"), { code: "EIO" });
+      if (n === 5) throw Object.assign(new Error("still locked"), { code: "EBUSY" }); // the first undo step
+      renameReal(a, b);
+    };
+    let err: Error & { undoFailed?: string[] } = new Error("none");
+    try {
+      swapIn(root, staged, join(root, ".old-1.6.0"), flaky);
+    } catch (e) {
+      err = e as typeof err;
+    }
+    assert.match(err.message, /disk said no/);
+    assert.equal(err.undoFailed?.length, 1);
+    assert.match(err.undoFailed![0], /still locked/);
+    // runUpdate says which, and does not claim everything was put back
+    const r2 = fakeBundle(scratch(), "1.6.0");
+    const lines: string[] = [];
+    let m = 0;
+    const code = await runUpdate({ check: false }, {
+      mode: "bundle", root: r2, version: "1.6.0", platform: "linux", arch: "x64", env: {},
+      fetch: (async (url: string | URL) => {
+        const u = String(url);
+        const archive = Buffer.from("a");
+        if (u.includes("/releases/latest")) return new Response(JSON.stringify({ tag_name: "v1.7.0", assets: [{ name: "monomem-1.7.0-linux-x64.tar.gz", browser_download_url: "https://dl/a" }, { name: "SHA256SUMS", browser_download_url: "https://dl/s" }] }));
+        if (u === "https://dl/s") return new Response(`${createHash("sha256").update(archive).digest("hex")}  monomem-1.7.0-linux-x64.tar.gz\n`);
+        return new Response(archive);
+      }) as typeof fetch,
+      out: (l) => void lines.push(l), err: (l) => void lines.push(l),
+      unpack: (_a, into) => void fakeBundle(join(into, "Monomem"), "1.7.0"),
+      run: (cmd) => ({ status: 0, stdout: readFileSync(cmd, "utf8").replace("node for ", "") + "\n" }),
+      rename: (a, b) => {
+        m++;
+        if (m === 4) throw Object.assign(new Error("disk said no"), { code: "EIO" });
+        if (m === 5) throw Object.assign(new Error("still locked"), { code: "EBUSY" });
+        renameReal(a, b);
+      },
+    });
+    assert.equal(code, 1);
+    const all = lines.join("\n");
+    assert.doesNotMatch(all, /every file was put back/);
+    assert.match(all, /could not be put back.*still locked/s);
+  });
   test("Windows: works while the folder's node.exe is running (it is renamed, never overwritten)", { skip: process.platform !== "win32" }, async () => {
     const root = scratch();
     fakeBundle(root, "1.6.0", "win32");
@@ -299,6 +407,17 @@ describe("rename-aside swap", () => {
     cleanupOld(root);
     assert.deepEqual(readdirSync(root).filter((n) => n.startsWith(".")), []);
     assert.ok(existsSync(join(root, "runtime", "node")));
+  });
+  test("cleanupOld skips a leftover still in use (an open app's node.exe) and never throws", () => {
+    const root = fakeBundle(scratch(), "1.6.0");
+    put(join(root, ".old-1.5.0", "runtime", "node.exe"), "held");
+    put(join(root, ".update-1.6.0", "y"), "y");
+    const locked = (p: string): void => {
+      if (p.includes(".old-1.5.0")) throw Object.assign(new Error("EPERM, Permission denied"), { code: "EPERM" });
+      rmSync(p, { recursive: true, force: true });
+    };
+    assert.deepEqual(cleanupOld(root, locked), [".old-1.5.0"]);
+    assert.ok(!existsSync(join(root, ".update-1.6.0")));
   });
 });
 
@@ -402,6 +521,83 @@ describe("monomem update", () => {
     const npm = deps(root, null, { mode: "npm" });
     assert.equal(await runUpdate({ check: false }, npm.d), 0);
     assert.match(npm.all(), /npm i -g monomem@latest/);
+  });
+
+  test("--check never deletes the old copy a failed update tells the person to restore from", async () => {
+    const root = fakeBundle(scratch(), "1.6.0");
+    put(join(root, ".old-1.5.0", "x"), "rollback copy");
+    assert.equal(await runUpdate({ check: true }, deps(root, release()).d), 0);
+    assert.ok(existsSync(join(root, ".old-1.5.0", "x")));
+  });
+
+  test("an earlier update's leftovers still in use: the update goes on, says so, and swaps aside under a fresh name", async () => {
+    const root = fakeBundle(scratch(), "1.6.0");
+    put(join(root, ".old-1.6.0", "runtime", "node"), "held by an open app");
+    const locked = (p: string): void => {
+      if (p.endsWith(".old-1.6.0")) throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+      rmSync(p, { recursive: true, force: true });
+    };
+    const t = deps(root, release(), { remove: locked });
+    assert.equal(await runUpdate({ check: false }, t.d), 0, t.all());
+    assert.equal(readFileSync(join(root, "runtime", "node"), "utf8"), "node for 1.7.0");
+    assert.match(t.all(), /still in use by an open app.*\.old-1\.6\.0/);
+    assert.equal(readFileSync(join(root, ".old-1.6.0", "runtime", "node"), "utf8"), "held by an open app");
+    assert.ok(readdirSync(root).some((n) => /^\.old-1\.6\.0-\d+$/.test(n)), "the replaced files went to a fresh aside folder");
+  });
+
+  test("from the dashboard: the new copy is told which server to restart", async () => {
+    const root = fakeBundle(scratch(), "1.6.0");
+    const t = deps(root, release(), { restartServer: 4242 });
+    assert.equal(await runUpdate({ check: false }, t.d), 0, t.all());
+    assert.deepEqual(t.runs.at(-1)!.slice(2), ["update", "--finish", "1.6.0", "--restart-server", "4242"]);
+  });
+
+  describe("restarting the dashboard's server after the swap (no real process)", () => {
+    const fake = (o: { stops?: boolean; up?: boolean } = {}) => {
+      const calls: string[] = [];
+      let alive = true;
+      const r: RestartDeps = {
+        kill: (pid) => {
+          calls.push(`kill ${pid}`);
+          if (o.stops !== false) alive = false;
+        },
+        alive: () => alive,
+        startServer: () => void calls.push("start"),
+        waitUp: async () => o.up !== false,
+        sleep: async () => undefined,
+      };
+      return { r, calls };
+    };
+    test("no service (Start menu, monomem open): stops the old server, then starts the new one", async () => {
+      const f = fake();
+      const lines: string[] = [];
+      assert.equal(await restartServerAfterUpdate(77, false, f.r, (l) => void lines.push(l)), true);
+      assert.deepEqual(f.calls, ["kill 77", "start"]);
+      assert.match(lines.join("\n"), /running the new version/);
+    });
+    test("with the service: stops the old server and leaves the start to the service", async () => {
+      const f = fake();
+      assert.equal(await restartServerAfterUpdate(77, true, f.r, () => undefined), true);
+      assert.deepEqual(f.calls, ["kill 77"]);
+    });
+    test("a server that will not stop, or a new one that does not answer: says what to do", async () => {
+      const lines: string[] = [];
+      assert.equal(await restartServerAfterUpdate(77, false, fake({ stops: false }).r, (l) => void lines.push(l)), false);
+      assert.equal(await restartServerAfterUpdate(77, false, fake({ up: false }).r, (l) => void lines.push(l)), false);
+      assert.match(lines.join("\n"), /did not stop.*monomem open[\s\S]*did not start.*monomem open/);
+    });
+  });
+
+  test("the release upload waits for the full CI, never replaces a published file; every src/ PR builds the download", () => {
+    const wf = readFileSync(join(REPO, ".github", "workflows", "bundle.yml"), "utf8");
+    assert.match(wf, /verify:\n(?:\s+.*\n)*?\s+uses: \.\/\.github\/workflows\/ci\.yml/);
+    assert.match(wf, /release:\n(?:\s+.*\n)*?\s+needs: \[build, verify\]/);
+    assert.match(wf, /isDraft[\s\S]*--clobber[\s\S]*else[\s\S]*gh release upload "\$tag" out\/monomem-\* out\/SHA256SUMS\n/);
+    assert.match(wf, /paths:\n\s+- src\/\*\*\n/);
+    const smoke = readFileSync(join(REPO, "scripts", "smoke-bundle.mjs"), "utf8");
+    assert.match(smoke, /\/health/);
+    assert.match(smoke, /"service", "install", "--print"/);
+    assert.doesNotMatch(smoke, /\|\| \/Monomem\|database\/i/, "doctor must really pass, not just print the name");
   });
 
   test("the CLI knows `update` and never runs it from a hook", () => {

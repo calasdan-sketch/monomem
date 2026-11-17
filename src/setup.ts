@@ -23,7 +23,7 @@ import { applyTomlOps, findTable, hasServer, tomlOpsApplied } from "./toml-table
 import { applyLegacyEnv, homeDataDir } from "./legacy-env.js";
 import { EMBEDDINGS_OFFER_ENV, embeddingsOfferLine } from "./embeddings-offer.js";
 import { privateDir } from "./private-dir.js";
-import { addToPath, pathPlan, removeFromPath, windowsUserPath, type PathEntry } from "./install.js";
+import { addToPath, installDir, pathPlan, removeFromPath, samePath, windowsUserPath, type PathEntry } from "./install.js";
 import { subagentMemoryOn } from "./prompt/switches.js";
 import { SELF_CLI, quoteShellArg, selfCommand, selfFacts, selfShellLine, type SelfFacts, type SelfMode } from "./self.js";
 
@@ -650,14 +650,37 @@ const PINNED_VERSION = /monomem@(\d+\.\d+\.\d+)/i;
  * Why an app's Monomem entry would not start this version, else null: an absolute command or a .js argument (cli.js) that
  * no longer exists (stale: the install moved or was removed), or an npx pin to another version (outdated).
  */
-export function entryProblem(entry: Record<string, unknown>, version: string, exists: (p: string) => boolean = existsSync): string | null {
+export function entryProblem(entry: Record<string, unknown>, version: string, exists: (p: string) => boolean = existsSync, self?: OtherCopyEnv): string | null {
   const cmd = typeof entry.command === "string" ? entry.command : "";
   const args = Array.isArray(entry.args) ? entry.args.map(String) : [];
   const absolute = (p: string): boolean => /^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(p);
   for (const p of [cmd, ...args.filter((a) => /\.js$/i.test(a))]) {
     if (p && absolute(p) && !exists(p)) return `points at ${p}, which no longer exists`;
   }
-  return pinProblem([cmd, ...args].join(" "), version);
+  return (self ? otherCopyProblem(self, [cmd, ...args]) : null) ?? pinProblem([cmd, ...args].join(" "), version);
+}
+
+export type OtherCopyEnv = Pick<SetupEnv, "mode" | "cliPath" | "platform" | "env" | "home">;
+const CLI_JS = /[\\/]dist[\\/]src[\\/]cli\.js$/i;
+
+/**
+ * The standalone download only: a launch that runs another Monomem copy (an npm install's cli.js, or npx) instead of this
+ * download, so the app still needs Node.js and that copy; removing them later would leave it with no memory. Else null.
+ */
+export function otherCopyProblem(e: OtherCopyEnv, words: string[]): string | null {
+  if (e.mode !== "bundle") return null;
+  const cli = words.find((w) => CLI_JS.test(w));
+  if (cli) {
+    const ours = [e.cliPath, join(installDir(e), "dist", "src", "cli.js")];
+    return ours.some((o) => samePath(o, cli, e.platform)) ? null : `runs another Monomem copy (${cli}), not this download, so it still needs Node.js and that copy`;
+  }
+  return words.some((w) => /^monomem@/i.test(w)) ? "runs Monomem through npx, not this download, so it still needs Node.js" : null;
+}
+
+/** The cli.js path in a hook command line (quoted or not), else null. */
+function hookCliPath(command: string): string | null {
+  const m = /"([^"]*[\\/]dist[\\/]src[\\/]cli\.js)"|(\S*[\\/]dist[\\/]src[\\/]cli\.js)(?=\s)/i.exec(command);
+  return m ? (m[1] ?? m[2]) : null;
 }
 
 /** "launches monomem X, this is Y" when the text pins another version with npx (monomem@X.Y.Z), else null. */
@@ -667,9 +690,9 @@ export function pinProblem(text: string, version: string): string | null {
 }
 
 /** entryProblem for Codex's [mcp_servers.monomem] TOML table text. */
-function tomlEntryProblem(ours: string, version: string): string | null {
+function tomlEntryProblem(ours: string, version: string, self?: OtherCopyEnv): string | null {
   const command = /\bcommand\s*=\s*["']([^"']*)["']/.exec(ours)?.[1] ?? "";
-  return entryProblem({ command, args: [...ours.matchAll(/["']([^"']+\.js)["']/gi)].map((m) => m[1]) }, version) ?? pinProblem(ours, version);
+  return entryProblem({ command, args: [...ours.matchAll(/["']([^"']+\.js)["']/gi)].map((m) => m[1]) }, version, existsSync, self) ?? pinProblem(ours, version);
 }
 
 /**
@@ -706,7 +729,7 @@ export function appEntryProblems(e: SetupEnv): string[] {
     if (c.id === "codex") {
       const table = findTable(text, ["mcp_servers", "monomem"]);
       const ours = table ? text.slice(table.start, table.end) : "";
-      const r = ours ? tomlEntryProblem(ours, e.version) : null;
+      const r = ours ? tomlEntryProblem(ours, e.version, e) : null;
       if (r) out.push(`${c.label}: "monomem" ${r}`);
       continue;
     }
@@ -719,7 +742,7 @@ export function appEntryProblems(e: SetupEnv): string[] {
     for (const s of servers) {
       const entry = safeParseEntry(text, s);
       if (!entry || classifyEntry(s.name, entry) !== "monomem") continue;
-      const r = entryProblem(entry, e.version);
+      const r = entryProblem(entry, e.version, existsSync, e);
       if (r) out.push(`${c.label}: "${s.name}"${s.path.length === 1 ? "" : ` (project ${s.path[1]})`} ${r}`);
     }
   }
@@ -728,6 +751,8 @@ export function appEntryProblems(e: SetupEnv): string[] {
     if (!text) continue;
     const r = pinProblem([...text.matchAll(/"command"\s*:\s*"([^"]*monomem@[^"]*)"/gi)].map((m) => m[1]).join(" "), e.version);
     if (r) out.push(`${h.label}: a Monomem hook ${r}`);
+    const other = otherCopyHooks(e, text, h)[0];
+    if (other) out.push(`${h.label}: a Monomem hook ${other.problem}`);
   }
   return out;
 }
@@ -800,7 +825,7 @@ function planToml(e: SetupEnv, opts: SetupOptions, target: ClientTarget, text: s
     const pinned = pinMismatch(e, pin, (k) => tomlString(ours, k));
     if (pinned === "differs") return { ...already, already: [], conflicts: [`${target.label}: "monomem" uses a different data folder than the one set in this shell (${pinText(pin)}). Make them the same in ${target.file}, or unset MONOMEM_HOME / MONOMEM_DB_PATH here, then run setup again`] };
     if (pinned === "missing") Object.assign(want, pin);
-    const stale = tomlEntryProblem(ours, e.version);
+    const stale = tomlEntryProblem(ours, e.version, e);
     if (stale) {
       // TOML tables are not rewritten in place; say exactly what to do instead of calling a broken entry fine.
       return { ...already, already: [], warnings: [`${target.label}: "monomem" ${stale}. Delete the [mcp_servers.monomem] table (and its env table) from ${target.file}, then run monomem setup again`] };
@@ -946,7 +971,7 @@ export function planFile(e: SetupEnv, opts: SetupOptions, target: ClientTarget, 
       if (pinned === "missing") Object.assign(add, pin);
       // An entry that would not start this version (its cli.js is gone, or npx pins another version) is rewritten: same
       // name, same env and extra settings, this version's launch command.
-      const problem = entryProblem(entry, e.version);
+      const problem = entryProblem(entry, e.version, existsSync, e);
       const fresh: ServerEntry = { ...entry, ...buildServerEntry(e, opts, { ...((env as Record<string, string> | null) ?? {}), ...add }, withType && "type" in entry) };
       // Only when rewriting changes something: an entry that already is what setup writes now stays (no rewrite loop).
       if (problem && JSON.stringify(fresh) !== JSON.stringify(entry)) {
@@ -1120,6 +1145,55 @@ export function buildCaptureCommand(e: SetupEnv, opts: Pick<SetupOptions, "comma
 
 const CAPTURE_REWRITE = "replace the automatic memory hooks";
 
+interface OtherCopyHook {
+  on: string;
+  item: { hooks?: Array<{ command?: unknown }> };
+  /** The other copy's cli.js path as written: finds the entry again (unappend). */
+  cli: string;
+  problem: string;
+}
+
+/**
+ * The standalone download: hook entries (start-of-session and capture events) whose command runs another Monomem copy's
+ * cli.js (otherCopyProblem). Entries with comments inside are left alone, as elsewhere.
+ */
+function otherCopyHooks(e: SetupEnv, text: string, host: HookHost, ons: string[] = [host.start.on, ...host.events.map((h) => h.on)]): OtherCopyHook[] {
+  if (e.mode !== "bundle" || !text.trim()) return [];
+  let doc: ReturnType<typeof parseDoc>;
+  try {
+    doc = parseDoc(text);
+  } catch {
+    return [];
+  }
+  const out: OtherCopyHook[] = [];
+  for (const on of new Set(ons)) {
+    for (const i of getPath(doc, ["hooks", on])?.items ?? []) {
+      let item: OtherCopyHook["item"];
+      try {
+        item = JSON.parse(text.slice(i.start, i.end));
+      } catch {
+        continue;
+      }
+      const cmds = Array.isArray(item.hooks) ? item.hooks.map((x) => (typeof x?.command === "string" ? x.command : "")) : [];
+      for (const c of cmds) {
+        const cli = hookCliPath(c);
+        const problem = cli && /\s(?:recall|hook)\b/.test(c) ? otherCopyProblem(e, [cli]) : null;
+        if (cli && problem) {
+          out.push({ on, item, cli, problem });
+          break;
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/** A hook command of another copy run by this download: the launcher changes, `recall ...` / `hook <event> ...` stays. */
+function moveHookCommand(e: SetupEnv, command: string, cli: string): string {
+  const tail = hookCliPath(command) === cli ? /\s((?:recall|hook)\b.*)$/s.exec(command) : null;
+  return tail ? selfShellLine(tail[1], selfOf(e)) : command;
+}
+
 export function planHook(e: SetupEnv, opts: SetupOptions, dbForHook?: string): { change: FileChange | null; already: boolean; conflict?: string } {
   return planHooks(e, opts, dbForHook, { recall: true, capture: false });
 }
@@ -1228,6 +1302,18 @@ export function planHooks(e: SetupEnv, opts: SetupOptions, dbForHook: string | u
   const ops: Op[] = [];
   const inverse: Op[] = [];
   const lines: string[] = [];
+  // The standalone download over an earlier (npm) install: those hooks move to this download, same place and settings.
+  // ponytail: undo finds the moved entry by its command ("hook <event>"); with a second Monomem hook on the same event the
+  // first one goes back instead (same commands, order differs).
+  const moved = text ? otherCopyHooks(e, text, host, [...(want.recall ? [host.start.on] : []), ...(want.capture ? host.events.map((h) => h.on) : [])]) : [];
+  for (const m of moved) {
+    const hooks = (m.item.hooks ?? []).map((x) => (typeof x?.command === "string" ? { ...x, command: moveHookCommand(e, x.command, m.cli) } : x));
+    const back = /\b(recall --budget-ms|hook [\w-]+)/.exec(JSON.stringify(hooks))?.[1] ?? HOOK_MARKER;
+    ops.push({ op: "unappend", path: ["hooks"], key: m.on, marker: m.cli }, { op: "append", path: ["hooks"], key: m.on, value: { ...m.item, hooks } });
+    inverse.unshift({ op: "append", path: ["hooks"], key: m.on, value: m.item });
+    inverse.unshift({ op: "unappend", path: ["hooks"], key: m.on, marker: back });
+  }
+  if (moved.length) lines.push(`move ${host.agent}'s Monomem hooks (${moved.length}) to this download, same place and settings: a hook ${moved[0].problem}`);
   // The old package's start-of-session hook (`npx -y onememory-mcp@<v> recall|hook session-start`) is rewritten to the current command.
   const oldNpx = want.recall && doc ? oldStartHook(e.version).exec(text!.slice(...startRange(doc, host.start.on))) : null;
   const oldEntry = oldNpx ? getPath(doc!, ["hooks", host.start.on])?.items?.find((i) => text!.slice(i.start, i.end).includes(oldNpx[0])) : undefined;
@@ -2120,8 +2206,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   let pathAdded: PathEntry | undefined;
   if (pathStep) {
     try {
-      addToPath(pathStep, pathStep.kind === "registry" ? (e.userPath ?? windowsUserPath()) : undefined);
-      pathAdded = pathStep;
+      pathAdded = addToPath(pathStep, pathStep.kind === "registry" ? (e.userPath ?? windowsUserPath()) : undefined);
       io.out(`Added ${pathStep.dir} to ${pathStep.where}. Open a new terminal to use \`monomem\` there.`);
     } catch (err) {
       io.err(`Could not add ${pathStep.dir} to ${pathStep.where} (${(err as Error).message}). Everything else is done.`);
