@@ -133,10 +133,10 @@ holds are counted here as they are.
 |---|---|---|---|---|---|
 | LongMemEval-S chat turns | 189,502 | 21 / 21 | 27 / 27 | 421 / 421 | 177 / 186 µs |
 | LoCoMo-10 chat turns | 5,882 | 0 / 0 | 0 / 0 | 0 / 0 | 97 / 99 µs |
-| Monomem CHANGELOG + docs (minus files that quote attacks, now including this page) | 1,438 | 6 / 6 | 4 / 4 | 12 / 12 | 120 / 136 µs |
+| Monomem CHANGELOG + docs (minus files that quote attacks, now including this page) | 1,438 (re-run on the 1.6.0 docs, 2026-11-17: 1,622) | 6 / 6 (1,622: 6) | 4 / 4 (1,622: 4) | 12 / 12 (1,622: 13) | 120 / 136 µs |
 | Developer and personal notes (`bench/dev-notes-fp.txt`: written before the patterns, using the words attacks use) | 156 | 0 / 0 | 0 / 0 | 7 / 7 | 74 / 64 µs |
 
-No count rose. The new warn labels appear on 2 developer notes that were already warned for an email address
+No count rose on the same corpus. The 1.6.0 docs re-run has more notes and one more warned note; held and refused are unchanged. The new warn labels appear on 2 developer notes that were already warned for an email address
 ("Export the error logs and send them to support@...", "Send my CV to the recruiter at jobs@..."). Lint time is one run
 on one PC, so the before/after difference is within noise; the 256 KB flood tests in `test/lint.test.ts` and
 `test/lint-outbound.test.ts` check that time grows linearly with the text.

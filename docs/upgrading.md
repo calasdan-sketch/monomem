@@ -34,6 +34,19 @@ database 1.6 used, with no restore. 1.6 adds a few side tables, each made the fi
 labels (echoes and the other 1.6 labels). Install the older version (`npm i -g monomem@1.5`) and run
 `monomem setup` again so your apps point at it. The sync note above applies while the two versions run side by side.
 
+- **If you switched OAuth on, run `monomem oauth off` first.** 1.5 does not know an OAuth key's one-hour expiry or its
+  MCP-only limit (`expires_at`, `audience`), so a key claude.ai or ChatGPT still holds would work under 1.5 as a write key
+  that never expires, on the REST API too. `oauth off` removes every OAuth key.
+- **What 1.5 does not keep up to date while it runs**, and how 1.6 catches up when you come back:
+  - Branch memory: a note edited under 1.5 keeps the branch it had in 1.6 until 1.6 writes it again. This affects ranking
+    only.
+  - What a note touched: no reads are recorded while 1.5 runs, so `monomem why <id> --touched` shows less for that time.
+  - Probation: a new app key or unknown writer that first wrote while 1.5 ran starts probation on its first 1.6 write
+    (a label, and its confirms do not count yet). Apps you connected with `monomem setup` are not put on probation.
+  - Passage pooling (if on) catches up from the change log, or rebuilds its index if that log was trimmed.
+  - The evidence and claims of a note deleted under 1.5 are removed with it (database triggers); an edit under 1.5 leaves the new
+    version without evidence, as in 1.6.
+
 **Claude Code permission lists.** If you allowed Monomem's 1.5 tools by name in Claude Code's permission settings
 (`mcp__monomem__state_write`, `mcp__monomem__state_search` and the other `mcp__monomem__state_*` or `catch_up` names),
 Claude Code will ask again for the 1.6 tools, because they have new names: `mcp__monomem__memory_save`,

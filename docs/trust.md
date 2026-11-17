@@ -464,9 +464,14 @@ redactor before they are stored. Evidence is only taken when a note is created. 
 note is changed, the new version has no evidence (the old evidence may not back the new text). The 1.5 tool name
 `state_write` does not take it, because its 1.5 arguments are unchanged.
 
+Evidence stays in this database: evidence is not exported and not synced to your other computers, and a held write loses
+its evidence: when a person approves a held write, the saved note has no evidence label. A backup keeps it (it copies
+the whole database). So a note labelled `[observed: ...]` here arrives unlabelled on another computer or in an export.
+
 `monomem settings set facts-need-evidence on` makes confirming stricter. An agent's confirm of a note that carries facts
 (`fact:` tags) and has no observed evidence is recorded but does not count (reason `no_evidence`). A person's confirm
 always counts. The setting is off by default, and turning it off needs a person at the terminal.
+It is a nudge, not a check: a writer can cite evidence it did not observe, so the setting stops a lazy writer, not a hostile one.
 
 Storage: the side table `note_evidence` (note id, version, items, time), plus a trigger that deletes the rows when their
 note is deleted. The items are sealed when encryption is on; `monomem encrypt status --surfaces` counts them. The schema
