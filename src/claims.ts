@@ -97,11 +97,14 @@ function lineClaim(file: unknown, span: unknown, at: string): { file: string; ki
   return { file: checkPath(file, at), kind: "lines", arg: `${start}-${end}` };
 }
 
-/** File text by real path, re-read only when size or mtime moves. ponytail: whole-file cache, 64 entries, cleared when full. */
-const textCache = new Map<string, { size: number; mtimeMs: number; text: string }>();
+/**
+ * File text by real path, re-read only when size or mtime moves, with the line hashes already worked out for it (a read
+ * re-checks every claim; a big cited file was split and hashed again each time). ponytail: 64 entries, cleared when full.
+ */
+const textCache = new Map<string, { size: number; mtimeMs: number; text: string; hashes: Map<string, string | null> }>();
 
 /** The text of `rel` under `root`, or why it cannot be read. Never reads through a symlink that leaves the root. */
-function readInRepo(root: string, rel: string): { text: string } | { why: string } {
+function readInRepo(root: string, rel: string): { text: string; hashes: Map<string, string | null> } | { why: string } {
   let real: string;
   let realRoot: string;
   try {
@@ -121,7 +124,7 @@ function readInRepo(root: string, rel: string): { text: string } | { why: string
   if (st.size > MAX_BYTES) return { why: `file over ${MAX_BYTES >> 20} MB, not read` };
   const hit = textCache.get(real);
   // ponytail: a same-size rewrite inside one mtime tick (coarse 1-2 s clocks: FAT, old HFS+) reads as unchanged until the next write.
-  if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return { text: hit.text };
+  if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return hit;
   let text: string;
   try {
     text = readFileSync(real, "utf8");
@@ -129,8 +132,9 @@ function readInRepo(root: string, rel: string): { text: string } | { why: string
     return { why: "file not readable" };
   }
   if (textCache.size >= 64) textCache.clear();
-  textCache.set(real, { size: st.size, mtimeMs: st.mtimeMs, text });
-  return { text };
+  const entry = { size: st.size, mtimeMs: st.mtimeMs, text, hashes: new Map<string, string | null>() };
+  textCache.set(real, entry);
+  return entry;
 }
 
 const lineHash = (text: string, arg: string): string | null => {
@@ -164,7 +168,8 @@ function evaluate(c: Claim): string {
     case "dependency":
       return hasDependency(r.text, c.arg) ? "" : "dependency not listed";
     case "lines": {
-      const h = lineHash(r.text, c.arg);
+      let h = r.hashes.get(c.arg);
+      if (h === undefined) r.hashes.set(c.arg, (h = lineHash(r.text, c.arg)));
       return h === null ? "lines gone" : h === c.hash ? "" : "cited code changed";
     }
   }
