@@ -409,6 +409,13 @@ export interface TokenEntry {
 
 export const sha256Hex = (s: string): string => createHash("sha256").update(s).digest("hex");
 const HASH_RE = /^[0-9a-f]{64}$/i;
+/**
+ * r4 SF-1: every OAuth key in tokens.json carries this field (true). Monomem 1.5.x knows neither expires_at nor audience, so
+ * it would load an OAuth key as a write key that never expires and works on REST too. 1.5.x refuses any entry with an
+ * unknown key that looks like "max_sensitivity" (/sens|ceil/), so this one name makes it ignore OAuth keys after a
+ * downgrade. 1.6 accepts it.
+ */
+export const OAUTH_KEY_MARKER = "sensitivity_needs_monomem_1_6";
 /** The identity of a token entry that is the same whether it is stored as the key or as its hash. */
 export const tokenId = (e: Pick<TokenEntry, "token" | "token_sha256">): string => (e.token_sha256 ?? sha256Hex(e.token ?? "")).toLowerCase();
 
@@ -659,7 +666,7 @@ export function resolveTokens(): TokenEntry[] {
     for (const e of arr) {
       const o = e as { token?: unknown; token_sha256?: unknown; scope?: unknown; label?: unknown; namespace?: unknown; max_sensitivity?: unknown; reads_outside?: unknown; expires_at?: unknown; audience?: unknown };
       // A misspelt ceiling key ("maxSensitivity", "max_sensitivty") would otherwise be ignored and leave the token unrestricted.
-      const lookalikes = o && typeof o === "object" ? Object.keys(o).filter((k) => k !== "max_sensitivity" && /sens|ceil/i.test(k)) : [];
+      const lookalikes = o && typeof o === "object" ? Object.keys(o).filter((k) => k !== "max_sensitivity" && k !== OAUTH_KEY_MARKER && /sens|ceil/i.test(k)) : [];
       if (lookalikes.length) {
         console.error(
           `[monomem] ignoring token ${typeof o.label === "string" && o.label ? `"${o.label}"` : "(unnamed)"}: unknown key ${lookalikes.map((k) => JSON.stringify(k)).join(", ")} looks like "max_sensitivity". ` +

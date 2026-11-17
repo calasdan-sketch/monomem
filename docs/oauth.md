@@ -20,7 +20,12 @@ dashboard port, and it adds no outside sign-in service.
   their own site. To allow one more site, run `monomem oauth allow-redirect https://<site>` at a terminal. The consent
   page then warns in red that the address is not claude.ai or chatgpt.com, and shows the full address.
 - **Each approved app becomes an ordinary key.** It shows up in `monomem keys` and in the dashboard as
-  `oauth:<app name>`, and `monomem keys remove "oauth:<app name>"` (or Remove in the dashboard) ends it.
+  `oauth:<app name>`, and `monomem keys remove "oauth:<app name>"` (or Remove in the dashboard) ends it. A name is never
+  given out twice: when you approve an app again (claude.ai makes a new one on every fresh connection), it gets a new
+  name such as `oauth:Claude-3`, so it does not inherit what you decided about the old one.
+- **A newly connected app is a new writer.** Its notes show with the label `[new writer]`, and its confirmations do not count
+  as a second source, until it has kept a few notes for a day or you run `monomem trust confirm-writer "oauth:<name>"`
+  ([trust.md](./trust.md)). Its notes also carry the tag `obs.origin:declared`: the "from outside" mark in the next point.
 - **You pick read, or read and write. Never more.** An OAuth app can never delete notes, manage keys or approve held
   notes. It sees public and internal notes, never private ones (ceiling `internal`).
 - **Its notes are marked as from outside.** claude.ai and ChatGPT read the web, so every note such an app writes is
@@ -81,7 +86,7 @@ app has to be approved again.
 |---|---|---|
 | `GET /.well-known/oauth-protected-resource` and `.../oauth-protected-resource/mcp` | RFC 9728 | `resource` = `<your url>/mcp`, `authorization_servers` = `[<your url>]` |
 | `GET /.well-known/oauth-authorization-server` | RFC 8414 | PKCE `S256` only, client auth `none`, `iss` in responses (RFC 9207) |
-| `POST /register` | RFC 7591 | Redirect addresses on claude.ai, chatgpt.com, http to `localhost` / `127.0.0.1`, or an origin added with `allow-redirect`. App names lose control and invisible characters. At most 50 apps; one nobody approved within a day is dropped. 10 per 10 minutes per address |
+| `POST /register` | RFC 7591 | Redirect addresses on claude.ai or chatgpt.com (https, default port), http to `localhost` / `127.0.0.1`, or an origin added with `allow-redirect`. App names lose control and invisible characters. At most 50 apps; one nobody approved within a day is dropped. 10 per 10 minutes per address |
 | `GET`/`POST /authorize` | OAuth 2.1 | Consent page. Unknown app or unregistered redirect address: an error page, never a redirect. Redirect addresses must match exactly (a `localhost` one with any port, RFC 8252). The form needs its cookie and same-origin; 60 per minute per address |
 | `POST /token` | OAuth 2.1 | Form-encoded. Codes work once, for 60 seconds, only with the matching PKCE verifier (and redirect address, when one was sent to `/authorize`). A code used twice ends the grant it made. A refresh token sent again within 10 seconds of its renewal (a retry) is refused without ending the grant; later, the grant ends. 30 per minute per address |
 | `POST /revoke` | RFC 7009 | Always `200` |
@@ -95,8 +100,12 @@ app has to be approved again.
   you removed, expired `oauth:` keys no grant owns, and apps nobody approved within a day.
 - Authorization codes and open consent pages live in the server's memory: restarting the server cancels a sign-in
   in progress. Connected apps are not affected.
-- State: `<data dir>/oauth.json` (switch, public address, apps, refresh-token hashes). Delete it, and remove the
-  `oauth:` keys, to remove every trace.
+- State: `<data dir>/oauth.json` (switch, public address, apps, refresh-token hashes, the app names already given out).
+  Delete it, and remove the `oauth:` keys, to remove every trace.
+- Going back to Monomem 1.5: 1.5 does not know that an OAuth key expires or works only on the MCP port. Each OAuth key in
+  tokens.json also carries `"sensitivity_needs_monomem_1_6": true`, which 1.5 does not accept, so 1.5 ignores those keys
+  (it prints that the field "looks like max_sensitivity"; leave it, removing it would turn the key into a write key that
+  never expires). Run `monomem oauth off` before you downgrade all the same: it removes the keys.
 
 ## What the safeguards do not cover
 

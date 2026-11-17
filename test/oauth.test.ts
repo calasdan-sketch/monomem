@@ -12,7 +12,8 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { Store } from "../src/store.js";
 import { createMcpHttpServer } from "../src/mcp-http.js";
-import { DATA_DIR, resolveTokens, type TokenEntry } from "../src/config.js";
+import { DATA_DIR, OAUTH_KEY_MARKER, resolveTokens, type TokenEntry } from "../src/config.js";
+import { confirmWriter, onProbation } from "../src/store/probation.js";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { listApps, removeApp } from "../src/tokens-admin.js";
 import { clock, newPairCode, readState, setEnabled, usePairCode, allowRedirectOrigin, PAIR_MAX_FAILS } from "../src/oauth/state.js";
@@ -485,6 +486,71 @@ describe("OAuth front door", () => {
     assert.equal((await token({ grant_type: "authorization_code", code, code_verifier: verifier, client_id: cid })).status, 200);
     const c = await getCode();
     assert.equal((await token({ grant_type: "authorization_code", code: c.code, code_verifier: c.verifier, client_id: c.client_id })).status, 400, "sent to /authorize, so required");
+  });
+
+  // ---- r4 OAuth security review (.panel-160/r4-oauth-security.md) ----
+
+  test("r4 N1: an ended grant's label is never reused, so a re-approved app with the same name starts on probation", async () => {
+    on();
+    const save = async (key: string, title: string): Promise<void> => {
+      const r = await fetch(`${base}/mcp`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "memory_save", arguments: { title, body: "b" } } }),
+      });
+      assert.equal(r.status, 200, await r.clone().text());
+      await r.text();
+    };
+    const a = await exchange("write");
+    await save(a.access, "from grant A");
+    const labelA = store.list({ limit: 50 }).notes.find((n) => n.title === "from grant A")!.written_by!;
+    assert.match(labelA, /^oauth:Claude/);
+    assert.equal(onProbation(store, labelA), true, "a new OAuth app starts on probation");
+    confirmWriter(store, labelA, "cli"); // the person vouched for grant A
+    const r = await fetch(`${base}/revoke`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: form({ token: a.refresh, client_id: a.client_id }) });
+    assert.equal(r.status, 200);
+    const b = await exchange("write"); // a new app, also calling itself "Claude"
+    await save(b.access, "from grant B");
+    const labelB = store.list({ limit: 50 }).notes.find((n) => n.title === "from grant B")!.written_by!;
+    assert.notEqual(labelB.toLowerCase(), labelA.toLowerCase(), "never the ended grant's label");
+    assert.equal(onProbation(store, labelB), true, "the new grant does not inherit grant A's trust record");
+    setEnabled(false);
+    on();
+    const c = await exchange("write");
+    await save(c.access, "from grant C");
+    const labelC = store.list({ limit: 50 }).notes.find((n) => n.title === "from grant C")!.written_by!;
+    assert.ok(![labelA, labelB].map((l) => l.toLowerCase()).includes(labelC.toLowerCase()), "not reused after oauth off/on either");
+  });
+
+  test("r4 N3: claude.ai and chatgpt.com are known redirect hosts on the default port only", async () => {
+    on();
+    for (const bad of ["https://claude.ai:8443/cb", "https://chatgpt.com:444/connector_platform_oauth_redirect"]) {
+      const r = await fetch(`${base}/register`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ client_name: "x", redirect_uris: [bad] }) });
+      assert.equal(r.status, 400, bad);
+    }
+    for (const ok of ["https://claude.ai:443/api/mcp/auth_callback", "https://chatgpt.com/connector_platform_oauth_redirect"]) {
+      const r = await fetch(`${base}/register`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ client_name: "x", redirect_uris: [ok] }) });
+      assert.equal(r.status, 201, ok);
+    }
+  });
+
+  test("r4 SF-1: an OAuth key is written so Monomem 1.5.x refuses it after a downgrade; 1.6 loads it", async () => {
+    on();
+    const t = await exchange("write");
+    const rows = JSON.parse(readFileSync(join(DATA_DIR, "tokens.json"), "utf8")) as Array<Record<string, unknown>>;
+    const row = rows.find((r) => String(r.label).startsWith("oauth:"))!;
+    assert.equal(row[OAUTH_KEY_MARKER], true);
+    // Monomem 1.5.0's own rule (src/config.ts parseList, v1.5.0): an entry with a key other than max_sensitivity that matches
+    // /sens|ceil/i is ignored ("looks like max_sensitivity"). So 1.5.0 never loads this key as a non-expiring REST write key.
+    const v150Refuses = (o: Record<string, unknown>): boolean => Object.keys(o).some((k) => k !== "max_sensitivity" && /sens|ceil/i.test(k));
+    assert.equal(v150Refuses(row), true);
+    assert.equal(v150Refuses(Object.fromEntries(Object.entries(row).filter(([k]) => k !== OAUTH_KEY_MARKER))), false, "the marker is what does it");
+    assert.ok(resolveTokens().some((e) => e.label === row.label), "1.6 still loads it");
+    assert.equal((await mcpList(t.access)).status, 200);
+    // A refresh rewrites the row and keeps the marker.
+    assert.equal((await token({ grant_type: "refresh_token", refresh_token: t.refresh, client_id: t.client_id })).status, 200);
+    const again = (JSON.parse(readFileSync(join(DATA_DIR, "tokens.json"), "utf8")) as Array<Record<string, unknown>>).find((r) => r.label === row.label)!;
+    assert.equal(again[OAUTH_KEY_MARKER], true);
   });
 
   test("L1: an OAuth key works only on /mcp, not on the REST port", async () => {

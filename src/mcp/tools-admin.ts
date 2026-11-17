@@ -116,6 +116,8 @@ export function registerAdminTools(c: McpCtx): void {
       try {
         const denied = denyIfUnder(touched === true ? "admin" : "read");
         if (denied) return errorResult(denied);
+        // r4 L3: who read a note comes from the store-wide read log; an app key confined to namespaces does not get it (as REST).
+        if (touched === true && nsActive && conn.authed === true) return errorResult("touched comes from the store-wide read log: use a key that is not pinned to a namespace");
         let namespaces: string[] | undefined;
         if (nsActive) {
           const hint = trustedHint(namespace);

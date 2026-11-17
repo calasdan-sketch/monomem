@@ -6,7 +6,7 @@
 import { randomBytes } from "node:crypto";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { API_PORT, BIND_HOST, DATA_DIR, MCP_HTTP_PORT, MIN_TOKEN_LENGTH, resolveTokens, sha256Hex, tokenId, type Scope, type TokenEntry } from "./config.js";
+import { API_PORT, BIND_HOST, DATA_DIR, MCP_HTTP_PORT, MIN_TOKEN_LENGTH, OAUTH_KEY_MARKER, resolveTokens, sha256Hex, tokenId, type Scope, type TokenEntry } from "./config.js";
 import { audit } from "./security.js";
 import { DEFAULT_SENSITIVITY, SENSITIVITY_HELP, parseSensitivity, sensitivityRank, type Sensitivity } from "./sensitivity.js";
 
@@ -273,7 +273,8 @@ export function setOAuthKey(label: string, entry: { token_sha256: string; scope:
     const ceiling = oldCeiling && sensitivityRank(oldCeiling) < sensitivityRank(DEFAULT_SENSITIVITY) ? oldCeiling : DEFAULT_SENSITIVITY;
     const ns = typeof old?.namespace === "string" && old.namespace.trim() ? old.namespace.trim() : undefined;
     const key: TokenEntry = { token_sha256: entry.token_sha256, scope: entry.scope, label, ...(ns ? { namespace: ns } : {}), max_sensitivity: ceiling, reads_outside: true, expires_at: entry.expires_at, audience: "mcp" };
-    const row: RawEntry = { ...key, created_at: old?.created_at ?? new Date().toISOString() };
+    // OAUTH_KEY_MARKER: Monomem 1.5.x refuses this entry instead of loading it as a permanent REST write key (r4 SF-1).
+    const row: RawEntry = { ...key, [OAUTH_KEY_MARKER]: true, created_at: old?.created_at ?? new Date().toISOString() };
     writeRaw(i < 0 ? [...entries, row] : entries.map((e, j) => (j === i ? row : e)));
     return key;
   });
