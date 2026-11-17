@@ -272,7 +272,7 @@ export function overwriteLines(store: Store, writer: string, sinceIso: string, n
   if (!over.length) return "";
   return [
     "Another writer replaced text you wrote (read the note and its history if the change looks wrong, and tell the user):",
-    ...over.map((o) => `#${o.id} "${neutral(o.title).slice(0, 80)}" by ${neutral(o.by).slice(0, 24) || "(no writer)"}, ${o.at.slice(0, 10)}`),
+    ...over.map((o) => `#${o.id} ${o.held ? "(held: from outside content or flagged, title not shown)" : `"${neutral(o.title).slice(0, 80)}"`} by ${neutral(o.by).slice(0, 24) || "(no writer)"}, ${o.at.slice(0, 10)}`),
   ].join("\n");
 }
 
