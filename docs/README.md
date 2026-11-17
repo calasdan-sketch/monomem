@@ -7,6 +7,7 @@ Pick by what you want to do. Everything here is also linked from the main [READM
 | I want to... | Read |
 |---|---|
 | connect my apps in a minute | [INSTALL.md](../INSTALL.md), then [live-claude-code.md](./live-claude-code.md) if something goes wrong |
+| let my coding agent install Monomem, or fix what `monomem check` warns about | [install-with-your-agent.md](./install-with-your-agent.md) |
 | back up my notes, or restore a backup | [backups.md](./backups.md) |
 | give an app its own key and a limit on what it can see | [give-an-app-limited-access.md](./give-an-app-limited-access.md) |
 | mark a note `private` so only some apps see it | [sensitivity-labels.md](./sensitivity-labels.md) |

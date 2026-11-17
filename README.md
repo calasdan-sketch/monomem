@@ -30,7 +30,7 @@ Setup finds your apps (Claude Code, Claude Desktop, Cursor, Codex, Gemini CLI, M
 - The download is not code-signed yet, and it has not been tested with Windows Smart App Control switched on or on a Mac.
 - claude.ai and the Claude and ChatGPT phone apps cannot connect yet: they need an OAuth sign-in Monomem does not have.
 
-More: [what it does, in detail](./docs/features.md) · [how it compares](./docs/comparison.md) · [all tools and commands](./docs/tools.md) · [backups](./docs/backups.md) · [known limits](#known-limits) · [security](./SECURITY.md)
+More: [install it with your agent](./docs/install-with-your-agent.md) · [what it does, in detail](./docs/features.md) · [how it compares](./docs/comparison.md) · [all tools and commands](./docs/tools.md) · [backups](./docs/backups.md) · [known limits](#known-limits) · [security](./SECURITY.md)
 
 ---
 

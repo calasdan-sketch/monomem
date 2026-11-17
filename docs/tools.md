@@ -9,11 +9,11 @@
 tokens). A client that loads every tool's schema up front pays this on each request, so the other tools are operator
 tooling you switch on yourself:
 
-- `MONOMEM_TOOLS=all` over stdio: 13 tools, 8,248 characters (about 2,060 tokens). `memory_held`, `memory_rollback`
+- `MONOMEM_TOOLS=all` over stdio: 13 tools, 8,308 characters (about 2,080 tokens). `memory_held`, `memory_rollback`
   and `memory_trust` stay hidden on a local connection unless you set `MONOMEM_STDIO_ADMIN_TOOLS=1`, because a local
   connection has no app key and nobody deliberately gave the agent those powers.
-- With an admin app key over HTTP, or with `MONOMEM_STDIO_ADMIN_TOOLS=1`: all 16 tools, 10,448 characters (about
-  2,610 tokens). The 37 tools of 1.5 were 64,501 characters.
+- With an admin app key over HTTP, or with `MONOMEM_STDIO_ADMIN_TOOLS=1`: all 16 tools, 10,508 characters (about
+  2,630 tokens). The 37 tools of 1.5 were 64,501 characters.
 - Or name only the ones you want: `MONOMEM_TOOLS=memory_sessions,memory_held`.
 
 These sizes are measured over stdio and checked by a test, so this page fails the build if they drift. See
@@ -44,7 +44,7 @@ repository.
 | `memory_rollback` | admin | undo what one writer did since a time: preview, then confirm with the one-time code (operator-only: off over stdio unless `MONOMEM_STDIO_ADMIN_TOOLS=1`) | `memory_rollback` |
 | `memory_tidy` | admin | action `candidates`, `merge`, `rebuild_edges`: near-duplicates and similarity-graph upkeep | `memory_consolidation_candidates`, `memory_consolidate`, `memory_rebuild_edges` |
 | `memory_held` | admin | review writes the safety check held: list, context, approve, keep_history, reject | `memory_quarantine` |
-| `memory_usage` | read | action `stats` (totals, most-read, never-read, stale), `receipt` (which notes a session start showed and why), `why` (why a note is where it is; titles only, never the text) | `memory_stats`, `memory_receipt`, `memory_why` |
+| `memory_usage` | read | action `stats` (totals, most-read, never-read, stale), `receipt` (which notes a session start showed and why), `why` (why a note is where it is; titles only, never the text), `health` (the `monomem check` warnings, each with a sentence to paste to your agent; read-only, admin connection only: [install-with-your-agent.md](./install-with-your-agent.md#fix-it-with-your-agent)) | `memory_stats`, `memory_receipt`, `memory_why` |
 | `memory_sessions` | read / write | action `list`, `handoff` (leave a handoff), `index` (compact rows), `timeline` (what happened around one) | `session_list`, `session_handoff`, `memory_index`, `memory_timeline` |
 | `memory_tasks` | read / write / admin | shared task board: `list`, `get`, `put`, `claim` (a lease, compare-and-swap), `approve` (admin: let the PC's runner run a command task), `runner` (is the runner listening; [RUNNER.md](https://github.com/calasdan-sketch/monomem/blob/main/docs/RUNNER.md)) | `task_put` / `_get` / `_list` / `_claim` / `_approve`, `runner_status` |
 | `memory_trust` | admin | list or change the per-namespace distrust list and the trusted signing keys ([trust.md](./trust.md)) | `trust_policy` |
