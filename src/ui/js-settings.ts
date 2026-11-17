@@ -35,7 +35,7 @@ function openSettings(){
     "<section><h3>Monomem</h3><div class='group'><div class='item'><div><b>Version " + esc(STATE.version || "") + "</b><div class='help'>Updates only when you ask. Checking asks github.com for the newest version; nothing else is sent.</div></div>"+
       "<button id='upd_btn' onclick='checkUpdate()'>Check for updates</button></div><div id='upd_out'></div></div></section>"+
     "<section><h3>Your apps</h3><div class='group' id='set_apps'><div class='item muted'>Looking for apps...</div></div>"+
-      "<div class='acts'><button class='plain' onclick='undoConnect()'>Undo the last connect</button></div><div id='set_out'></div></section>"+
+      "<div class='acts' id='undo_row' hidden><button class='plain' onclick='undoConnect()'>Undo the last connect</button></div><div id='set_out'></div></section>"+
     "<section><h3>Automatic</h3><div class='group'>"+autoSwitches(s)+"</div></section>"+
     syncSection()+
     "<section><h3>Backups</h3><div class='group'><div class='item'><div id='bk_line'>"+last+"</div><button onclick='backupNow()'>Back up now</button></div>"+
@@ -69,7 +69,7 @@ function loadSync(){
   api("/ui/sync").then(function(j){
     var el = $("sync_now"); if(!el){ return; }
     el.textContent = j.set ? "Set up on this computer (" + (j.kind === "git" ? "git: " : "folder: ") + j.where + "). " + (j.auto ? "Syncs by itself every " + j.every_minutes + " minutes." : "Run monomem sync to sync.") : "Not set up on this computer yet.";
-  }).catch(function(e){ var el = $("sync_now"); if(el){ el.textContent = localMissing(e) ? "To set this up from here, open Monomem from its Start menu entry, or run monomem open on this computer." : ""; } });
+  }).catch(function(e){ var el = $("sync_now"); if(el){ el.textContent = localMissing(e) ? "To set this up from here, open Monomem from " + whereEntry() + ", or run monomem open on this computer." : ""; } });
 }
 function syncSetup(){
   var t = ($("sync_target").value || "").trim(), n = ($("sync_name").value || "").trim();
@@ -87,7 +87,7 @@ function appRow(a, welcome){
   var id = esc(a.id);
   var right = a.connected ? "<span class='lbl ok'>Connected</span>"
     : a.declined && !welcome ? "<span class='muted t-foot'>Skipped</span> <button class='plain' onclick='connectApp(&quot;"+id+"&quot;)'>Connect</button>"
-    : "<span class='row'><button class='primary' onclick='connectApp(&quot;"+id+"&quot;)'>Connect</button><button class='plain' onclick='declineApp(&quot;"+id+"&quot;)'>Not this one</button></span>";
+    : "<span class='row'><button onclick='connectApp(&quot;"+id+"&quot;)'>Connect</button><button class='plain' onclick='declineApp(&quot;"+id+"&quot;)'>Not this one</button></span>";
   return "<div class='app'><div><b>"+esc(a.label)+"</b>"+(a.connected ? "<div class='help'>"+esc(restartHint(a.id))+"</div>" : "")+"</div>"+right+"</div>";
 }
 function restartHint(id){
@@ -96,10 +96,11 @@ function restartHint(id){
 function loadApps2(boxId, welcome){
   api("/ui/apps").then(function(j){
     APPS = j.apps || [];
+    var u = $("undo_row"); if(u){ u.hidden = !j.can_undo; }
     var box = $(boxId); if(!box){ return; }
     box.innerHTML = APPS.length ? APPS.map(function(a){ return appRow(a, welcome); }).join("") : "<div class='item muted'>No AI apps found on this computer. Install one (Claude Code, Cursor, Codex...) and open this again.</div>";
   }).catch(function(e){
-    var box = $(boxId); if(box){ box.innerHTML = "<div class='item muted'>" + (localMissing(e) ? "To see and connect your apps, open Monomem from its Start menu entry, or run monomem open on this computer." : esc(e.message)) + "</div>"; }
+    var box = $(boxId); if(box){ box.innerHTML = "<div class='item muted'>" + (localMissing(e) ? "To see and connect your apps, open Monomem from " + whereEntry() + ", or run monomem open on this computer." : esc(e.message)) + "</div>"; }
   });
 }
 function appsBox(){ return $("wl_apps") && !$("welcome").hidden ? "wl_apps" : "set_apps"; }
@@ -189,9 +190,9 @@ function showWelcome(n){
   } else {
     w.innerHTML = wcard(2, "You're set", "<p><b>Monomem does these by itself.</b> Change them any time in Settings.</p><div class='group'>"+autoSwitches(STATE.settings)+"</div>"+
       "<p style='margin-top:16px'><b>What happens now</b></p><ul class='t-callout'><li>Each time an app starts, it gets the notes that matter for the project.</li>"+
-      "<li>Writes that look like a secret or an injected instruction are held until you decide (the Held tab).</li>"+
+      "<li>Writes that hold a secret are refused; writes that look like an injected instruction are held until you decide (the Held tab).</li>"+
       "<li>You can close this window. Your apps start Monomem themselves.</li>"+
-      "<li>To come back, open Monomem from the Start menu" + (INSTALL_EVT ? ", or install this page as an app" : "") + ".</li></ul>"+
+      "<li>To come back, open Monomem from " + whereEntry() + (INSTALL_EVT ? ", or install this page as an app" : "") + ".</li></ul>"+
       (INSTALL_EVT ? "<div class='acts'><button onclick='installApp()'>Install as an app</button></div>" : ""),
       "<button class='plain' onclick='showWelcome(1)'>Back</button><button class='primary' onclick='finishWelcome()'>Open my notes</button>");
   }

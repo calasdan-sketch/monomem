@@ -214,7 +214,9 @@ kbd{font:600 .75rem var(--mono);border:1px solid var(--separator);border-bottom-
 .ghead h1{font-size:1.75rem;margin-top:var(--s2)}
 .ghead p{margin:var(--s1) 0 0;color:#A9BFCF;font-size:.8125rem}
 .gbody{padding:var(--s5)}
-.gbody input{width:100%}
+.gbody input:not([type=checkbox]){width:100%}
+/* Disclosure links (More options, Use an app key instead): at least 24 px tall (WCAG 2.5.8). */
+.gbody summary,.sheet summary{cursor:pointer;padding:var(--s2) 0}
 .steps{display:flex;gap:var(--s2);justify-content:center;margin:0 0 var(--s4);padding:0;list-style:none}
 .steps li{width:8px;height:8px;border-radius:50%;background:var(--separator)}
 .steps li[aria-current=step]{background:var(--action);width:24px;border-radius:4px}

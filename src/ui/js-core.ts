@@ -15,6 +15,13 @@ function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g, function(c){
   return {"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;","'":"&#39;"}[c]; }); }
 function $(id){ return document.getElementById(id); }
 function plural(n, one, many){ return Number(n) + " " + (Number(n) === 1 ? one : many); }
+// Where Monomem's own launcher lives on this computer (setup makes a Start menu entry, ~/Applications/Monomem.app or a
+// .desktop file). The page is only ever opened on the same computer, so the browser's platform names it.
+function whereEntry(){
+  var n = (typeof navigator !== "undefined" && navigator) || {};
+  var p = String((n.userAgentData && n.userAgentData.platform) || n.platform || "") + " " + String(n.userAgent || "");
+  return /mac/i.test(p) ? "your Applications folder" : /win/i.test(p) ? "its Start menu entry" : /linux|x11|cros|bsd/i.test(p) ? "your app launcher" : "its Start menu entry";
+}
 
 // A small coloured chip per writer: a stable hash of the label picks the hue (never red: red means danger here).
 var HUES = [30,195,96,261,162,327,63,228,129,294], hueOf = {};
@@ -118,7 +125,7 @@ function api(path, opts){
   if(lsess()){ opts.headers["X-Monomem-Local"] = lsess(); }
   if(opts.body){ opts.headers["Content-Type"] = "application/json"; }
   return fetch(path, opts).then(function(r){
-    if(r.status === 401){ logout("That key was not accepted. Open Monomem again from its Start menu entry, or run  monomem open  on this computer."); throw new Error("not signed in"); }
+    if(r.status === 401){ logout("That key was not accepted. Open Monomem again from " + whereEntry() + ", or run  monomem open  on this computer."); throw new Error("not signed in"); }
     return r.json().then(function(j){ if(!r.ok){ var e = new Error(j.error || r.status); e.body = j; throw e; } return j; });
   });
 }
@@ -166,22 +173,47 @@ function setNeeds(j){
   try { if(navigator.setAppBadge){ if(NEEDS.count){ navigator.setAppBadge(NEEDS.count); } else { navigator.clearAppBadge(); } } } catch(e){}
   showNeeds();
 }
-// One calm banner on Notes only: what waits, and one button to the first place that settles it.
+// One calm banner on Notes only: what waits, and one button (named for where it goes) to the first place that settles it.
+// Not a filled button: New note is the one filled button on Notes.
 function showNeeds(){
   var b = $("needs"), items = NEEDS.items || [];
   if(!b){ return; }
   b.hidden = !(VIEW === "list" && items.length);
   if(b.hidden){ return; }
-  var go = { held:"loadHeld()", review:"loadReview()", settings:"openSettings()" }[items[0].view] || "loadReview()";
+  var go = { held:["loadHeld()", "Open Held"], review:["loadReview()", "Open Review"], settings:["openSettings()", "Open Settings"] }[items[0].view] || ["loadReview()", "Open Review"];
   b.innerHTML = "<div><b>" + (NEEDS.count === 1 ? "1 thing needs you" : Number(NEEDS.count) + " things need you") + "</b><ul class='t-callout'>" +
-    items.map(function(i){ return "<li>"+esc(i.text)+"</li>"; }).join("") + "</ul></div><button class='primary' onclick='"+go+"'>Review</button>";
+    items.map(function(i){ return "<li>"+esc(i.text)+"</li>"; }).join("") + "</ul></div><button onclick='"+go[0]+"'>"+go[1]+"</button>";
 }
 function loadNeeds(){ if(!IS_ADMIN){ return; } api("/ui/needs-you").then(setNeeds).catch(function(){ setNeeds(null); }); }
 
 // ---- keyboard: / search, n new note, Ctrl/Cmd+K palette, u undo, ? shortcuts, 1-4 tabs, Esc closes ----
 function typing(e){ var t = e.target || {}; var n = String(t.tagName || "").toLowerCase(); return n === "input" || n === "textarea" || n === "select" || t.isContentEditable; }
 function anySheetOpen(){ return ["newsheet","settings","confirmsheet","palette","helpsheet"].some(function(id){ var d = $(id); return d && d.open; }); }
+// The note's "..." menu (role=menu): arrow keys, Home and End move through its items; Esc closes it and goes back to "...".
+function menuKey(e){
+  var t = e.target, d = t && t.closest ? t.closest("details.menu") : null;
+  if(!d){ return false; }
+  var k = e.key, items = [].slice.call(d.querySelectorAll(".pop button")), i = items.indexOf(t);
+  if(k === "Escape"){
+    if(!d.open){ return false; }
+    e.preventDefault(); d.open = false;
+    var s = d.querySelector("summary"); if(s){ s.focus(); }
+    return true;
+  }
+  if(k !== "ArrowDown" && k !== "ArrowUp" && k !== "Home" && k !== "End"){ return false; }
+  e.preventDefault();
+  if(!items.length){ return true; }
+  d.open = true;
+  var n = k === "Home" ? 0 : k === "End" ? items.length - 1 : k === "ArrowDown" ? (i + 1) % items.length : (i <= 0 ? items.length - 1 : i - 1);
+  items[n].focus();
+  return true;
+}
+// A click outside an open "..." menu closes it.
+function menuClickAway(e){
+  try { [].forEach.call(document.querySelectorAll("details.menu[open]"), function(d){ if(!d.contains(e.target)){ d.open = false; } }); } catch(x){}
+}
 function onKey(e){
+  if(menuKey(e)){ return; }
   if((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === "k"){ e.preventDefault(); openPalette(); return; }
   if(e.ctrlKey || e.metaKey || e.altKey || typing(e) || anySheetOpen() || $("app").hidden){ return; }
   var k = e.key, f = { "/": function(){ $("q").focus(); }, "n": toggleNew, "u": undoLast, "?": function(){ openSheet("helpsheet"); },
@@ -236,7 +268,8 @@ try { window.addEventListener("hashchange", function(){ if(/(?:^#|&)(?:code|toke
     if(c){ LOGIN_CODE = c[1]; history.replaceState(null, "", location.pathname + location.search); }
   } catch(e){}
 })();
-try { document.addEventListener("keydown", onKey); } catch(e){}
+try { document.addEventListener("keydown", onKey); document.addEventListener("click", menuClickAway); } catch(e){}
+try { $("gate_where").textContent = whereEntry(); } catch(e){}
 try { $("pal_q").addEventListener("input", palFilter); $("pal_q").addEventListener("keydown", function(e){ if(e.key === "Enter"){ e.preventDefault(); palRun(0); } }); } catch(e){}
 var qT;
 $("q").addEventListener("input", function(){ clearTimeout(qT); qT = setTimeout(load, 250); });

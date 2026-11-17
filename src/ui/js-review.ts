@@ -18,7 +18,7 @@ function loadReview(){
     CFG = cf; CFACT = {};
     $("count").textContent = plural(j.count, "note waits", "notes wait") + " (the same list as monomem review)" + (cf.length ? "; " + plural(cf.length, "fact has", "facts have") + " two answers" : "");
     var out = [];
-    if(j.held_writes){ out.push("<div class='banner'><span>"+plural(j.held_writes, "write is", "writes are")+" held for your decision.</span><button class='primary' onclick='loadHeld()'>Open Held</button></div>"); }
+    if(j.held_writes){ out.push("<div class='banner'><span>"+plural(j.held_writes, "write is", "writes are")+" held for your decision.</span><button onclick='loadHeld()'>Open Held</button></div>"); }
     if(j.notes.length){
       out.push("<h3 class='section t-title'>Waiting for you to confirm</h3>");
       out = out.concat(j.notes.map(function(r){

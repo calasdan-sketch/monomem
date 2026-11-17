@@ -115,7 +115,7 @@ describe("dashboard: held strip, pinned first, writer label", () => {
     p.ctx.setNeeds({ count: 1, items: [{ kind: "held", count: 1, view: "held", text: "1 write is held until you approve or reject it." }] });
     p.ctx.setView("list");
     assert.equal(p.el("needs").hidden, false);
-    assert.match(p.el("needs").innerHTML, /1 thing needs you[\s\S]*onclick='loadHeld\(\)'>Review</);
+    assert.match(p.el("needs").innerHTML, /1 thing needs you[\s\S]*onclick='loadHeld\(\)'>Open Held</, "the button names where it goes (r3-design LOW)");
     p.ctx.setView("held");
     assert.equal(p.el("needs").hidden, true);
     p.ctx.setNeeds({ count: 0, items: [] });
