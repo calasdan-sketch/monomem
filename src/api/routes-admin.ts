@@ -1,4 +1,4 @@
-// REST routes: operator views and switches: sweep, insights, audit, quality, approve-first, access/flood, pinned, rollback, quarantine.
+// REST routes: operator views and switches: sweep, insights, audit, quality, approve-first, access/flood, pinned, touched, rollback, quarantine.
 // Moved out of createApiServer's request handler (api.ts) unchanged; handle() tries the route files in a fixed order.
 // Each returns true when it answered the request, false to let the next one try.
 
@@ -11,6 +11,8 @@ import { maybeEmbed } from "../search-service.js";
 import { resolveSince } from "../changes.js";
 import { qualityReport } from "../quality.js";
 import { rollbackPreview, rollbackConfirm, embedRestored } from "../rollback.js";
+import { noteRollbackPreview, noteRollbackConfirm } from "../rollback-note.js";
+import { noteTouched, touchedText } from "../blast-radius.js";
 import type { Caller } from "../supersede.js";
 import { heldEditDiff } from "../line-diff.js";
 import { cachedFor, sendError, sendJson, intParam } from "./shared.js";
@@ -198,11 +200,30 @@ export async function adminRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
     return true;
   }
 
+  // GET /notes/:id/touched -> who read the note and what was built on it (blast-radius.ts), plus the same text the CLI prints.
+  // Admin-only; refused for a key with a sensitivity limit (it comes from the read log, like /access). Namespace-pinned: its own.
+  const touched = req.method === "GET" ? /^\/notes\/(\d+)\/touched$/.exec(path) : null;
+  if (touched) {
+    if (principal.max_sensitivity !== undefined) {
+      sendJson(res, 403, { error: "what a note touched comes from the read log: use an administrator key with no sensitivity limit" });
+      return true;
+    }
+    const own = nsCtx.active ? [nsCtx.ownNamespace] : undefined;
+    const note = store.readVisible(Number(touched[1]));
+    if (!note || (own && !own.includes(note.namespace))) {
+      sendJson(res, 404, { error: `no note ${touched[1]}` });
+      return true;
+    }
+    const t = noteTouched(store, note, { namespaces: own, operator: false });
+    sendJson(res, 200, { ...t, text: touchedText(t) });
+    return true;
+  }
+
   // POST /rollback/preview { writer, since, include_conflicts? } -> the plan + a one-time code; POST /rollback/confirm { token }.
   // Admin-only (rollback.ts). REST counts as an agent: pinned notes and approve-first namespaces are listed as skipped.
   if (req.method === "POST" && (path === "/rollback/preview" || path === "/rollback/confirm")) {
     const caller: Caller = { scope, ...(nsCtx.active ? { ownNamespace: nsCtx.ownNamespace } : {}) };
-    let b: { writer?: unknown; since?: unknown; include_conflicts?: unknown; token?: unknown };
+    let b: { writer?: unknown; since?: unknown; include_conflicts?: unknown; token?: unknown; note?: unknown; include_likely?: unknown };
     try {
       b = JSON.parse((await readBody(req)) || "{}");
     } catch {
@@ -210,7 +231,16 @@ export async function adminRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
       return true;
     }
     try {
-      if (path === "/rollback/preview") {
+      // { note, include_likely? } instead of writer/since: roll back one note and what was built on it (rollback-note.ts).
+      if (b.note !== undefined && (b.writer !== undefined || b.since !== undefined)) {
+        sendJson(res, 400, { error: "pass note, or writer and since, not both" });
+      } else if (b.note !== undefined && path === "/rollback/preview") {
+        sendJson(res, 200, noteRollbackPreview(store, caller, { note: b.note, include_likely: b.include_likely, include_conflicts: b.include_conflicts }));
+      } else if (b.note !== undefined) {
+        const out = noteRollbackConfirm(store, caller, { token: b.token });
+        await embedRestored(store, out);
+        sendJson(res, 200, out);
+      } else if (path === "/rollback/preview") {
         sendJson(res, 200, rollbackPreview(store, caller, { writer: b.writer, since: b.since, include_conflicts: b.include_conflicts }));
       } else {
         const out = rollbackConfirm(store, caller, { token: b.token });

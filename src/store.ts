@@ -127,6 +127,7 @@ import * as reputationOps from "./store/reputation.js";
 import type { WriterCounts, WriterEvent } from "./store/reputation.js";
 export type { FlaggedItem, NoteFlag, WriterCounts, WriterEvent };
 import { tagsToStorage, parseTags, dueBase, needsHumanConfirm, sealQuarantineCol, openQuarantineCol, isoOrNull, clampInt, envCount, floodWritesPerHour, isOperatorWrite, isPlainObject } from "./store/rows.js";
+import { recordNoteReads, purgeNoteReads } from "./store/note-reads.js";
 export { dueBase, needsHumanConfirm, clampInt, floodWritesPerHour };
 export { ValidationError, NoteUnreadableError, StaleWriteError, RebuildBusyError, CandidateScanError, QuarantinedError, WriterPausedError };
 
@@ -7466,6 +7467,7 @@ export class Store {
       const namespaces = new Set(e.namespaces ?? []);
       let results = e.results ?? 0;
       const seen = new Set<unknown>();
+      const ids: number[] = [];
       const walk = (v: unknown, depth: number): void => {
         if (!v || typeof v !== "object" || depth > 6 || seen.has(v)) return;
         seen.add(v);
@@ -7473,6 +7475,7 @@ export class Store {
         const o = v as Record<string, unknown>;
         if (typeof o.id === "number") {
           results++;
+          ids.push(o.id);
           if (typeof o.namespace === "string") namespaces.add(o.namespace);
           return;
         }
@@ -7487,16 +7490,18 @@ export class Store {
       // (it used to, for up to the full busy timeout). A row skipped under contention is reported once per process.
       let wrote = false;
       this.bestEffortWrite(() => {
+        const at = new Date().toISOString();
         this.db
           .prepare("INSERT INTO access_log (at, writer, tool, namespaces, query, results) VALUES (?, ?, ?, ?, ?, ?)")
           .run(
-            new Date().toISOString(),
+            at,
             currentWriter(),
             e.tool.slice(0, 100),
             [...namespaces].filter(Boolean).sort().join(",").slice(0, 500),
             key ? encrypt(preview, key, ACCESS_AAD) : preview,
             Math.max(0, Math.floor(results) || 0)
           );
+        recordNoteReads(this.db, at, currentWriter(), e.tool.slice(0, 100), ids); // C23: which notes this read handed out
         this.bookkeepingChanges += 1;
         wrote = true;
       });
@@ -7539,7 +7544,9 @@ export class Store {
   /** Drop access-log rows past MONOMEM_ACCESS_LOG_DAYS (all of them when it is 0) and flood counts older than an hour. */
   private sweepAccessLog(now: number): void {
     const days = accessLogDays();
-    this.db.prepare("DELETE FROM access_log WHERE at < ?").run(days === 0 ? "9999" : new Date(now - days * 86_400_000).toISOString());
+    const cutoff = days === 0 ? "9999" : new Date(now - days * 86_400_000).toISOString();
+    this.db.prepare("DELETE FROM access_log WHERE at < ?").run(cutoff);
+    purgeNoteReads(this.db, cutoff);
     this.db.prepare("DELETE FROM write_rate WHERE at < ?").run(new Date(now - 3_600_000).toISOString());
   }
 

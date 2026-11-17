@@ -4,6 +4,7 @@
 import { z } from "zod";
 import { QuarantinedError } from "../store.js";
 import { rollbackPreview, rollbackConfirm, embedRestored } from "../rollback.js";
+import { noteRollbackPreview, noteRollbackConfirm } from "../rollback-note.js";
 import { supersedePreview, supersedeConfirm, supersedeUndo, noteHistory, restoreVersion, purgeNoteHistory, SupersedeError, type Caller } from "../supersede.js";
 import { UNTRUSTED_BANNER } from "../security.js";
 import { maybeEmbed } from "../search-service.js";
@@ -201,18 +202,28 @@ export function registerSupersedeTools(c: McpCtx): void {
         "Admin only, operator tool. Without code: a preview of undoing everything one writer did since a time (notes it created are archived, " +
         "notes whose text it changed get their earlier text back) plus a one-time code; nothing changes. With code: applies exactly that preview, " +
         "all or nothing. Notes another writer changed later are skipped unless include_conflicts. Pinned notes and approve-first namespaces " +
-        "are skipped here (the monomem CLI does those). Show the preview to the person and ask before confirming.",
+        "are skipped here (the monomem CLI does those). With note instead: undo that note and what was built on it (memory_why touched lists it). " +
+        "Show the preview to the person and ask before confirming.",
       inputSchema: {
         writer: z.string().optional().describe('The exact writer name (written_by), e.g. "token:ci" or "stdio:cursor"; "stdio" means every local app.'),
         since: z.string().optional().describe("An ISO time, or a duration back from now: 30m, 2h, 7d."),
         include_conflicts: z.boolean().optional().describe("Also roll back notes another writer changed afterwards (their text stays in the history)."),
         code: z.string().optional().describe("The one-time code from the preview, to apply it."),
+        note: zInt().optional().describe("Instead of writer/since: roll back this note and what was built on it (pass it with the code too)."),
+        include_likely: z.boolean().optional().describe("With note: also undo what a reader wrote or claimed after reading it, with no recorded link."),
       },
     },
-    async ({ writer, since, include_conflicts, code }) => {
+    async ({ writer, since, include_conflicts, code, note, include_likely }) => {
       try {
         const denied = denyIfUnder("admin");
         if (denied) return errorResult(denied);
+        if (note !== undefined) {
+          if (writer !== undefined || since !== undefined) return errorResult("pass note, or writer and since, not both. Nothing was done.");
+          if (code === undefined) return untrustedResult(noteRollbackPreview(store, callerNow(), { note, include_likely, include_conflicts }));
+          const out = noteRollbackConfirm(store, callerNow(), { token: code });
+          await embedRestored(store, out);
+          return textResult(out);
+        }
         if (code === undefined) return untrustedResult(rollbackPreview(store, callerNow(), { writer, since, include_conflicts }));
         const out = rollbackConfirm(store, callerNow(), { token: code });
         await embedRestored(store, out);

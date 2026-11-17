@@ -16,6 +16,7 @@ Pick by what you want to do. Everything here is also linked from the main [READM
 | have Claude Code recall notes at the start of a session | [sessionstart-hook.md](./sessionstart-hook.md) |
 | move notes in or out, or keep them in git | [file-sync.md](./file-sync.md), [switching.md](./switching.md) |
 | replace a wrong note, or undo an edit | [replacing-memories.md](./replacing-memories.md) |
+| see what a bad note touched, and undo it with what was built on it | [what-a-note-touched.md](./what-a-note-touched.md) |
 | encrypt the notes or let old ones expire | [encryption-retention.md](./encryption-retention.md) |
 | check my memory's health, find personal data, scrub old deletions, import rules files, read the audit log | [checkups.md](./checkups.md) |
 | show it off in 90 seconds | [demo-script.md](./demo-script.md) |

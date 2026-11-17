@@ -106,6 +106,8 @@ export function requiredScope(method: string | undefined, path: string): Scope {
   if (path === "/pinned" || path === "/rollback/preview" || path === "/rollback/confirm") return "admin";
   // The read access log shows every agent's queries, and the flood pause is the operator's switch: admin, reads included.
   if (path === "/access" || path === "/flood" || path === "/flood/resume") return "admin";
+  // What a note touched comes from the read log (who was handed it): admin, like /access.
+  if (/^\/notes\/\d+\/touched$/.test(path)) return "admin";
   // A note's earlier versions can hold text that was taken out on purpose: administrators only, reads included.
   if (/^\/notes\/\d+\/history(\/restore)?$/.test(path)) return "admin";
   // 1.4.0: any writer may confirm; who counts (and as what kind) is decided by Store.confirm, an admin token as `admin`.

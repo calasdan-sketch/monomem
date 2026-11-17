@@ -172,12 +172,12 @@ export function noteWhy(store: Store, note: NoteRecord, opts: { namespaces?: str
   };
 }
 
-/** `monomem why <id> [--json] [--body] [--commits]` */
+/** `monomem why <id> [--json] [--body] [--commits] [--touched]` (--touched: what the note touched, blast-radius.ts) */
 export async function whyCmd(args: string[]): Promise<void> {
   const raw = args.find((a) => !a.startsWith("-"));
   const id = raw && /^#?\d+$/.test(raw) ? Number(raw.replace("#", "")) : NaN;
   if (!Number.isInteger(id)) {
-    console.error("Usage: monomem why <note-id> [--json] [--body] [--commits]");
+    console.error("Usage: monomem why <note-id> [--json] [--body] [--commits] [--touched]");
     process.exit(1);
   }
   const { DB_PATH } = await import("./config.js");
@@ -190,6 +190,11 @@ export async function whyCmd(args: string[]): Promise<void> {
       process.exit(1);
     }
     if (args.includes("--commits")) return await commitsOf(store, note.id, note.title, args.includes("--json"));
+    if (args.includes("--touched")) {
+      const { noteTouched, touchedText } = await import("./blast-radius.js");
+      const t = noteTouched(store, note, { operator: true });
+      return console.log(args.includes("--json") ? JSON.stringify(t, null, 2) : touchedText(t));
+    }
     const w = noteWhy(store, note, { body: args.includes("--body") });
     if (args.includes("--json")) return console.log(JSON.stringify(w, null, 2));
     console.log(`#${w.id} "${printable(w.title)}"  namespace ${printable(w.namespace)}`);

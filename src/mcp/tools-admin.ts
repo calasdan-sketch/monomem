@@ -10,6 +10,7 @@ import { maybeEmbed } from "../search-service.js";
 import { meterStats } from "../meter.js";
 import { receiptList, receiptGet } from "../receipts.js";
 import { noteWhy } from "../why.js";
+import { noteTouched } from "../blast-radius.js";
 import { findCandidatesGuarded, resolveConsolidationNotes, consolidateNotes, buildConsolidationPreview, clampThreshold } from "../consolidate.js";
 import { textResult, untrustedResult, WRITER_FILTER_SHAPE, NOTE_WRITER_SHAPE, writerFilterArgs, noteWriterArgs, errorResult, errorFor } from "./shared.js";
 import type { McpCtx } from "./context.js";
@@ -108,11 +109,12 @@ export function registerAdminTools(c: McpCtx): void {
       inputSchema: {
         id: z.number().int().describe("The note id."),
         namespace: z.string().optional().describe(nsActive ? "Untrusted hint: restrict to this namespace. Ignored unless this server may read it." : "Restrict to this namespace."),
+        touched: z.boolean().optional().describe("Admin: instead, who read it and what was built on it afterwards (proven vs likely)."),
       },
     },
-    async ({ id, namespace }) => {
+    async ({ id, namespace, touched }) => {
       try {
-        const denied = denyIfUnder("read");
+        const denied = denyIfUnder(touched === true ? "admin" : "read");
         if (denied) return errorResult(denied);
         let namespaces: string[] | undefined;
         if (nsActive) {
@@ -123,6 +125,7 @@ export function registerAdminTools(c: McpCtx): void {
         }
         const note = store.readVisible(id);
         if (!note || (namespaces && !namespaces.includes(note.namespace))) return errorResult(`no note ${id}`);
+        if (touched === true) return untrustedResult(noteTouched(store, note, { namespaces, operator: false }));
         return untrustedResult(noteWhy(store, note, { namespaces }));
       } catch (e) {
         return errorFor(e);

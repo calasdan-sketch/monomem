@@ -107,6 +107,14 @@ const EXPECTED_SITES: Record<string, string[]> = {
   "llm.ts": ["the capture writer re-reads its own summary note"],
   "phase-b-cli.ts": ["local command, full local trust"],
   "progressive.ts": ["access probe: readVisible decides before anything is returned"],
+  // C23: what a note touched. The CLI (operator) reads every note; REST/MCP callers get readVisible plus their namespaces.
+  "blast-radius.ts": ["operator path is the CLI; others go through the trust gate"],
+  "rollback-note.ts": [
+    "operator rollback (admin), confined to the caller's namespaces just below",
+    "operator rollback (admin), within the caller's namespaces (noteTouched)",
+    "operator rollback (admin), within the caller's namespaces (noteTouched)",
+    "operator rollback (admin), within the caller's namespaces (noteTouched)",
+  ],
   "rollback.ts": [
     "operator rollback (admin), confined to the caller's namespaces by rollbackCandidates",
     "re-embed what the operator just restored; nothing is returned",
@@ -177,6 +185,13 @@ const SQL_ALLOWED: Record<string, string[]> = {
   // rollback.ts (admin-only writer rollback): finds the writer's open flags and its still-live replacements by id, confined to the
   // caller's namespaces in the query; clears those flags in the confirm transaction. Ids only; every note is re-read via Store.
   "rollback.ts": ["note_flags", "notes"],
+  // blast-radius.ts (C23, read-only): note ids and times only (derived_from links, a reader's later creates and history rows,
+  // still-in-force replacements); every note it names is re-read through visibleTo (Store.read for the CLI, readVisible + the
+  // caller's namespaces otherwise), so nothing outside the gate is returned.
+  "blast-radius.ts": ["note_history", "note_links", "notes"],
+  // rollback-note.ts (admin-only rollback by note): the note's own open flags by id, cleared in the confirm transaction; a flag
+  // raised at this computer is left for the CLI (r3 S1), as in rollback.ts.
+  "rollback-note.ts": ["note_flags"],
   // why.ts is a local shell command (the operator owns the database file): held-write and confirmation history for one id.
   "why.ts": ["confirmations", "quarantine"],
 };

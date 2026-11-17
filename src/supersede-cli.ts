@@ -13,6 +13,7 @@
 //   monomem history purge <id> [--yes]
 //   monomem pin [<id>]  |  monomem unpin <id>
 //   monomem rollback --writer <name> --since <iso|duration> [--include-conflicts] [--yes] [--json]
+//   monomem rollback --note <id> [--include-likely] [--include-conflicts] [--yes] [--json]   (src/cli/forensics.ts)
 //
 // There is deliberately NO --yes for a replacement: a script has to carry a code that was made by looking at a preview.
 //
@@ -41,8 +42,8 @@ export interface CliIO {
   gate?: (kind: "pinned" | "outside", ids: number[], what: string) => Promise<void>;
 }
 
-const VALUE_FLAGS = ["old", "new-id", "title", "body", "body-file", "tags", "confidence", "confirm-token", "if-rev", "writer", "since"];
-const BOOL_FLAGS = ["acknowledge-risk", "json", "include-distrusted", "yes", "include-conflicts"];
+const VALUE_FLAGS = ["old", "new-id", "title", "body", "body-file", "tags", "confidence", "confirm-token", "if-rev", "writer", "since", "note"];
+const BOOL_FLAGS = ["acknowledge-risk", "json", "include-distrusted", "yes", "include-conflicts", "include-likely"];
 
 export function parseArgs(args: string[]): { flags: Record<string, string | true>; rest: string[] } {
   const flags: Record<string, string | true> = {};
@@ -275,6 +276,7 @@ export async function pinCli(store: Store, kind: "pin" | "unpin", args: string[]
 export async function rollbackCli(store: Store, args: string[], io: CliIO, caller: Caller = OWNER): Promise<number> {
   try {
     const { flags } = parseArgs(args);
+    if (flags.note !== undefined) return (await import("./cli/forensics.js")).noteRollbackCli(store, flags, io, caller);
     const json = flags.json === true;
     if (!s(flags.since)?.trim()) {
       const w = s(flags.writer)?.trim() || "<writer>";
