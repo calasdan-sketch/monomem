@@ -63,6 +63,10 @@ costs money we have not spent yet). The only program in the folder is Node's, wh
      Mac, and in the Linux applications menu. `monomem setup --undo` and `monomem uninstall` remove it.
 4. Then it connects your apps as usual. You can delete the downloaded archive and folder afterwards.
 
+Had the npm version? Setup lists moving your apps and hooks from it to this download as a step you say yes to (same data
+folder, and `monomem setup --undo` puts them back). After that, `npm rm -g monomem` is safe; until then
+`monomem check` warns that an app still runs the npm copy.
+
 To type `monomem` in any terminal, setup offers to add the home folder to your PATH, as one more step in the list you say
 yes to: on Windows your per-user PATH (the `Path` value under `HKCU\Environment`, appended, nothing else changed; open a new
 terminal afterwards), on Mac/Linux one line marked `# added by monomem setup` in your shell's startup file (`~/.zshrc`,
