@@ -236,6 +236,18 @@ const backupTimer = autoBackupOn() ? setInterval(backupNow, 3_600_000) : undefin
 backupTimer?.unref();
 if (backupTimer) setTimeout(backupNow, 60_000).unref();
 
+// Notice apps installed later (app-detect.ts): two minutes after start, then hourly, at most one look a day. Read only;
+// the result is the "Connect / Not this one / Repair" items in Needs you and Settings.
+// ponytail: runs on the server's thread (a few dozen small file reads, no app started); move it to a worker if it shows up in timings.
+const appCheckNow = (): void => {
+  void Promise.all([import("./app-detect.js"), import("./setup.js"), import("./config.js")])
+    .then(([d, s, c]) => d.maybeCheckApps(s.realEnv(c.PACKAGE_VERSION), DATA_DIR))
+    .catch((e: Error) => console.error(`[monomem] app check failed: ${e.message}`));
+};
+const appCheckTimer = setInterval(appCheckNow, 3_600_000);
+appCheckTimer.unref();
+setTimeout(appCheckNow, 120_000).unref();
+
 // Device sync on a timer: only after `monomem sync setup --auto on` (off by default; it talks to your git remote).
 void Promise.all([import("./sync/device.js"), import("./self.js")])
   .then(([d, self]) => d.startSyncTimer(DATA_DIR, () => self.selfCommand([]), (l) => console.error(l)))
@@ -247,6 +259,7 @@ function shutdown(): void {
   closing = true;
   clearInterval(purgeTimer);
   clearInterval(backupTimer);
+  clearInterval(appCheckTimer);
   // Live waits (memory_since / GET /changes?wait=) end NOW and answer with
   // timedOut:true, so a restart drains in milliseconds instead of resetting
   // sockets at the 3s safety net.

@@ -5,16 +5,18 @@
 //   conflicts   facts two writers disagree on (fact tier only: the "possible" tier is a guess, not a question for you)
 //   backup      the last backup failed
 //   sync        the last device sync failed (sync-status.json; a sync that is only late shows in monomem check)
+//   apps        an app installed later to connect, or a connection to repair (app-detect.ts, checked daily by the server)
 // Counts only, never note text. Silent (count 0) when nothing waits.
 import type { Store } from "../store.js";
 import { findConflicts, groupConflicts } from "../conflicts.js";
-import { readBackupStatus } from "./settings.js";
+import { readBackupStatus, readUiSettings } from "./settings.js";
+import { appsNeedingYou } from "../app-detect.js";
 import { DATA_DIR, DB_PATH } from "../config.js";
 import { syncProblem } from "../sync/device.js";
 import { dirname } from "node:path";
 import { currentCeiling } from "../actor.js";
 
-export type NeedKind = "held" | "unconfirmed" | "conflicts" | "backup" | "sync";
+export type NeedKind = "held" | "unconfirmed" | "conflicts" | "backup" | "sync" | "apps";
 export interface NeedItem {
   kind: NeedKind;
   count: number;
@@ -72,6 +74,11 @@ export function needsYou(store: Store, opts: { namespaces?: string[]; conflicts?
   if (b && !b.ok) items.push({ kind: "backup", count: 1, view: "settings", text: `The last backup failed (${b.at.slice(0, 16).replace("T", " ")}).` });
   const sync = syncProblem(opts.dataDir ?? DATA_DIR);
   if (sync?.kind === "failed") items.push({ kind: "sync", count: 1, view: "settings", text: `The last sync with your other computers failed (${sync.at.slice(0, 16).replace("T", " ")}). Run monomem sync to see why.` });
+  const dir = opts.dataDir ?? DATA_DIR;
+  const apps = appsNeedingYou(dir, readUiSettings(dir).declined_apps);
+  const names = (a: { label: string }[]): string => (a.length > 2 ? `${a[0].label}, ${a[1].label} and ${a.length - 2} more` : a.map((x) => x.label).join(" and "));
+  if (apps.new.length) items.push({ kind: "apps", count: apps.new.length, view: "settings", text: `${names(apps.new)} ${apps.new.length === 1 ? "was" : "were"} installed after Monomem was set up: connect ${apps.new.length === 1 ? "it" : "them"} in Settings, or choose Not this one.` });
+  if (apps.repair.length) items.push({ kind: "apps", count: apps.repair.length, view: "settings", text: `The Monomem connection in ${names(apps.repair)} would not start: Repair ${apps.repair.length === 1 ? "it" : "them"} in Settings.` });
   return { count: items.reduce((n, i) => n + i.count, 0), items };
 }
 
@@ -81,6 +88,7 @@ const SHORT: Record<NeedKind, [string, string]> = {
   conflicts: ["disputed fact", "disputed facts"],
   backup: ["failed backup", "failed backups"],
   sync: ["failed sync", "failed syncs"],
+  apps: ["app to connect or repair", "apps to connect or repair"],
 };
 /**
  * Session start's one line (recall.ts): counts only, never note text; "" when nothing waits. Skips the conflict scan
