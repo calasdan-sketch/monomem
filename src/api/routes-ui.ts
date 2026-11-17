@@ -284,6 +284,23 @@ export async function uiRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
     sendJson(res, 200, { ok: out.code === 0, ...out });
     return true;
   }
+  // GET /ui/import -> other memory tools found on this computer (file checks only). POST /ui/import { id } -> the ordinary
+  // `monomem import ... --yes` for that one, after the person said yes on the page; every note comes in held.
+  if (path === "/ui/import" && (req.method === "GET" || req.method === "POST")) {
+    if (needLocal()) return true;
+    const { findSources, importArgs, SOURCE_IDS } = await import("../importers/sources.js");
+    const { realEnv } = await import("../setup.js");
+    if (req.method === "GET") {
+      sendJson(res, 200, { sources: await findSources(realEnv(PACKAGE_VERSION), DB_PATH) });
+      return true;
+    }
+    const b = await jsonBody(req);
+    const id = SOURCE_IDS.find((x) => b?.id === x);
+    if (!id) { sendJson(res, 400, { error: "Unknown source." }); return true; }
+    const out = await runner(importArgs(id), 600_000);
+    sendJson(res, 200, { ok: out.code === 0, ...out });
+    return true;
+  }
   // POST /ui/backup -> a copy of the database now, in <data dir>/backups/<time>; the result is recorded for "Needs you".
   if (req.method === "POST" && path === "/ui/backup") {
     if (needLocal()) return true;
