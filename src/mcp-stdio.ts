@@ -11,7 +11,8 @@ import { fileURLToPath } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { Store } from "./store.js";
 import { createMcpServer, stdioSweep } from "./mcp-server-core.js";
-import { DB_PATH, prepareDataDir } from "./config.js";
+import { DATA_DIR, DB_PATH, prepareDataDir } from "./config.js";
+import { startStdioDailyBackup } from "./backup-schedule.js";
 import { resolveStartupNamespace } from "./namespace.js";
 import { setProcessWriter, stdioWriter } from "./actor.js";
 import { audit, printable } from "./security.js";
@@ -36,6 +37,7 @@ try {
 const sweep = (): void => stdioSweep(store);
 sweep();
 setInterval(sweep, 3_600_000).unref();
+startStdioDailyBackup(DB_PATH, DATA_DIR); // most people never run the server, so the daily backup is checked here too
 setImmediate(() => store.warmBodyIndex()); // C-06: build the encrypted-body search index now, not on the first agent search
 // Server-side namespace resolution: resolved ONCE at startup from the
 // process working directory. Null when unconfigured (legacy behavior).
