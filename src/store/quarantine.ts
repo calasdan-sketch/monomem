@@ -180,7 +180,9 @@ export function approveQuarantine(s: Store, id: number): NoteRecord {
   const done = s.transaction(() => {
     const q = s.getQuarantine(id);
     if (!q) throw heldHandled(id);
-    return { note: s.applyHeld(id, q), namespace: q.namespace };
+    const note = s.applyHeld(id, q);
+    s.recordWriterEvent(q.written_by ?? "", "held_approved", note.id); // the writer's own notice (store/held-outcomes.ts); not a reputation count
+    return { note, namespace: q.namespace };
   });
   s.audit({ op: "quarantine-approve", id, namespace: done.namespace });
   return done.note;

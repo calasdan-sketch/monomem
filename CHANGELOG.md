@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- A writer is now told what became of a held write. Before, the write was answered "held" and the writer never learned
+  whether a person approved or rejected it, so it could go on assuming the note existed or was visible to others. The
+  next `catch_up` (as `held_decided`) and the next session start say how many were approved (with the note ids) and how
+  many were rejected and not stored. The notice never repeats the held text, only ids, counts and dates, and other
+  writers do not see it. It covers the last 7 days, like the overwrite notice. Only decisions made after upgrading are
+  reported, and the match relies on the writer name, which for local apps comes from the app's config and is not proof.
+  The held reply now says the outcome will be reported there.
+
 ## [1.6.0] - 2026-11-17
 
 A large release: a download that needs no Node, a redesigned dashboard, new tool and command names, daily backups, sync

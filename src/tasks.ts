@@ -28,6 +28,7 @@ import { runnerNotice } from "./liveness.js";
 import { currentWriter } from "./actor.js";
 import { heldFromSessionStart } from "./taint.js";
 import { overwritesOf, type Overwrite } from "./store/overwrites.js";
+import { heldOutcomesOf, heldOutcomeText, type HeldOutcomes } from "./store/held-outcomes.js";
 import {
   TASK_STATUSES,
   TASK_TAG,
@@ -1270,6 +1271,8 @@ export interface CatchUp {
   /** r2-improvement #3: your notes whose text another writer replaced since your last catch-up (7 days without one). */
   overwritten?: Overwrite[];
   overwritten_hint?: string;
+  /** Held writes of this writer a person approved or rejected since `since` (ids, counts, dates; never the held text). */
+  held_decided?: HeldOutcomes & { hint: string };
 }
 
 /**
@@ -1326,6 +1329,9 @@ export function catchUp(store: Store, opts: CatchUpOpts = {}): CatchUp {
     out.overwritten = over;
     out.overwritten_hint = "Another writer replaced text you wrote. Read the note (memory_read) and its history if the change looks wrong, and tell the user.";
   }
+  // Held writes of this writer that a person has since approved or rejected: the write itself was answered "held" at the time.
+  const decided = heldOutcomesOf(store, currentWriter(), since, opts.namespaces);
+  if (decided) out.held_decided = { ...decided, hint: heldOutcomeText(decided) };
   return out;
 }
 

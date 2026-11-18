@@ -42,6 +42,7 @@ import { receiptAdd } from "./receipts.js";
 import { GIT_NO_ANSWER, branchLabel, gitHead, gitRun, hasOtherBranchNotes, insideFolder, noteScopes, unmergedBranches } from "./git-trail.js";
 import { currentWriter, stdioWriter } from "./actor.js";
 import { overwritesOf } from "./store/overwrites.js";
+import { heldOutcomesOf, heldOutcomeText } from "./store/held-outcomes.js";
 import { noteComputer } from "./sync/marks.js";
 import { nameIs, stdioFamily } from "./trust.js";
 
@@ -238,6 +239,14 @@ export function overwriteLines(store: Store, writer: string, sinceIso: string, n
     "Another writer replaced text you wrote (read the note and its history if the change looks wrong, and tell the user):",
     ...over.map((o) => `#${o.id} ${o.held ? "(unconfirmed or flagged, title not shown)" : `"${neutral(o.title).slice(0, 80)}"`} by ${neutral(o.by).slice(0, 24) || "(no writer)"}, ${o.at.slice(0, 10)}`),
   ].join("\n");
+}
+
+/**
+ * Session start and the prompt step: held writes of this app's agent that a person approved or rejected in the last week
+ * (store/held-outcomes.ts; ids, counts and dates only, never the held text). "" when there are none.
+ */
+export function heldOutcomeLines(store: Store, writer: string, sinceIso: string, namespace?: string): string {
+  return heldOutcomeText(heldOutcomesOf(store, writer, sinceIso, namespace !== undefined ? [namespace] : undefined));
 }
 
 /** `{files,kw 3d}`: why a row is in the pack (signals from rankContext) and its age. */
