@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- A session summary of a session that read outside content is now written in two parts, and the start-up briefing shows
+  the first. Before, the whole summary was held back until a person confirmed it, so a session that looked up a library
+  version or read an issue lost its whole summary. Now the first part (what the session did before its first outside read:
+  the request, commands, files and closing words) is shown, with a line saying the rest is held back; the second part
+  (everything from the read on) is never shown. An event the store recorded late is counted as from the read on. A summary
+  of a very long session (20,000 events or more), a model-written summary, a summary held for another reason (written after
+  reading an unconfirmed note, declared outside, distrusted, flagged or expired) and a 1.6.0 summary (no split yet) are
+  still held back whole. `MONOMEM_SUMMARY_SPLIT=0` restores the old behaviour. Limits: the split is at the first outside
+  read Monomem's hooks recognise, not at content fetched with a shell command; observation notes are not stamped and are not
+  covered; the count line still counts the summary as waiting.
+
 ## [1.6.1] - 2026-11-18
 
 A small update. No database change (still schema v22), so there is nothing to re-run after upgrading.
