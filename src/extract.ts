@@ -22,7 +22,7 @@ import { scanForInjection } from "./lint.js";
 import { extractKeywords } from "./keywords.js";
 import { captureAad, eventInput } from "./capture.js";
 import { MODEL_WRITTEN_TAG, ORIGIN_TOOL_PREFIX } from "./reserved-tags.js";
-import { isOutsideTool, OTHER_TOOL, toolTag } from "./taint.js";
+import { AFTER_OUTSIDE_MARKER, isOutsideTool, OTHER_TOOL, toolTag } from "./taint.js";
 
 export const OBS_TYPES = ["bugfix", "feature", "refactor", "change", "discovery", "decision", "security_alert", "security_note"] as const;
 export type ObsType = (typeof OBS_TYPES)[number];
@@ -34,7 +34,7 @@ const BATCH = 2000;
 /** An unfinished session with no event for this long is treated as ended (its process crashed or was closed). */
 export const STALE_SESSION_MS = 30 * 60_000;
 
-interface EventRow {
+export interface EventRow {
   seq: number;
   at: string;
   event: string;
@@ -72,9 +72,42 @@ export const MAX_ORIGIN_TOOLS = 3;
 export function originTags(events: readonly { event: string; tool: string; output: string }[]): string[] {
   const seen = new Set<string>();
   // A tool name lands in a tag and in agent context: anything but plain name characters is stamped as "other" (still stamped).
-  for (const e of events) if ((e.event === "post-tool" || e.event === "post-tool-failure") && e.output && isOutsideTool(e.tool)) seen.add(toolTag(e.tool));
+  for (const e of events) if (isOutsideRead(e)) seen.add(toolTag(e.tool));
   return [...seen].sort().slice(0, MAX_ORIGIN_TOOLS);
 }
+
+/** An event that returned outside content: what stamps a summary and what marks the cut (one test, so the two cannot drift). */
+const isOutsideRead = (e: { event: string; tool: string; output: string }): boolean =>
+  (e.event === "post-tool" || e.event === "post-tool-failure") && Boolean(e.output) && isOutsideTool(e.tool);
+
+interface Bucket {
+  changed: Set<string>;
+  read: Set<string>;
+  commands: string[];
+  errors: string[];
+}
+const bucket = (): Bucket => ({ changed: new Set(), read: new Set(), commands: [], errors: [] });
+
+/** The sequence number of the first event that returned outside content (the same test originTags stamps by), else null. */
+export function firstOutsideSeq(events: readonly { seq: number; event: string; tool: string; output: string }[]): number | null {
+  let first: number | null = null;
+  for (const e of events) if (isOutsideRead(e) && (first === null || e.seq < first)) first = e.seq;
+  return first;
+}
+
+/** Where the session first read outside content: the lowest seq AND the earliest time. Events are numbered when they are stored,
+ *  and a busy store can store an event late, so an event counts as "from the read on" if EITHER says so (holding too much is safe). */
+export function firstOutside(events: readonly { seq: number; at: string; event: string; tool: string; output: string }[]): { seq: number; at: string } | null {
+  let seq: number | null = null;
+  let at = "";
+  for (const e of events) {
+    if (!isOutsideRead(e)) continue;
+    if (seq === null || e.seq < seq) seq = e.seq;
+    if (!at || e.at < at) at = e.at;
+  }
+  return seq === null ? null : { seq, at };
+}
+
 const TEST_CMD = /\b(?:node\s+--test|(?:npm|pnpm|yarn)\s+(?:run\s+)?test|npx\s+(?:jest|vitest)|jest|vitest|pytest|cargo\s+test|go\s+test)\b/;
 const BUILD_CMD = /\b(?:(?:npm|pnpm|yarn)\s+run\s+build|tsc\b|cargo\s+build|go\s+build|make\b)/;
 const TEST_FAILED =
@@ -342,8 +375,11 @@ function linkFiles(store: Store, noteId: number, files: Observation["files"]): v
   store.linkNoteFiles(noteId, files);
 }
 
+/** The most events one summary rebuild reads. A session that reaches it may have an outside read before the window. */
+const SUMMARY_EVENT_WINDOW = 20_000;
+
 /** Pure: the summary text of a whole session. Null when there is nothing worth summarizing. */
-export function summarize(events: readonly EventRow[], cwd: string, observationTitles: readonly string[]): { title: string; body: string; files: Observation["files"] } | null {
+export function summarize(events: readonly EventRow[], cwd: string, observationTitles: readonly string[], opts: { windowFull?: boolean } = {}): { title: string; body: string; files: Observation["files"] } | null {
   const prompts = events.filter((e) => e.event === "user-prompt" && e.input.trim());
   const tools = events.filter((e) => e.event === "post-tool" || e.event === "post-tool-failure");
   // A session needs something in it. "hi" with no tool calls was producing a
@@ -353,38 +389,56 @@ export function summarize(events: readonly EventRow[], cwd: string, observationT
   const didWork = tools.length > 0;
   const saidSomething = prompts.some((p) => stripNotUserWritten(p.input).trim().length >= MIN_PROMPT_CHARS);
   if (!didWork && !saidSomething) return null;
+  // The first outside read splits the session. Everything the agent did BEFORE it could not have been shaped by that content
+  // (it did not exist yet); what came at or after it could. Those lines go in a second part the start-up briefing never pastes.
+  // `windowFull`: the caller read the most events it will, so the real first outside read may lie before the window; then
+  // everything counts as from the read on (the first part keeps only what cannot be placed, i.e. nothing).
+  const found = firstOutside(events);
+  const cut = found && opts.windowFull ? { seq: 0, at: "" } : found;
+  const after = (e: { seq: number; at: string }): boolean => cut !== null && (e.seq >= cut.seq || e.at >= cut.at);
+  const early = bucket();
+  const late = bucket();
+  // The observation titles come from the whole session; with an outside read, only the ones for events before it count here.
+  const titles = cut === null ? observationTitles : observe(events.filter((e) => !after(e)), cwd).map((o) => o.title);
   const changed = new Set<string>();
   const read = new Set<string>();
-  const commands: string[] = [];
-  const errors: string[] = [];
   let lastTest: { cmd: string; failed: boolean } | null = null;
   let editsSinceCommit = new Set<string>();
   for (const e of tools) {
+    const into = after(e) ? late : early;
     const p = field(e.input, "file_path") || field(e.input, "notebook_path") || (READ_TOOLS.has(e.tool) ? field(e.input, "path") : "");
     // R1-07: a path is one printable line, capped; tool OUTPUT never enters the summary (it can be attacker text).
     const clean = (x: string): string => one(normPath(x, cwd), 120);
     if (p && EDIT_TOOLS.has(e.tool) && e.ok) {
       changed.add(clean(p));
+      into.changed.add(clean(p));
       editsSinceCommit.add(clean(p));
-    } else if (p && READ_TOOLS.has(e.tool)) read.add(clean(p));
+    } else if (p && READ_TOOLS.has(e.tool)) {
+      read.add(clean(p));
+      into.read.add(clean(p));
+    }
     if (!e.ok) {
       const code = /\bexit(?:ed with)?(?: code)?[: ]+(\d{1,3})\b/i.exec(e.output)?.[1];
-      errors.push(`${one(e.tool, 40)} failed${code ? ` (exit ${code})` : ""}`);
+      into.errors.push(`${one(e.tool, 40)} failed${code ? ` (exit ${code})` : ""}`);
     }
     if (e.tool !== "Bash") continue;
     const cmd = field(e.input, "command");
     if (!cmd) continue;
     const isTest = TEST_CMD.test(cmd);
     const failed = isTest ? testFailed(e) : !e.ok;
-    commands.push(`${failed ? "✗" : "✓"} ${one(cmd, 120)}`);
+    into.commands.push(`${failed ? "✗" : "✓"} ${one(cmd, 120)}`);
     if (isTest) lastTest = { cmd: one(cmd, 120), failed };
     if (/\bgit\s+(?:-C\s+\S+\s+)?commit\b/.test(cmd) && e.ok) editsSinceCommit = new Set();
   }
-  const request = prompts.length ? one(prompts[0].input, 300) : "";
-  const lastWords = [...events].reverse().find((e) => (e.event === "stop" || e.event === "session-end") && e.input.trim());
+  // With an outside read, the request is the first prompt that came BEFORE it, and only its user-written part.
+  const firstPrompt = cut === null ? prompts[0] : prompts.find((p) => !after(p));
+  const request = firstPrompt ? one(cut === null ? firstPrompt.input : stripNotUserWritten(firstPrompt.input), 300) : "";
+  const isStop = (e: EventRow): boolean => (e.event === "stop" || e.event === "session-end") && Boolean(e.input.trim());
+  const lastWords = [...events].reverse().find(isStop); // the session's last words, wherever they fall
+  const lastEarly = [...events].reverse().find((e) => isStop(e) && !after(e)); // the last ones before the outside read
   const outcome = [
     lastTest ? (lastTest.failed ? `tests failing (${lastTest.cmd})` : `tests passing (${lastTest.cmd})`) : "",
-    commands.filter((c) => /\bgit\s+(?:-C\s+\S+\s+)?commit\b/.test(c) && c.startsWith("✓")).length ? "changes committed" : "",
+    [...early.commands, ...late.commands].filter((c) => /\bgit\s+(?:-C\s+\S+\s+)?commit\b/.test(c) && c.startsWith("✓")).length ? "changes committed" : "",
   ].filter(Boolean);
   const next = lastTest?.failed
     ? `Fix the failing \`${lastTest.cmd}\`.`
@@ -392,21 +446,36 @@ export function summarize(events: readonly EventRow[], cwd: string, observationT
       ? `Review and commit the changes to ${[...editsSinceCommit].slice(0, 5).join(", ")}.`
       : "";
   const uniq = (xs: string[], n: number): string[] => [...new Set(xs)].slice(0, n);
-  const lines = [
-    request && `Request: ${request}`,
-    (observationTitles.length || lastWords) && `Done: ${[...observationTitles.slice(0, 10), lastWords ? one(lastWords.input, 300) : ""].filter(Boolean).join("; ")}`,
-    changed.size && `Files changed: ${uniq([...changed], 30).join(", ")}`,
-    read.size && `Files read: ${uniq([...read], 30).join(", ")}`,
-    commands.length && `Commands: ${uniq(commands, 15).join(" | ")}`,
-    errors.length && `Errors: ${uniq(errors, 5).join(" | ")}`,
-    outcome.length && `Outcome: ${outcome.join(", ")}`,
-    next && `Next step: ${next}`,
-  ].filter(Boolean) as string[];
+  // Per-part limits apply to each part, so a session with an outside read can run to about twice the size.
+  const bucketLines = (b: Bucket): string[] => {
+    const out: string[] = [];
+    if (b.changed.size) out.push(`Files changed: ${uniq([...b.changed], 30).join(", ")}`);
+    if (b.read.size) out.push(`Files read: ${uniq([...b.read], 30).join(", ")}`);
+    if (b.commands.length) out.push(`Commands: ${uniq(b.commands, 15).join(" | ")}`);
+    if (b.errors.length) out.push(`Errors: ${uniq(b.errors, 5).join(" | ")}`);
+    return out;
+  };
+  // Done: the closing words from before the outside read (the last ones overall when there was none). The session's actual
+  // last words, written after the read, go in the second part.
+  const doneWords = cut === null ? lastWords : lastEarly;
+  const lines: string[] = [];
+  if (request) lines.push(`Request: ${request}`);
+  if (titles.length || doneWords) lines.push(`Done: ${[...titles.slice(0, 10), doneWords ? one(doneWords.input, 300) : ""].filter(Boolean).join("; ")}`);
+  lines.push(...bucketLines(early));
+  const tail: string[] = [];
+  if (cut !== null && lastWords && after(lastWords)) tail.push(`Closing words: ${one(lastWords.input, 300)}`);
+  if (cut !== null) tail.push(...bucketLines(late));
+  if (outcome.length) tail.push(`Outcome: ${outcome.join(", ")}`);
+  if (next) tail.push(`Next step: ${next}`);
+  // No outside read: one part, exactly as before. An outside read: what came before it, the marker (even when nothing came after), then the rest.
+  if (cut !== null) lines.push(AFTER_OUTSIDE_MARKER);
+  lines.push(...tail);
   const where = cwd.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? "";
   return {
     title: `Session: ${request ? one(request, 80) : `work in ${where || "a project"}`}`,
     body: lines.join("\n"),
-    files: [...[...changed].map((path) => ({ path, action: "changed" as const })), ...[...read].map((path) => ({ path, action: "read" as const }))],
+    // With an outside read, only the paths touched before it are linked to the note.
+    files: [...[...(cut === null ? changed : early.changed)].map((path) => ({ path, action: "changed" as const })), ...[...(cut === null ? read : early.read)].map((path) => ({ path, action: "read" as const }))],
   };
 }
 
@@ -427,9 +496,9 @@ export function distillSession(store: Store, sessionId: string): { observations:
     store.captureDb().prepare("UPDATE sessions SET distilled_seq = ? WHERE id = ?").run(seq, sessionId);
     if (batch.length < BATCH) break;
   }
-  const all = eventsAfter(store, sessionId, 0, 20_000);
+  const all = eventsAfter(store, sessionId, 0, SUMMARY_EVENT_WINDOW);
   const titles = store.list({ kinds: ["observation"], sessionId, limit: 50, order: "created_asc" }).notes.map(obsTitle);
-  const sum = summarize(all, s.cwd, titles);
+  const sum = summarize(all, s.cwd, titles, { windowFull: all.length >= SUMMARY_EVENT_WINDOW });
   if (!sum) return { observations: written, summaryId: s.summary_note_id };
   if (store.sealsWrites()) sum.title = sealedSessionTitle(s.started_at);
   // The summary quotes the session's errors and closing words, which can carry what an outside tool returned: stamp it.

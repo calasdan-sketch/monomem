@@ -208,3 +208,31 @@ export function unconfirmedIdsIn(payload: unknown, depth = 0): number[] {
   const here = o.unconfirmed === true && typeof o.id === "number" ? [o.id] : [];
   return here.concat(...Object.values(o).map((v) => unconfirmedIdsIn(v, depth + 1)));
 }
+
+/**
+ * A session summary that read outside content is written in two parts: what the session did BEFORE its first outside read,
+ * then this line, then everything from that read on. The start-up briefing pastes only the first part (context-inject.ts).
+ * Each other line of a summary starts with a fixed label and is one flattened line, so no tool text can forge this line;
+ * and a reader that splits on the FIRST copy of it can only ever be shown less, never more.
+ */
+export const AFTER_OUTSIDE_MARKER = "--- From the first outside read on (the start-up briefing does not show this part) ---";
+
+/** The only line labels the first part of a split summary can carry (extract.ts writes exactly these there). */
+const PART_ONE_LABELS = /^(?:Request|Done|Files changed|Files read|Commands|Errors): /;
+
+/** Set MONOMEM_SUMMARY_SPLIT=0 to hold a stamped session summary back whole again, as before 1.6.1. */
+export const summarySplitOn = (env: NodeJS.ProcessEnv = process.env): boolean => env.MONOMEM_SUMMARY_SPLIT !== "0";
+
+/**
+ * The part of a session summary the briefing may paste: everything before the FIRST marker line, or null when there is no
+ * marker, when the split is switched off, or when any line of that part is not one of the labelled lines extract.ts writes
+ * there (a body someone edited cannot get its own text through).
+ */
+export function beforeOutside(body: string, env: NodeJS.ProcessEnv = process.env): string | null {
+  if (!summarySplitOn(env)) return null;
+  const lines = body.split("\n");
+  const i = lines.indexOf(AFTER_OUTSIDE_MARKER);
+  if (i < 0) return null;
+  const first = lines.slice(0, i);
+  return first.every((l) => PART_ONE_LABELS.test(l)) ? first.join("\n") : null;
+}

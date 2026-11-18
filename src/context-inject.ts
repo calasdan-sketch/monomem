@@ -24,7 +24,7 @@ import { TASK_TAG, HANDOFF_TAG, listTasks } from "./tasks.js";
 import { CHAT_TAG } from "./chat-import.js";
 import { NEVER_SHOW_TAG, isModelWritten, originFlag, originTools, originLegend } from "./reserved-tags.js";
 import { disputedLines, factsTable, flaggedFactValue, MAX_FACT_VALUE, WITHHELD } from "./facts.js";
-import { expiredCountLine, heldFromSessionStart, isTainted, noteFlags, unconfirmedCountLine } from "./taint.js";
+import { beforeOutside, expiredCountLine, heldFromSessionStart, isTainted, noteFlags, ORIGIN_PREFIX, ORIGIN_TOOL_PREFIX, unconfirmedCountLine } from "./taint.js";
 
 /**
  * The tool this text tells the model to open a memory with.
@@ -375,7 +375,17 @@ export async function rankContext(
     for (const n of store.list({ ...base, notWrittenBy: busiest, limit: POOL, count: false }).notes) if (!skip(n) && !seen.has(n.id)) recent.notes.push(n);
   }
   // R1-06: only a summary the capture hooks wrote is framed as a summary block; anything else is an ordinary index line.
-  const latestSummary = store.list({ ...base, kinds: ["summary"] as const, limit: 5, count: false }).notes.find((n) => !skip(n) && n.written_by === "capture") ?? null;
+  // 1.6.1: a capture summary of a session that read outside content is held back whole, EXCEPT its first part (what the
+  // session did before the first outside read, see extract.ts). That part may be pasted when the stamp is the only reason
+  // it is held: tool origin only (no via:memory or declared), not model-written (a model could forge the split line), and
+  // not distrusted, expired or flagged.
+  const cleanPartOnly = (n: NoteRecord): boolean => {
+    if (n.unconfirmed !== true || n.kind !== "summary" || n.written_by !== "capture" || isModelWritten(n)) return false;
+    if (n.tags.some((t) => t.startsWith(ORIGIN_PREFIX) && !t.startsWith(ORIGIN_TOOL_PREFIX)) || originTools(n).length === 0) return false;
+    if (heldFromSessionStart({ ...n, unconfirmed: undefined }, enforce) || n.tags.some((t) => hidden.includes(t))) return false;
+    return Boolean(beforeOutside(n.body)?.trim());
+  };
+  const latestSummary = store.list({ ...base, kinds: ["summary"] as const, limit: 5, count: false }).notes.find((n) => (!skip(n) || cleanPartOnly(n)) && n.written_by === "capture") ?? null;
   const signals = opts.signals ?? (await gitSignals(opts.cwd ?? process.cwd()));
   const db = store.captureDb();
   // Branch scope: the one git call it may need starts now and runs while the searches below do (session-start budget).
@@ -552,9 +562,15 @@ export async function injectContext(store: Store, opts: InjectOptions = {}): Pro
   const recentTag = (n: NoteRecord): string => tagOf(n) + branchOf(n) + fromComputerText(noteComputer(store, n.id));
   if (latestSummary) {
     // A summary of a session that read outside content is not pasted in: its title and the reason, and the agent can open it.
+    // What the session did BEFORE its first outside read is shown (the outside content did not exist yet, so it cannot have
+    // shaped it); everything from that read on stays out. A summary without the split marker is withheld whole, as before.
     const outside = originTools(latestSummary).length > 0;
+    const before = outside ? beforeOutside(latestSummary.body) : null;
+    const reason = `that session read outside content (${originTools(latestSummary).join(", ").slice(0, 80)})`;
     const body = outside
-      ? `Its text is not shown here because that session read outside content (${originTools(latestSummary).join(", ").slice(0, 80)}). memory_read id=${latestSummary.id} opens it.`
+      ? before !== null && before.trim()
+        ? `${summaryLines(before.slice(0, Math.floor(budget / 3)))}\nThe rest is not shown here because ${reason}: everything from that read on is held back. memory_read id=${latestSummary.id} opens it.`
+        : `Its text is not shown here because ${reason}. memory_read id=${latestSummary.id} opens it.`
       : summaryLines(latestSummary.body.slice(0, Math.floor(budget / 3)));
     const text = `Latest session summary (#${latestSummary.id}, ${latestSummary.updated_at.slice(0, 10)}${isModelWritten(latestSummary) ? ", model-written" : ""}): ${neutral(latestSummary.title).slice(0, 120)}\n${body}`;
     parts.push(text);

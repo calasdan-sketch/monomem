@@ -9,6 +9,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - Tool descriptions: every argument of `memory_save`, `memory_search`, `memory_read`, `memory_list`, `memory_replace` and `memory_archive` now says what it is, and each tool says when to use it instead of its neighbours (edit in place with `memory_save id`, retire with `memory_replace`, hide with `memory_archive`), what it returns, whether it is read-only, and that only a person can restore an archived note. This is a cost: the seven default tools are now 9,239 characters in `tools/list` (about 2,310 tokens), up from 6,160 (about 1,540). Written to raise the tool-quality score that directories such as Glama give; whether the score rises is theirs to decide on a re-scan.
+- A session summary of a session that read outside content is now written in two parts, and the start-up briefing shows
+  the first. Before, the whole summary was held back until a person confirmed it, so a session that looked up a library
+  version or read an issue lost its whole summary. Now the first part (what the session did before its first outside read:
+  the request, commands, files and closing words) is shown, with a line saying the rest is held back; the second part
+  (everything from the read on) is never shown. An event the store recorded late is counted as from the read on. A summary
+  of a very long session (20,000 events or more), a model-written summary, a summary held for another reason (written after
+  reading an unconfirmed note, declared outside, distrusted, flagged or expired) and a 1.6.0 summary (no split yet) are
+  still held back whole. `MONOMEM_SUMMARY_SPLIT=0` restores the old behaviour. Limits: the split is at the first outside
+  read Monomem's hooks recognise, not at content fetched with a shell command; observation notes are not stamped and are not
+  covered; the count line still counts the summary as waiting.
 
 ## [1.6.1] - 2026-11-18
 
