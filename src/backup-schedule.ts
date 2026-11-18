@@ -8,7 +8,7 @@
 // all read that one file, and the next good backup clears a failure.
 // Turn it off in the dashboard's Settings, or with MONOMEM_AUTO_BACKUP=off, which wins when set (docs/configuration.md);
 // disk use is in docs/footprint.md.
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Store } from "./store.js";
 import { backupStore, backupStoreOffThread } from "./backup.js";
@@ -89,13 +89,83 @@ export function runDailyBackup(store: Store, dbPath: string, now = new Date(), r
 export async function runDailyBackupAsync(dbPath: string, now = new Date()): Promise<DailyBackupResult> {
   const d = dailyTarget(dbPath, now);
   if (!d) return { made: false, removed: [] };
+  // One copy at a time across processes: the server and every app's MCP process run this check, and a second full copy
+  // of a large store only wastes disk and IO. A lock folder (mkdir is atomic) held by a live copy makes the others skip;
+  // it counts as abandoned after 30 minutes (a killed process), so a crash never stops backups for good.
+  const lock = join(d.root, ".lock");
   try {
     mkdirSync(d.root, { recursive: true, mode: 0o700 });
-    await backupStoreOffThread(dbPath, d.dir);
+    if (!takeLock(lock)) return { made: false, removed: [] };
   } catch (e) {
     return failed(dbPath, now, e);
   }
+  try {
+    await backupStoreOffThread(dbPath, d.dir);
+  } catch (e) {
+    // Backups never overwrite: if today's copy appeared meanwhile, that is not a failure and must not raise a warning.
+    if ((e as { code?: string }).code === "EBACKUP_EXISTS" && existsSync(join(d.dir, "state.db"))) return { made: false, removed: [] };
+    return failed(dbPath, now, e);
+  } finally {
+    try {
+      rmSync(lock, { recursive: true, force: true });
+    } catch {
+      /* the next run treats an old lock as abandoned */
+    }
+  }
   return afterDailyBackup(dbPath, now, d);
+}
+
+const LOCK_STALE_MS = 30 * 60_000;
+/** True when this process now holds the lock folder; false when a live copy holds it. */
+function takeLock(lock: string): boolean {
+  for (let i = 0; i < 2; i++) {
+    try {
+      mkdirSync(lock, { mode: 0o700 });
+      return true;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      try {
+        if (Date.now() - statSync(lock).mtimeMs < LOCK_STALE_MS) return false;
+        rmSync(lock, { recursive: true, force: true });
+      } catch {
+        return false;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * The MCP stdio process's daily backup. Most people only ever run Monomem through their apps (stdio), never the server whose
+ * timer makes the backup, so they got none. Same check as the server's: a first look about a minute after start (a random
+ * extra delay, so several apps starting together do not all copy at once), then hourly; at most one copy a day; the
+ * Settings switch and MONOMEM_AUTO_BACKUP=off apply. Quiet on success; a failure is one line on stderr and in backup-status.json.
+ */
+export function startStdioDailyBackup(dbPath: string, dataDir: string, o: { firstMs?: number; everyMs?: number; env?: NodeJS.ProcessEnv } = {}): { stop: () => void; tick: () => Promise<void> } {
+  let running = false;
+  let lastSaid = 0; // a folder that can never be written would otherwise log the same line every hour, forever
+  const say = (m: string): void => {
+    if (Date.now() - lastSaid < 86_400_000) return;
+    lastSaid = Date.now();
+    process.stderr.write(`[monomem] automatic backup failed: ${m.replace(/\s+/g, " ")} (monomem check shows it)\n`);
+  };
+  const tick = async (): Promise<void> => {
+    if (running) return;
+    running = true;
+    try {
+      const r = await maybeDailyBackupAsync(dbPath, { dataDir, env: o.env });
+      if (r?.error) say(r.error);
+    } catch (e) {
+      say(String((e as Error).message ?? e));
+    } finally {
+      running = false;
+    }
+  };
+  const first = setTimeout(() => void tick(), o.firstMs ?? 60_000 + Math.floor(Math.random() * 30_000));
+  const every = setInterval(() => void tick(), o.everyMs ?? 3_600_000);
+  first.unref();
+  every.unref();
+  return { stop: () => (clearTimeout(first), clearInterval(every)), tick };
 }
 
 /** The server timer's call, off the main thread: null when daily backups are off. */
