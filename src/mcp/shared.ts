@@ -191,7 +191,7 @@ export function quarantinedResult(e: QuarantinedError, extra?: Record<string, un
       // given -- the user was asked for an action nobody could take. Point at
       // the surfaces that always exist instead.
       next: "The write was held, not lost. A person can approve or reject it in the dashboard, or with: monomem review held",
-      message: why + "A person can approve or reject it in the Monomem dashboard, or with `monomem review held`.",
+      message: why + "A person can approve or reject it in the Monomem dashboard, or with `monomem review held`. Until then other agents cannot see it; your next catch-up or session start says whether it was approved or rejected.",
     },
     ...extra,
   });

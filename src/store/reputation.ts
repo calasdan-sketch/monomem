@@ -7,12 +7,14 @@
 import type { Store } from "../store.js";
 
 export type WriterEvent = "quarantined" | "rejected" | "rolled_back" | "flags_upheld" | "superseded";
+/** Recorded for the writer's own notice only ("your held write was approved"); never counted in the reputation numbers. */
+export type WriterNoticeEvent = "held_approved";
 export type WriterCounts = Record<WriterEvent, number>;
 const EVENTS: readonly WriterEvent[] = ["quarantined", "rejected", "rolled_back", "flags_upheld", "superseded"];
 export const REPUTATION_DAYS = 30;
 
 /** Caller holds whatever transaction the event belongs to, so a rolled-back action records nothing. "" writers are not counted. */
-export function recordWriterEvent(s: Store, writer: string, event: WriterEvent, noteId: number | null): void {
+export function recordWriterEvent(s: Store, writer: string, event: WriterEvent | WriterNoticeEvent, noteId: number | null): void {
   if (!writer) return;
   s.db.prepare("INSERT INTO writer_events (writer, event, note_id, at) VALUES (?, ?, ?, ?)").run(writer, event, noteId, new Date().toISOString());
 }

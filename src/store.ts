@@ -126,7 +126,7 @@ import type { CodeChange, CodeChangedItem } from "./store/code-anchors.js";
 export type { CodeChange, CodeChangedItem };
 import type { FlaggedItem, NoteFlag } from "./store/flags.js";
 import * as reputationOps from "./store/reputation.js";
-import type { WriterCounts, WriterEvent } from "./store/reputation.js";
+import type { WriterCounts, WriterEvent, WriterNoticeEvent } from "./store/reputation.js";
 export type { FlaggedItem, NoteFlag, WriterCounts, WriterEvent };
 import { tagsToStorage, parseTags, dueBase, needsHumanConfirm, sealQuarantineCol, openQuarantineCol, isoOrNull, clampInt, envCount, floodWritesPerHour, isOperatorWrite, isPlainObject } from "./store/rows.js";
 import { recordNoteReads, purgeNoteReads } from "./store/note-reads.js";
@@ -7602,7 +7602,7 @@ export class Store {
   }
 
   /** R2-08: record what happened to a writer's write (inside the action's own transaction). */
-  /** @internal */ recordWriterEvent(writer: string, event: WriterEvent, noteId: number | null): void {
+  /** @internal */ recordWriterEvent(writer: string, event: WriterEvent | WriterNoticeEvent, noteId: number | null): void {
     reputationOps.recordWriterEvent(this, writer, event, noteId);
   }
 
