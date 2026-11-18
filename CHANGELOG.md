@@ -8,6 +8,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 A small update. No database change (still schema v22), so there is nothing to re-run after upgrading.
 
+### Fixed
+
+- Daily backups now happen when you only use Monomem through your apps. Before, the automatic daily copy ran only
+  inside the HTTP server, so anyone who used Monomem just over MCP stdio and never started the server got no automatic
+  backup at all. Each connected app now checks about a minute after it starts and then every hour, with the same rules as
+  the server (one copy a day; `MONOMEM_AUTO_BACKUP=off` and the Settings switch still apply). A lock folder keeps the
+  server and several apps from making the same day's copy at once. If the backup folder cannot be written, that is
+  reported once a day on stderr instead of every hour. Not yet tried with a real app connected, only in automated
+  tests, and not tested on macOS or Linux. A process killed mid-copy can leave a `.partial` file behind; it never
+  replaces a good backup, but nothing cleans it up yet.
+
 ### Added
 
 - A writer is now told what became of a held write. Before, the write was answered "held" and the writer never learned
