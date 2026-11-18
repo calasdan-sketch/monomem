@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Tool descriptions: every argument of `memory_save`, `memory_search`, `memory_read`, `memory_list`, `memory_replace` and `memory_archive` now says what it is, and each tool says when to use it instead of its neighbours (edit in place with `memory_save id`, retire with `memory_replace`, hide with `memory_archive`), what it returns, whether it is read-only, and that only a person can restore an archived note. This is a cost: the seven default tools are now 9,180 characters in `tools/list` (about 2,300 tokens), up from 6,160 (about 1,540). Written to raise the tool-quality score that directories such as Glama give; whether the score rises is theirs to decide on a re-scan.
+
 ## [1.6.1] - 2026-11-18
 
 A small update. No database change (still schema v22), so there is nothing to re-run after upgrading.
