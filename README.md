@@ -19,7 +19,7 @@ One download, nothing else to install (no Node needed): each release has one arc
 
 Setup finds your apps (Claude Code, Claude Desktop, Cursor, Codex, Gemini CLI, VS Code, Zed and ten more, listed in docs/apps.md), shows exactly what it will change, keeps a backup of every file, and asks before it writes. `monomem setup --undo` takes it all back. Already have Node 22.16 or newer? `npx monomem setup` does the same. Which file to pick, and what Windows or macOS may say about an unsigned download: [INSTALL.md](./INSTALL.md#download-no-nodejs-needed).
 
-**What it costs your assistant.** The seven tools shown by default add 9,180 characters of tool descriptions, about 2,300 tokens. A session start adds up to about 1,500 tokens of your notes (you can change that limit).
+**What it costs your assistant.** The seven tools shown by default add 9,239 characters of tool descriptions, about 2,310 tokens. A session start adds up to about 1,500 tokens of your notes (you can change that limit).
 
 **What it does not do.** Please read this before you rely on it:
 
