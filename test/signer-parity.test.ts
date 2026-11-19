@@ -27,7 +27,7 @@ const cases: Record<string, Parameters<typeof canonicalString>[0]> = {
     issued_at: "2026-10-16T00:00:00.000Z", nonce: "n",
   },
   "with a target": {
-    cmd_id: "c", action: "status", params: {}, target: "DANITA",
+    cmd_id: "c", action: "status", params: {}, target: "WORKSTATION-1",
     issued_at: "2026-10-16T00:00:00.000Z", nonce: "n",
   },
   "awkward characters in a value": {
@@ -92,7 +92,7 @@ describe("browser signer matches the runner", () => {
   });
 
   test("a command built in the browser verifies on the runner", async () => {
-    const cmd = await browser.buildCommand(SECRET, "status", { repo: "calas-site" }, "DANITA");
+    const cmd = await browser.buildCommand(SECRET, "status", { repo: "calas-site" }, "WORKSTATION-1");
     const v = verifyCommand(SECRET, JSON.stringify(cmd));
     assert.equal(v.ok, true, "the runner must accept what the phone produced");
   });

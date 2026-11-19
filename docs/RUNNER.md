@@ -124,7 +124,7 @@ this device", and unticking wipes them. A phone gets lost or lent out.
 The same thing from a terminal on the PC:
 
     npm run runner:sign -- status
-    npm run runner:sign -- site-pull repo=calas-site --target DANITA
+    npm run runner:sign -- site-pull repo=calas-site --target WORKSTATION-1
     npm run runner:sign -- __actions --post
     npm run runner:sign -- verify-result "{...result note body...}"
 
@@ -368,7 +368,7 @@ approve it from any admin session. It reaches the same runner, through the
 same allowlist.
 
 ```
-memory_tasks({ action: "put", title: "pull the site", command: { action: "site-pull", params: { repo: "calas-site" } }, target: "DANITA" })
+memory_tasks({ action: "put", title: "pull the site", command: { action: "site-pull", params: { repo: "calas-site" } }, target: "WORKSTATION-1" })
         // any write-scope app key: creates a task in status `queued`. It cannot run yet.
 memory_tasks({ action: "approve", id: 41, command_hash: "<the command_hash that action get showed>" })
         // ADMIN key only. Read the task first (action get); the approval is refused if the command changed since.
@@ -385,7 +385,7 @@ key to do both in one call.
 Switch it on at the PC by naming the namespace the runner should watch:
 
     setx MONOMEM_RUNNER_TASK_NAMESPACE "tasks"
-    setx MONOMEM_RUNNER_ID "DANITA"
+    setx MONOMEM_RUNNER_ID "WORKSTATION-1"
 
 It is **off** until you do. The task must be created in that same namespace
 (`namespace: "tasks"` in `memory_tasks` action `put`; with namespace resolution on, the API

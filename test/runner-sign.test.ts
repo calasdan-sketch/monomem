@@ -13,8 +13,8 @@ describe("runner:sign argument parsing", () => {
   });
 
   test("params and target", () => {
-    assert.deepEqual(parseArgs(["pull", "repo=calas-site", "--target", "DANITA"]), {
-      action: "pull", params: { repo: "calas-site" }, target: "DANITA", post: false,
+    assert.deepEqual(parseArgs(["pull", "repo=calas-site", "--target", "WORKSTATION-1"]), {
+      action: "pull", params: { repo: "calas-site" }, target: "WORKSTATION-1", post: false,
     });
   });
 
