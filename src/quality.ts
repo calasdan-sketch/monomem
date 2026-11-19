@@ -23,7 +23,7 @@ import { isStale, stalenessConfig } from "./staleness.js";
 import { findConflicts, conflictReport, type Conflict, type ConflictGroup } from "./conflicts.js";
 import { scanPii, describePii } from "./pii.js";
 import { findContradictions } from "./contradiction.js";
-import { factClash, noteFacts, canonKey } from "./facts.js";
+import { factClash } from "./facts.js";
 import { heldFromSessionStart } from "./taint.js";
 import { RESTATE_MIN_SIM, expiryEnforced } from "./search-service.js";
 
