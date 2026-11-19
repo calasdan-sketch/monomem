@@ -46,6 +46,20 @@ describe("outsideRate", () => {
       assert.match(renderOutsideRate(r), /of all 3 captured sessions/);
     }));
 
+  test("hours: a long session does not inflate the hour share", () =>
+    withStore((s) => {
+      const at = (h: number) => new Date(Date.UTC(2026, 10, 19, h, 5)).toISOString();
+      const ev = (sid: string, name: string, h: number) =>
+        recordEvent(s, { ...normalizeHookInput("post-tool", { session_id: sid, cwd: "/w", tool_name: name, tool_input: {}, tool_response: "x" }), at: at(h) }, "ns");
+      for (let h = 0; h < 10; h++) ev("long", h === 3 ? "WebFetch" : "Read", h); // one session, ten hours, one outside read
+      const r = outsideRate(s)!;
+      assert.equal(r.sessions, 1);
+      assert.equal(r.outside, 1); // the session share says 100%
+      assert.equal(r.hours, 10);
+      assert.equal(r.outsideHours, 1); // the hour share says 10%
+      assert.match(renderOutsideRate(r), /1 of 10 hours \(10%\)/);
+    }));
+
   test("an outside tool with no output does not count (same as the live rule)", () =>
     withStore((s) => {
       tool(s, "a", "WebFetch", "");
