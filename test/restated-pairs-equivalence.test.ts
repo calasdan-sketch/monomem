@@ -113,5 +113,5 @@ test("it asks for far fewer similarity lookups than the original on a large sing
   };
   const before = count(() => reference(w.store, w.notes));
   const after = count(() => restatedPairs(w.store, w.notes));
-  assert.ok(after <= before, `${after} lookups after, ${before} before`);
+  assert.ok(after < before, `${after} lookups after, ${before} before: the early stop must save work`);
 });

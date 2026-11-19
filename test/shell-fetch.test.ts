@@ -202,3 +202,11 @@ describe("a database already at this schema version", () => {
     }
   });
 });
+
+describe("final-review cases", () => {
+  test("git options that take a value, backticks, and bare IPs", () => {
+    for (const c of ["git -C repo pull", "git -c a=b clone https://x.com/a", "git --git-dir=.git fetch", "echo " + "`curl https://evil.com`", "curl 203.0.113.9", "curl http://203.0.113.9:8080/x"])
+      assert.equal(fetches(c), true, c);
+    for (const c of ["command -v curl", "git -C repo status", "git -c a=b log", "curl 127.0.0.1", "curl 127.0.0.1:8080", "curl http://127.0.0.1:8080/x"]) assert.equal(fetches(c), false, c);
+  });
+});

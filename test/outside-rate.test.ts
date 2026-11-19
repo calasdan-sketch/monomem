@@ -95,3 +95,26 @@ describe("outsideRate", () => {
       assert.match(renderDigest(d), /Outside reads since/);
     }));
 });
+
+describe("outsideRate on a grouped query", () => {
+  test("many events in one hour and one session count once, and the answers equal the per-event definition", () =>
+    withStore((s) => {
+      for (let i = 0; i < 200; i++) tool(s, "a", i % 50 === 0 ? "WebFetch" : "Read");
+      tool(s, "b", "Read");
+      const r = outsideRate(s)!;
+      assert.equal(r.sessions, 2);
+      assert.equal(r.outside, 1);
+      assert.equal(r.hours, 1);
+      assert.equal(r.outsideHours, 1);
+      assert.equal(r.allSessions, 2);
+    }));
+
+  test("a database without the shell_fetch column still gives the rate", () =>
+    withStore((s) => {
+      tool(s, "a", "WebFetch");
+      s.captureDb().exec("ALTER TABLE capture_events DROP COLUMN shell_fetch");
+      const r = outsideRate(s)!;
+      assert.equal(r.outside, 1);
+      assert.equal(r.shellFetchHours, 0);
+    }));
+});

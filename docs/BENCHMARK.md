@@ -345,7 +345,9 @@ the highest published figure. Other systems' own numbers (none re-run by us exce
   `5c9e2e69`, its BM25 component, strict recall-all@5) on the same dataset file (SHA-256 `d6f21ea9...3c442`, the hash it pins) and
   got its published numbers back exactly: BM25 **84.7** (398 of 470), its grep baseline 72.1. Ours on the same 470 questions, same
   metric, keyword mode: **86.0** (404 of 470). Question by question, 14 were answered only by us and 8 only by agentmemory;
-  that is **not a significant difference** (exact McNemar, two-sided p = 0.29). Read it as a tie, not a win. (The 86.0 is a
+  that is **not a significant difference** (exact McNemar, two-sided p = 0.29). Read it as a tie, not a win. It is also not
+  tuning-neutral: our ranking was tuned on half **a** of this same question set (see above) and agentmemory's was not, so the fair
+  reading is that we are at best level on questions we tuned on. (The 86.0 is a
   fresh run on the current code; the table above is the 2026-11-15 run, 85.7. We have not tracked down what moved the 0.3.) By question type the
   two are within two questions of each other in every type (multi-session 88 vs 86, temporal 101 vs 99, preference 25 vs 25).
   Caveats: its repository has no lockfile, so dependencies resolved fresh on the day; its BM25 component is the lexical index

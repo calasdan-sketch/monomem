@@ -1907,8 +1907,11 @@ export class Store {
     }
     try {
       ensureCaptureColumns({ hasColumn: (t, c) => this.hasColumn(t, c), addColumn: (t, c, d) => this.addColumn(t, c, d) }); // databases a dev build already took to this schema version lack the newest capture columns
-    } catch {
-      /* read-only file: no writer can store a capture event either */
+    } catch (e) {
+      // A read-only file cannot take the column and no writer can store a capture event there either: fine. Anything else (a busy
+      // database, a full disk) is NOT fine, because capture would then fail on every event: say so.
+      const why = String((e as Error)?.message ?? e);
+      if (!/readonly|read-only|attempt to write/i.test(why)) console.error(`[monomem] could not add the capture_events.shell_fetch column (${why.slice(0, 120)}); capture may fail until the next start`);
     }
     try {
       // sessions.writer: who opened the session (set on first insert, NULL for older rows). POST /capture refuses a

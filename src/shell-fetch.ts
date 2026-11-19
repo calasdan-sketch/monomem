@@ -12,7 +12,7 @@
 // Known misses (a hint, not a guarantee): obfuscation ($(echo cu)rl), other fetchers (python -c urllib, node -e fetch, nc),
 // package installs, and a script that runs curl inside it. The caller classifies the raw command BEFORE it is cut to 4096 chars.
 const SHELL_TOOLS = new Set(["Bash", "PowerShell"]);
-const WRAPPERS = new Set(["env", "sudo", "command", "time", "nohup", "exec", "builtin", "nice", "stdbuf", "timeout", "xargs", "then", "do", "else", "elif", "if", "while", "until", "!", "{"]);
+const WRAPPERS = new Set(["env", "sudo", "time", "nohup", "exec", "builtin", "nice", "stdbuf", "timeout", "xargs", "then", "do", "else", "elif", "if", "while", "until", "!", "{"]);
 const SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh"]);
 // options of a wrapper that take a separate argument: `sudo -u root curl x`, `timeout 5 curl x`
 const WRAPPER_ARG = /^(-u|-g|-h|-p|-C|-n|-s|-k|-o)$/;
@@ -20,13 +20,15 @@ const FETCHERS = new Set(["curl", "wget", "iwr", "irm", "invoke-webrequest", "in
 const GIT_FETCH = new Set(["clone", "fetch", "pull", "ls-remote"]);
 const GH_FETCH = new Set(["api", "pr", "issue", "release", "gist", "run", "search"]);
 const LOOPBACK_V4 = /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
+// git options that take a separate value: in `git -C repo pull` the word "repo" is not the subcommand
+const GIT_OPT_VALUE = new Set(["-c", "-C", "--git-dir", "--work-tree", "--namespace", "--exec-path"]);
 
 export const isShellTool = (tool: string): boolean => SHELL_TOOLS.has(tool);
 
 /** The hostname of a URL-like token, or null when it is not one. Parsed with URL so `localhost@evil.com` is evil.com. */
 function hostOf(tok: string): string | null {
   const t = tok.replace(/^["'`(]+|["'`);,]+$/g, "");
-  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(t) ? t : /^[^\s/:@?#-][^\s/@?#]*\.[a-z]{2,}(?::\d+)?(?:[/?#]\S*)?$|^localhost(?::\d+)?(?:[/?#]\S*)?$|^\[::1\](?::\d+)?/i.test(t) ? `http://${t}` : "";
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(t) ? t : /^[^\s/:@?#-][^\s/@?#]*\.[a-z]{2,}(?::\d+)?(?:[/?#]\S*)?$|^(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?(?:[/?#]\S*)?$|^localhost(?::\d+)?(?:[/?#]\S*)?$|^\[::1\](?::\d+)?/i.test(t) ? `http://${t}` : "";
   if (!withScheme) return null;
   try {
     return new URL(withScheme).hostname.toLowerCase().replace(/^\[|\]$/g, "");
@@ -41,10 +43,10 @@ const isLoopback = (h: string): boolean => h === "localhost" || h.endsWith(".loc
 function segments(cmd: string): string[][] {
   const out: string[][] = [];
   let cur: string[] = [];
-  const re = /"(?:[^"\\]|\\.)*"|'[^']*'|\|\||&&|[;|&\n(]|[^\s;|&()"']+/g;
+  const re = /"(?:[^"\\]|\\.)*"|'[^']*'|\|\||&&|[;|&\n(`]|[^\s;|&()`"']+/g;
   for (const m of cmd.matchAll(re)) {
     const tok = m[0];
-    if (/^(\|\||&&|[;|&\n(])$/.test(tok)) {
+    if (/^(\|\||&&|[;|&\n(`])$/.test(tok)) {
       if (cur.length) out.push(cur);
       cur = [];
     } else cur.push(tok);
@@ -79,7 +81,11 @@ function segmentFetches(seg: string[]): boolean {
   }
   const head = words[0].replace(/^["']|["']$/g, "").split(/[\\/]/).pop()!.toLowerCase().replace(/\.exe$/, "");
   const sub = words.slice(1).find((w) => !w.startsWith("-"))?.toLowerCase() ?? "";
-  if (head === "git") return GIT_FETCH.has(sub);
+  if (head === "git") {
+    let k = 1;
+    while (k < words.length && words[k].startsWith("-")) k += GIT_OPT_VALUE.has(words[k]) ? 2 : 1;
+    return GIT_FETCH.has((words[k] ?? "").toLowerCase());
+  }
   if (head === "gh") return GH_FETCH.has(sub) || (sub === "repo" && words.some((w) => w.toLowerCase() === "clone"));
   if (!FETCHERS.has(head)) return false;
   const hosts = words.slice(1).map(hostOf).filter((h): h is string => h !== null);
