@@ -9,6 +9,8 @@ Tell Claude Code something once, and Cursor, Codex, Gemini CLI and your other as
 >
 > **What it records.** When capture is on, Monomem stores the text of your prompts and of tool output (secrets are redacted first) in a local file on this computer. Nothing is sent anywhere by Monomem. Raw captured events are deleted after 7 days by default (`MONOMEM_CAPTURE_RETENTION_DAYS`). Notes are encrypted at rest only if you turn encryption on, and file paths are never encrypted.
 
+**Using Monomem at work?** Monomem is free and stays free (MIT). If your team wants help, Calas Automations Inc. offers a paid team setup, a memory security check and monthly support: [calasautomations.com/devtools/monomem/#teams](https://calasautomations.com/devtools/monomem/#teams). The tool does not need any of it.
+
 ## Get it
 
 [![Download for Windows](https://img.shields.io/badge/Download-Windows-0B2E45?style=for-the-badge)](https://github.com/calasdan-sketch/monomem/releases/latest)
