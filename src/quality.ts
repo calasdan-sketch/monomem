@@ -259,19 +259,14 @@ const personConfirmed = (n: NoteRecord): boolean => (n.confirmed_kind === "human
 export function restatedPairs(store: Store, notes: NoteRecord[], max = Infinity): Array<[NoteRecord, NoteRecord]> {
   const enforce = expiryEnforced(store);
   const plain = notes.filter((n) => (n.kind ?? "note") === "note" && !n.superseded_by);
-  // Only same-writer pairs count. The candidates for an older note O are the notes its similarity links point to and the notes
-  // that give one of O's facts another value, found through two indexes, so the cost grows with the number of links, not with the
-  // square of one writer's notes (a store of 20,000 notes by one writer took minutes).
-  const byId = new Map(plain.map((n) => [n.id, n]));
-  const wk = new Map(plain.map((n) => [n.id, writerKey(n)]));
-  const factIdx = new Map<string, NoteRecord[]>();
+  // One group per namespace + writer (only same-writer pairs count), so a store with many writers stays cheap.
+  // ponytail: still O(k^2) inside one writer's group of k notes; index by created_at if one writer reaches tens of thousands
+  const groups = new Map<string, NoteRecord[]>();
   for (const n of plain) {
-    for (const [k] of noteFacts(n.tags ?? [])) {
-      const key = `${wk.get(n.id)}\0${canonKey(k)}`;
-      const g = factIdx.get(key);
-      if (g) g.push(n);
-      else factIdx.set(key, [n]);
-    }
+    const k = writerKey(n);
+    const g = groups.get(k);
+    if (g) g.push(n);
+    else groups.set(k, [n]);
   }
   const created = new Map(plain.map((n) => [n.id, Date.parse(n.created_at)]));
   // Newest first, ties in the original order: the answer is "the newest valid N", so the first valid one found is it and the scan stops
@@ -290,22 +285,20 @@ export function restatedPairs(store: Store, notes: NoteRecord[], max = Infinity)
   }
   const out: Array<[NoteRecord, NoteRecord]> = [];
   for (const o of plain) {
-    const w = wk.get(o.id)!;
-    const oUpdated = Date.parse(o.updated_at);
-    const cands = new Map<number, NoteRecord>();
-    for (const [k] of noteFacts(o.tags ?? [])) for (const n of factIdx.get(`${w}\0${canonKey(k)}`) ?? []) cands.set(n.id, n);
-    const sims = store.neighbourScores(o.id);
-    for (const id of sims.keys()) {
-      const n = byId.get(id);
-      if (n && wk.get(id) === w) cands.set(id, n);
-    }
     let best: NoteRecord | undefined;
-    for (const n of cands.values()) {
-      if (n.id === o.id || !(created.get(n.id)! > oUpdated)) continue;
-      if (best && (created.get(n.id)! < created.get(best.id)! || (created.get(n.id) === created.get(best.id) && n.id > best.id))) continue;
-      if (n.distrusted || heldFromSessionStart(n, enforce) || (personConfirmed(o) && !personConfirmed(n))) continue;
-      const sameSubject = factClash(o.tags ?? [], n.tags ?? []) || (sims.get(n.id) ?? 0) >= RESTATE_MIN_SIM;
-      if (sameSubject && !(typeof store.isDistrusted === "function" && store.isDistrusted(n))) best = n;
+    let sims: Map<number, number> | undefined; // read only when a cheap candidate exists
+    const oUpdated = Date.parse(o.updated_at);
+    if (!Number.isNaN(oUpdated)) {
+      for (const n of newestFirst.get(writerKey(o))!) {
+        if (!(created.get(n.id)! > oUpdated)) break; // sorted newest first: every note after this one is older still
+        if (n.id === o.id) continue;
+        if (n.distrusted || heldFromSessionStart(n, enforce) || (personConfirmed(o) && !personConfirmed(n))) continue;
+        const sameSubject = factClash(o.tags ?? [], n.tags ?? []) || ((sims ??= store.neighbourScores(o.id)).get(n.id) ?? 0) >= RESTATE_MIN_SIM;
+        if (sameSubject && !(typeof store.isDistrusted === "function" && store.isDistrusted(n))) {
+          best = n;
+          break;
+        }
+      }
     }
     if (best && out.push([o, best]) >= max) break;
   }
