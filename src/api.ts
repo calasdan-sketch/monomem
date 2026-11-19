@@ -34,6 +34,7 @@ import { taskRoutes } from "./api/routes-tasks.js";
 import { backupRoutes } from "./api/routes-backup.js";
 import { trustRoutes } from "./api/routes-trust.js";
 import { uiRoutes, uiAssetRoute, mintLocalSession } from "./api/routes-ui.js";
+import { DASHBOARD_CSP } from "./ui/csp.js";
 export { DASHBOARD_SESSION_TTL_MS, unknownNoteFields } from "./api/shared.js";
 
 export function createApiServer(
@@ -121,18 +122,9 @@ export function createApiServer(
           "Content-Type": "text/html; charset=utf-8",
           "X-Content-Type-Options": "nosniff",
           "X-Frame-Options": "DENY",
-          // Keep the page self-contained: no external loads, no framing. Inline
-          // styles/handlers are allowed because the dashboard uses them; this
-          // still blocks exfiltration to third-party origins as a backstop to
-          // the output escaping in dashboard.ts.
-          // 'unsafe-inline' for scripts is NOT for inline <script> blocks (the page has none: it loads /dashboard.js from
-          // 'self'). It is for ~85 inline event-handler attributes (onclick='...') in the HTML strings src/ui/js-*.ts build.
-          // A per-response nonce or hash does not cover handler attributes (only 'unsafe-hashes' would, per handler), so a
-          // nonce would change nothing here. Removing it needs those handlers rewritten as delegated listeners (2026-11-18: not done).
-          "Content-Security-Policy":
-            "default-src 'self'; style-src 'self' 'unsafe-inline'; " +
-            "script-src 'self' 'unsafe-inline'; connect-src 'self'; " +
-            "img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'",
+          // Self-contained page: no external loads, no framing. Scripts run only from /dashboard.js (no inline handlers:
+          // buttons use data-do attributes and one dispatcher, src/ui/js-actions.ts). Styles may be inline.
+          "Content-Security-Policy": DASHBOARD_CSP,
         });
         res.end(DASHBOARD_HTML);
         return;

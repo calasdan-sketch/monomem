@@ -6,6 +6,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Round 3
+- Dashboard: the page no longer allows inline scripts (`script-src 'self'` only). The ~85 inline `onclick` handlers are delegated listeners over one fixed list of actions.
+- Import: audit lines are written in one batch per transaction (one open, chain still verifiable). 20,000 notes: about 32 s down to about 16 s.
+- New `monomem drift`, `audit-memory`, `prune`, `handoff` and `tools --verify`; `monomem doctor` checks the recorded tool descriptions. See docs/repo-memory-commands.md.
+- Memory linter: holds notes from apps or outside content that steer which tool or server an agent must use (new `tool-steer` attack set, 14 samples; dev-notes false positives still 0).
+- PreCompact capture hook: already present, unchanged.
+- Registry readiness: docs/listing-checklist.md; server.json and package.json checked by a test.
+
 ### Security
 
 - A forged worktree pointer can no longer make a folder join another project: the main repository is used only when `<gitdir>/gitdir` exists and points back at the folder's own `.git`.

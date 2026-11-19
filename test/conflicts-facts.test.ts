@@ -276,8 +276,8 @@ describe("dashboard conflicts UI", () => {
   test("Keep <value> for each value, equal weight, Pin and Distrust, writer kind shown, no Replace", () => {
     const { ctx } = page([]);
     const html: string = ctx.cfRow(G(), 0);
-    assert.match(html, /cfKeep\(0,0\)'>Keep Fly\.io</);
-    assert.match(html, /cfKeep\(0,1\)'>Keep Render</);
+    assert.match(html, /data-do='cfKeep' data-args='\[0,0\]'>Keep Fly\.io</);
+    assert.match(html, /data-do='cfKeep' data-args='\[0,1\]'>Keep Render</);
     assert.match(html, /Pin #1/);
     assert.match(html, /Distrust alice/);
     assert.match(html, /alice \(token label, stamped by the server from the token\)/);

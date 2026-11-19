@@ -746,6 +746,7 @@ function lastAuditLine(path: string): { hash: string; seq: number; signed: boole
 
 /** Hash and seq of the newest line of the log (what a checkpoint signs); undefined for an empty log. */
 export function auditHead(path: string = auditPath()): { hash: string; seq: number } | undefined {
+  flushAuditBatch(); // a head read inside a batch must see the buffered lines
   const l = lastAuditLine(path);
   return l.hash === GENESIS ? undefined : { hash: l.hash, seq: l.seq };
 }
@@ -1049,6 +1050,84 @@ function takeGenesisLock(path: string): string | undefined {
   return undefined;
 }
 
+/**
+ * Batched audit appends (import speed). Inside auditBatch(fn) each audit() line is built and chained in memory (the same
+ * hash chain, signed the same way, with the real seq and hash handed back to the caller) and the lines reach the file in
+ * ONE open and ONE write when the batch ends (or every AUDIT_BATCH_MAX lines / bytes). The file is exactly what one-by-one
+ * appends would have written, so `monomem audit verify` reads it the same. A restore of 20,000 notes used to open, stat and
+ * close the log once per note.
+ */
+const AUDIT_BATCH_MAX = 1000;
+const AUDIT_BATCH_BYTES = 512 * 1024;
+let batchDepth = 0;
+let pending: { path: string; out: string; lines: number; last: { hash: string; seq: number; signed: boolean }; signer: SigningKey | null } | null = null;
+
+/** Run fn with audit lines batched (nesting is fine); everything buffered is written before this returns, even on an error. */
+export function auditBatch<T>(fn: () => T): T {
+  batchDepth++;
+  try {
+    return fn();
+  } finally {
+    batchDepth--;
+    if (batchDepth === 0) flushAuditBatch();
+  }
+}
+
+/** Write the buffered lines now: one open, one write. A failure counts like any other audit failure and never throws. */
+export function flushAuditBatch(): void {
+  const b = pending;
+  if (!b) return;
+  pending = null;
+  try {
+    waitWhileRotating(b.path);
+    rotateAuditIfNeeded(b.path);
+    const fd = openSync(b.path, "a+", 0o600);
+    try {
+      const before = fstatSync(fd).size;
+      writeSync(fd, b.out);
+      const after = fstatSync(fd);
+      const lastLine = b.out.slice(0, -1).split("\n").pop() as string;
+      auditTail = after.size === before + Buffer.byteLength(b.out) ? { path: b.path, size: after.size, mtime: after.mtimeMs, hash: b.last.hash, seq: b.last.seq, len: Buffer.byteLength(lastLine), signed: b.last.signed } : null;
+    } finally {
+      closeSync(fd);
+    }
+  } catch (e) {
+    auditTail = null;
+    auditFailures += b.lines;
+    console.error(`[monomem] could not write the audit log (${(e as Error)?.message ?? e}); ${auditFailures} entries missing so far`);
+  }
+}
+
+/** One audit line into the batch. "single" = write this one the ordinary way (the log is brand new: the first line takes the lock). */
+function auditBuffered(path: string, entry: Record<string, unknown>): { seq: number; chain_hash: string; ts: string; signer?: SigningKey } | "single" {
+  if (pending && pending.path !== path) flushAuditBatch();
+  if (!pending) {
+    const last = lastAuditLine(path);
+    if (last.hash === GENESIS) return "single";
+    pending = { path, out: "", lines: 0, last, signer: auditSigner(path) };
+  }
+  const b = pending;
+  const ts = new Date().toISOString();
+  let { hash: prev, seq } = b.last;
+  seq += 1;
+  const signer = b.signer;
+  if (signer && !b.last.signed) {
+    const start = signLine({ ts, prev, seq, op: "sign-start", detail: `${unsignedTail(path)} unsigned lines before; head ${prev}`, pub: signer.publicKey }, signer);
+    b.out += start + "\n";
+    b.lines++;
+    prev = sha(start);
+    seq += 1;
+  }
+  const line = signer ? signLine({ ts, prev, seq, ...entry }, signer) : JSON.stringify({ ts, prev, seq, ...entry });
+  b.out += line + "\n";
+  b.lines++;
+  const hash = sha(line);
+  b.last = { hash, seq, signed: !!signer };
+  const result = { seq, chain_hash: hash, ts, ...(signer ? { signer } : {}) };
+  if (b.lines >= AUDIT_BATCH_MAX || b.out.length >= AUDIT_BATCH_BYTES) flushAuditBatch();
+  return result;
+}
+
 export function audit(entry: {
   op: string;
   id?: number;
@@ -1068,6 +1147,11 @@ export function audit(entry: {
     if (auditDirMade !== path) {
       mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
       auditDirMade = path;
+    }
+    if (pending && (!batchDepth || entry.new_pub)) flushAuditBatch(); // a line outside the batch (or a key hand-over) goes after the buffered ones
+    if (batchDepth > 0 && !entry.new_pub) {
+      const r = auditBuffered(path, entry);
+      if (r !== "single") return r;
     }
     waitWhileRotating(path);
     rotateAuditIfNeeded(path);

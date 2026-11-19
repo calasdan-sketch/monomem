@@ -13,6 +13,7 @@ import { recallHookCheck, claudeHookCheck, appEntriesCheck } from "./hooks.js";
 import { captureCheck } from "./capture.js";
 import { actionGuardCheck } from "./action-guard.js";
 import { serverCheck } from "./server.js";
+import { toolPinCheck } from "./tools.js";
 
 /** The checks, in the order their lines are printed. Later checks read facts earlier ones put on `d`. */
 export const CHECKS: ReadonlyArray<(d: Doctor) => Promise<void>> = [
@@ -34,6 +35,7 @@ export const CHECKS: ReadonlyArray<(d: Doctor) => Promise<void>> = [
   captureCheck,
   actionGuardCheck,
   serverCheck,
+  toolPinCheck,
 ];
 
 /** No data folder, no database and no 1.0.x data to move in: say "not set up" (exit 1) instead of creating a fresh store. */

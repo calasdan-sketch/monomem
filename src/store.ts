@@ -16,7 +16,7 @@ import { mkdirSync, statSync, statfsSync, readdirSync, renameSync, linkSync, exi
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { dirname, basename, join, resolve } from "node:path";
 import { privateDir } from "./private-dir.js";
-import { checkSizes, checkNames, audit, auditHead, auditPath, beginKeyRotation, withAuditPath, ADMIN_SCOPE_NEEDED, SECRET_ASSIGN_LABEL } from "./security.js";
+import { checkSizes, checkNames, audit, auditBatch, auditHead, auditPath, beginKeyRotation, withAuditPath, ADMIN_SCOPE_NEEDED, SECRET_ASSIGN_LABEL } from "./security.js";
 import { chmodQuiet } from "./config.js";
 import { lintContent, lintPolicy, describeFindings, type LintFinding, type LintAction, type LintCategory } from "./lint.js";
 // The zero-dependency text similarity for the note similarity graph (shared with consolidate.ts).
@@ -316,7 +316,7 @@ function lintFor(
   mode: LintMode
 ): LintFinding[] {
   if (mode === "none") return [];
-  const all = lintContent(fields);
+  const all = lintContent({ ...fields, writer: currentWriter() }); // writer: lint-tool-steer.ts holds tool-choice steering from writers that are not the owner
   return mode === "trusted" ? all.filter((f) => f.category === "secret") : all;
 }
 
@@ -7675,7 +7675,7 @@ export class Store {
   private flushAudit(): void {
     const q = this.pendingAudit;
     this.pendingAudit = [];
-    for (const [e, r] of q) receiptOps.noteAudited(this, e.op, withAuditPath(this.auditLog, () => audit(e)), r);
+    (q.length > 1 ? auditBatch : (f: () => void) => f())(() => { for (const [e, r] of q) receiptOps.noteAudited(this, e.op, withAuditPath(this.auditLog, () => audit(e)), r); }); // many lines (an import batch): one open, one write
   }
 
   /**

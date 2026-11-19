@@ -40,6 +40,7 @@ import { HIGH_ENTROPY_LABEL, normalizeForScan, scanForSecrets } from "./security
 import { configuredTokenValues, sha256Hex } from "./config.js";
 import { scanOutboundDirective, scanOutboundInjection } from "./lint-outbound.js";
 import { scanEncodedBlob, scanMultilingual, scanStandingInstruction } from "./lint-evasion.js";
+import { scanForToolSteering, steerChecked } from "./lint-tool-steer.js";
 import { evasionVariants, scanExternalEmbeds, scanHiddenComments, scanMemoryPoison, scanMoreLanguages } from "./lint-evasion2.js";
 
 export type LintCategory = "secret" | "injection" | "entropy" | "pii" | "directive";
@@ -451,6 +452,8 @@ export function lintContent(input: {
   body?: string;
   tags?: string[];
   source?: string;
+  /** Who is writing (written_by). Given, a writer that is not the owner is also checked for steering the agent's tool choice. */
+  writer?: string;
 }): LintFinding[] {
   const fields: Array<[string, string | undefined]> = [
     ["title", input.title],
@@ -475,6 +478,13 @@ export function lintContent(input: {
     if (pii) out.push({ category: "pii", label: pii, field });
     const dir = scanForDirective(text);
     if (dir) out.push({ category: "directive", label: dir, field });
+  }
+  // Tool-choice steering (lint-tool-steer.ts): only for a writer that is not the owner, or a note written after outside content.
+  if (steerChecked(input.writer, input.tags)) {
+    for (const [field, text] of fields) if (field !== "source" && scanForToolSteering(text)) {
+      out.push({ category: "injection", label: scanForToolSteering(text) as string, field });
+      break;
+    }
   }
   // An instruction split across fields ("ignore previous" in the title, "instructions" in the body) reads as one to an agent
   // that is shown title, body and tags together. Scanned joined, only when no single field already held it.

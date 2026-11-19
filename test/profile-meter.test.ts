@@ -101,7 +101,7 @@ describe("why was this shown? / never show again", () => {
   });
 
   test("dashboard: a never-show button on each note PUTs the tag", async () => {
-    assert.match(DASHBOARD_JS, /nav\("Usage", "fromSettings\(loadMeter\)\(\)"\)/); // Settings > Usage
+    assert.match(DASHBOARD_JS, /nav\("Usage", "fromSettings", \["loadMeter"\]\)/); // Settings > Usage
     const puts: Array<{ path: string; body: string }> = [];
     const els = new Map<string, any>();
     const el = (id: string): any => {
@@ -125,7 +125,7 @@ describe("why was this shown? / never show again", () => {
     vm.createContext(ctx);
     vm.runInContext(DASHBOARD_JS, ctx);
     ctx.render([{ id: 7, title: "t", namespace: "default", tags: ["a"], body: "" }]);
-    assert.match(el("list").innerHTML, /onclick='neverShow\(7,true\)'>Don't show at session start</);
+    assert.match(el("list").innerHTML, /data-do='neverShow' data-args='\[7,true\]'>Don't show at session start</);
     ctx.neverShow(7, true);
     await new Promise((r) => setTimeout(r, 20));
     assert.deepEqual(puts, [{ path: "/notes/7", body: JSON.stringify({ tags: ["a", NEVER_SHOW_TAG], if_rev: 3 }) }]);

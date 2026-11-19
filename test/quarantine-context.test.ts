@@ -145,7 +145,7 @@ describe("quarantine context", () => {
     assert.match(el("list").innerHTML, /id='qctx4'/);
     const box = el("qctx4").innerHTML as string;
     assert.match(box, /Keep as history/);
-    assert.match(box, /qHeld\(4,&quot;keep-history&quot;\)/);
+    assert.match(box, /data-args='\[4,&quot;keep-history&quot;\]'/);
     assert.match(box, /Saved on the same topic since:/);
     assert.match(box, /quoting-bot/);
     assert.ok(!box.includes("<b>"), "titles are escaped");
