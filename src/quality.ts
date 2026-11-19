@@ -261,17 +261,36 @@ export function restatedPairs(store: Store, notes: NoteRecord[], max = Infinity)
     else groups.set(k, [n]);
   }
   const created = new Map(plain.map((n) => [n.id, Date.parse(n.created_at)]));
+  // Newest first, ties in the original order: the answer is "the newest valid N", so the first valid one found is it and the scan stops
+  // (the similarity lookup is the expensive part; before, every candidate newer than the best so far was tried). A note with an unreadable
+  // date can never be a candidate (NaN is not greater than anything), so it is left out of the sorted list.
+  const newestFirst = new Map<string, NoteRecord[]>();
+  for (const [k, g] of groups) {
+    newestFirst.set(
+      k,
+      g
+        .map((n, i) => ({ n, i, t: created.get(n.id)! }))
+        .filter((x) => !Number.isNaN(x.t))
+        .sort((a, b) => b.t - a.t || a.i - b.i)
+        .map((x) => x.n)
+    );
+  }
   const out: Array<[NoteRecord, NoteRecord]> = [];
   for (const o of plain) {
     let best: NoteRecord | undefined;
     let sims: Map<number, number> | undefined; // read only when a cheap candidate exists
     const oUpdated = Date.parse(o.updated_at);
-    for (const n of groups.get(writerKey(o))!) {
-      if (n.id === o.id || !(created.get(n.id)! > oUpdated)) continue;
-      if (best && created.get(n.id)! <= created.get(best.id)!) continue;
-      if (n.distrusted || heldFromSessionStart(n, enforce) || (personConfirmed(o) && !personConfirmed(n))) continue;
-      const sameSubject = factClash(o.tags ?? [], n.tags ?? []) || ((sims ??= store.neighbourScores(o.id)).get(n.id) ?? 0) >= RESTATE_MIN_SIM;
-      if (sameSubject && !(typeof store.isDistrusted === "function" && store.isDistrusted(n))) best = n;
+    if (!Number.isNaN(oUpdated)) {
+      for (const n of newestFirst.get(writerKey(o))!) {
+        if (!(created.get(n.id)! > oUpdated)) break; // sorted newest first: every note after this one is older still
+        if (n.id === o.id) continue;
+        if (n.distrusted || heldFromSessionStart(n, enforce) || (personConfirmed(o) && !personConfirmed(n))) continue;
+        const sameSubject = factClash(o.tags ?? [], n.tags ?? []) || ((sims ??= store.neighbourScores(o.id)).get(n.id) ?? 0) >= RESTATE_MIN_SIM;
+        if (sameSubject && !(typeof store.isDistrusted === "function" && store.isDistrusted(n))) {
+          best = n;
+          break;
+        }
+      }
     }
     if (best && out.push([o, best]) >= max) break;
   }
