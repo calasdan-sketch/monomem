@@ -5,6 +5,10 @@
 
 Tell Claude Code something once, and Cursor, Codex, Gemini CLI and your other assistants can find it too. Everything stays in one file on your own computer: no cloud account, no API keys, no hidden model calls.
 
+> **Beta. Not independently security-reviewed.** MIT licence, no warranty. The security checks and benchmarks here were written and run by the author (with AI reviewers); numbers are self-measured and reproducible from this repo, not third-party audited.
+>
+> **What it records.** When capture is on, Monomem stores the text of your prompts and of tool output (secrets are redacted first) in a local file on this computer. Nothing is sent anywhere by Monomem. Raw captured events are deleted after 7 days by default (`MONOMEM_CAPTURE_RETENTION_DAYS`). Notes are encrypted at rest only if you turn encryption on, and file paths are never encrypted.
+
 ## Get it
 
 [![Download for Windows](https://img.shields.io/badge/Download-Windows-0B2E45?style=for-the-badge)](https://github.com/calasdan-sketch/monomem/releases/latest)
