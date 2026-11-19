@@ -54,7 +54,8 @@ export async function addCmd(args: string[]): Promise<void> {
   if (flags.private && (flags.sens ?? flags.sensitivity) && flags.sens !== "private") fail("Use either --private or --sens, not both.");
   if (sens !== undefined && !(SENSITIVITY_LEVELS as readonly string[]).includes(sens)) fail(`--sens must be one of: ${SENSITIVITY_LEVELS.join(", ")}`);
   const title = typeof flags.title === "string" ? flags.title : text.replace(/\s+/g, " ").trim().slice(0, 60);
-  const namespace = (flags.ns ?? flags.namespace) as string | undefined;
+  // No --ns: inside a repo with per-project scope on, save where that repo's apps will recall it (no effect with a spaces map or scope off).
+  const namespace = ((flags.ns ?? flags.namespace) as string | undefined) ?? (await (async () => { const m = await import("./namespace.js"); return m.namespaceConfigSource() ? undefined : m.resolveAutoScope(process.cwd())?.namespace; })());
   const tagRaw = (flags.tag ?? flags.tags) as string | undefined;
   const tags = tagRaw ? tagRaw.split(",").map((t) => t.trim()).filter(Boolean) : undefined;
   const derivedRaw = flags["derived-from"] as string | undefined;

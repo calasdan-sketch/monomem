@@ -127,6 +127,19 @@ All environment variables are optional. This table lists **every** `MONOMEM_*` v
 | `MONOMEM_HOOK_TOKEN` | unset | A write-scope app key for `MONOMEM_HOOK_URL` |
 | `MONOMEM_SPACES` | unset (feature off) | Optional JSON namespace config: `{"spaces":{"/home/you/work":"work"},"default_namespace":"default","reads_from":{"work":["shared"]}}` (or `<data dir>/spaces.json`; env wins). Enables server-side namespace resolution |
 | `MONOMEM_SPACE` | unset | Explicit namespace override: when set, the server uses this namespace directly instead of resolving from the working directory (only meaningful with a spaces config present) |
+| `MONOMEM_AUTO_SCOPE` | unset (on for new installs, off for stores that already had notes) | `1`/`on` keeps each git repository's notes in its own project, `0`/`off` shares one space. Overrides the `auto-scope` file in the data dir that `monomem scope on` writes. Ignored when a spaces config is present. See `monomem scope` |
+
+## Per-project scope (`monomem scope`)
+
+Without a spaces config, every project shares one pool of notes. `monomem scope on` gives each git repository its own, so notes from one repo do not turn up in an unrelated one. A fresh `monomem setup` (empty store) turns it on; a store that already has notes stays off until you run `monomem scope on --yes`. Nothing is moved or deleted either way, and `monomem scope off` brings the old view back. `monomem scope status` and `monomem doctor` show the mode and the project the current folder uses.
+
+- The project is the nearest parent folder that contains `.git`. A worktree or submodule (its `.git` is a file) is its own project. The home folder and folders in no repository are not scoped.
+- Notes belong to the folder path. Moving or renaming a repository, or cloning it to a second place, starts a new project; the old notes stay under the old path.
+- The stdio server decides once, from the folder the app was started in; the session hooks decide per event from the working folder. If an app is started from your home folder rather than inside the repo, it is not scoped. Set `MONOMEM_AUTO_SCOPE` in both the app's MCP settings and the hook's environment, or use the `auto-scope` file (which both read).
+- `monomem add` with no `--ns` saves to the current repo's project when scope is on.
+- It is a convenience against cross-project mix-ups, not a security boundary: the hook follows the working folder, an app outside any repository can still search every project's notes, and anyone who can edit the data folder can change the setting. For hard separation use a spaces config or per-token namespaces ([token-namespaces.md](./token-namespaces.md)).
+- A spaces config, when set, decides instead, and `monomem scope on` refuses.
+- `monomem uninstall` and `monomem setup --undo` leave the `auto-scope` file; `monomem scope off` removes it.
 
 ## Settings kept in the store (`monomem settings`, formerly `monomem config`)
 

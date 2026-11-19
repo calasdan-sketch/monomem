@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Per-project scope: `monomem scope [status|on|off]` keeps each git repository's notes in its own project, so one repo's notes stop showing up in an unrelated one. It is on by default for a new `monomem setup` (empty store) and off for stores that already have notes; `MONOMEM_AUTO_SCOPE` overrides. A spaces map, when set, still decides. Nothing is moved or deleted when it is turned on or off. `monomem doctor` shows the mode and the project this folder uses. Limits: an app started outside any git repository is not scoped and can still search every project's notes; this is a convenience against cross-project bleed, not a security boundary (use a spaces map or per-token namespaces for that).
+
 ## [1.6.2] - 2026-11-18
 
 ### Changed

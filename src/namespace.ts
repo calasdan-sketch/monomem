@@ -13,8 +13,10 @@
 // exactly as before -- model-supplied namespaces keep working. Resolution
 // only activates when configured.
 
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { join, posix, win32 } from "node:path";
+import { homedir } from "node:os";
+import { basename, dirname, join, posix, win32 } from "node:path";
 import { DATA_DIR } from "./config.js";
 
 /** Path of the spaces config file (in the data dir). */
@@ -365,8 +367,67 @@ export function resolveRequestNamespace(
  * Throws on ambiguous overlap -- startup must fail loudly, never silently
  * pick a namespace.
  */
-export function resolveStartupNamespace(cwd: string): ResolvedNamespace | null {
+export function resolveStartupNamespace(cwd: string, opts: { auto?: boolean } = {}): ResolvedNamespace | null {
   const cfg = loadNamespaceConfig();
-  if (!cfg) return null;
-  return { namespace: resolveNamespace(cwd, cfg), readsFrom: cfg.reads_from ?? {} };
+  if (cfg) return { namespace: resolveNamespace(cwd, cfg), readsFrom: cfg.reads_from ?? {} };
+  // No spaces map: only a per-app stdio server or the session-start hook may scope itself to the repo it was started in
+  // (opts.auto). The HTTP server and `monomem start` serve several agents from one folder and never do.
+  return opts.auto ? resolveAutoScope(cwd) : null;
+}
+
+/** Per-project scope without a spaces map. MONOMEM_AUTO_SCOPE=1 / 0 wins; else the `auto-scope` file in the data dir says "on". */
+export const AUTO_SCOPE_ENV = "MONOMEM_AUTO_SCOPE";
+export const AUTO_SCOPE_FILE = join(DATA_DIR, "auto-scope");
+
+export function autoScopeMode(): { on: boolean; source: "env" | "file" | "off" } {
+  const env = (process.env[AUTO_SCOPE_ENV] ?? "").trim().toLowerCase();
+  if (["1", "on", "true", "yes"].includes(env)) return { on: true, source: "env" };
+  if (["0", "off", "false", "no"].includes(env)) return { on: false, source: "env" };
+  try {
+    if (existsSync(AUTO_SCOPE_FILE) && readFileSync(AUTO_SCOPE_FILE, "utf8").trim().toLowerCase() === "on") return { on: true, source: "file" };
+  } catch {
+    /* unreadable: stays off (the shared space, as before) */
+  }
+  return { on: false, source: "off" };
+}
+
+/**
+ * The repository a folder belongs to: the nearest parent (or the folder itself) holding `.git` (a file counts, so a
+ * worktree is its own project). null for the home folder, a drive root, or a folder in no repository: those stay in the
+ * shared space, so an app launched outside any project is not given a namespace from wherever it happened to start.
+ */
+export function findRepoRoot(cwd: string, home: string = homedir()): string | null {
+  const f = pathFlavor();
+  let real = cwd;
+  try {
+    real = realpathSync.native(cwd); // a folder reached through a symlink or junction is the same project as its real path
+  } catch {
+    /* not on disk: walk the path as given */
+  }
+  let dir = lexicalDir(real, f);
+  const homeDir = canonicalDir(home, f);
+  for (let i = 0; i < 64; i++) {
+    const canon = canonicalDir(dir, f);
+    if (canon === homeDir || dir === f.path.parse(dir).root) return null;
+    if (existsSync(join(dir, ".git"))) return dir;
+    const up = dirname(dir);
+    if (up === dir) return null;
+    dir = up;
+  }
+  return null;
+}
+
+/** `<folder name>-<6 hex of a hash of the repo's real path>`: readable, stable, and different for two repos with the same name. */
+export function autoScopeName(root: string): string {
+  const f = pathFlavor();
+  const canon = canonicalDir(root, f);
+  const slug = basename(root).toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "project";
+  return `${slug}-${createHash("sha256").update(canon).digest("hex").slice(0, 6)}`;
+}
+
+/** The repo-scoped namespace for a folder when auto-scope is on and the folder is in a repo; null otherwise. No read grants: repos are isolated. */
+export function resolveAutoScope(cwd: string): ResolvedNamespace | null {
+  if (!autoScopeMode().on) return null;
+  const root = findRepoRoot(cwd);
+  return root ? { namespace: autoScopeName(root), readsFrom: {} } : null;
 }

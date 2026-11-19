@@ -19,7 +19,7 @@ import { type Sensitivity, mayEmbed, DEFAULT_SENSITIVITY, SENSITIVITY_HELP, SENS
 /** Every command main() accepts, for the unknown-command check and the "did you mean" hint. */
 const COMMANDS = [
   "start", "serve", "mcp", "mcp:stdio", "doctor", "init", "setup", "uninstall", "sync", "reindex", "recall", "hook",
-  "consolidate", "rebuild-edges", "relevant", "search", "token", "changes", "backup", "runner-status", "watch", "export", "import", "trust",
+  "consolidate", "rebuild-edges", "relevant", "search", "token", "changes", "scope", "backup", "runner-status", "watch", "export", "import", "trust",
   "quarantine", "approve-first", "access", "flood", "resume", "decay", "archive", "restore", "delete", "quality", "conflicts", "facts", "fact",
   "encrypt", "meter", "receipts", "why", "never-show", "supersede", "history", "pin", "unpin", "rollback", "bench", "drill", "health", "audit", "verify-receipt",
   "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet", "confirm", "review", "taint", "config", "service", "stale", "project-rules", "update", "stop", "commit-trail",
@@ -2087,6 +2087,9 @@ async function main(): Promise<void> {
       break;
     case "changes":
       await changes();
+      break;
+    case "scope":
+      await (await import("./cli/scope.js")).scopeCmd();
       break;
     case "backup":
       if (process.argv[3] === "restore") await restoreBackupCmd(process.argv.slice(4));
