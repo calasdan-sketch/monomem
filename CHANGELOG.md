@@ -6,6 +6,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-11-19
+
 ### Added
 - `monomem activity --summary` (the digest) now says how often sessions read outside content, counted from the stored tool events with
   the same rule that sets the mark (so sessions from before the mark existed count): per session that ran tools (with a 95% range), per
