@@ -23,7 +23,7 @@ export async function accountRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
   // GET /status (admin) -> this server's build and the state of its in-memory body index (C-06): what /health leaves out
   // for unauthenticated callers. `monomem doctor` reads it from a server it has verified (local-server.ts).
   if (req.method === "GET" && path === "/status") {
-    sendJson(res, 200, { ...healthBody(), body_index: store.bodyIndexInfo() });
+    sendJson(res, 200, { ...healthBody(true), body_index: store.bodyIndexInfo() });
     return true;
   }
 

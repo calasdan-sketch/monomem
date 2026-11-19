@@ -59,8 +59,9 @@ export function createApiServer(
 
       // Health check is intentionally unauthenticated so infra (tunnel,
       // uptime monitor) can probe liveness without a credential.
+      // Callers without a valid key get {status:"ok"} only; the build and schema need a key (a failed key counts nothing here).
       if (req.method === "GET" && path === "/health") {
-        sendJson(res, 200, healthBody());
+        sendJson(res, 200, healthBody(authenticateEntry(req, tokens) !== null));
         return;
       }
 
@@ -124,6 +125,10 @@ export function createApiServer(
           // styles/handlers are allowed because the dashboard uses them; this
           // still blocks exfiltration to third-party origins as a backstop to
           // the output escaping in dashboard.ts.
+          // 'unsafe-inline' for scripts is NOT for inline <script> blocks (the page has none: it loads /dashboard.js from
+          // 'self'). It is for ~85 inline event-handler attributes (onclick='...') in the HTML strings src/ui/js-*.ts build.
+          // A per-response nonce or hash does not cover handler attributes (only 'unsafe-hashes' would, per handler), so a
+          // nonce would change nothing here. Removing it needs those handlers rewritten as delegated listeners (2026-11-18: not done).
           "Content-Security-Policy":
             "default-src 'self'; style-src 'self' 'unsafe-inline'; " +
             "script-src 'self' 'unsafe-inline'; connect-src 'self'; " +

@@ -76,9 +76,10 @@ function suggestCommand(cmd: string): string | undefined {
 async function reindex(): Promise<void> {
   const { DB_PATH } = await import("./config.js");
   const { Store } = await import("./store.js");
-  const { embeddingsEnabled, embeddingsConfig, embed, noteEmbeddingText } = await import(
+  const { embeddingsEnabled, embeddingsConfig, noteEmbeddingText } = await import(
     "./embeddings.js"
   );
+  const { reindexEmbedder } = await import("./embed-retry.js"); // long first-call timeout and retries for a cold model
 
   if (!embeddingsEnabled()) {
     console.error(
@@ -102,11 +103,12 @@ async function reindex(): Promise<void> {
 
   let done = 0;
   let failed = 0;
+  const embed = reindexEmbedder(cfg);
   for (const id of ids) {
     const note = store.read(id); // gate-ok: local shell command (show): the operator owns the database file
     if (!note) continue;
     if (!mayEmbed(note)) continue; // private notes are not sent to the embeddings endpoint (MONOMEM_ALLOW_PRIVATE_REMOTE=1 allows it)
-    const vec = await embed(noteEmbeddingText(note.title, note.body), cfg);
+    const vec = await embed(noteEmbeddingText(note.title, note.body));
     if (vec) {
       store.setVector(id, vec, cfg.model);
       done += 1;

@@ -187,6 +187,11 @@ const CONFUSABLES: Record<string, string> = {
   α: "a", ο: "o", ν: "v", ι: "i", κ: "k", ρ: "p", τ: "t", υ: "u", ε: "e",
   Α: "A", Β: "B", Ε: "E", Ζ: "Z", Η: "H", Ι: "I", Κ: "K", Μ: "M", Ν: "N", Ο: "O",
   Ρ: "P", Τ: "T", Υ: "Y", Χ: "X",
+  // More Cyrillic and Greek look-alikes (2026-11-18)
+  к: "k", м: "m", н: "h", т: "t", в: "b", ґ: "r", ӎ: "m", γ: "y", χ: "x", ϲ: "c", ϳ: "j", ѵ: "v", ԍ: "g", ԃ: "d",
+  // Latin-script look-alikes that NFKC leaves alone: dotless i, script g / a, small capitals (ᴏ ᴇ ɪ ...), Armenian
+  ı: "i", ɡ: "g", ɑ: "a", ɩ: "i", ɪ: "i", ᴏ: "o", ᴇ: "e", ᴀ: "a", ʀ: "r", ɴ: "n", ᴛ: "t", ᴜ: "u", ᴅ: "d", ᴘ: "p", ʟ: "l",
+  ᴍ: "m", ᴄ: "c", ʙ: "b", ᴋ: "k", ᴠ: "v", ᴡ: "w", ᴢ: "z", ɢ: "g", ʜ: "h", ս: "u", ո: "n", օ: "o", ց: "g",
 };
 const CONFUSABLE_RE = new RegExp(`[${Object.keys(CONFUSABLES).join("")}]`, "gu");
 
@@ -360,9 +365,10 @@ export function scanForSecrets(text: string | undefined): string | null {
 // ---- Origin check (DNS-rebinding defense for browser-based callers) ----------
 // Non-browser clients (Claude Code, curl, the MCP SDK) send no Origin header --
 // those are allowed. A browser sends Origin; we allow it only if explicitly
-// listed in MONOMEM_ALLOWED_ORIGINS (comma-separated). Default: no
-// browser origins allowed, which blocks a malicious web page from reaching a
-// localhost/tunnelled server via DNS rebinding.
+// listed in MONOMEM_ALLOWED_ORIGINS (comma-separated), or if it is this server's
+// own loopback origin (same port the request arrived on). Default: no other
+// browser origins, which blocks a malicious web page from reaching a
+// localhost/tunnelled server via DNS rebinding or from another local port.
 export function originAllowed(req: IncomingMessage): boolean {
   const origin = req.headers["origin"];
   if (!origin || Array.isArray(origin)) return true; // no Origin = non-browser
@@ -371,20 +377,28 @@ export function originAllowed(req: IncomingMessage): boolean {
     .map((s) => s.trim())
     .filter(Boolean);
   let host: string;
+  let port: string;
+  let protocol: string;
   try {
     // URL.hostname keeps the brackets on an IPv6 literal ("[::1]"); strip them
     // so the loopback check below matches "::1".
-    host = new URL(origin).hostname.replace(/^\[|\]$/g, "");
+    const u = new URL(origin);
+    host = u.hostname.replace(/^\[|\]$/g, "");
+    port = u.port;
+    protocol = u.protocol;
   } catch {
     // Malformed Origin: allow only if someone listed it verbatim (they won't).
     return allowed.includes(origin);
   }
-  // The built-in dashboard is served from loopback, so its same-origin fetch
-  // carries a loopback Origin -- allow that. We deliberately do NOT trust a
-  // match against the Host header: under DNS rebinding the attacker controls
-  // both Origin and Host, so Origin==Host would wave the attack straight
-  // through. A real browser hitting the tunnel must be allowlisted explicitly.
-  if (isLoopback(host)) return true;
+  // The built-in dashboard is served from loopback, so its same-origin fetch carries a loopback Origin on THIS server's own
+  // port -- allow exactly that (2026-11-18: it used to allow any loopback origin, so a page served from another local
+  // program, http://localhost:3000, could call this API from the browser). The port is the one the connection arrived on
+  // (the socket), which a caller cannot choose. We deliberately do NOT trust a match against the Host header: under DNS
+  // rebinding the attacker controls both Origin and Host, so Origin==Host would wave the attack straight through. A real
+  // browser hitting the tunnel, or this server through another local port or a proxy, must be allowlisted explicitly.
+  const own = req.socket?.localPort;
+  const originPort = port || (protocol === "https:" ? "443" : "80");
+  if (protocol === "http:" && isLoopback(host) && own !== undefined && String(own) === originPort) return true;
   return allowed.includes(origin);
 }
 

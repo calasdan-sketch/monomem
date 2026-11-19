@@ -40,6 +40,7 @@ import { BodyIndex, type BodyIndexInfo } from "./store/body-index.js";
 import { migrate as migrateSchema } from "./store/migrate.js";
 import { beginImmediate } from "./store/write-lock.js";
 import { CHANGE_LOG_RETENTION_DAYS, FTS_PREFIX_OPT, SQL_NOW, DEFAULT_NAMESPACE } from "./store/schema-constants.js";
+import { expandIdentifiers } from "./query-expand.js";
 export { CHANGE_LOG_RETENTION_DAYS, DEFAULT_NAMESPACE } from "./store/schema-constants.js";
 import { encrypt, decryptIfEncrypted, isEncrypted, loadKey, keyPath, noteAad, captureAad } from "./crypto.js";
 import { currentActor, currentWriter, cleanWriter, currentCeiling, actorStore } from "./actor.js";
@@ -1050,16 +1051,11 @@ export function queryTooLong(q: unknown): string {
 }
 
 function buildMatchQuery(q: string, any = false): string {
-  const tokens = q
-    .slice(0, QUERY_MAX_CHARS)
-    .trim()
-    .split(/\s+/)
-    .filter((t) => /[\p{L}\p{N}]/u.test(t)) // keep only tokens with a letter/number
-    .slice(0, QUERY_MAX_WORDS)
-    // Any-term searches run on extracted keywords: a keyword of one or two letters is matched exactly there ("go" must not
-    // match every word starting with go). A typed search keeps prefix matching for every word.
-    .map((t) => `"${t.replace(/"/g, '""')}"${any && /^[\p{L}]{1,2}$/u.test(t) ? "" : "*"}`);
-  return tokens.join(any ? " OR " : " AND "); // "" when nothing usable; caller returns []
+  const words = q.slice(0, QUERY_MAX_CHARS).trim().split(/\s+/).filter((t) => /[\p{L}\p{N}]/u.test(t)).slice(0, QUERY_MAX_WORDS); // keep only tokens with a letter/number
+  // Any-term searches run on extracted keywords: a keyword of one or two letters is matched exactly there ("go" must not
+  // match every word starting with go). A typed search keeps prefix matching for every word.
+  const tokens = words.map((t) => `"${t.replace(/"/g, '""')}"${any && /^[\p{L}]{1,2}$/u.test(t) ? "" : "*"}`);
+  return any ? tokens.join(" OR ") : expandIdentifiers(words, tokens); // "" when nothing usable; caller returns []; identifiers are widened (query-expand.ts)
 }
 
 // --- Similarity edge graph (v4) -------------------------------------------

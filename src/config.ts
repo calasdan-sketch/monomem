@@ -18,14 +18,14 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { chmodQuiet, privateDir } from "./private-dir.js";
+import { chmodQuiet, privateDir, restrictFile } from "./private-dir.js";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { resolveTimeZone } from "./time-parse.js";
 import { cleanWriter } from "./actor.js";
 import { didYouMean } from "./suggest.js";
 import { type Sensitivity, parseSensitivity, sensitivityRank, defaultCeilingFromEnv, SENSITIVITY_HELP } from "./sensitivity.js";
-export { chmodQuiet, lockdownArgs, wideAccessGroups, privateDir, type PrivateDirOptions } from "./private-dir.js";
+export { chmodQuiet, lockdownArgs, fileLockdownArgs, restrictFile, wideAccessGroups, privateDir, type PrivateDirOptions } from "./private-dir.js";
 
 // The package root and the version come from self.ts, which knows how this copy is packaged (npm, bundled folder, single exe).
 export { PROJECT_ROOT } from "./self.js";
@@ -334,6 +334,7 @@ export function resolveToken(): string {
   try {
     // "wx": only the first of several processes starting at once creates the file; the others use its value.
     writeFileSync(TOKEN_FILE, token, { mode: 0o600, flag: "wx" });
+    restrictFile(TOKEN_FILE); // Windows: no ACL inheritance, the current user only (best effort)
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
     // The winner may not have written its bytes yet: re-read briefly while the file is empty.
@@ -342,7 +343,8 @@ export function resolveToken(): string {
       if (won) return won;
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
     }
-    writeFileSync(TOKEN_FILE, token, { mode: 0o600 }); // left empty by an earlier crash: replace it, as before
+    writeFileSync(TOKEN_FILE, token, { mode: 0o600 });
+    restrictFile(TOKEN_FILE); // left empty by an earlier crash: replace it, as before
   }
   // Never print the token value itself -- this line may be captured by a
   // Windows Scheduled Task's redirected output, a service manager's logs, or

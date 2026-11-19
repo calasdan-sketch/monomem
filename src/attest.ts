@@ -21,6 +21,7 @@
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign, verify, type KeyObject } from "node:crypto";
 import { chmodSync, constants as fsConstants, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { restrictFile } from "./private-dir.js";
 
 /** The version a new export signs. The verifier accepts every version in SUPPORTED_VERSIONS. */
 export const ATTEST_VERSION = 2;
@@ -214,6 +215,7 @@ export function replaceSigningKey(dataDir: string, keepOldAs?: string, beforeSwa
   const { privateKey } = generateKeyPairSync("ed25519");
   const tmp = `${p}.${process.pid}.${Date.now()}.new`;
   writeFileSync(tmp, privateKey.export({ format: "pem", type: "pkcs8" }), { mode: 0o600, flag: "wx" });
+  restrictFile(tmp); // Windows ACL: the current user only (best effort)
   try {
     chmodSync(tmp, 0o600);
     if (keepOldAs && existsSync(p)) {
@@ -292,6 +294,7 @@ export function loadOrCreateSigningKey(dataDir: string): SigningKey {
   const pem = privateKey.export({ format: "pem", type: "pkcs8" });
   const tmp = `${p}.${process.pid}.${Date.now()}.tmp`;
   writeFileSync(tmp, pem, { mode: 0o600, flag: "wx" });
+  restrictFile(tmp); // Windows ACL: the current user only (best effort)
   try {
     chmodSync(tmp, 0o600);
   } catch {

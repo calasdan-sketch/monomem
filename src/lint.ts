@@ -39,6 +39,7 @@ import { isIPv4, isIPv6 } from "node:net";
 import { HIGH_ENTROPY_LABEL, normalizeForScan, scanForSecrets } from "./security.js";
 import { configuredTokenValues, sha256Hex } from "./config.js";
 import { scanOutboundDirective, scanOutboundInjection } from "./lint-outbound.js";
+import { scanEncodedBlob, scanMultilingual, scanStandingInstruction } from "./lint-evasion.js";
 
 export type LintCategory = "secret" | "injection" | "entropy" | "pii" | "directive";
 export type LintAction = "block" | "quarantine" | "warn";
@@ -273,9 +274,16 @@ function unLeet(t: string): string {
   return t.replace(/\S+/g, (w) => (/[a-z]/i.test(w) && /[013457@$]/.test(w) ? w.replace(/[013457@$]/g, (c) => LEET[c]) : w));
 }
 
-/** First injection label found in `text`, or null. */
+/** First injection label found in `text`, or null. Also looks inside base64 / hex blobs that decode to text (one level). */
 export function scanForInjection(text: string | undefined): string | null {
   if (!text) return null;
+  const direct = scanInjectionCore(text);
+  if (direct) return direct;
+  // Encoded blobs are scanned on the normalized text, so a blob split by invisible characters is still found.
+  return scanEncodedBlob(normalizeForScan(text), scanInjectionCore);
+}
+
+function scanInjectionCore(text: string): string | null {
   const t = normalizeForScan(text);
   // Chat-template tokens inside inline code are quoted, not a prompt
   // (`<|im_start|>` in a doc); only the marker rule skips code spans.
@@ -284,12 +292,18 @@ export function scanForInjection(text: string | undefined): string | null {
   // Any TAG char is invisible; only the three subdivision flags are exempt.
   if (/[\u{E0000}-\u{E007F}]/u.test(text.replace(FLAG_TAGS_RE, "")) || VS_RUN_RE.test(text.replace(/\p{Cf}/gu, ""))) return "hidden Unicode tag text";
   const unleeted = unLeet(prose);
+  // "harness tool-syntax" is deliberately last: any real signal in the same text (including the 2026-11-18 additions) wins the label.
+  let harness: string | null = null;
   for (const [label, re] of INJECTION_PATTERNS) {
     if (re === REF_IMAGE_DEF && !REF_IMAGE_USE.test(t)) continue;
-    if (re.test(label === "system-prompt marker" ? prose : t)) return label;
-    if (unleeted !== prose && label !== "system-prompt marker" && re.test(unleeted)) return label;
+    const hit = re.test(label === "system-prompt marker" ? prose : t) || (unleeted !== prose && label !== "system-prompt marker" && re.test(unleeted));
+    if (!hit) continue;
+    if (label === "harness tool-syntax") harness = label;
+    else return label;
   }
-  return scanOutboundInjection(t);
+  const evasion = scanMultilingual(t) ?? scanStandingInstruction(t);
+  if (evasion) return evasion;
+  return harness ?? scanOutboundInjection(t);
 }
 
 // ---- PII (warn by default) ------------------------------------------------

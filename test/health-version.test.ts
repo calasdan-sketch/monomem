@@ -29,12 +29,15 @@ function runDoctor(env: NodeJS.ProcessEnv): Promise<string> {
 }
 
 describe("version handshake (U-10)", () => {
-  test("/health on both servers returns {status, version, schema}", async () => {
+  test("/health on both servers: {status} only without a key (or with a wrong one), {status, version, schema} with a valid key", async () => {
     const store = new Store(":memory:");
     for (const server of [createApiServer(store, "tok-admin-1234567890"), createMcpHttpServer(store, "tok-admin-1234567890")]) {
       await new Promise<void>((r) => server.listen(0, r));
       try {
-        const body = await (await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/health`)).json();
+        const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/health`;
+        assert.deepEqual(await (await fetch(url)).json(), { status: "ok" });
+        assert.deepEqual(await (await fetch(url, { headers: { authorization: "Bearer not-the-key-0123456789" } })).json(), { status: "ok" });
+        const body = await (await fetch(url, { headers: { authorization: "Bearer tok-admin-1234567890" } })).json();
         assert.deepEqual(body, { status: "ok", version: PACKAGE_VERSION, schema: SCHEMA_VERSION });
       } finally {
         await new Promise<void>((r) => server.close(() => r()));
@@ -55,7 +58,7 @@ describe("version handshake (U-10)", () => {
     const env = { ...process.env, HOME: dir, USERPROFILE: dir, MONOMEM_HOME: join(dir, "data"), MONOMEM_PORT: String((fake.address() as AddressInfo).port), MONOMEM_NO_SERVER_PROBE: "" };
     try {
       let out = await runDoctor(env);
-      assert.match(out, /\[warn\].*server .* is older .*restart/i, out);
+      assert.match(out, /\[warn\].*server .* did not report its version.*restart/i, out);
       answer = { status: "ok", version: "1.4.0", schema: SCHEMA_VERSION - 1 };
       out = await runDoctor(env);
       assert.match(out, /\[warn\].*server .*1\.4\.0.* is older .*restart/i, out);
@@ -83,6 +86,9 @@ describe("version handshake (U-10)", () => {
       store.warmBodyIndex();
       const out = await runDoctor(env);
       assert.match(out, /\[ok\].*server body search index: ready \(1 notes indexed, 0 bodies unreadable, 0 searches/, out);
+      // A new server answers an unauthenticated /health with {status} only: doctor still learns the version, because the server
+      // proved it holds this key and store, and then /status carries it.
+      assert.match(out, new RegExp(`\\[ok\\].*server on port \\d+ runs ${PACKAGE_VERSION.replace(/\./g, "\\.")}`), out);
       store.create({ title: "two", body: "more sealed words", tags: [] });
       store.close();
     } finally {

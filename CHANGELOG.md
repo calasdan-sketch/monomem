@@ -6,7 +6,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- The write-time linter now also holds: more look-alike letters (Cyrillic, Greek, Latin small capitals, dotless i) folded to Latin before matching; "ignore previous instructions" and "do not tell the user" in Spanish, French, German and Portuguese; a base64 or hex blob that decodes (one level) to text the patterns hold ("encoded instruction"); and a standing instruction ("from now on / whenever / always ...") that also hides something from the user, sends data to an outside address or runs code fetched from one. "Always run tests before commit" and similar rules are still stored. Still pattern matching and not complete; what is still missed is listed in SECURITY.md and docs/memory-linter.md. New attack set `lint-evasion` (28 samples, all held) for `monomem check --attacks`.
+- The Origin check no longer allows any loopback origin: only this server's own loopback origin (the port the request arrived on) and `MONOMEM_ALLOWED_ORIGINS`. A page on another local port (`http://localhost:3000`) is refused; no Origin header (CLI, curl, MCP clients) is unaffected. Behind a Docker port mapping or proxy on another port, list the origin.
+- `GET /health` answers `{"status":"ok"}` only to callers without a valid key; version and schema need a key. The dashboard sends its key; `monomem doctor` reads the version from `GET /status` after the server proves it holds the same key and store (the key is never sent to an unverified listener).
+- On Windows, a newly created key or token file (access token, encryption key, signing key, `tokens.json`) is locked with `icacls` to the current user (best effort; a failure prints one warning and never stops startup).
+- Dependencies: `npm audit fix` moved `hono` 4.13.13 to 4.13.19 and `@hono/node-server` 2.1.5 to 2.1.9 (0 vulnerabilities in `npm audit --omit=dev`; package.json now asks for `@hono/node-server` ^2.1.9).
+- Not changed: the dashboard Content-Security-Policy still has `script-src 'unsafe-inline'`, because the dashboard uses about 85 inline event-handler attributes that a nonce does not cover (SECURITY.md says why).
+
 ### Added
+
+- Keyword search finds code identifiers across spellings: "get user by id" finds `getUserById`, "user session timeout" finds `userSessionTimeout`, and `getUserById` finds `get_user_by_id`. The query is widened (`src/query-expand.ts`); the index and schema are unchanged. Only the whole identifier is found, not a part of it. Regression cases in `evals/identifier-queries.json`.
+- `monomem reindex` gives the first embedding call a 2-minute timeout (a cold local model) and retries a failed note twice before counting it failed.
 
 - `monomem scope adopt <old-project> --yes` moves the notes of another project into the current repository's project (it shows the count first and refuses without scope or a repository). `monomem scope status` lists the other projects and their note counts.
 - `monomem check --quick` skips the attack replay and the full note scan; a large store gets a line suggesting it. `monomem check` now also shows the per-project scope status.

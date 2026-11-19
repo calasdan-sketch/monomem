@@ -25,6 +25,25 @@ runs are collapsed. So `ig\u200bnore previous instructions`,
 zero-width character are all caught. Scanning is linear-time on any input
 (no regex backtracking on newline or whitespace floods).
 
+### Evasions covered since 2026-11-18 (and what is still missed)
+
+Added after the first expert audit (`src/lint-evasion.ts`; our own attack set `lint-evasion` in `monomem check --attacks`):
+
+- More look-alike letters are folded to Latin before matching: Cyrillic (`? ? ? ? ?`), Greek (`? ?`), dotless i, script g / a,
+  Latin small capitals (`? ? ? ? ...`) and a few Armenian letters.
+- "Ignore previous instructions" and "do not tell the user" in Spanish, French, German and Portuguese (accents are ignored).
+- A base64 (also URL-safe) or hex run of 24+ characters that decodes (one level) to readable text the patterns hold: label
+  "encoded instruction". Images and keys decode to binary and are skipped.
+- A standing instruction ("from now on", "whenever", "every time", "always", "never", "in future sessions") **plus** an
+  instruction to hide something from the user ("do not mention it", "without telling the user", "keep this secret"), to send
+  data (secrets, history, files) to an outside address, or to run code fetched from one: label "standing order". A standing
+  marker alone is not held: "always run tests before commit" and "from now on we use conventional commits" are ordinary rules.
+
+**Still missed, by design or by limit:** any other language; rot13, percent-encoding, double encoding, base64 split across
+lines or wrapped at 76 columns; a base64 blob that is not text; a persistent instruction that never says to hide or send
+anything; paraphrases beyond the word lists; and any attack that needs understanding rather than patterns. This is
+pattern matching and it is not complete.
+
 ## What it detects
 
 **Secrets** (`src/security.ts`, category `secret`, known prefixes only):

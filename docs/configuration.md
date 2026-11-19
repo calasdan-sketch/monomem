@@ -77,7 +77,7 @@ All environment variables are optional. This table lists **every** `MONOMEM_*` v
 | `MONOMEM_EDGE_SYNC_MAX` | `5000` | A namespace with more live notes than this gets its similarity index built in the background in short slices instead of inside the write that needs it (so the server keeps answering; measured: the build froze it for 2.6 s at 50,000 notes and 41 s at 200,000). Notes written meanwhile are linked when it is ready |
 | `MONOMEM_EDGE_AUTO_MAX_NOTES` | `100000` | A namespace bigger than this is not indexed automatically: new notes there get no automatic similarity links until you run `monomem tidy edges`. Search, listing and everything else are unaffected |
 | `MONOMEM_EDGE_SLICE_MS` | `15` | How long each background index slice may run before handing the server back |
-| `MONOMEM_ALLOWED_ORIGINS` | unset | Comma-separated browser Origins allowed to call the API (for a browser on the tunnel domain); loopback is always allowed |
+| `MONOMEM_ALLOWED_ORIGINS` | unset | Comma-separated browser Origins allowed to call the API (for a browser on the tunnel domain). Since 2026-11-18 the only origin allowed without listing is this server's own loopback origin (the port the request arrived on); another local port, or this server behind a Docker port mapping or proxy, must be listed |
 | `MONOMEM_RATE_MAX` | `120` | Max requests per client per window |
 | `MONOMEM_RATE_WINDOW_MS` | `10000` | Rate-limit window in milliseconds |
 | `MONOMEM_TIMEZONE` | system timezone | IANA timezone for interpreting `when` time phrases in search (e.g. `America/Winnipeg`); invalid names fall back to `UTC` |

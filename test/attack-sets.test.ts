@@ -32,7 +32,7 @@ function makeStore(n: number): { dir: string; db: string } {
 
 describe("outside attack sets", () => {
   test("the shipped sets: sizes, unique ids, licence, and only poisonedrag-nq downloads", async () => {
-    const sizes: Record<string, number> = { injecagent: 62, "injecagent-enhanced": 62, agentdojo: 27, minja: 6, poisonedrag: 10 };
+    const sizes: Record<string, number> = { injecagent: 62, "injecagent-enhanced": 62, agentdojo: 27, minja: 6, poisonedrag: 10, "lint-evasion": 28 };
     for (const s of ATTACK_SETS) {
       assert.equal(s.licence, "MIT", s.name);
       if (s.download) {

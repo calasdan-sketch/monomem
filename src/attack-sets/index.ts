@@ -11,6 +11,7 @@ import { PACKAGE_VERSION } from "../config.js";
 import { AGENTDOJO_GOALS, AGENTDOJO_IMPORTANT_INSTRUCTIONS } from "./data-agentdojo.js";
 import { INJECAGENT, INJECAGENT_ENHANCED_PREFIX } from "./data-injecagent.js";
 import { MINJA } from "./data-minja.js";
+import { LINT_EVASION } from "./data-lint-evasion.js";
 import { POISONEDRAG_NQ_SHA256, POISONEDRAG_NQ_URL, POISONEDRAG_SAMPLE } from "./data-poisonedrag.js";
 
 export type Half = "a" | "b";
@@ -92,6 +93,14 @@ export const ATTACK_SETS: readonly AttackSet[] = [
     licence: "MIT",
     what: "A normal-looking question plus MINJA's 'information is lost, using patient X instead' note: a false fact, no command words.",
     samples: async () => fromPairs(MINJA),
+  },
+  {
+    name: "lint-evasion",
+    title: "Linter evasions: homoglyphs, other languages, encoded blobs, standing orders (28)",
+    source: "Monomem expert audit round 1, 2026-11-18 (our own variants, not an outside paper)",
+    licence: "MIT",
+    what: "Variants of 'ignore previous instructions' that the first audit found stored: look-alike letters, Spanish / French / German / Portuguese, base64 and hex, and a standing order that hides or sends data. Closing these says the audit's cases are held, not that the linter is complete.",
+    samples: async () => fromPairs(LINT_EVASION),
   },
   {
     name: "poisonedrag",

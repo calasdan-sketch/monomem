@@ -158,7 +158,7 @@ function waitUpdate(n){
   var out = $("upd_out");
   if(n >= 180){ if(out){ out.innerHTML += "<p class='help'>Still restarting. Reload this page in a moment (when Monomem is set to start with " + osName() + ", it can take up to 5 minutes).</p>"; } return; }
   setTimeout(function(){
-    fetch("/health").then(function(r){ return r.json(); }).then(function(h){
+    api("/health").then(function(h){
       if(h.version && h.version !== STATE.version){ location.reload(); return; }
       return api("/ui/update/log").then(function(l){
         if(out){ out.innerHTML = "<pre class='out'>"+esc(l.output || "")+"</pre>"; }
