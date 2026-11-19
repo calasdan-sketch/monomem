@@ -38,7 +38,7 @@ import { isStale, stalenessConfig, annotateStaleness } from "./staleness.js";
 // At-rest encryption for note bodies. No module cycle: crypto.ts imports
 // only node: builtins, never store.ts.
 import { BodyIndex, type BodyIndexInfo } from "./store/body-index.js";
-import { migrate as migrateSchema } from "./store/migrate.js";
+import { ensureCaptureColumns, migrate as migrateSchema } from "./store/migrate.js";
 import { beginImmediate } from "./store/write-lock.js";
 import { CHANGE_LOG_RETENTION_DAYS, FTS_PREFIX_OPT, SQL_NOW, DEFAULT_NAMESPACE } from "./store/schema-constants.js";
 export { CHANGE_LOG_RETENTION_DAYS, DEFAULT_NAMESPACE } from "./store/schema-constants.js";
@@ -1906,10 +1906,7 @@ export class Store {
       /* read-only file: the flag stays unset until a writer opens the database */
     }
     try {
-      // 2.0.0 (v16, before release): capture inputs are sealed like outputs; databases made by the first v16 builds lack the column.
-      if (this.hasColumn("capture_events", "input_enc") === false && this.hasColumn("capture_events", "seq")) {
-        this.addColumn("capture_events", "input_enc", "TEXT");
-      }
+      ensureCaptureColumns({ hasColumn: (t, c) => this.hasColumn(t, c), addColumn: (t, c, d) => this.addColumn(t, c, d) }); // databases a dev build already took to this schema version lack the newest capture columns
     } catch {
       /* read-only file: no writer can store a capture event either */
     }

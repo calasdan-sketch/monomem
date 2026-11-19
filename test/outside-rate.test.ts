@@ -84,7 +84,7 @@ describe("outsideRate", () => {
       const line = renderOutsideRate(outsideRate(s));
       assert.match(line, /1 of 1 sessions that ran tools/);
       assert.match(line, /too few sessions/i);
-      assert.match(line, /Local file reads and shell fetches are not counted/);
+      assert.match(line, /Local file reads are not counted/);
     }));
 
   test("the digest carries the line", () =>

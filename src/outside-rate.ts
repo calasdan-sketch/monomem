@@ -10,6 +10,8 @@ export interface OutsideRate {
   allSessions: number; // every captured session, including those with no tool events
   hours: number; // clock hours (UTC) with at least one tool event
   outsideHours: number; // of those, hours with an outside-tool result
+  shellFetchHours: number; // active hours (since the upgrade that records it) with a shell command that looked like a network fetch
+  shellOnlyHours: number; // of those, hours with NO outside-tool result: exposure the strong mark misses
   outside: number; // of those, sessions with an outside-tool result
   since: string | null; // when the oldest counted event was captured
   low: number; // 95% interval, percent
@@ -30,18 +32,20 @@ export function wilson(k: number, n: number): { low: number; high: number } {
 export function outsideRate(store: Store, sinceIso?: string): OutsideRate | null {
   const db = store.captureDb();
   const rows = db
-    .prepare("SELECT session_id, tool, event, (output != '' OR output_enc IS NOT NULL) AS has_output, at FROM capture_events WHERE tool != '' AND at >= ?")
-    .all(sinceIso ?? "") as Array<{ session_id: string; tool: string; event: string; has_output: number; at: string }>;
+    .prepare("SELECT session_id, tool, event, (output != '' OR output_enc IS NOT NULL) AS has_output, shell_fetch, at FROM capture_events WHERE tool != '' AND at >= ?")
+    .all(sinceIso ?? "") as Array<{ session_id: string; tool: string; event: string; has_output: number; shell_fetch: number; at: string }>;
   if (!rows.length) return null;
   const all = new Set<string>();
   const every = (db.prepare("SELECT COUNT(DISTINCT session_id) AS n FROM capture_events WHERE at >= ?").get(sinceIso ?? "") as { n: number }).n;
   const hit = new Set<string>();
   const hours = new Set<string>();
   const outHours = new Set<string>();
+  const fetchHours = new Set<string>();
   let first = rows[0].at;
   for (const r of rows) {
     all.add(r.session_id);
     hours.add(r.at.slice(0, 13));
+    if (r.shell_fetch) fetchHours.add(r.at.slice(0, 13));
     if (r.at < first) first = r.at;
     // the live rule also needs a non-empty output: a stored row has it plain or sealed (output_enc)
     if ((r.event === "post-tool" || r.event === "post-tool-failure") && r.has_output && isOutsideTool(r.tool)) {
@@ -50,7 +54,7 @@ export function outsideRate(store: Store, sinceIso?: string): OutsideRate | null
     }
   }
   const { low, high } = wilson(hit.size, all.size);
-  return { sessions: all.size, allSessions: every, hours: hours.size, outsideHours: outHours.size, outside: hit.size, since: first, low, high };
+  return { sessions: all.size, allSessions: every, hours: hours.size, outsideHours: outHours.size, shellFetchHours: fetchHours.size, shellOnlyHours: [...fetchHours].filter((h) => !outHours.has(h)).length, outside: hit.size, since: first, low, high };
 }
 
 export function renderOutsideRate(r: OutsideRate | null): string {
@@ -63,6 +67,9 @@ export function renderOutsideRate(r: OutsideRate | null): string {
     `(${pct.toFixed(0)}%, 95% range ${r.low.toFixed(0)}-${r.high.toFixed(0)}%); that is ${pctAll.toFixed(1)}% of all ${r.allSessions} captured sessions. ` +
     `Per clock hour with any tool activity: ${r.outsideHours} of ${r.hours} hours (${((100 * r.outsideHours) / Math.max(1, r.hours)).toFixed(0)}%) included an outside read, which does not depend on how long a session runs. ` +
     `Sessions that ran tools tend to be long, so the first figure is per working session, not per chat.${thin} ` +
-    "Local file reads and shell fetches are not counted."
+    (r.shellFetchHours > 0
+      ? `A weaker hint, recorded only since this version: ${r.shellFetchHours} hours had a shell command that looked like a network fetch (curl, wget, git clone and the like), ${r.shellOnlyHours} of them with no outside read. It is a hint, not a mark: it changes no note and no guard, and it misses obfuscated or scripted fetches. `
+      : "") +
+    "Local file reads are not counted, and shell fetches only count as that weaker hint."
   );
 }

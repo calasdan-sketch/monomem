@@ -24,6 +24,7 @@ export const OLD_COMMANDS: Readonly<Record<string, string>> = {
   "rebuild-edges": "tidy edges",
   reindex: "tidy reindex",
   decay: "tidy decay",
+  "backfill-marks": "tidy marks",
   scrub: "tidy scrub",
   "purge-deleted": "tidy scrub",
   token: "keys",
@@ -50,6 +51,7 @@ export const TIDY_JOBS: Readonly<Record<string, string>> = {
   reindex: "reindex",
   decay: "decay",
   scrub: "scrub",
+  marks: "backfill-marks",
 };
 const RENAMES: Record<string, string> = { keys: "token", settings: "config", replace: "supersede" };
 
@@ -62,6 +64,7 @@ export const TIDY_HELP = [
   "  reindex                     Add meaning-search vectors to notes that have none (was: reindex)",
   "  decay [--dry-run]           Archive captured observations nobody used for a long time (was: decay)",
   "  scrub [--yes]               Remove the text of long-deleted notes from the database file (was: scrub)",
+  "  marks [--yes]               Stamp ended sessions that read outside content before the mark existed (dry run without --yes)",
 ].join("\n");
 
 /**

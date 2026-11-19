@@ -22,7 +22,7 @@ const COMMANDS = [
   "consolidate", "rebuild-edges", "relevant", "search", "token", "changes", "backup", "runner-status", "watch", "export", "import", "trust",
   "quarantine", "approve-first", "access", "flood", "resume", "decay", "archive", "restore", "delete", "quality", "conflicts", "facts", "fact",
   "encrypt", "meter", "receipts", "why", "never-show", "supersede", "history", "pin", "unpin", "rollback", "bench", "drill", "health", "audit", "verify-receipt",
-  "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet", "confirm", "review", "taint", "config", "service", "stale", "project-rules", "update", "stop", "commit-trail",
+  "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet", "confirm", "review", "taint", "config", "service", "stale", "project-rules", "update", "stop", "commit-trail", "backfill-marks",
   "help", "--help", "-h", "--version", "-v", "version",
   "check", "activity", "tidy", "keys", "settings", "replace", "tasks", "oauth",
 ];
@@ -1552,6 +1552,32 @@ async function decayCmd(): Promise<void> {
   }
 }
 
+// `monomem tidy marks [--yes]`: stamp ended sessions that read outside content before the stamp existed. Dry run unless --yes.
+async function backfillMarksCmd(): Promise<void> {
+  const { DB_PATH } = await import("./config.js");
+  const { Store } = await import("./store.js");
+  const { audit } = await import("./security.js");
+  const { backfillOutsideMarks } = await import("./outside-backfill.js");
+  const { flags } = parseFlags(process.argv.slice(3), { values: [], bools: ["yes", "dry-run"] });
+  const store = new Store(DB_PATH);
+  try {
+    const apply = flags.yes === true && flags["dry-run"] !== true;
+    const { found, applied } = backfillOutsideMarks(store, apply);
+    if (!found.length) {
+      console.log("Nothing to stamp: every ended session that read outside content already carries the mark.");
+      return;
+    }
+    for (const r of found) console.log(`  session ${r.id.slice(0, 8)}: last outside read ${r.at}`);
+    if (!apply) console.log(`${found.length} ended session(s) would be stamped. Open sessions are never touched. Run \`monomem tidy marks --yes\` to apply (a backup first: \`monomem backup\`).`);
+    else {
+      audit({ op: "tidy.marks", label: "cli", kind: "session", detail: `stamped ${applied} ended session(s) with an outside-read mark` });
+      console.log(`Stamped ${applied} ended session(s).`);
+    }
+  } finally {
+    store.close();
+  }
+}
+
 // `monomem delete <id> [--yes]`: the permanent delete, for a person. An agent's state_delete only archives.
 async function deleteCmd(): Promise<void> {
   const { DB_PATH } = await import("./config.js");
@@ -2169,6 +2195,9 @@ async function main(): Promise<void> {
       break;
     case "decay":
       await decayCmd();
+      break;
+    case "backfill-marks":
+      await backfillMarksCmd();
       break;
     case "tasks":
       await (await import("./cli/tasks.js")).tasksCmd(process.argv.slice(3));
