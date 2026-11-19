@@ -97,7 +97,7 @@ function canonicalDir(dir: string, f: PathFlavor): string {
   let p = dir;
   if (f.realpath && p) {
     try {
-      p = realpathSync(p);
+      p = realpathSync.native(p); // native: expands Windows 8.3 short names, so every comparison uses one spelling
     } catch {
       /* not on disk: compare lexically */
     }
