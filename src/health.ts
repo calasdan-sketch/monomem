@@ -70,6 +70,8 @@ export interface HealthReport {
   not_covered: string;
   date: string;
   exit_code: 0 | 1;
+  /** A large store: one sentence about `check --quick` (shown before the grade). */
+  hint?: string;
 }
 
 const LETTERS = ["A", "B", "C", "D", "E", "F"];
@@ -274,7 +276,12 @@ export interface HealthOpts {
    * process-wide settings while it runs and so must not run inside a server that is answering other calls.
    */
   readOnly?: boolean;
+  /** `check --quick`: skip the attack replay and the full note scan (the two slow parts); every other line still runs. */
+  quick?: boolean;
 }
+
+/** From this many notes the check takes seconds, and the output says that `--quick` is faster. */
+export const LARGE_STORE_NOTES = 2000;
 
 export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
   const dbPath = o.dbPath ?? process.env.MONOMEM_DB_PATH ?? DB_PATH;
@@ -329,7 +336,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
             const b = s.confirmBacklog();
             if (b.capped) backlog = b.reason;
           });
-          step("redacted", "Note scan", () => {
+          if (!o.quick) step("redacted", "Note scan", () => {
             // ponytail: loads every live note to count markers; use SQL if a store gets big enough for this to show up in the runtime
             const live = s.exportAll({ live: true }); // gate-ok: operator CLI, counts redaction markers only; no note content is returned or printed
             marked = live.filter((n) => /\[REDACTED:/.test(`${n.title}\n${n.body}`)).length;
@@ -397,7 +404,25 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
   if (sec.length) for (const f of sec) add(`security:${f.id}`, f.label, f.status, `${f.short} (monomem check --setup has the detail)`);
   else add("security", "Security settings", "ok", "no weakening settings found (lint, stdio admin tools, bind address, cloud-sync folder, remote embeddings, browser origins, file permissions, proxy trust, legacy runners)");
 
+  // Per-project scope: which project this folder's notes go to (an unreadable MONOMEM_AUTO_SCOPE is a warning: it is ignored).
+  if (!o.readOnly) try { // (not in the server's own health action: its folder says nothing about yours)
+    const { autoScopeMode, namespaceConfigSource, resolveAutoScope, AUTO_SCOPE_ENV } = await import("./namespace.js");
+    if (namespaceConfigSource()) add("scope", "Per-project scope", "info", "a spaces map decides which project a folder belongs to, so per-repository scope is not used");
+    else {
+      const m = autoScopeMode();
+      if (m.invalid) add("scope", "Per-project scope", "warn", `${AUTO_SCOPE_ENV} is set to "${m.invalid}", which is not understood (use 1 or 0), so it is ignored and the saved setting is used`);
+      else if (!m.on) add("scope", "Per-project scope", "info", "off: every project shares one space (monomem scope on keeps each git repository's notes apart)");
+      else {
+        const here = resolveAutoScope(process.cwd());
+        add("scope", "Per-project scope", "info", here ? `on: this folder is in the project "${here.namespace}"` : "on, but this folder is not in a git repository, so it uses the shared space");
+      }
+    }
+  } catch {
+    /* the scope could not be read: monomem scope status says why */
+  }
+
   if (dbOk && o.readOnly) add("drill", "Attack replay", "info", "not run here: run monomem check --attacks in a terminal");
+  else if (dbOk && o.quick) add("drill", "Attack replay", "info", "skipped (--quick): run monomem check --attacks, or monomem check without --quick, to replay the known attacks");
   else if (dbOk) {
     try {
       const d: DrillReport = await (o.drill ?? runDrill)({ dbPath });
@@ -473,7 +498,8 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
     add("distrust", "Distrusted writers", "info",`${plural(distrust, "distrust rule")}${distrust ? " (their notes are hidden from agents)" : ""}`);
     if (confirmLines.length) add("confirm", "Confirm rules", "info", confirmLines.join("; "));
     if (backlog) add("confirm-backlog", "Unconfirmed backlog", "warn", `${backlog}: review them with monomem review (the grade is capped at B until they are dealt with)`);
-    add("redacted", "Redacted notes", "info", `notes with a [REDACTED:...] marker (secret redaction replaced a credential): ${marked}`);
+    if (o.quick) add("redacted", "Note scan", "info", "skipped (--quick): redaction markers, personal-data suggestions and sensitivity labels were not counted; run monomem check for the full scan");
+    else add("redacted", "Redacted notes", "info", `notes with a [REDACTED:...] marker (secret redaction replaced a credential): ${marked}`);
     add("memory", "Memory size", "ok", meterText);
     add("hygiene", "Memory hygiene", "info", hygiene);
     const failed = backupFailure(dbPath);
@@ -491,7 +517,8 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
 
   for (let i = 0; i < checks.length; i++) if (checks[i].status === "warn" || checks[i].status === "fail") checks[i] = { ...checks[i], ask: askFor(checks[i]) };
   const grade = gradeOf(checks);
-  return { grade, rule: GRADE_RULE, checks, not_covered: NOT_COVERED, date: (o.now ?? new Date()).toISOString().slice(0, 10), exit_code: grade <= "C" ? 0 : 1 };
+  const hint = !o.quick && !o.readOnly && notes >= LARGE_STORE_NOTES ? `With ${notes.toLocaleString("en-US")} notes this check takes a few seconds, mostly the attack replay and the note scan. For a faster one that skips both: monomem check --quick` : undefined;
+  return { grade, rule: GRADE_RULE, checks, not_covered: NOT_COVERED, date: (o.now ?? new Date()).toISOString().slice(0, 10), exit_code: grade <= "C" ? 0 : 1, ...(hint ? { hint } : {}) };
 }
 
 const TAG: Record<Status, string> = { ok: "[ok]  ", warn: "[warn]", fail: "[fail]", info: "[info]" };
@@ -513,6 +540,7 @@ export function renderHealth(r: HealthReport, verbose = true): string {
     "monomem check\n",
     ...rows.flatMap((c) => [`  ${TAG[c.status]} ${c.label}: ${c.text}`, ...(c.ask ? [`         Ask your agent: "${c.ask}"`] : [])]),
     ...quiet,
+    ...(r.hint ? ["", r.hint] : []),
     "",
     `Grade ${r.grade}`,
     gradeReason(r),
@@ -543,7 +571,9 @@ export function renderHealthCard(r: HealthReport): string {
   );
 }
 
-export const HEALTH_USAGE = `monomem check [--verbose] [--json] [--card [file.svg]]   (old name: monomem health)
+export const HEALTH_USAGE = `monomem check [--verbose] [--json] [--quick] [--card [file.svg]]   (old name: monomem health)
+
+  --quick skips the attack replay and the full note scan (the slow parts on a large store); every other line still runs, and the grade is worked out from those.
 
   Without --verbose: only the lines that need a look, then the grade. --verbose: one line per check (setup, hook, each weakening security setting, drill, audit chain, held writes, distrusted writers,
   redacted notes, memory size), then a grade and the reason for it.
@@ -558,15 +588,17 @@ export async function healthMain(argv: string[], out: (s: string) => void = cons
   let json = false;
   let verbose = out !== console.log || !process.stdout.isTTY; // quiet only for a person at a terminal
   let card: string | undefined;
+  let quick = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--help" || a === "-h") return out(HEALTH_USAGE), 0;
     if (a === "--json") json = true;
     else if (a === "--verbose") verbose = true;
+    else if (a === "--quick") quick = true;
     else if (a === "--card") card = argv[i + 1] && !argv[i + 1].startsWith("-") ? argv[++i] : join(opts.dataDir ?? DATA_DIR, "monomem-health.svg");
     else return console.error(`Error: unknown option ${a}. Fix: see monomem check --help`), 2;
   }
-  const r = await runHealth(opts);
+  const r = await runHealth(quick ? { ...opts, quick: true } : opts);
   if (card) {
     if (!isAbsolute(card)) card = join(process.cwd(), card);
     mkdirSync(dirname(card), { recursive: true });

@@ -150,9 +150,9 @@ export function checkSizes(input: {
   tags?: string[];
 }): string | null {
   if (input.title !== undefined && input.title.length > LIMITS.title)
-    return `title exceeds ${LIMITS.title} chars`;
+    return `title exceeds ${LIMITS.title} chars (this one has ${input.title.length}). Use a short title and put the rest in the note text`;
   if (input.body !== undefined && input.body.length > LIMITS.body)
-    return `body exceeds ${LIMITS.body} chars`;
+    return `body exceeds ${LIMITS.body} chars (this one has ${input.body.length}). Split it: save it as several notes of under ${LIMITS.body} characters each (part 1, part 2, ...), or put the parts in separate files in one folder and bring them in with: monomem import --dir <folder>`;
   if (input.tags) {
     if (input.tags.length > LIMITS.tagCount)
       return `too many tags (max ${LIMITS.tagCount})`;

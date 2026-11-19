@@ -8,6 +8,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `monomem scope adopt <old-project> --yes` moves the notes of another project into the current repository's project (it shows the count first and refuses without scope or a repository). `monomem scope status` lists the other projects and their note counts.
+- `monomem check --quick` skips the attack replay and the full note scan; a large store gets a line suggesting it. `monomem check` now also shows the per-project scope status.
+- `--all-projects` for `monomem search`, `relevant` and `ls`.
+- The MCP server answers a `tools/call` with missing or invalid arguments with a plain one-sentence error (code -32602); a wrong-typed `memory_save` argument names the field and the type needed.
+- Characters that cannot be stored (NUL, broken surrogates) are replaced and now reported to the user. A note that is too large says how to split it.
+
+### Changed
+
+- `monomem search`, `relevant` and `ls` now stay inside the current repository's project when per-project scope is on (and no spaces map is set); one plain line names the project. Unchanged with scope off.
+- A git worktree now belongs to its main repository's project; a submodule stays its own project.
+- A bad `MONOMEM_AUTO_SCOPE` value now prints one warning on stderr, in `doctor` and in `check`.
+- `monomem backup` now writes to `<data folder>/backups/monomem-backup-<time>` instead of the system temp folder (an explicit path still works). The database-corruption Fix line now says `monomem backup restore <backup folder>`.
+- `monomem search hello` no longer says "no words to search for" when a note has that word; a too-common word says "too common to search; try another word".
+
 - Per-project scope: `monomem scope [status|on|off]` keeps each git repository's notes in its own project, so one repo's notes stop showing up in an unrelated one. It is on by default for a new `monomem setup` (empty store) and off for stores that already have notes; `MONOMEM_AUTO_SCOPE` overrides. A spaces map, when set, still decides. Nothing is moved or deleted when it is turned on or off. `monomem doctor` shows the mode and the project this folder uses. Limits: an app started outside any git repository is not scoped and can still search every project's notes; this is a convenience against cross-project bleed, not a security boundary (use a spaces map or per-token namespaces for that).
 
 ## [1.6.2] - 2026-11-18

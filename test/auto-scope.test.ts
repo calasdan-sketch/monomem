@@ -174,3 +174,157 @@ describe("monomem scope", () => {
     assert.match(r.stdout, new RegExp(`project "alpha-[0-9a-f]{6}"`));
   });
 });
+
+describe("git worktrees and submodules", () => {
+  const noHome = (root: string): string => join(root, "nohome");
+  test("a worktree belongs to the repository it was made from (absolute and relative gitdir)", () => {
+    const root = tmp();
+    const main = repo(root, "main");
+    mkdirSync(join(main, ".git", "worktrees", "wt1"), { recursive: true });
+    const wt = join(root, "wt");
+    mkdirSync(join(wt, "src"), { recursive: true });
+    writeFileSync(join(wt, ".git"), `gitdir: ${join(main, ".git", "worktrees", "wt1")}\n`);
+    assert.equal(findRepoRoot(join(wt, "src"), noHome(root)), realpathSync.native(main));
+    assert.equal(autoScopeName(findRepoRoot(wt, noHome(root))!), autoScopeName(main));
+    const wt2 = join(root, "wt2");
+    mkdirSync(wt2);
+    writeFileSync(join(wt2, ".git"), "gitdir: ../main/.git/worktrees/wt1\n");
+    assert.equal(findRepoRoot(wt2, noHome(root)), realpathSync.native(main));
+  });
+  test("a submodule, a worktree whose main repository is gone, and a bare repository stay their own project", () => {
+    const root = tmp();
+    const main = repo(root, "main");
+    mkdirSync(join(main, ".git", "modules", "sub"), { recursive: true });
+    const sub = join(main, "sub");
+    mkdirSync(sub);
+    writeFileSync(join(sub, ".git"), "gitdir: ../.git/modules/sub\n");
+    assert.equal(findRepoRoot(sub, noHome(root)), realpathSync.native(sub));
+    const orphan = join(root, "orphan");
+    mkdirSync(orphan);
+    writeFileSync(join(orphan, ".git"), `gitdir: ${join(root, "gone", ".git", "worktrees", "x")}\n`);
+    assert.equal(findRepoRoot(orphan, noHome(root)), realpathSync.native(orphan));
+    mkdirSync(join(root, "bare.git", "worktrees", "w"), { recursive: true });
+    const wtBare = join(root, "wtbare");
+    mkdirSync(wtBare);
+    writeFileSync(join(wtBare, ".git"), `gitdir: ${join(root, "bare.git", "worktrees", "w")}\n`);
+    assert.equal(findRepoRoot(wtBare, noHome(root)), realpathSync.native(wtBare));
+  });
+});
+
+describe("reads follow per-project scope", () => {
+  const on = { MONOMEM_AUTO_SCOPE: "1" };
+  function seeded(): { dir: string; a: string; b: string } {
+    const root = tmp();
+    const a = repo(root, "alpha");
+    const b = repo(root, "beta");
+    const dir = tmp();
+    assert.equal(cli(["add", "alpha tea note"], dir, on, a).status, 0);
+    assert.equal(cli(["add", "beta tea note"], dir, on, b).status, 0);
+    return { dir, a, b };
+  }
+  test("search, relevant and ls look in this repository's project and say so; --all-projects sees everything", () => {
+    const { dir, a } = seeded();
+    for (const verb of ["search", "relevant"]) {
+      const mine = cli([verb, "tea"], dir, on, a).stdout;
+      assert.match(mine, /Searching only this project \("alpha-[0-9a-f]{6}"\)/, verb);
+      assert.match(mine, /alpha tea note/);
+      assert.doesNotMatch(mine, /beta tea note/);
+      const all = cli([verb, "tea", "--all-projects"], dir, on, a).stdout;
+      assert.doesNotMatch(all, /Searching only this project/);
+      assert.match(all, /alpha tea note/);
+      assert.match(all, /beta tea note/);
+    }
+    const ls = cli(["ls"], dir, on, a).stdout;
+    assert.match(ls, /Searching only this project/);
+    assert.match(ls, /alpha tea note/);
+    assert.doesNotMatch(ls, /beta tea note/);
+    assert.match(cli(["ls", "--all-projects"], dir, on, a).stdout, /beta tea note/);
+    assert.doesNotMatch(cli(["search", "--all-projects"], dir, on, a).stdout, /Searching only/);
+  });
+  test("a miss in the project points at --all-projects; an explicit --ns wins; --json keeps stdout clean", () => {
+    const { dir, a } = seeded();
+    assert.match(cli(["search", "zzzunknown"], dir, on, a).stdout, /Nothing in this project\. To look in every project: add --all-projects/);
+    const other = cli(["ls", "--ns", "default"], dir, on, a).stdout;
+    assert.doesNotMatch(other, /Searching only/);
+    const j = cli(["search", "tea", "--json"], dir, on, a);
+    assert.doesNotThrow(() => JSON.parse(j.stdout));
+    assert.match(j.stderr, /Searching only this project/);
+  });
+  test("scope off, or a folder outside any repository: nothing changes", () => {
+    const { dir, a } = seeded();
+    const off = cli(["search", "tea"], dir, { MONOMEM_AUTO_SCOPE: "0" }, a).stdout;
+    assert.doesNotMatch(off, /Searching only/);
+    assert.match(off, /alpha tea note/);
+    assert.match(off, /beta tea note/);
+    const plain = tmp();
+    assert.doesNotMatch(cli(["ls"], dir, on, plain).stdout, /Searching only/);
+  });
+});
+
+describe("monomem scope adopt", () => {
+  const on = { MONOMEM_AUTO_SCOPE: "1" };
+  function orphaned(): { dir: string; a: string; mine: string } {
+    const root = tmp();
+    const a = repo(root, "alpha");
+    const dir = tmp();
+    assert.equal(cli(["add", "orphan one", "--ns", "oldproj"], dir, on, a).status, 0);
+    assert.equal(cli(["add", "orphan two", "--ns", "oldproj"], dir, on, a).status, 0);
+    return { dir, a, mine: autoScopeName(realpathSync.native(a)) };
+  }
+  test("status lists the other projects with their counts", () => {
+    const { dir, a } = orphaned();
+    assert.match(cli(["scope", "status"], dir, on, a).stdout, /Other projects: oldproj \(2 notes\)/);
+  });
+  test("shows the count and needs --yes, then moves the notes and keeps their history", () => {
+    const { dir, a, mine } = orphaned();
+    const asked = cli(["scope", "adopt", "oldproj"], dir, on, a);
+    assert.equal(asked.status, 1);
+    assert.match(asked.stdout, /2 notes saved under "oldproj" would be moved into this folder's project/);
+    assert.match(cli(["show", "1"], dir, on, a).stdout, /\[oldproj\]/);
+    const done = cli(["scope", "adopt", "oldproj", "--yes"], dir, on, a);
+    assert.equal(done.status, 0, done.stdout + done.stderr);
+    assert.match(done.stdout, /Moved 2 notes from "oldproj"/);
+    const shown = JSON.parse(cli(["show", "1", "--json"], dir, on, a).stdout);
+    assert.equal(shown.namespace, mine);
+    assert.equal(shown.rev, 2);
+    assert.equal(shown.body, "orphan one");
+    assert.match(cli(["ls"], dir, on, a).stdout, /orphan two/);
+    assert.doesNotMatch(cli(["scope", "status"], dir, on, a).stdout, /oldproj/);
+  });
+  test("refuses with no repository, scope off, no name, a spaces map, an unknown name or the current project", () => {
+    const { dir, a, mine } = orphaned();
+    const plain = tmp();
+    const noRepo = cli(["scope", "adopt", "oldproj", "--yes"], dir, on, plain);
+    assert.equal(noRepo.status, 1);
+    assert.match(noRepo.stdout, /not inside a git repository/);
+    const off = cli(["scope", "adopt", "oldproj", "--yes"], dir, { MONOMEM_AUTO_SCOPE: "0" }, a);
+    assert.equal(off.status, 1);
+    assert.match(off.stdout, /scope is OFF/);
+    assert.equal(cli(["scope", "adopt"], dir, on, a).status, 2);
+    assert.equal(cli(["scope", "adopt", "oldproj", "--yes"], dir, { ...on, MONOMEM_SPACES: JSON.stringify({ spaces: {}, default_namespace: "default" }) }, a).status, 1);
+    const unknown = cli(["scope", "adopt", "nosuch", "--yes"], dir, on, a);
+    assert.equal(unknown.status, 1);
+    assert.match(unknown.stdout, /no notes under the project name "nosuch"/);
+    assert.match(cli(["scope", "adopt", mine, "--yes"], dir, on, a).stdout, /already this folder's project/);
+    assert.match(cli(["show", "1"], dir, on, a).stdout, /\[oldproj\]/); // nothing moved by any of the refusals
+  });
+});
+
+describe("a MONOMEM_AUTO_SCOPE value that is not understood", () => {
+  test("warns once on stderr, is ignored, and status says so; valid values are quiet", () => {
+    const dir = tmp();
+    const bad = cli(["scope", "status"], dir, { MONOMEM_AUTO_SCOPE: "ture" });
+    assert.equal((bad.stderr.match(/not understood/g) ?? []).length, 1, bad.stderr);
+    assert.match(bad.stdout, /Per-project scope: OFF/);
+    assert.match(bad.stdout, /"ture", which is not understood/);
+    for (const v of ["1", "0", "on", "off", ""]) assert.doesNotMatch(cli(["scope", "status"], dir, { MONOMEM_AUTO_SCOPE: v }).stderr, /not understood/, v);
+    withEnv("ture", () => assert.deepEqual(autoScopeMode(), { on: false, source: "off", invalid: "ture" }));
+  });
+  test("monomem check shows the scope line, and warns about the bad value", () => {
+    const dir = tmp();
+    const ok = cli(["check", "--verbose", "--quick"], dir, { MONOMEM_AUTO_SCOPE: "1" });
+    assert.match(ok.stdout, /Per-project scope: on, but this folder is not in a git repository|Per-project scope: on: this folder is in the project/);
+    const bad = cli(["check", "--verbose", "--quick"], dir, { MONOMEM_AUTO_SCOPE: "ture" });
+    assert.match(bad.stdout, /\[warn\] Per-project scope: MONOMEM_AUTO_SCOPE is set to "ture"/);
+  });
+});

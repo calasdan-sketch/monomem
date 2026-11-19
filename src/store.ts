@@ -16,9 +16,8 @@ import { mkdirSync, statSync, statfsSync, readdirSync, renameSync, linkSync, exi
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { dirname, basename, join, resolve } from "node:path";
 import { privateDir } from "./private-dir.js";
-import { checkSizes, checkNames, audit, auditHead, auditPath, beginKeyRotation, withAuditPath, ADMIN_SCOPE_NEEDED } from "./security.js";
+import { checkSizes, checkNames, audit, auditHead, auditPath, beginKeyRotation, withAuditPath, ADMIN_SCOPE_NEEDED, SECRET_ASSIGN_LABEL } from "./security.js";
 import { chmodQuiet } from "./config.js";
-import { SECRET_ASSIGN_LABEL } from "./security.js";
 import { lintContent, lintPolicy, describeFindings, type LintFinding, type LintAction, type LintCategory } from "./lint.js";
 // The zero-dependency text similarity for the note similarity graph (shared with consolidate.ts).
 import {
@@ -2497,7 +2496,7 @@ export class Store {
     if (!input.title || !input.title.trim()) {
       throw new ValidationError("title is required");
     }
-    validateSizes(input);
+    validateSizes((input = receiptOps.cleanTexts(this, input)));
     // Imports too (importNotes reports the row as rejected and keeps going): a backup or a hand-made file must not bring
     // in a namespace or tag no live write could create.
     validateNames(input);
@@ -3286,7 +3285,7 @@ export class Store {
     } & LintOpts = {}
   ): NoteRecord | null {
     this.floodGate(opts.lint ?? "full", false); // a paused writer is refused even for a no-op; the write is counted below
-    validateNames(patch);
+    validateNames((patch = receiptOps.cleanTexts(this, patch)));
     validateForgetAfter(patch.forget_after);
     validateConfidence(patch.confidence);
     const existing = this.read(id);
@@ -7742,6 +7741,7 @@ export class Store {
   /** @internal R2-06: the newest write decision this store audited, until a surface takes it (store/write-receipt.ts). */
   lastWriteReceipt: receiptOps.PendingReceipt | undefined;
 
+  /** The notice for what the last write replaced (NUL, broken characters), or null; cleared as read. */ takeCleanedNotice(): string | null { return receiptOps.takeCleanedNotice(this); }
   /** R2-06: the receipt `{seq, chain_hash, decision}` of the write that just ran, cleared as it is read. */
   takeWriteReceipt(): receiptOps.WriteReceipt | undefined {
     return receiptOps.takeWriteReceipt(this);

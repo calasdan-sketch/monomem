@@ -96,3 +96,43 @@ export function refusedWriteReceipt(s: Store, e: unknown, id?: number): WriteRec
   s.audit({ op: "write-refused", ...(id !== undefined ? { id } : {}), detail: e.constructor.name }, id !== undefined ? { note_id: id } : {});
   return takeWriteReceipt(s);
 }
+
+// Text the store had to change on the way in (NUL characters, broken surrogate halves): the sentence is kept per store until a
+// surface (CLI, MCP) takes it, the same one-slot way as the write receipt above.
+const NUL_RE = /\u0000/g;
+const LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+const cleanedSentence = new WeakMap<object, string | null>();
+
+/** Text with every NUL and every half of a surrogate pair (a broken emoji) replaced by U+FFFD, and how many of each. */
+export function cleanNoteText(s: string): { text: string; nul: number; broken: number } {
+  if (!/[\u0000\uD800-\uDFFF]/.test(s)) return { text: s, nul: 0, broken: 0 };
+  let nul = 0;
+  let broken = 0;
+  const text = s.replace(NUL_RE, () => (nul++, "\uFFFD")).replace(LONE_SURROGATE_RE, () => (broken++, "\uFFFD"));
+  return { text, nul, broken };
+}
+
+/** One plain sentence for what cleanNoteText changed, or null when nothing was (no counts: a derived title would double them). */
+export function cleanedNotice(nul: number, broken: number): string | null {
+  if (!nul && !broken) return null;
+  const parts = [...(nul ? ["NUL characters (invisible zero bytes)"] : []), ...(broken ? ["broken characters (half of an emoji or similar)"] : [])];
+  return `The text had ${parts.join(" and ")}. They were replaced with the replacement mark (\uFFFD) because such characters cannot be stored as written.`;
+}
+
+/** `title` and `body` with NUL and broken characters replaced; remembers the notice for takeCleanedNotice. */
+export function cleanTexts<T extends { title?: string; body?: string }>(s: Store, input: T): T {
+  const t = input.title === undefined ? null : cleanNoteText(input.title);
+  const b = input.body === undefined ? null : cleanNoteText(input.body);
+  const nul = (t?.nul ?? 0) + (b?.nul ?? 0);
+  const broken = (t?.broken ?? 0) + (b?.broken ?? 0);
+  if (!nul && !broken) return input;
+  cleanedSentence.set(s, cleanedNotice(nul, broken));
+  return { ...input, ...(t ? { title: t.text } : {}), ...(b ? { body: b.text } : {}) };
+}
+
+/** The sentence for the text change the write that just ran made, or null; cleared as it is read. */
+export function takeCleanedNotice(s: Store): string | null {
+  const v = cleanedSentence.get(s) ?? null;
+  cleanedSentence.delete(s);
+  return v;
+}

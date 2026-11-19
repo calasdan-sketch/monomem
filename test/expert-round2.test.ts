@@ -166,7 +166,7 @@ describe("4. a damaged database is reported", () => {
     }
     const r = cli(home, ["search", "deploy"]);
     assert.notEqual(r.status, 0, r.stdout);
-    assert.match(r.stderr, /monomem restore/);
+    assert.match(r.stderr, /monomem backup restore <backup folder>/);
     const d = cli(home, ["doctor"]);
     assert.doesNotMatch(d.stdout, /database OK/);
     assert.match(d.stdout, /FAIL/);

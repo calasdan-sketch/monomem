@@ -344,6 +344,7 @@ async function relevant(): Promise<void> {
   const { DB_PATH } = await import("./config.js");
   const { Store } = await import("./store.js");
   const { runRelevantSearch } = await import("./search-service.js");
+  const { tooCommonWords } = await import("./keywords.js");
 
   const args = process.argv.slice(3);
   let limit: number | undefined;
@@ -353,6 +354,7 @@ async function relevant(): Promise<void> {
   let includeDistrusted = false;
   let asOfRaw: string | undefined;
   let asJson = false;
+  let allProjects = false;
   let modeRaw: string | undefined;
   const parts: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -363,6 +365,7 @@ async function relevant(): Promise<void> {
           'monomem search|relevant "words" [options]     (search with no words lists your newest notes)',
           "  --limit n               how many to show (default 5; 20 when listing)",
           "  --namespace ns          only this namespace (--ns for short)",
+          "  --all-projects          with per-project scope on (monomem scope), search every project, not just this repository's",
           "  --as-of <ISO|7d|2h>     the notes as they were then",
           "  --written-by w | --not-written-by w   keep or drop one writer's notes",
           "  --include-distrusted    also show notes from writers you distrust (marked)",
@@ -375,6 +378,7 @@ async function relevant(): Promise<void> {
     }
     const valueFlag = /^--(mode|as-of|limit|namespace|ns|written-by|not-written-by)(=.*)?$/.exec(a);
     if (a === "--json") asJson = true;
+    else if (a === "--all-projects") allProjects = true;
     else if (a === "--include-distrusted") includeDistrusted = true;
     else if (valueFlag) {
       let v: string;
@@ -417,9 +421,15 @@ async function relevant(): Promise<void> {
     return;
   }
   if (!message.trim() && !asOfRaw) {
-    console.error('Usage: monomem relevant "some natural language message" [--limit 5] [--namespace ns] [--as-of <ISO|7d|2h>] [--json]');
+    console.error('Usage: monomem relevant "some natural language message" [--limit 5] [--namespace ns | --all-projects] [--as-of <ISO|7d|2h>] [--json]');
     process.exit(1);
   }
+  // Per-project scope on, inside a repository, no --namespace: look in that repository's project (one plain line says so).
+  const scopedRead = await (await import("./everyday-cli.js")).scopedReadNamespace(namespace, allProjects, asJson);
+  namespace = scopedRead.namespace;
+  const scopeMiss = (): void => {
+    if (scopedRead.scoped) console.log("Nothing in this project. To look in every project: add --all-projects");
+  };
   if (asOfRaw) {
     if (writtenBy || notWrittenBy) {
       console.error("--as-of cannot be combined with --written-by / --not-written-by (who wrote a note at that time is not reconstructed).");
@@ -502,6 +512,7 @@ async function relevant(): Promise<void> {
       if (!hits.length) {
         console.log("No matching notes found.");
         sealedLine();
+        scopeMiss();
       }
       else console.log(`Matching notes (${hits.length}):`);
       for (const n of hits) {
@@ -514,7 +525,18 @@ async function relevant(): Promise<void> {
     }
     if (notice && !asJson) console.log(`Note: ${notice}`);
     const relOpts = { namespace, limit: want + 1, ...(writtenBy ? { writtenBy } : {}), ...(notWrittenBy ? { notWrittenBy } : {}) };
-    const { keywords, results: fetched } = await runRelevantSearch(store, message, { ...relOpts, ...(includeDistrusted ? { includeDistrusted: true } : {}) });
+    const relevantRun = await runRelevantSearch(store, message, { ...relOpts, ...(includeDistrusted ? { includeDistrusted: true } : {}) });
+    const { keywords } = relevantRun;
+    let fetched = relevantRun.results;
+    // Every word was filtered out as too common ("hello"): search for the words exactly as typed instead of giving up.
+    let literal = false;
+    if (keywords.length === 0 && message.trim()) {
+      const lit = await runSearch(store, message, { ...relOpts, ...(includeDistrusted ? { includeDistrusted: true } : {}) });
+      if (lit.length) {
+        fetched = lit;
+        literal = true;
+      }
+    }
     const results = fetched.slice(0, want);
     if (asJson) {
       return void console.log(
@@ -531,10 +553,17 @@ async function relevant(): Promise<void> {
     }
     // The words searched for show only when nothing matched (they explain the miss); --json always has them.
     if (results.length === 0) {
-      console.log(`No relevant notes found. ${keywords.length ? `Searched for: ${keywords.join(", ")}.` : "That text has no words to search for."}`);
+      const common = keywords.length === 0 ? tooCommonWords(message) : [];
+      const why = keywords.length
+        ? `Searched for: ${keywords.join(", ")}.`
+        : common.length
+          ? `${common.map((w) => `"${w}"`).join(", ")} ${common.length === 1 ? "is" : "are"} too common to search; try another word.`
+          : "That text has no words to search for.";
+      console.log(`No relevant notes found. ${why}`);
       sealedLine();
+      scopeMiss();
     }
-    else console.log(`Relevant notes (${results.length}):`);
+    else console.log(`${literal ? "Matching" : "Relevant"} notes (${results.length}):`);
     for (const n of results) {
       const ann = annotateStaleness(n);
       const stale = ann.stale ? ` [stale, ${ann.ageDays}d]` : "";
@@ -679,7 +708,7 @@ async function backupCmd(): Promise<void> {
   const { DB_PATH } = await import("./config.js");
   const { Store } = await import("./store.js");
   const { backupStore } = await import("./backup.js");
-  const { flags } = parseFlags(process.argv.slice(3), { values: ["out"], bools: ["include-approval-key", "include-attest-key", "include-key", "prune-premigration"] });
+  const { flags, rest: backupRest } = parseFlags(process.argv.slice(3), { values: ["out"], bools: ["include-approval-key", "include-attest-key", "include-key", "prune-premigration"] });
   if (flags["prune-premigration"] === true) {
     // Remove the copies the upgrade made (`<db>.pre-v*-backup`): they hold the notes as they were before
     // the upgrade, including any deleted or forgotten since, and are outside encryption and retention.
@@ -696,12 +725,12 @@ async function backupCmd(): Promise<void> {
     return;
   }
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..*$/, "").replace("T", "-");
-  // Default in the home folder, never the current one: run inside a repo, a backup (notes + key) there could get committed.
-  // With MONOMEM_HOME set (a test or a second store) it goes next to that data folder instead, not into the real home.
-  const { homedir } = await import("node:os");
-  const { join, dirname } = await import("node:path");
-  const { DATA_DIR, DATA_DIR_SOURCE } = await import("./config.js");
-  const out = str(flags.out) ?? join(DATA_DIR_SOURCE === "env" ? dirname(DATA_DIR) : homedir(), `monomem-backup-${stamp}`);
+  // Default: inside the data folder's own backups folder (where the daily automatic backups go), never the current folder
+  // (run inside a repo, a backup with the notes could get committed) and never the system temp folder or the home folder
+  // (the temp folder is cleaned out by the system, and a backup that vanishes is no backup). An explicit --out wins.
+  const { join } = await import("node:path");
+  const { backupsDir } = await import("./backup-schedule.js");
+  const out = str(flags.out) ?? backupRest[0] ?? join(backupsDir(DB_PATH), `monomem-backup-${stamp}`);
   const store = new Store(DB_PATH);
   try {
     const r = backupStore(store, DB_PATH, out, {

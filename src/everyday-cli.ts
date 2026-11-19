@@ -34,6 +34,24 @@ export function parseArgs(args: string[], values: string[], bools: string[]): { 
   return { flags, words };
 }
 
+/**
+ * The project a read command (search, relevant, ls) looks in. --namespace / --ns wins; --all-projects looks everywhere; otherwise,
+ * with per-project scope on and no spaces map, inside a git repository, it is that repository's project and ONE plain line says so
+ * (on stderr with --json, so the JSON stays clean). Scope off, a spaces map, or a folder outside any repository: unchanged (undefined).
+ */
+export async function scopedReadNamespace(explicit: string | undefined, allProjects: boolean, json: boolean): Promise<{ namespace: string | undefined; scoped: boolean }> {
+  if (explicit !== undefined) return { namespace: explicit, scoped: false };
+  if (allProjects) return { namespace: undefined, scoped: false };
+  const m = await import("./namespace.js");
+  if (m.namespaceConfigSource()) return { namespace: undefined, scoped: false };
+  const auto = m.resolveAutoScope(process.cwd());
+  if (!auto) return { namespace: undefined, scoped: false };
+  const line = `Searching only this project ("${auto.namespace}"). To look in every project: add --all-projects`;
+  if (json) console.error(line);
+  else console.log(line);
+  return { namespace: auto.namespace, scoped: true };
+}
+
 function readStdin(): string {
   try {
     return readFileSync(0, "utf8");
@@ -64,8 +82,11 @@ export async function addCmd(args: string[]): Promise<void> {
   const { Store, ValidationError, QuarantinedError } = await import("./store.js");
   const store = new Store(DB_PATH);
   try {
+    store.takeCleanedNotice();
     const n = store.create({ title, body: text, ...(namespace ? { namespace } : {}), ...(tags ? { tags } : {}), ...(sens ? { sensitivity: sens } : {}), ...(flags.outside ? { outside: true } : {}), ...(derived ? { derived_from: derived } : {}), source: "cli" });
     console.log(`Saved #${n.id} "${n.title}" in ${n.namespace}${n.sensitivity === "private" ? " (private)" : ""}.`);
+    const cleaned = store.takeCleanedNotice();
+    if (cleaned) console.log(`Note: ${cleaned}`);
     if (n.unconfirmed) console.log(`Marked as from outside content: it stays out of session start until you confirm it: monomem confirm ${n.id}`);
     const sim = store.similarNote(n.id);
     if (sim) console.log(`Note: this looks similar to #${sim.id} "${sim.title}". If it is the same thing, update that one instead: monomem edit ${sim.id}`);
@@ -111,11 +132,12 @@ export async function showCmd(args: string[]): Promise<void> {
 }
 
 export async function lsCmd(args: string[]): Promise<void> {
-  const { flags, bad } = parseArgs(args, ["ns", "namespace", "limit"], ["json", "archived", "include-distrusted"]);
-  if (bad) fail(`${bad}\nUsage: monomem ls [--ns x] [--limit 20] [--archived] [--include-distrusted] [--json]`);
+  const { flags, bad } = parseArgs(args, ["ns", "namespace", "limit"], ["json", "archived", "include-distrusted", "all-projects"]);
+  if (bad) fail(`${bad}\nUsage: monomem ls [--ns x | --all-projects] [--limit 20] [--archived] [--include-distrusted] [--json]`);
   const limit = flags.limit === undefined ? 20 : Number(flags.limit);
   if (!Number.isInteger(limit) || limit < 1) fail("--limit must be a whole number, 1 or more.");
-  const ns = (flags.ns ?? flags.namespace) as string | undefined;
+  const explicitNs = (flags.ns ?? flags.namespace) as string | undefined;
+  const { namespace: ns, scoped } = await scopedReadNamespace(explicitNs, flags["all-projects"] === true, flags.json === true);
   const { DB_PATH } = await import("./config.js");
   const { Store } = await import("./store.js");
   const { printable } = await import("./security.js");
@@ -129,7 +151,7 @@ export async function lsCmd(args: string[]): Promise<void> {
     const query = { ...(ns ? { namespace: ns } : {}), ...(archived ? { archivedOnly: true, includeSuperseded: true } : {}) };
     const page = store.list({ ...query, limit, ...(withDistrusted ? { includeDistrusted: true } : {}) });
     const notes = page.notes;
-    const flagsOf = `${archived ? " --archived" : ""}${ns ? ` --ns ${ns}` : ""}`;
+    const flagsOf = `${archived ? " --archived" : ""}${explicitNs ? ` --ns ${explicitNs}` : ""}`;
     const moreLine = (): void => {
       if (page.total > notes.length) console.log(`Showing ${notes.length} of ${page.total} (newest first). More: monomem ls${flagsOf}${withDistrusted ? " --include-distrusted" : ""} --limit ${Math.min(500, Math.max(limit * 2, 50))}`);
     };
@@ -152,6 +174,7 @@ export async function lsCmd(args: string[]): Promise<void> {
       return hiddenLine();
     }
     if (!notes.length && hidden) return hiddenLine();
+    if (!notes.length && scoped) return void console.log("No notes in this project yet. Add one with: monomem add \"something worth remembering\"   (notes in other projects: monomem ls --all-projects)");
     if (!notes.length && ns) {
       const used = store.rebuildPlan().map((r) => printable(r.namespace, 100));
       return void console.log(`No notes in namespace "${printable(ns, 100)}". ${used.length ? `Namespaces in use: ${used.slice(0, 30).join(", ")}${used.length > 30 ? ", ..." : ""}` : "There are no notes in any namespace yet."}`);
@@ -218,8 +241,11 @@ export async function editCmd(args: string[]): Promise<void> {
     }
     if (title === n.title && body === n.body.replace(/\s+$/, "")) return void console.log("No changes.");
     try {
+      store.takeCleanedNotice();
       const next = store.update(id, { title, body }, { ifRev: n.rev }); // if_rev: refuses if someone else changed it meanwhile
       console.log(`Saved #${id} (version ${next?.rev}).`);
+      const cleaned = store.takeCleanedNotice();
+      if (cleaned) console.log(`Note: ${cleaned}`);
     } catch (e) {
       if (e instanceof QuarantinedError) {
         return stop(`Held, not saved: ${e.message}. Review it with: monomem review held`, 3);

@@ -379,22 +379,58 @@ export function resolveStartupNamespace(cwd: string, opts: { auto?: boolean } = 
 export const AUTO_SCOPE_ENV = "MONOMEM_AUTO_SCOPE";
 export const AUTO_SCOPE_FILE = join(DATA_DIR, "auto-scope");
 
-export function autoScopeMode(): { on: boolean; source: "env" | "file" | "off" } {
-  const env = (process.env[AUTO_SCOPE_ENV] ?? "").trim().toLowerCase();
+let warnedBadScopeEnv = false;
+export function autoScopeMode(): { on: boolean; source: "env" | "file" | "off"; invalid?: string } {
+  const rawEnv = (process.env[AUTO_SCOPE_ENV] ?? "").trim();
+  const env = rawEnv.toLowerCase();
   if (["1", "on", "true", "yes"].includes(env)) return { on: true, source: "env" };
   if (["0", "off", "false", "no"].includes(env)) return { on: false, source: "env" };
+  // A value that is neither: say so once (a typo such as "ture" must not look like a deliberate "off"), then use the saved setting.
+  const invalid = rawEnv ? rawEnv.slice(0, 40) : undefined;
+  if (invalid && !warnedBadScopeEnv) {
+    warnedBadScopeEnv = true;
+    process.stderr.write(`[monomem] ${AUTO_SCOPE_ENV}="${invalid}" is not understood (use 1 for on or 0 for off), so it is ignored. The saved setting (monomem scope status) is used instead.\n`);
+  }
   try {
-    if (existsSync(AUTO_SCOPE_FILE) && readFileSync(AUTO_SCOPE_FILE, "utf8").trim().toLowerCase() === "on") return { on: true, source: "file" };
+    if (existsSync(AUTO_SCOPE_FILE) && readFileSync(AUTO_SCOPE_FILE, "utf8").trim().toLowerCase() === "on") return { on: true, source: "file", ...(invalid ? { invalid } : {}) };
   } catch {
     /* unreadable: stays off (the shared space, as before) */
   }
-  return { on: false, source: "off" };
+  return { on: false, source: "off", ...(invalid ? { invalid } : {}) };
 }
 
 /**
- * The repository a folder belongs to: the nearest parent (or the folder itself) holding `.git` (a file counts, so a
- * worktree is its own project). null for the home folder, a drive root, or a folder in no repository: those stay in the
- * shared space, so an app launched outside any project is not given a namespace from wherever it happened to start.
+ * A folder whose `.git` is a FILE ("gitdir: <path>"): when that path is `<main>/.git/worktrees/<name>` the folder is a git
+ * worktree and the answer is `<main>`, the repository it was made from (so both share notes). A submodule's gitdir is under
+ * `.git/modules`, a bare repository has no working folder: those return null and the folder stays its own project.
+ */
+function worktreeMainRoot(dir: string, f: PathFlavor): string | null {
+  let text: string;
+  try {
+    text = readFileSync(join(dir, ".git"), "utf8");
+  } catch {
+    return null; // `.git` is a folder (an ordinary repository) or unreadable
+  }
+  const m = /^gitdir:\s*(.+?)\s*$/m.exec(text);
+  if (!m) return null;
+  const gitdir = f.path.resolve(dir, m[1]);
+  const worktrees = f.path.dirname(gitdir);
+  const commonGit = f.path.dirname(worktrees);
+  if (f.path.basename(worktrees) !== "worktrees" || f.path.basename(commonGit) !== ".git") return null;
+  const main = f.path.dirname(commonGit);
+  if (!existsSync(join(commonGit, "worktrees"))) return null;
+  try {
+    return lexicalDir(realpathSync.native(main), f);
+  } catch {
+    return null; // the main repository is gone (a removed or moved folder): keep the worktree as its own project
+  }
+}
+
+/**
+ * The repository a folder belongs to: the nearest parent (or the folder itself) holding `.git`. A git worktree belongs to
+ * the repository it was made from (its notes are that repository's notes); a submodule is its own project. null for the
+ * home folder, a drive root, or a folder in no repository: those stay in the shared space, so an app launched outside any
+ * project is not given a namespace from wherever it happened to start.
  */
 export function findRepoRoot(cwd: string, home: string = homedir()): string | null {
   const f = pathFlavor();
@@ -409,7 +445,11 @@ export function findRepoRoot(cwd: string, home: string = homedir()): string | nu
   for (let i = 0; i < 64; i++) {
     const canon = canonicalDir(dir, f);
     if (canon === homeDir || dir === f.path.parse(dir).root) return null;
-    if (existsSync(join(dir, ".git"))) return dir;
+    if (existsSync(join(dir, ".git"))) {
+      const main = worktreeMainRoot(dir, f);
+      if (main !== null && canonicalDir(main, f) === homeDir) return null; // a worktree of a repository in the home folder: shared, like that repository
+      return main ?? dir;
+    }
     const up = dirname(dir);
     if (up === dir) return null;
     dir = up;

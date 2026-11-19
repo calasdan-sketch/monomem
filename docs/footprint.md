@@ -101,7 +101,7 @@ leaves it running. On Windows the task is found by its `monomem-task.xml` in the
 | `commit-trail on` (1.6.0, asks first) | `.git/hooks/prepare-commit-msg` in that repository, which adds a `Monomem-Notes: #12 #40` line to commit messages. Not written when the repository uses a hook manager (`core.hooksPath`). `monomem commit-trail off` removes it (only Monomem's own hook) |
 | `monomem setup` from the download, in the repository it runs in | `<repo>/.git/hooks/prepare-commit-msg.monomem-backup-<time>`: a copy of a commit line hook that still runs another Monomem copy (for example an npm install), saved before setup moves the hook to the download (it asks first). `monomem setup --undo` puts the old hook back from it (when the hook was not changed since) and leaves the copy in place; `uninstall --purge` deletes it unless that setup was already undone |
 | `export --format md --dir <d>` / `export --format json --out <f>` | that folder / file |
-| `backup [--out <d>]` | `<d>`, default `~/monomem-backup-<time>`, or next to the data folder when `MONOMEM_HOME` is set (never the current folder: a backup and its key must not land in a repo) |
+| `backup [--out <d>]` | `<d>` (or a folder given as a plain argument), default `<data folder>/backups/monomem-backup-<time>` (never the current folder: a backup and its key must not land in a repo; never the system temp folder, which is cleaned out) |
 | `uninstall --purge` | the final backup, `~/monomem-final-backup-<time>` (unless `--no-backup`) |
 | `sync --git <repo>` | `<repo>/monomem/` or `<repo>/monomem-enc/`, and git commits in that repo |
 | `sync setup <folder>` / `sync` | `<folder>/monomem-enc/` (sealed note files `*.enc` and this computer's sealed name `*.mach`) |

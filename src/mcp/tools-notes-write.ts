@@ -135,11 +135,16 @@ export function registerNotesWriteTools(c: McpCtx): void {
       let title = givenTitle;
       let tags = plainTags;
       // R2-06: the audit line of this write's decision (accepted, held, refused) comes back as `receipt`.
-      const withReceipt = (r = store.takeWriteReceipt()) => (r ? { receipt: r, receipt_check: RECEIPT_CHECK } : {});
+      // text_changed: NUL or broken characters in the text were replaced (the store says so, in one sentence).
+      const withReceipt = (r = store.takeWriteReceipt()) => {
+        const cleaned = store.takeCleanedNotice();
+        return { ...(r ? { receipt: r, receipt_check: RECEIPT_CHECK } : {}), ...(cleaned ? { text_changed: cleaned } : {}) };
+      };
       try {
         const denied = denyIfUnder("write");
         if (denied) return errorResult(denied);
         store.takeWriteReceipt(); // drop a decision left by an earlier call
+        store.takeCleanedNotice();
         // task / handoff / task.* tags belong to task_put and session_handoff.
         // 1.5.0 (A2): for an update the guard runs below, on the note this caller may see (the same order as REST), so a
         // reserved-tag refusal can't reveal a hidden note.
