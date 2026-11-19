@@ -40,7 +40,10 @@ describe("outsideRate", () => {
       recordEvent(s, normalizeHookInput("user-prompt", { session_id: "p", prompt: "hi" }), "ns");
       tool(s, "a", "WebFetch");
       tool(s, "b", "Read");
-      assert.equal(outsideRate(s)!.sessions, 2);
+      const r = outsideRate(s)!;
+      assert.equal(r.sessions, 2);
+      assert.equal(r.allSessions, 3);
+      assert.match(renderOutsideRate(r), /of all 3 captured sessions/);
     }));
 
   test("an outside tool with no output does not count (same as the live rule)", () =>
@@ -66,7 +69,7 @@ describe("outsideRate", () => {
       tool(s, "a", "WebFetch");
       const line = renderOutsideRate(outsideRate(s));
       assert.match(line, /1 of 1 sessions that ran tools/);
-      assert.match(line, /too few sessions/);
+      assert.match(line, /too few sessions/i);
       assert.match(line, /Local file reads and shell fetches are not counted/);
     }));
 
@@ -75,6 +78,6 @@ describe("outsideRate", () => {
       tool(s, "a", "WebSearch");
       const d = await buildDigest(s, "24h");
       assert.equal(d.outsideReads?.outside, 1);
-      assert.match(renderDigest(d), /Outside reads:/);
+      assert.match(renderDigest(d), /Outside reads since/);
     }));
 });

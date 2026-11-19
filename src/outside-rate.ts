@@ -6,7 +6,8 @@ import type { Store } from "./store.js";
 import { isOutsideTool } from "./taint.js";
 
 export interface OutsideRate {
-  sessions: number; // captured sessions that ran at least one tool (sessions with only prompts or stops cannot read anything outside, so they are not in the count)
+  sessions: number; // captured sessions that ran at least one tool (a session with only prompts and stops has no tool result to mark)
+  allSessions: number; // every captured session, including those with no tool events
   outside: number; // of those, sessions with an outside-tool result
   since: string | null; // when the oldest counted event was captured
   low: number; // 95% interval, percent
@@ -31,6 +32,7 @@ export function outsideRate(store: Store, sinceIso?: string): OutsideRate | null
     .all(sinceIso ?? "") as Array<{ session_id: string; tool: string; event: string; has_output: number; at: string }>;
   if (!rows.length) return null;
   const all = new Set<string>();
+  const every = (db.prepare("SELECT COUNT(DISTINCT session_id) AS n FROM capture_events WHERE at >= ?").get(sinceIso ?? "") as { n: number }).n;
   const hit = new Set<string>();
   let first = rows[0].at;
   for (const r of rows) {
@@ -40,13 +42,18 @@ export function outsideRate(store: Store, sinceIso?: string): OutsideRate | null
     if ((r.event === "post-tool" || r.event === "post-tool-failure") && r.has_output && isOutsideTool(r.tool)) hit.add(r.session_id);
   }
   const { low, high } = wilson(hit.size, all.size);
-  return { sessions: all.size, outside: hit.size, since: first, low, high };
+  return { sessions: all.size, allSessions: every, outside: hit.size, since: first, low, high };
 }
 
 export function renderOutsideRate(r: OutsideRate | null): string {
   if (!r) return "Outside reads: no captured session has run a tool yet, so there is nothing to count.";
   const pct = (100 * r.outside) / r.sessions;
-  const range = r.sessions < 30 ? " (too few sessions for a steady rate)" : "";
-  return `Outside reads: ${r.outside} of ${r.sessions} sessions that ran tools (since ${(r.since ?? "").slice(0, 10)}) read the web or another MCP server ` +
-    `(${pct.toFixed(1)}%, 95% range ${r.low.toFixed(0)}-${r.high.toFixed(0)}%)${range}. Local file reads and shell fetches are not counted.`;
+  const pctAll = r.allSessions > 0 ? (100 * r.outside) / r.allSessions : 0;
+  const thin = r.sessions < 30 ? " Too few sessions for a steady rate." : "";
+  return (
+    `Outside reads since ${(r.since ?? "").slice(0, 10)}: ${r.outside} of ${r.sessions} sessions that ran tools read the web or another MCP server ` +
+    `(${pct.toFixed(0)}%, 95% range ${r.low.toFixed(0)}-${r.high.toFixed(0)}%); that is ${pctAll.toFixed(1)}% of all ${r.allSessions} captured sessions. ` +
+    `Sessions that ran tools tend to be long, so the first figure is per working session, not per chat.${thin} ` +
+    "Local file reads and shell fetches are not counted."
+  );
 }
