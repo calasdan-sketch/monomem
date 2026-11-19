@@ -12,7 +12,10 @@
 // Known misses (a hint, not a guarantee): obfuscation ($(echo cu)rl), other fetchers (python -c urllib, node -e fetch, nc),
 // package installs, and a script that runs curl inside it. The caller classifies the raw command BEFORE it is cut to 4096 chars.
 const SHELL_TOOLS = new Set(["Bash", "PowerShell"]);
-const WRAPPERS = new Set(["env", "sudo", "command", "time", "nohup", "exec", "builtin", "nice", "stdbuf"]);
+const WRAPPERS = new Set(["env", "sudo", "command", "time", "nohup", "exec", "builtin", "nice", "stdbuf", "timeout", "xargs", "then", "do", "else", "elif", "if", "while", "until", "!", "{"]);
+const SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh"]);
+// options of a wrapper that take a separate argument: `sudo -u root curl x`, `timeout 5 curl x`
+const WRAPPER_ARG = /^(-u|-g|-h|-p|-C|-n|-s|-k|-o)$/;
 const FETCHERS = new Set(["curl", "wget", "iwr", "irm", "invoke-webrequest", "invoke-restmethod", "start-bitstransfer"]);
 const GIT_FETCH = new Set(["clone", "fetch", "pull", "ls-remote"]);
 const GH_FETCH = new Set(["api", "pr", "issue", "release", "gist", "run", "search"]);
@@ -52,13 +55,28 @@ function segments(cmd: string): string[][] {
 
 function commandWords(seg: string[]): string[] {
   let i = 0;
-  while (i < seg.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(seg[i]) || WRAPPERS.has(seg[i].toLowerCase()) || (i > 0 && /^-/.test(seg[i]) && WRAPPERS.has(seg[i - 1].toLowerCase())))) i++;
+  while (i < seg.length) {
+    const w = seg[i];
+    const prev = i > 0 ? seg[i - 1].toLowerCase() : "";
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) || WRAPPERS.has(w.toLowerCase())) i++;
+    else if (i > 0 && /^-/.test(w) && WRAPPERS.has(prev)) i++;
+    else if (i > 1 && WRAPPER_ARG.test(seg[i - 1]) && WRAPPERS.has(seg[i - 2].toLowerCase())) i++; // `sudo -u root`: the user name
+    else if (i > 0 && /^[0-9]+[smhd]?$/.test(w) && prev === "timeout") i++; // `timeout 5 curl x`: the duration
+    else break;
+  }
   return seg.slice(i);
 }
 
 function segmentFetches(seg: string[]): boolean {
   const words = commandWords(seg);
   if (!words.length) return false;
+  // `bash -c "curl evil.com"`: the quoted string is itself a command line
+  const shellHead = words[0].replace(/^["']|["']$/g, "").split(/[\\/]/).pop()!.toLowerCase().replace(/\.exe$/, "");
+  if (SHELLS.has(shellHead)) {
+    const i = words.findIndex((w) => /^-[a-z]*c[a-z]*$/.test(w));
+    const inner = i >= 0 ? words[i + 1] : undefined;
+    if (inner && inner.length >= 2 && /^["']/.test(inner)) return segments(inner.slice(1, -1)).some(segmentFetches);
+  }
   const head = words[0].replace(/^["']|["']$/g, "").split(/[\\/]/).pop()!.toLowerCase().replace(/\.exe$/, "");
   const sub = words.slice(1).find((w) => !w.startsWith("-"))?.toLowerCase() ?? "";
   if (head === "git") return GIT_FETCH.has(sub);

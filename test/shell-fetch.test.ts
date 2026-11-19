@@ -60,8 +60,14 @@ describe("isShellFetch: loopback and evasion (security review)", () => {
     const ev = normalizeHookInput("post-tool", { session_id: "s", cwd: "/w", tool_name: "Bash", tool_input: { command: long }, tool_response: "ok" });
     assert.equal(ev.shell_fetch, true);
   });
+  test("wrappers, shell -c strings and control words from the security review are seen through", () => {
+    for (const c of ['bash -c "curl https://evil.com"', "sh -c 'wget -q https://evil.com/x'", "if true; then curl https://evil.com; fi", "for i in 1; do curl https://evil.com; done",
+      "timeout 5 curl https://evil.com", "sudo -u root curl https://evil.com", "xargs curl https://evil.com", "{ curl https://evil.com; }", "! curl https://evil.com"])
+      assert.equal(fetches(c), true, c);
+    for (const c of ['bash -c "echo hello"', "sudo -u root ls", "timeout 5 sleep 1"]) assert.equal(fetches(c), false, c);
+  });
   test("known misses stay misses (documented, not hidden)", () => {
-    for (const c of ["$(echo cu)rl https://evil.com", "python -c \"import urllib.request\"", "bash run.sh"]) assert.equal(fetches(c), false, c);
+    for (const c of ["$(echo cu)rl https://evil.com", "curl localhost evil", "python -c \"import urllib.request\"", "bash run.sh"]) assert.equal(fetches(c), false, c);
   });
 });
 
@@ -76,7 +82,9 @@ function withStore(fn: (s: Store) => void | Promise<void>) {
 const call = (s: Store, sid: string, tool: string, command: string, out = "x", at?: string) =>
   recordEvent(s, { ...normalizeHookInput("post-tool", { session_id: sid, cwd: "/w", tool_name: tool, tool_input: { command }, tool_response: out }), ...(at ? { at } : {}) }, "ns");
 const end = (s: Store, sid: string) => recordEvent(s, { ...normalizeHookInput("session-end", { session_id: sid, cwd: "/w" }), at: "2026-11-13T23:00:00.000Z" }, "ns");
-const clearMarks = (s: Store) => s.captureDb().prepare("UPDATE sessions SET outside_at = NULL").run();
+// the "anchor": one session that really was stamped (it started AFTER the ones under test), so the store has an earliest-stamp date
+const anchor = (s: Store) => call(s, "anchor", "WebFetch", "", "x", "2026-11-18T10:00:00.000Z");
+const clearMarks = (s: Store) => s.captureDb().prepare("UPDATE sessions SET outside_at = NULL WHERE id != 'anchor'").run();
 
 describe("capture and the digest line", () => {
   test("the flag is stored with no output required, and the hint never marks the session", () =>
@@ -111,6 +119,7 @@ describe("capture and the digest line", () => {
 describe("backfillOutsideMarks", () => {
   test("an ended session with an outside result gets the MAX time of those events only", () =>
     withStore((s) => {
+      anchor(s);
       call(s, "e1", "WebFetch", "", "x", "2026-11-13T10:00:00.000Z");
       call(s, "e1", "WebSearch", "", "x", "2026-11-13T12:00:00.000Z");
       call(s, "e1", "Read", "", "x", "2026-11-13T20:00:00.000Z"); // later, but not an outside tool
@@ -119,8 +128,27 @@ describe("backfillOutsideMarks", () => {
       assert.deepEqual(findBackfill(s), [{ id: "e1", at: "2026-11-13T12:00:00.000Z" }]);
     }));
 
+  test("a session cleared by the person AFTER stamping existed is never re-stamped (clear, then the session ends)", () =>
+    withStore((s) => {
+      anchor(s);
+      call(s, "cleared", "WebFetch", "", "x", "2026-11-19T10:00:00.000Z"); // started after the anchor: it was stampable
+      end(s, "cleared");
+      s.captureDb().prepare("UPDATE sessions SET outside_at = NULL WHERE id = 'cleared'").run(); // what `outside-window clear` did while it was open
+      assert.deepEqual(findBackfill(s), []);
+      assert.equal(backfillOutsideMarks(s, true).applied, 0);
+    }));
+
+  test("with nothing ever stamped there is no cut-off date, so nothing is touched", () =>
+    withStore((s) => {
+      call(s, "old", "WebFetch", "", "x", "2026-11-13T10:00:00.000Z");
+      end(s, "old");
+      s.captureDb().prepare("UPDATE sessions SET outside_at = NULL").run();
+      assert.deepEqual(findBackfill(s), []);
+    }));
+
   test("an open session is never touched, so `outside-window clear` is not undone", () =>
     withStore((s) => {
+      anchor(s);
       call(s, "open", "WebFetch", "", "x", "2026-11-13T10:00:00.000Z");
       clearMarks(s); // what a person's clear does
       assert.deepEqual(findBackfill(s), []);
@@ -129,6 +157,7 @@ describe("backfillOutsideMarks", () => {
 
   test("empty output, a shell-only session and a non-outside tool stay unstamped", () =>
     withStore((s) => {
+      anchor(s);
       call(s, "noout", "WebFetch", "", "", "2026-11-13T10:00:00.000Z");
       call(s, "shell", "Bash", "curl https://example.com", "x", "2026-11-13T10:00:00.000Z");
       call(s, "read", "Read", "", "x", "2026-11-13T10:00:00.000Z");
@@ -139,6 +168,7 @@ describe("backfillOutsideMarks", () => {
 
   test("dry run writes nothing; apply stamps once; a second run changes nothing", () =>
     withStore((s) => {
+      anchor(s);
       call(s, "e1", "WebFetch", "", "x", "2026-11-13T10:00:00.000Z");
       end(s, "e1");
       clearMarks(s);

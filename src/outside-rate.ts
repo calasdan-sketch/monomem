@@ -31,8 +31,10 @@ export function wilson(k: number, n: number): { low: number; high: number } {
 
 export function outsideRate(store: Store, sinceIso?: string): OutsideRate | null {
   const db = store.captureDb();
+  // a read-only database from a dev build may lack the newest column: count without it rather than fail the whole digest
+  const hasFetch = (db.prepare("PRAGMA table_info(capture_events)").all() as Array<{ name: string }>).some((c) => c.name === "shell_fetch");
   const rows = db
-    .prepare("SELECT session_id, tool, event, (output != '' OR output_enc IS NOT NULL) AS has_output, shell_fetch, at FROM capture_events WHERE tool != '' AND at >= ?")
+    .prepare(`SELECT session_id, tool, event, (output != '' OR output_enc IS NOT NULL) AS has_output, ${hasFetch ? "shell_fetch" : "0 AS shell_fetch"}, at FROM capture_events WHERE tool != '' AND at >= ?`)
     .all(sinceIso ?? "") as Array<{ session_id: string; tool: string; event: string; has_output: number; shell_fetch: number; at: string }>;
   if (!rows.length) return null;
   const all = new Set<string>();
@@ -64,8 +66,8 @@ export function renderOutsideRate(r: OutsideRate | null): string {
   const thin = r.sessions < 30 ? " Too few sessions for a steady rate." : "";
   return (
     `Outside reads since ${(r.since ?? "").slice(0, 10)}: ${r.outside} of ${r.sessions} sessions that ran tools read the web or another MCP server ` +
-    `(${pct.toFixed(0)}%, 95% range ${r.low.toFixed(0)}-${r.high.toFixed(0)}%); that is ${pctAll.toFixed(1)}% of all ${r.allSessions} captured sessions. ` +
-    `Per clock hour with any tool activity: ${r.outsideHours} of ${r.hours} hours (${((100 * r.outsideHours) / Math.max(1, r.hours)).toFixed(0)}%) included an outside read, which does not depend on how long a session runs. ` +
+    `(${pct.toFixed(0)}%, rough 95% range ${r.low.toFixed(0)}-${r.high.toFixed(0)}%, which treats sessions as independent samples; they are not, so the real uncertainty is larger); that is ${pctAll.toFixed(1)}% of all ${r.allSessions} captured sessions. ` +
+    `Per clock hour with any tool activity: ${r.outsideHours} of ${r.hours} hours (${((100 * r.outsideHours) / Math.max(1, r.hours)).toFixed(0)}%) included an outside read, (hours of different sessions are pooled, so this is one rate for all of your work, not per session). ` +
     `Sessions that ran tools tend to be long, so the first figure is per working session, not per chat.${thin} ` +
     (r.shellFetchHours > 0
       ? `A weaker hint, recorded only since this version: ${r.shellFetchHours} hours had a shell command that looked like a network fetch (curl, wget, git clone and the like), ${r.shellOnlyHours} of them with no outside read. It is a hint, not a mark: it changes no note and no guard, and it misses obfuscated or scripted fetches. `
