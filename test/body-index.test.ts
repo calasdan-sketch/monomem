@@ -394,7 +394,7 @@ describe("C-06 gaps: other write paths, and a fallback is never silent", () => {
       assert.ok(status.body_index.fallbacks >= 3, JSON.stringify(status));
       assert.equal((await fetch(`${base}/status`)).status, 401, "the detail needs a key");
       const health = await (await fetch(`${base}/health`)).json();
-      assert.deepEqual(Object.keys(health).sort(), ["schema", "status", "version"], "/health stays minimal");
+      assert.deepEqual(Object.keys(health).sort(), ["status"], "/health stays minimal: no version or schema without a key");
       const mcp = createMcpServer(s, "admin");
       const [c, t] = InMemoryTransport.createLinkedPair();
       const client = new Client({ name: "t", version: "1.0.0" });

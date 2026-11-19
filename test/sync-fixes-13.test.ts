@@ -81,7 +81,7 @@ describe("1. recall board", () => {
     const text = buildBoardSummary(tasks as any, h, 2500, 40);
     assert.match(text, /^Open tasks \(40, showing \d+\):/);
     assert.match(text, /Latest handoff from pc/);
-    assert.match(text, /next: do X/);
+    assert.match(text, /next: "do X"/);
     assert.ok(text.length <= 2500);
   });
   test("catch_up and memory_since are not marked read-only", async () => {

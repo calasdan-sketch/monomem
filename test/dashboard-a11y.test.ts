@@ -136,18 +136,18 @@ describe("dashboard polish", () => {
     p.ctx.load();
     await settle();
     const h = p.el("list").innerHTML;
-    assert.match(h, /aria-label='archive note #4' onclick='archiveNote\(4\)'>Archive</);
+    assert.match(h, /aria-label='archive note #4' data-do='archiveNote' data-args='\[4\]'>Archive</);
     assert.match(h, />Private \(hidden from apps you limited\)</);
     p.ctx.archiveNote(4);
     await settle();
     assert.ok(calls.includes("POST /notes/4/archive"));
-    assert.match(p.el("toast").innerHTML, /Archived\.<\/span><button onclick='undoLast\(\)'>Undo<\/button>/);
+    assert.match(p.el("toast").innerHTML, /Archived\.<\/span><button data-do='undoLast'>Undo<\/button>/);
     p.ctx.undoLast();
     await settle();
     assert.ok(calls.includes("POST /notes/4/restore"), "Undo restores the note");
     p.ctx.loadArchived();
     await settle();
-    assert.match(p.el("list").innerHTML, /data-confirm='Delete for good\?' onclick='arm\(this,function\(\)\{del\(4\)\}\)'>Delete for good</);
+    assert.match(p.el("list").innerHTML, /data-confirm='Delete for good\?' data-do='armDel' data-args='\[4\]'>Delete for good</);
   });
   test("4 tabs + a Settings sheet; Usage, Tidy up, Apps and keys, Activity log, backup and sign out live in Settings", () => {
     const tabs = DASHBOARD_HTML.slice(DASHBOARD_HTML.indexOf('<nav class="tabs"'), DASHBOARD_HTML.indexOf("</nav>"));

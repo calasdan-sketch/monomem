@@ -10,6 +10,12 @@ export async function databaseCheck(dr: Doctor): Promise<void> {
   // 1.5.0 (infra HIGH-3): doctor only looks. An older database is not upgraded here (apps that still have it open would keep
   // writing in the old shape); a missing one is created as before.
   const { SchemaMismatchError, SCHEMA_VERSION: BUILD_SCHEMA } = await import("../store.js");
+  // A folder with no database yet: checking must not make one (that also makes the keys). Setup or start does.
+  if (DB_PATH !== ":memory:" && !(await import("node:fs")).existsSync(DB_PATH)) {
+    ok("no database yet: it is made the first time you run monomem setup or monomem start (checking creates nothing)");
+    dr.oldSchema = true; // skips the checks that would open it
+    return;
+  }
   try {
     const s = new Store(DB_PATH, { noMigrate: Store.peekSchemaVersion(DB_PATH) !== null });
     dr.storeIdForProbe = s.serverIdValue;
@@ -65,8 +71,8 @@ export async function databaseCheck(dr: Doctor): Promise<void> {
     );
     if (similarPair) {
       warn(
-        "notes but no similarity edges (a store created before 1.1, or notes brought in with import or restore, which skip linking to stay fast)",
-        "run `monomem tidy edges` once to link existing notes"
+        "search by meaning is not set up for these notes (they were brought in with import or restore, or the store is older)",
+        "run `monomem tidy edges` once to set it up"
       );
     }
   } catch (e) {

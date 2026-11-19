@@ -39,5 +39,15 @@ export async function namespaceCheck(dr: Doctor): Promise<void> {
         warn("namespace resolution: " + (e as Error).message);
       }
     }
+    return;
   }
+  const { autoScopeMode, resolveAutoScope } = await import("../namespace.js");
+  const mode = autoScopeMode();
+  if (mode.invalid) warn(`MONOMEM_AUTO_SCOPE is set to "${mode.invalid}", which is not understood (use 1 or 0), so it is ignored and the saved setting is used`);
+  if (!mode.on) {
+    ok("per-project scope: off (every project shares one space; turn on with: monomem scope on)");
+    return;
+  }
+  const auto = resolveAutoScope(process.cwd());
+  ok(auto ? `per-project scope: on, this folder -> "${auto.namespace}"` : "per-project scope: on, but this folder is not in a git repository (shared space)");
 }

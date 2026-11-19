@@ -3,7 +3,7 @@
 import { CSS } from "./css.js";
 
 const TAB = (id: string, view: string, label: string, badge = ""): string =>
-  `<button id="tab_${id}" onclick="${view}()">${label}${badge ? `<span id="${badge}"></span>` : ""}</button>`;
+  `<button id="tab_${id}" data-do="${view}">${label}${badge ? `<span id="${badge}"></span>` : ""}</button>`;
 
 export const PAGE_HTML = `<!doctype html>
 <html lang="en">
@@ -25,8 +25,8 @@ export const PAGE_HTML = `<!doctype html>
   <div class="bar">
     <div class="brand"><img src="/icon.svg" alt="" width="28" height="28"><span>Monomem</span></div>
     <input id="q" type="search" aria-label="Search notes" placeholder="Search notes" aria-keyshortcuts="/">
-    <button id="btn_new" class="primary" aria-haspopup="dialog" aria-expanded="false" aria-keyshortcuts="n" onclick="toggleNew()">New note</button>
-    <button id="btn_settings" class="icon" aria-label="Settings" aria-haspopup="dialog" title="Settings" onclick="openSettings()">&#9881;&#xFE0E;</button>
+    <button id="btn_new" class="primary" aria-haspopup="dialog" aria-expanded="false" aria-keyshortcuts="n" data-do="toggleNew">New note</button>
+    <button id="btn_settings" class="icon" aria-label="Settings" aria-haspopup="dialog" title="Settings" data-do="openSettings">&#9881;&#xFE0E;</button>
   </div>
 </header>
 <nav class="tabs" aria-label="Views">
@@ -39,7 +39,7 @@ export const PAGE_HTML = `<!doctype html>
 </nav>
 <main>
   <div class="viewhead">
-    <button id="back" class="plain back" hidden onclick="goBack()">&lsaquo; Back</button>
+    <button id="back" class="plain back" hidden data-do="goBack">&lsaquo; Back</button>
     <h2 id="viewh" class="t-large">Notes</h2>
     <p id="viewd" class="t-callout muted"></p>
   </div>
@@ -49,8 +49,8 @@ export const PAGE_HTML = `<!doctype html>
     <summary>Filters</summary>
     <div class="row" role="group" aria-label="Filters">
       <label class="field"><span>Project</span><input id="ns" placeholder="All projects"></label>
-      <label class="field"><span>Who can see it</span><select id="lvlf" onchange="applyFilter()"><option value="">Everyone and every level</option><option value="public">Public</option><option value="internal">Internal</option><option value="private">Private</option></select></label>
-      <label class="chk"><input type="checkbox" id="inc" onchange="load()"> Show notes from distrusted writers</label>
+      <label class="field"><span>Who can see it</span><select id="lvlf" data-chg="applyFilter"><option value="">Everyone and every level</option><option value="public">Public</option><option value="internal">Internal</option><option value="private">Private</option></select></label>
+      <label class="chk"><input type="checkbox" id="inc" data-chg="load"> Show notes from distrusted writers</label>
     </div>
   </details>
   <div id="msg" class="msg" role="status" aria-live="polite"></div>
@@ -70,18 +70,18 @@ export const PAGE_HTML = `<!doctype html>
       <p>Open Monomem from <span id="gate_where">its Start menu entry</span>, or run <code>monomem open</code> on this computer. It signs you in here.</p>
       <details>
         <summary class="muted">Use an app key instead</summary>
-        <label class="field" style="margin-top:12px"><span>App key</span><input id="tok" type="password" autocomplete="off" placeholder="Paste the key" onkeydown="if(event.key==='Enter')saveTok()"></label>
+        <label class="field" style="margin-top:12px"><span>App key</span><input id="tok" type="password" autocomplete="off" placeholder="Paste the key" data-enter="saveTok"></label>
         <p class="help">Your main key is in the file named .token in your Monomem data folder; <code>monomem doctor</code> shows where that is.</p>
-        <button class="primary" onclick="saveTok()">Open</button>
+        <button class="primary" data-do="saveTok">Open</button>
       </details>
       <p id="gate_err" class="err" role="alert"></p>
     </div>
   </div>
 </div>
 
-<dialog id="newsheet" aria-labelledby="new_h" onclose="newClosed()">
-  <form class="sheet" method="dialog" onsubmit="event.preventDefault();addNote()">
-    <div class="sheethead"><h2 id="new_h" class="t-title">New note</h2><button type="button" class="plain" onclick="closeSheet('newsheet')">Cancel</button></div>
+<dialog id="newsheet" aria-labelledby="new_h">
+  <form class="sheet" method="dialog" data-sub="addNote">
+    <div class="sheethead"><h2 id="new_h" class="t-title">New note</h2><button type="button" class="plain" data-do="closeSheet" data-args='["newsheet"]'>Cancel</button></div>
     <label class="field"><span>Title</span><input id="n_title" required placeholder="For example: We deploy with pnpm"></label>
     <label class="field"><span>Note</span><textarea id="n_body" placeholder="What your apps should know"></textarea></label>
     <details>
@@ -97,7 +97,7 @@ export const PAGE_HTML = `<!doctype html>
 
 <dialog id="settings" aria-labelledby="set_h">
   <div class="sheet">
-    <div class="sheethead"><h2 id="set_h" class="t-title">Settings</h2><button class="plain" onclick="closeSheet('settings')">Done</button></div>
+    <div class="sheethead"><h2 id="set_h" class="t-title">Settings</h2><button class="plain" data-do="closeSheet" data-args='["settings"]'>Done</button></div>
     <div id="set_body"></div>
   </div>
 </dialog>
@@ -106,7 +106,7 @@ export const PAGE_HTML = `<!doctype html>
   <div class="sheet">
     <h2 id="cf_h" class="t-title" style="margin-bottom:12px"></h2>
     <div id="cf_body"></div>
-    <div class="row" style="justify-content:flex-end;margin-top:16px"><button id="cf_no" class="plain" onclick="closeSheet('confirmsheet')">Cancel</button><button id="cf_ok" class="primary"></button></div>
+    <div class="row" style="justify-content:flex-end;margin-top:16px"><button id="cf_no" class="plain" data-do="closeSheet" data-args='["confirmsheet"]'>Cancel</button><button id="cf_ok" class="primary"></button></div>
   </div>
 </dialog>
 
@@ -119,7 +119,7 @@ export const PAGE_HTML = `<!doctype html>
 
 <dialog id="helpsheet" aria-labelledby="help_h">
   <div class="sheet">
-    <div class="sheethead"><h2 id="help_h" class="t-title">Keyboard shortcuts</h2><button class="plain" onclick="closeSheet('helpsheet')">Done</button></div>
+    <div class="sheethead"><h2 id="help_h" class="t-title">Keyboard shortcuts</h2><button class="plain" data-do="closeSheet" data-args='["helpsheet"]'>Done</button></div>
     <div class="group">
       <div class="item"><span>Search notes</span><kbd>/</kbd></div>
       <div class="item"><span>New note</span><kbd>n</kbd></div>

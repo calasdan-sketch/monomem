@@ -8,9 +8,12 @@ import { createHmac } from "node:crypto";
 import { envNum as num, PACKAGE_VERSION, type TokenEntry } from "./config.js";
 import { SCHEMA_VERSION } from "./store.js";
 
-/** GET /health on both servers (no auth, no DB): liveness plus the build and schema, so `monomem doctor` can tell a server
- * still running the old version after an upgrade (1.5.0, U-10). */
-export const healthBody = (): { status: "ok"; version: string; schema: number } => ({ status: "ok", version: PACKAGE_VERSION, schema: SCHEMA_VERSION });
+/** GET /health on both servers (no DB): liveness for anyone, and the build and schema only for a caller with a valid key, so
+ * `monomem doctor` (which has the key) can tell a server still running the old version after an upgrade (1.5.0, U-10) while an
+ * unauthenticated caller learns nothing about the build (expert round 1, 2026-11-18). */
+export function healthBody(authenticated: boolean): { status: "ok"; version?: string; schema?: number } {
+  return authenticated ? { status: "ok", version: PACKAGE_VERSION, schema: SCHEMA_VERSION } : { status: "ok" };
+}
 
 /**
  * 1.5.0: GET /proof's answer. The session-start hook sends the main key only to a server that proves it holds the same key

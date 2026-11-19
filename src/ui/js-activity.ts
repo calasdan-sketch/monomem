@@ -7,7 +7,7 @@ function loadChanges(){
   var ns = String($("ns").value || "").trim();
   var winText = WIN_TEXT[WIN] || WIN;
   var path = "/changes?since=" + encodeURIComponent(WIN) + "&limit=200" + (ns ? ("&namespace=" + encodeURIComponent(ns)) : "") + (inc() ? "&include_distrusted=1" : "");
-  var picker = "<label class='field' style='max-width:220px'><span>How far back</span><select id='chwin' onchange='WIN=this.value;loadChanges()'>" +
+  var picker = "<label class='field' style='max-width:220px'><span>How far back</span><select id='chwin'"+actC("setWin")+">" +
     ["24h","7d","30d"].map(function(w){ return "<option value='"+w+"'"+(w === WIN ? " selected" : "")+">Last "+WIN_TEXT[w]+"</option>"; }).join("") + "</select></label>";
   Promise.all([
     api(path),
@@ -23,7 +23,7 @@ function loadChanges(){
     var byApp = apps.length ? "<h3 class='section t-title'>By app</h3><div class='card'><div class='group' style='background:transparent;padding:0'>" + apps.map(function(k){
       var v = byW[k];
       return "<div class='item'><div>"+chip(k)+" <span class='muted t-foot'>"+v.created+" added, "+v.updated+" changed, "+v.deleted+" removed</span></div>"+
-        (IS_ADMIN ? "<button data-w='"+esc(k)+"' onclick='rollbackPreview(this.getAttribute(&quot;data-w&quot;))'>Undo what it did&hellip;</button>" : "")+"</div>";
+        (IS_ADMIN ? "<button data-w='"+esc(k)+"'"+actA("rollbackPreview")+">Undo what it did&hellip;</button>" : "")+"</div>";
     }).join("") + "</div></div>" : "";
     var rows = (j.changes || []).slice().reverse().map(function(e){
       var verb = e.kind === "created" ? "Added" : (e.kind === "updated" ? "Changed" : "Removed");
@@ -31,7 +31,7 @@ function loadChanges(){
     }).join("");
     $("list").innerHTML = picker + byApp + tasksHtml(rs[1].tasks || []) + handoffHtml((rs[2].handoffs || [])[0]) +
       "<h3 class='section t-title'>What changed</h3>" + (rows || empty("Nothing changed", "Nothing changed in the last " + winText + ".")) +
-      "<div class='acts'><button class='plain' onclick='loadSessions()'>App sessions &rsaquo;</button></div>";
+      "<div class='acts'><button class='plain'"+actA("loadSessions")+">App sessions &rsaquo;</button></div>";
   }).catch(function(e){ incRefused(e); failList(e); });
 }
 var TASK_WORDS = { open:"To do", claimed:"In progress", blocked:"Blocked", done:"Done", cancelled:"Cancelled" };
@@ -68,7 +68,7 @@ function loadSessions(){
       return "<article class='card'><h3 class='t-head'>"+esc(s.summary || "(no summary yet)")+"</h3>"+
         "<div class='meta'>"+when(s.started_at)+(s.ended_at ? " to "+when(s.ended_at) : " &middot; still open")+" &middot; "+esc(s.namespace)+" &middot; "+plural(s.prompt_count||0, "prompt", "prompts")+"</div>"+
         "<div class='meta'>"+(s.model ? "Model the app reported: "+esc(s.model) : "The app did not report its model")+"</div>"+
-        acts("<button data-sid='"+esc(s.id)+"' onclick='loadSession(this.getAttribute(&quot;data-sid&quot;))'>Timeline</button>")+"</article>";
+        acts("<button data-sid='"+esc(s.id)+"'"+actA("loadSession")+">Timeline</button>")+"</article>";
     }).join("") : empty("No sessions yet", "Sessions show up here once the session hooks are set up (Settings, Your apps).");
   }).catch(function(e){ incRefused(e); failList(e); });
 }
@@ -120,7 +120,7 @@ function loadApps(){
     $("count").textContent = plural(apps.length, "app can connect", "apps can connect");
     var rows = apps.map(function(a){
       var lim = a.max_sensitivity ? ("up to " + esc(a.max_sensitivity)) : "No limit" + (a.scope === "admin" ? " (sees everything)" : "");
-      var rm = (a.source === "file") ? "<button class='destructive' data-label='"+esc(a.label)+"' aria-label='Remove app "+esc(a.label)+"' onclick='var x=this;arm(x,function(){removeApp(x.getAttribute(&quot;data-label&quot;))})'>Remove</button>" : "<span class='muted'>set outside the dashboard</span>";
+      var rm = (a.source === "file") ? "<button class='destructive' data-label='"+esc(a.label)+"' aria-label='Remove app "+esc(a.label)+"'"+actA("removeApp")+">Remove</button>" : "<span class='muted'>set outside the dashboard</span>";
       return "<tr><td>"+esc(shownWriter(a.label))+"</td><td>"+esc(a.scope === "read" ? "read only" : a.scope === "admin" ? "everything" : "read and write")+"</td><td>"+esc(a.namespace || "all")+"</td><td>"+lim+"</td><td>"+(a.last_used ? esc(ago(a.last_used)) : "not since Monomem started")+"</td><td>"+rm+"</td></tr>";
     }).join("");
     $("list").innerHTML =
@@ -130,7 +130,7 @@ function loadApps(){
       "<label class='field'><span>Name</span><input id='ap_label' placeholder='For example: cursor'></label>"+
       "<label class='field'><span>It may</span><select id='ap_scope'><option value='write'>Read and write</option><option value='read'>Only read</option></select></label>"+
       "<label class='field'><span>It sees</span><select id='ap_max'><option value='internal'>Public and normal notes</option><option value='public'>Only public notes</option><option value='private'>Private notes too (still limited)</option><option value='none'>NO LIMIT (everything)</option></select></label>"+
-      "<button class='primary' onclick='addApp()'>Add app</button><div id='ap_out'></div></article>";
+      "<button class='primary'"+actA("addApp")+">Add app</button><div id='ap_out'></div></article>";
   }).catch(failList);
 }
 function addApp(){
@@ -141,8 +141,8 @@ function addApp(){
   var go = function(){
     api("/tokens", { method:"POST", body: JSON.stringify(body) }).then(function(j){
       var out = $("ap_out");
-      out.innerHTML = "<p><b>Copy this key now.</b> It is shown once.</p><pre class='out' id='ap_tok'></pre><button onclick='copyText(&quot;ap_tok&quot;)'>Copy key</button>"+
-        "<p class='meta'>"+esc(j.access || "")+"</p><p>Paste this into the app's settings:</p><pre class='out' id='ap_snip'></pre><button onclick='copyText(&quot;ap_snip&quot;)'>Copy settings</button>";
+      out.innerHTML = "<p><b>Copy this key now.</b> It is shown once.</p><pre class='out' id='ap_tok'></pre><button"+actA("copyText",["ap_tok"])+">Copy key</button>"+
+        "<p class='meta'>"+esc(j.access || "")+"</p><p>Paste this into the app's settings:</p><pre class='out' id='ap_snip'></pre><button"+actA("copyText",["ap_snip"])+">Copy settings</button>";
       $("ap_tok").textContent = j.token;
       $("ap_snip").textContent = j.snippet || "";
       $("ap_label").value = "";
@@ -169,7 +169,7 @@ function loadAudit(){
     var rows = es.map(function(e){ return "<tr><td>" + when(e.ts) + "</td><td>" + esc(e.op) + "</td><td>" + esc(e.label ? shownWriter(e.label) : "terminal or server") + "</td><td>" + esc(e.namespace || "") + "</td><td>" + (e.id != null ? "#" + Number(e.id) : "") + "</td></tr>"; }).join("");
     var ops = ["", "create", "update", "delete"].map(function(o){ return "<option value='" + o + "'" + (o===op?" selected":"") + ">" + (o || "Every action") + "</option>"; }).join("");
     var wins = ["24h", "7d", "30d"].map(function(w){ return "<option value='" + w + "'" + (w===since?" selected":"") + ">Last " + WIN_TEXT[w] + "</option>"; }).join("");
-    $("list").innerHTML = "<div class='row' style='margin-bottom:16px'><label class='field'><span>How far back</span><select id='au_since' onchange='loadAudit()'>" + wins + "</select></label><label class='field'><span>Action</span><select id='au_op' onchange='loadAudit()'>" + ops + "</select></label></div>" +
+    $("list").innerHTML = "<div class='row' style='margin-bottom:16px'><label class='field'><span>How far back</span><select id='au_since'"+actC("loadAudit")+">" + wins + "</select></label><label class='field'><span>Action</span><select id='au_op'"+actC("loadAudit")+">" + ops + "</select></label></div>" +
       (rows ? "<article class='card'><table class='apps'><tr><th>When</th><th>Action</th><th>App</th><th>Project</th><th>Note</th></tr>" + rows + "</table></article>" : empty("Nothing logged", "Nothing was logged in that time."));
   }).catch(failList);
 }

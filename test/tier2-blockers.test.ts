@@ -359,7 +359,7 @@ describe("blocker 1: cooperative edge rebuild", () => {
           stdio: ["ignore", "pipe", "pipe"],
         }
       ) as unknown as string;
-      assert.match(out, /Rebuilt similarity edges/);
+      assert.match(out, /Search by meaning set up/);
       assert.match(out, /\d+ created, \d+ removed/);
       assert.match(out, /pairs scored/);
     } finally {

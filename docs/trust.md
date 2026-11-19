@@ -210,6 +210,21 @@ version). An agent's write cannot add or remove `obs.` tags itself; only the `ou
 - ranked slightly lower in search (score x0.9) and still returned;
 - never hidden, archived or deleted.
 
+**One exception: the first part of a session summary (since the release after 1.6.1).** A session summary is written in two
+parts. The first holds what the session did before its first read of outside content (the request, the commands and
+files, the agent's closing words from before the read); a line then marks where the read happened; the second holds
+everything from that point on (later commands and files, the closing words, the outcome and next step). At session start
+an unconfirmed summary's first part is shown, followed by a line saying the rest is held back. Nothing from the second
+part is shown. The first part is shown only when the stamp is the only reason the summary is held (not when it was
+written after reading an unconfirmed note, or declared outside, or is distrusted, flagged or expired), when no model wrote
+it, when it has the marker (a 1.6.0 summary has none and stays held back whole) and when every line of the first part is one
+of the labelled lines Monomem writes there. Set `MONOMEM_SUMMARY_SPLIT=0` to hold a stamped summary back whole again.
+Limits: "before the first outside read" means before the first read Monomem's hooks recognise (the web tools and other MCP
+servers). Content an agent fetched with a shell command, such as curl, is not recognised, so it can shape what comes before
+the split exactly as it can in an unstamped session. The observation notes of a session are not stamped and are not held
+back by this change. The count line above still counts the summary as waiting, although its first part is shown. A summary
+rebuilt from a very long session (20,000 events or more) is held back whole, because the first read may be out of view.
+
 A marked note that **is** confirmed is shown at session start as an index line only, never its text. Notes that existed
 before the 1.4.0 upgrade are exempt from this hold (`grandfathered_at`) until an edit brings outside content into them
 (a mark, new or one they already carry) or a spooled outside read marks them. They are **not** exempt from the promotion

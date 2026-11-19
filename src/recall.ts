@@ -18,6 +18,7 @@ import { UNTRUSTED_BANNER, describeWriter } from "./security.js";
 import {
   namespaceConfigSource,
   resolveStartupNamespace,
+  resolveAutoScope,
 } from "./namespace.js";
 
 /**
@@ -190,7 +191,12 @@ export async function resolveRecallNamespace(cwd: string = process.cwd()): Promi
     );
     return { kind: "unresolvable" };
   }
-  if (!source) return { kind: "disabled" };
+  if (!source) {
+    // No spaces map: with auto-scope on, a folder inside a git repository recalls that repository's own namespace, the
+    // same one the stdio server writes to (both call resolveAutoScope). Anywhere else the shared space is kept.
+    const auto = resolveAutoScope(cwd);
+    return auto ? { kind: "resolved", namespace: auto.namespace } : { kind: "disabled" };
+  }
 
   // Namespaces are configured. resolveStartupNamespace() throws on ambiguous
   // overlap and returns null when the config is present-but-invalid
@@ -357,10 +363,14 @@ async function fetchRecentNotes(opts: RecallOptions): Promise<RecallData> {
       const notice = runnerNotice(store, ns);
       if (notice) board = [notice, board].filter(Boolean).join("\n\n");
       // Trust lane: text this app's agent wrote that another writer replaced in the last week (catch_up says the same).
-      const { hookSelfWriter, overwriteLines, OVERWRITE_LOOKBACK_MS } = await import("./context-inject.js");
+      const { hookSelfWriter, overwriteLines, heldOutcomeLines, OVERWRITE_LOOKBACK_MS } = await import("./context-inject.js");
       const self = opts.selfWriter ?? hookSelfWriter();
-      const over = self ? overwriteLines(store, self, new Date(Date.now() - OVERWRITE_LOOKBACK_MS).toISOString(), namespace) : "";
+      const sinceIso = new Date(Date.now() - OVERWRITE_LOOKBACK_MS).toISOString();
+      const over = self ? overwriteLines(store, self, sinceIso, namespace) : "";
       if (over) board = [board, over].filter(Boolean).join("\n\n");
+      // Held writes a person has since approved or rejected (the writer was told "held" at the time, never the outcome).
+      const decided = self ? heldOutcomeLines(store, self, sinceIso, namespace) : "";
+      if (decided) board = [board, decided].filter(Boolean).join("\n\n");
       if (need) board = [need, board].filter(Boolean).join("\n\n");
     } catch (e) {
       // The board is a bonus: never let it cost the recent-notes recall.

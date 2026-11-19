@@ -19,12 +19,12 @@ import { type Sensitivity, mayEmbed, DEFAULT_SENSITIVITY, SENSITIVITY_HELP, SENS
 /** Every command main() accepts, for the unknown-command check and the "did you mean" hint. */
 const COMMANDS = [
   "start", "serve", "mcp", "mcp:stdio", "doctor", "init", "setup", "uninstall", "sync", "reindex", "recall", "hook",
-  "consolidate", "rebuild-edges", "relevant", "search", "token", "changes", "backup", "runner-status", "watch", "export", "import", "trust",
+  "consolidate", "rebuild-edges", "relevant", "search", "token", "changes", "scope", "backup", "runner-status", "watch", "export", "import", "trust",
   "quarantine", "approve-first", "access", "flood", "resume", "decay", "archive", "restore", "delete", "quality", "conflicts", "facts", "fact",
   "encrypt", "meter", "receipts", "why", "never-show", "supersede", "history", "pin", "unpin", "rollback", "bench", "drill", "health", "audit", "verify-receipt",
   "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet", "confirm", "review", "taint", "config", "service", "stale", "project-rules", "update", "stop", "commit-trail", "backfill-marks",
   "help", "--help", "-h", "--version", "-v", "version",
-  "check", "activity", "tidy", "keys", "settings", "replace", "tasks", "oauth",
+  "check", "activity", "tidy", "keys", "settings", "replace", "tasks", "oauth", "drift", "audit-memory", "prune", "handoff", "tools", "rescan",
 ];
 
 /** Plain edit distance; the command list is tiny, so the simple version is fine. */
@@ -76,9 +76,10 @@ function suggestCommand(cmd: string): string | undefined {
 async function reindex(): Promise<void> {
   const { DB_PATH } = await import("./config.js");
   const { Store } = await import("./store.js");
-  const { embeddingsEnabled, embeddingsConfig, embed, noteEmbeddingText } = await import(
+  const { embeddingsEnabled, embeddingsConfig, noteEmbeddingText } = await import(
     "./embeddings.js"
   );
+  const { reindexEmbedder } = await import("./embed-retry.js"); // long first-call timeout and retries for a cold model
 
   if (!embeddingsEnabled()) {
     console.error(
@@ -102,11 +103,12 @@ async function reindex(): Promise<void> {
 
   let done = 0;
   let failed = 0;
+  const embed = reindexEmbedder(cfg);
   for (const id of ids) {
     const note = store.read(id); // gate-ok: local shell command (show): the operator owns the database file
     if (!note) continue;
     if (!mayEmbed(note)) continue; // private notes are not sent to the embeddings endpoint (MONOMEM_ALLOW_PRIVATE_REMOTE=1 allows it)
-    const vec = await embed(noteEmbeddingText(note.title, note.body), cfg);
+    const vec = await embed(noteEmbeddingText(note.title, note.body));
     if (vec) {
       store.setVector(id, vec, cfg.model);
       done += 1;
@@ -344,6 +346,7 @@ async function relevant(): Promise<void> {
   const { DB_PATH } = await import("./config.js");
   const { Store } = await import("./store.js");
   const { runRelevantSearch } = await import("./search-service.js");
+  const { tooCommonWords } = await import("./keywords.js");
 
   const args = process.argv.slice(3);
   let limit: number | undefined;
@@ -353,6 +356,7 @@ async function relevant(): Promise<void> {
   let includeDistrusted = false;
   let asOfRaw: string | undefined;
   let asJson = false;
+  let allProjects = false;
   let modeRaw: string | undefined;
   const parts: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -363,6 +367,7 @@ async function relevant(): Promise<void> {
           'monomem search|relevant "words" [options]     (search with no words lists your newest notes)',
           "  --limit n               how many to show (default 5; 20 when listing)",
           "  --namespace ns          only this namespace (--ns for short)",
+          "  --all-projects          with per-project scope on (monomem scope), search every project, not just this repository's",
           "  --as-of <ISO|7d|2h>     the notes as they were then",
           "  --written-by w | --not-written-by w   keep or drop one writer's notes",
           "  --include-distrusted    also show notes from writers you distrust (marked)",
@@ -375,6 +380,7 @@ async function relevant(): Promise<void> {
     }
     const valueFlag = /^--(mode|as-of|limit|namespace|ns|written-by|not-written-by)(=.*)?$/.exec(a);
     if (a === "--json") asJson = true;
+    else if (a === "--all-projects") allProjects = true;
     else if (a === "--include-distrusted") includeDistrusted = true;
     else if (valueFlag) {
       let v: string;
@@ -417,9 +423,15 @@ async function relevant(): Promise<void> {
     return;
   }
   if (!message.trim() && !asOfRaw) {
-    console.error('Usage: monomem relevant "some natural language message" [--limit 5] [--namespace ns] [--as-of <ISO|7d|2h>] [--json]');
+    console.error('Usage: monomem relevant "some natural language message" [--limit 5] [--namespace ns | --all-projects] [--as-of <ISO|7d|2h>] [--json]');
     process.exit(1);
   }
+  // Per-project scope on, inside a repository, no --namespace: look in that repository's project (one plain line says so).
+  const scopedRead = await (await import("./everyday-cli.js")).scopedReadNamespace(namespace, allProjects, asJson);
+  namespace = scopedRead.namespace;
+  const scopeMiss = (): void => {
+    if (scopedRead.scoped) console.log("Nothing in this project. To look in every project: add --all-projects");
+  };
   if (asOfRaw) {
     if (writtenBy || notWrittenBy) {
       console.error("--as-of cannot be combined with --written-by / --not-written-by (who wrote a note at that time is not reconstructed).");
@@ -502,6 +514,7 @@ async function relevant(): Promise<void> {
       if (!hits.length) {
         console.log("No matching notes found.");
         sealedLine();
+        scopeMiss();
       }
       else console.log(`Matching notes (${hits.length}):`);
       for (const n of hits) {
@@ -514,7 +527,18 @@ async function relevant(): Promise<void> {
     }
     if (notice && !asJson) console.log(`Note: ${notice}`);
     const relOpts = { namespace, limit: want + 1, ...(writtenBy ? { writtenBy } : {}), ...(notWrittenBy ? { notWrittenBy } : {}) };
-    const { keywords, results: fetched } = await runRelevantSearch(store, message, { ...relOpts, ...(includeDistrusted ? { includeDistrusted: true } : {}) });
+    const relevantRun = await runRelevantSearch(store, message, { ...relOpts, ...(includeDistrusted ? { includeDistrusted: true } : {}) });
+    const { keywords } = relevantRun;
+    let fetched = relevantRun.results;
+    // Every word was filtered out as too common ("hello"): search for the words exactly as typed instead of giving up.
+    let literal = false;
+    if (keywords.length === 0 && message.trim()) {
+      const lit = await runSearch(store, message, { ...relOpts, ...(includeDistrusted ? { includeDistrusted: true } : {}) });
+      if (lit.length) {
+        fetched = lit;
+        literal = true;
+      }
+    }
     const results = fetched.slice(0, want);
     if (asJson) {
       return void console.log(
@@ -531,10 +555,17 @@ async function relevant(): Promise<void> {
     }
     // The words searched for show only when nothing matched (they explain the miss); --json always has them.
     if (results.length === 0) {
-      console.log(`No relevant notes found. ${keywords.length ? `Searched for: ${keywords.join(", ")}.` : "That text has no words to search for."}`);
+      const common = keywords.length === 0 ? tooCommonWords(message) : [];
+      const why = keywords.length
+        ? `Searched for: ${keywords.join(", ")}.`
+        : common.length
+          ? `${common.map((w) => `"${w}"`).join(", ")} ${common.length === 1 ? "is" : "are"} too common to search; try another word.`
+          : "That text has no words to search for.";
+      console.log(`No relevant notes found. ${why}`);
       sealedLine();
+      scopeMiss();
     }
-    else console.log(`Relevant notes (${results.length}):`);
+    else console.log(`${literal ? "Matching" : "Relevant"} notes (${results.length}):`);
     for (const n of results) {
       const ann = annotateStaleness(n);
       const stale = ann.stale ? ` [stale, ${ann.ageDays}d]` : "";
@@ -566,12 +597,14 @@ async function rebuildEdges(): Promise<void> {
   let thresholdRaw: string | undefined;
   let yes = false;
   let force = false;
+  let allPairs = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--threshold" && i + 1 < args.length) thresholdRaw = args[++i];
     else if (a.startsWith("--threshold=")) thresholdRaw = a.slice("--threshold=".length);
     else if (a === "--yes" || a === "-y") yes = true;
     else if (a === "--force") force = true;
+    else if (a === "--all") allPairs = true;
     else {
       console.error(`Unknown option: ${a}`);
       process.exit(1);
@@ -623,9 +656,14 @@ async function rebuildEdges(): Promise<void> {
     const notes = plan.reduce((s, g) => s + g.notes, 0);
     const pairs = plan.reduce((s, g) => s + g.pairs, 0);
     console.error(
-      `Rebuilding similarity edges${namespace ? ` (namespace "${namespace}")` : ""}: ` +
+      `Setting up search by meaning${namespace ? ` (namespace "${namespace}")` : ""}: ` +
         `${notes} notes, ~${pairs.toLocaleString("en-US")} pairs to score.`
     );
+    const tooBig = allPairs ? null : (await import("./edges-cap.js")).edgesTooBigMessage(notes, pairs);
+    if (tooBig) {
+      console.error(tooBig);
+      process.exit(1);
+    }
     if (pairs > REBUILD_CONFIRM_PAIR_COUNT && !yes) {
       if (!process.stdin.isTTY) {
         console.error(
@@ -658,7 +696,7 @@ async function rebuildEdges(): Promise<void> {
     process.stderr.write("\n");
     const secs = ((Date.now() - t0) / 1000).toFixed(1);
     console.log(
-      `Rebuilt similarity edges (threshold ${threshold ?? EDGE_SIMILARITY_THRESHOLD}): ` +
+      `Search by meaning set up (threshold ${threshold ?? EDGE_SIMILARITY_THRESHOLD}): ` +
         `${created} created, ${removed} removed ` +
         `(${pairs.toLocaleString("en-US")} pairs scored in ${secs}s).`
     );
@@ -679,7 +717,7 @@ async function backupCmd(): Promise<void> {
   const { DB_PATH } = await import("./config.js");
   const { Store } = await import("./store.js");
   const { backupStore } = await import("./backup.js");
-  const { flags } = parseFlags(process.argv.slice(3), { values: ["out"], bools: ["include-approval-key", "include-attest-key", "include-key", "prune-premigration"] });
+  const { flags, rest: backupRest } = parseFlags(process.argv.slice(3), { values: ["out"], bools: ["include-approval-key", "include-attest-key", "include-key", "prune-premigration"] });
   if (flags["prune-premigration"] === true) {
     // Remove the copies the upgrade made (`<db>.pre-v*-backup`): they hold the notes as they were before
     // the upgrade, including any deleted or forgotten since, and are outside encryption and retention.
@@ -696,12 +734,12 @@ async function backupCmd(): Promise<void> {
     return;
   }
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..*$/, "").replace("T", "-");
-  // Default in the home folder, never the current one: run inside a repo, a backup (notes + key) there could get committed.
-  // With MONOMEM_HOME set (a test or a second store) it goes next to that data folder instead, not into the real home.
-  const { homedir } = await import("node:os");
-  const { join, dirname } = await import("node:path");
-  const { DATA_DIR, DATA_DIR_SOURCE } = await import("./config.js");
-  const out = str(flags.out) ?? join(DATA_DIR_SOURCE === "env" ? dirname(DATA_DIR) : homedir(), `monomem-backup-${stamp}`);
+  // Default: inside the data folder's own backups folder (where the daily automatic backups go), never the current folder
+  // (run inside a repo, a backup with the notes could get committed) and never the system temp folder or the home folder
+  // (the temp folder is cleaned out by the system, and a backup that vanishes is no backup). An explicit --out wins.
+  const { join } = await import("node:path");
+  const { backupsDir } = await import("./backup-schedule.js");
+  const out = str(flags.out) ?? backupRest[0] ?? join(backupsDir(DB_PATH), `monomem-backup-${stamp}`);
   const store = new Store(DB_PATH);
   try {
     const r = backupStore(store, DB_PATH, out, {
@@ -903,7 +941,7 @@ async function changes(): Promise<void> {
   const { runChanges } = await import("./changes.js");
   const { flags } = parseFlags(process.argv.slice(3), {
     values: ["since", "consumer", "namespace", "source", "limit", "written-by", "not-written-by", "note-written-by", "not-note-written-by"],
-    bools: ["json", "purge", "include-distrusted"],
+    bools: ["json", "purge", "include-distrusted", "all-projects"],
   });
   const store = new Store(DB_PATH);
   try {
@@ -912,8 +950,8 @@ async function changes(): Promise<void> {
       console.log(`Purged ${n} change-log row(s) and every "last" marker.`);
       return;
     }
-    const base = {
-      namespaces: str(flags.namespace) ? [str(flags.namespace)!] : undefined,
+    const sc = await (await import("./everyday-cli.js")).scopedReadNamespace(str(flags.namespace), !!flags["all-projects"], !!flags.json); const base = {
+      namespaces: sc.namespace ? [sc.namespace] : undefined,
       source: str(flags.source),
       limit: str(flags.limit) ? Number(flags.limit) : undefined,
       ...(str(flags["written-by"]) ? { writtenBy: str(flags["written-by"])! } : {}),
@@ -1072,6 +1110,7 @@ async function exportCmd(): Promise<void> {
       return;
     }
     if (format !== "md" || !str(flags.dir)) {
+      if (!format && str(flags.out)) console.error(`--out needs --format json: monomem export --format json --out ${str(flags.out)}`);
       console.error("Usage: monomem export --format md --dir <path> [--namespace ns] [--no-prune] [--force] [--include-distrusted] [--max-sensitivity public|internal|private]");
       console.error("       monomem export --format json [--out file] [--attest]");
       process.exit(1);
@@ -1215,6 +1254,9 @@ async function importJsonFile(file: string, dedupe: boolean, json: boolean, requ
   const { Store, ValidationError, attestationsToShow } = await import("./store.js");
   const { printable } = await import("./security.js");
   const { streamBackupNotes, StreamJsonError, checkBackupNote } = await import("./stream-json.js");
+  const { ImportShape, importHeadline, importWarnings, importProgress, mergeTrustStripped } = await import("./import-report.js");
+  const shape = new ImportShape(); // notes with no body text, counted in the first pass
+  const started = Date.now();
   const { statSync } = await import("node:fs");
   try {
     statSync(file);
@@ -1236,6 +1278,7 @@ async function importJsonFile(file: string, dedupe: boolean, json: boolean, requ
         continue;
       }
       elements++;
+      shape.observe(note);
       if (bad) throw new StreamJsonError(`note #${elements}: ${bad}`);
     }
   } catch (e) {
@@ -1280,6 +1323,8 @@ async function importJsonFile(file: string, dedupe: boolean, json: boolean, requ
     skipped += report.skipped ?? 0;
     total.quarantined.push(...report.quarantined);
     total.rejected.push(...report.rejected);
+    mergeTrustStripped(total, report);
+    importProgress(handled, elements, started, json);
     const a = report.attestations;
     if (a) {
       att.verified += a.verified;
@@ -1321,10 +1366,11 @@ async function importJsonFile(file: string, dedupe: boolean, json: boolean, requ
     total.attestations = { verified: att.verified, unverified: att.unverified, reasons: att.reasons, untrusted_keys: [...att.untrusted_keys.values()] };
     if (skipped) total.skipped = skipped;
     if (json) {
-      console.log(JSON.stringify({ imported, ...total, ...(notObjects ? { ignored_entries: notObjects } : {}), ...(pinnedInFile ? { pinned_not_imported: pinnedInFile } : {}), attestations: attestationsToShow(total.attestations) }, null, 2));
+      console.log(JSON.stringify({ imported, ...total, ...(importWarnings(shape, total).length ? { warnings: importWarnings(shape, total), empty_body: shape.empty } : {}), ...(notObjects ? { ignored_entries: notObjects } : {}), ...(pinnedInFile ? { pinned_not_imported: pinnedInFile } : {}), attestations: attestationsToShow(total.attestations) }, null, 2));
       return;
     }
-    console.log(`Imported ${imported} note(s)${total.skipped ? `, skipped ${total.skipped} already present` : ""}.`);
+    console.log(importHeadline(imported, total.skipped, shape));
+    for (const w of importWarnings(shape, total)) console.log(w);
     if (pinnedInFile) console.log(`${pinnedInFile} note(s) were pinned in the file; pins are not imported (monomem pin <id> pins one again).`);
     if (notObjects) console.log(`${notObjects} entr${notObjects === 1 ? "y" : "ies"} in the file ${notObjects === 1 ? "was" : "were"} not a note (not an object) and ${notObjects === 1 ? "was" : "were"} ignored.`);
     const a = attestationsToShow(total.attestations);
@@ -1336,7 +1382,7 @@ async function importJsonFile(file: string, dedupe: boolean, json: boolean, requ
         console.log(`  key ${printable(k.key_id)} (server ${printable(k.server_id)}) signed ${k.notes} note(s) but is not trusted. To trust it you must get its public key from that server's admin (monomem trust identity there).`);
       }
     }
-    if (deferred) console.log("The similarity graph was not rebuilt for this large import: run `monomem tidy edges` when convenient.");
+    if (deferred) console.log("Search by meaning is not set up for these notes: run `monomem tidy edges` when convenient (normal search still works).");
     if (total.quarantined.length) console.log(`${total.quarantined.length} note(s) held by the linter (monomem review held).`);
     if (total.rejected.length) {
       console.error(`${total.rejected.length} note(s) rejected:`);
@@ -1674,7 +1720,7 @@ async function restoreBackupCmd(args: string[]): Promise<void> {
     const r = applyRestore(plan, DB_PATH);
     console.log(`Restored ${plan.notes} note(s).`);
     if (r.keptCurrentAt) console.log(`Your previous database is kept at ${r.keptCurrentAt}.\nTo undo this restore: monomem backup restore "${r.keptCurrentAt}" --yes`);
-    console.log("Start Monomem again, then run: monomem check --setup");
+    console.log("Next, run: monomem check --setup   (if a Monomem server was running, stop it and run: monomem start)");
   } catch (e) {
     if (e instanceof RestoreError) {
       console.error(e.message);
@@ -2114,6 +2160,9 @@ async function main(): Promise<void> {
     case "changes":
       await changes();
       break;
+    case "scope":
+      await (await import("./cli/scope.js")).scopeCmd();
+      break;
     case "backup":
       if (process.argv[3] === "restore") await restoreBackupCmd(process.argv.slice(4));
       else await backupCmd();
@@ -2150,6 +2199,9 @@ async function main(): Promise<void> {
       break;
     case "project-rules":
       await projectRulesCmd(process.argv.slice(3));
+      break;
+    case "drift": case "audit-memory": case "prune": case "handoff": case "tools": case "rescan":
+      await (await import("./cli/round3.js")).round3Cmd(cmd, process.argv.slice(3));
       break;
     case "stale": {
       // R2-03: notes whose anchored files changed in git since they were written.

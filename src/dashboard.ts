@@ -7,9 +7,10 @@ import { NOTES_JS } from "./ui/js-notes.js";
 import { REVIEW_JS } from "./ui/js-review.js";
 import { ACTIVITY_JS } from "./ui/js-activity.js";
 import { SETTINGS_JS } from "./ui/js-settings.js";
+import { ACTIONS_JS } from "./ui/js-actions.js";
 
 export const DASHBOARD_HTML = PAGE_HTML;
-export const DASHBOARD_JS = [CORE_JS, HUMAN_JS, NOTES_JS, REVIEW_JS, ACTIVITY_JS, SETTINGS_JS, BOOT_JS].join(String.fromCharCode(10));
+export const DASHBOARD_JS = [CORE_JS, HUMAN_JS, NOTES_JS, REVIEW_JS, ACTIVITY_JS, SETTINGS_JS, ACTIONS_JS, BOOT_JS].join(String.fromCharCode(10));
 
 // The brand mark (docs/brand/mark-gold-48.png), served at GET /favicon.ico without a token.
 export const FAVICON_PNG = Buffer.from(

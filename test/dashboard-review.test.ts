@@ -49,7 +49,7 @@ async function withServer(fn: (base: string, s: Store) => Promise<void>): Promis
 
 describe("dashboard Review = monomem review", () => {
   test("the page has a Review tab and valid script", () => {
-    assert.match(DASHBOARD_HTML, /id="tab_review" onclick="loadReview\(\)">Review/);
+    assert.match(DASHBOARD_HTML, /id="tab_review" data-do="loadReview">Review/);
     assert.doesNotThrow(() => new vm.Script(DASHBOARD_JS));
     assert.ok(!/reviewQueue|acceptNote/.test(DASHBOARD_JS), "the every-agent-note queue is gone");
   });
@@ -74,7 +74,7 @@ describe("dashboard Review = monomem review", () => {
       for (let i = 0; i < 20 && !p.el("list").innerHTML; i++) await settle();
       const html = p.el("list").innerHTML as string;
       assert.match(p.el("count").textContent, /^2 notes wait/);
-      assert.match(html, /aria-label='confirm note #\d+' onclick='reviewConfirm\(\d+\)'>Confirm: I checked it</);
+      assert.match(html, /aria-label='confirm note #\d+' data-do='reviewConfirm' data-args='\[\d+\]'>Confirm: I checked it</);
       assert.match(html, /we deploy with pnpm now/);
       assert.match(html, /Acme pricing &lt;b&gt;/, "titles are escaped");
       assert.ok(!html.includes("ordinary 1"), "ordinary agent notes are not listed");

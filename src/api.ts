@@ -34,6 +34,7 @@ import { taskRoutes } from "./api/routes-tasks.js";
 import { backupRoutes } from "./api/routes-backup.js";
 import { trustRoutes } from "./api/routes-trust.js";
 import { uiRoutes, uiAssetRoute, mintLocalSession } from "./api/routes-ui.js";
+import { DASHBOARD_CSP } from "./ui/csp.js";
 export { DASHBOARD_SESSION_TTL_MS, unknownNoteFields } from "./api/shared.js";
 
 export function createApiServer(
@@ -59,8 +60,9 @@ export function createApiServer(
 
       // Health check is intentionally unauthenticated so infra (tunnel,
       // uptime monitor) can probe liveness without a credential.
+      // Callers without a valid key get {status:"ok"} only; the build and schema need a key (a failed key counts nothing here).
       if (req.method === "GET" && path === "/health") {
-        sendJson(res, 200, healthBody());
+        sendJson(res, 200, healthBody(authenticateEntry(req, tokens) !== null));
         return;
       }
 
@@ -120,14 +122,9 @@ export function createApiServer(
           "Content-Type": "text/html; charset=utf-8",
           "X-Content-Type-Options": "nosniff",
           "X-Frame-Options": "DENY",
-          // Keep the page self-contained: no external loads, no framing. Inline
-          // styles/handlers are allowed because the dashboard uses them; this
-          // still blocks exfiltration to third-party origins as a backstop to
-          // the output escaping in dashboard.ts.
-          "Content-Security-Policy":
-            "default-src 'self'; style-src 'self' 'unsafe-inline'; " +
-            "script-src 'self' 'unsafe-inline'; connect-src 'self'; " +
-            "img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'",
+          // Self-contained page: no external loads, no framing. Scripts run only from /dashboard.js (no inline handlers:
+          // buttons use data-do attributes and one dispatcher, src/ui/js-actions.ts). Styles may be inline.
+          "Content-Security-Policy": DASHBOARD_CSP,
         });
         res.end(DASHBOARD_HTML);
         return;

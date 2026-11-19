@@ -87,7 +87,7 @@ export function evidenceOf(s: Store, noteId: number, rev: number): EvidenceItem[
 export function evidenceLabel(items: EvidenceItem[]): string {
   if (!items.length) return INFERRED_LABEL;
   const first = items[0];
-  return `[observed: ${first.kind} ${printable(first.ref, 60)}${items.length > 1 ? `, +${items.length - 1}` : ""}; cited by the writer, not checked]`;
+  return `[observed: ${first.kind} ${JSON.stringify(printable(first.ref, 60))}${items.length > 1 ? `, +${items.length - 1}` : ""}; cited by the writer, not checked]`;
 }
 
 /** rec(): `evidence`, `basis` and the label on a note saved with evidence; other notes keep their exact shape. */

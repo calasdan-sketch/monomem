@@ -81,20 +81,20 @@ function noteMenu(n){
   var id = Number(n.id), items = [], labels = labelsOf(n);
   labels.forEach(function(l){ if(l[2]){ items.push("<p><b>"+esc(l[1])+":</b> "+esc(l[2])+"</p>"); } });
   if(labels.some(function(l){ return l[2]; })){ items.push("<hr>"); }
-  if(IS_ADMIN && (n.unconfirmed || n.expired)){ items.push("<button role='menuitem' onclick='confirmNote("+id+")'>Confirm: I checked it</button>"); }
+  if(IS_ADMIN && (n.unconfirmed || n.expired)){ items.push("<button role='menuitem'"+actA("confirmNote",[id])+">Confirm: I checked it</button>"); }
   if(IS_ADMIN){
-    items.push(n.pinned ? "<button role='menuitem' onclick='setPin("+id+",false)'>Unpin</button>"
+    items.push(n.pinned ? "<button role='menuitem'"+actA("setPin",[id,false])+">Unpin</button>"
       : needsPerson(n) ? "<p>To pin it, confirm it first (Review).</p>"
-      : "<button role='menuitem' onclick='setPin("+id+",true)'>Pin to every session start</button>");
+      : "<button role='menuitem'"+actA("setPin",[id,true])+">Pin to every session start</button>");
   }
   items.push((n.tags||[]).indexOf("never-show") >= 0
-    ? "<button role='menuitem' aria-label='show note #"+id+" at session start again' onclick='neverShow("+id+",false)'>Show at session start again</button>"
-    : "<button role='menuitem' aria-label='never show note #"+id+"' onclick='neverShow("+id+",true)'>Don't show at session start</button>");
+    ? "<button role='menuitem' aria-label='show note #"+id+" at session start again'"+actA("neverShow",[id,false])+">Show at session start again</button>"
+    : "<button role='menuitem' aria-label='never show note #"+id+"'"+actA("neverShow",[id,true])+">Don't show at session start</button>");
   var l = LVL_OPT[n.sensitivity] ? n.sensitivity : "internal";
   items.push("<hr><div class='cap'>Who can see this</div>" + ["public","internal","private"].map(function(o){
-    return "<button role='menuitemradio' aria-checked='"+(o === l)+"' onclick='setLabel("+id+",&quot;"+o+"&quot;)'>"+LVL_OPT[o]+"</button>"; }).join(""));
-  if(IS_ADMIN){ items.push("<hr><button role='menuitem' onclick='touchedNote("+id+")'>What did this touch?</button>"); }
-  if(IS_ADMIN){ items.push("<button role='menuitem' aria-label='archive note #"+id+"' onclick='archiveNote("+id+")'>Archive</button>"); }
+    return "<button role='menuitemradio' aria-checked='"+(o === l)+"'"+actA("setLabel",[id,o])+">"+LVL_OPT[o]+"</button>"; }).join(""));
+  if(IS_ADMIN){ items.push("<hr><button role='menuitem'"+actA("touchedNote",[id])+">What did this touch?</button>"); }
+  if(IS_ADMIN){ items.push("<button role='menuitem' aria-label='archive note #"+id+"'"+actA("archiveNote",[id])+">Archive</button>"); }
   return "<details class='menu'><summary aria-label='More for note #"+id+"' title='More'>&middot;&middot;&middot;</summary><div class='pop' role='menu'>"+items.join("")+"</div></details>";
 }
 function noteCard(n, extra){
@@ -115,7 +115,7 @@ function render(notes){
     list.innerHTML = lf ? empty("No notes at that level", "Choose another level in Filters.")
       : q ? empty("No notes match", "Try fewer words, or clear the Project filter.")
       : ns ? empty("No notes in this project", "Clear the Project filter to see every project.")
-      : empty("No notes yet", "In any connected app, type: Save to Monomem: we deploy with pnpm", "<div class='acts' style='justify-content:center'><button class='primary' onclick='toggleNew()'>Add a note</button></div>");
+      : empty("No notes yet", "In any connected app, type: Save to Monomem: we deploy with pnpm", "<div class='acts' style='justify-content:center'><button class='primary'"+actA("toggleNew")+">Add a note</button></div>");
     return;
   }
   list.innerHTML = notes.map(function(n){ return noteCard(n); }).join("");
@@ -250,7 +250,7 @@ function loadArchived(){
     $("list").innerHTML = ns.length ? ns.map(function(n){
       return "<article class='card'><h3 class='t-head'>"+esc(n.title)+"</h3><div class='meta'>"+chip(n.written_by || "")+" &middot; "+esc(n.namespace)+" &middot; archived "+esc(ago(n.archived_at || n.updated_at))+"</div>"+
         (n.body ? "<div class='body clamp'>"+esc(n.body)+"</div>" : "")+
-        acts("<button class='primary' onclick='restoreNote("+Number(n.id)+")'>Restore</button><button class='destructive' aria-label='delete note #"+Number(n.id)+" for good' data-confirm='Delete for good?' onclick='arm(this,function(){del("+Number(n.id)+")})'>Delete for good</button>")+"</article>";
+        acts("<button class='primary'"+actA("restoreNote",[Number(n.id)])+">Restore</button><button class='destructive' aria-label='delete note #"+Number(n.id)+" for good' data-confirm='Delete for good?'"+actA("armDel",[Number(n.id)])+">Delete for good</button>")+"</article>";
     }).join("") : empty("Nothing archived", "Notes you archive wait here, and you can bring them back.");
   }).catch(failList);
 }

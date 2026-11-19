@@ -51,7 +51,7 @@ describe("dashboard: Held view", () => {
     assert.match(html, /instruction override in body/);
     assert.match(html, /work/);
     assert.ok(!html.includes("<img"), "no live markup");
-    assert.match(html, /arm\(this,function\(\)\{qHeld\(4,&quot;reject&quot;\)\}\)/);
+    assert.match(html, /data-do='armHeld' data-args='\[4,&quot;reject&quot;\]'/);
     // Calm: no red bar on the card and no red outline on the tab; red stays only on the HELD stamp.
     assert.ok(!/card held/.test(html));
     assert.match(html, /<span class='stamp'>HELD &middot; NOT IN MEMORY<\/span>/);
@@ -104,7 +104,7 @@ describe("dashboard: cards", () => {
     p.ctx.render([]);
     // Plain words and a button, never a CLI command where a button does the job.
     assert.match(p.el("list").innerHTML, /Save to Monomem: /);
-    assert.match(p.el("list").innerHTML, /onclick='toggleNew\(\)'>Add a note</);
+    assert.match(p.el("list").innerHTML, /data-do='toggleNew'>Add a note</);
     assert.ok(!/monomem setup/.test(p.el("list").innerHTML));
   });
 });
@@ -115,7 +115,7 @@ describe("dashboard: held strip, pinned first, writer label", () => {
     p.ctx.setNeeds({ count: 1, items: [{ kind: "held", count: 1, view: "held", text: "1 write is held until you approve or reject it." }] });
     p.ctx.setView("list");
     assert.equal(p.el("needs").hidden, false);
-    assert.match(p.el("needs").innerHTML, /1 thing needs you[\s\S]*onclick='loadHeld\(\)'>Open Held</, "the button names where it goes (r3-design LOW)");
+    assert.match(p.el("needs").innerHTML, /1 thing needs you[\s\S]*data-do='loadHeld'>Open Held</, "the button names where it goes (r3-design LOW)");
     p.ctx.setView("held");
     assert.equal(p.el("needs").hidden, true);
     p.ctx.setNeeds({ count: 0, items: [] });

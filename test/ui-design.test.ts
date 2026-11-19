@@ -176,7 +176,7 @@ describe("Welcome (first run)", () => {
     assert.match(w, /Connect the apps you use/);
     assert.match(w, /Settings, then Undo the last connect, puts it back/);
     const apps = p.el("wl_apps").innerHTML as string;
-    assert.match(apps, /<b>Claude Code<\/b>[\s\S]*connectApp\(&quot;claude-code&quot;\)'>Connect<[\s\S]*declineApp\(&quot;claude-code&quot;\)'>Not this one</);
+    assert.match(apps, /<b>Claude Code<\/b>[\s\S]*data-do='connectApp' data-args='\[&quot;claude-code&quot;\]'>Connect<[\s\S]*data-do='declineApp' data-args='\[&quot;claude-code&quot;\]'>Not this one</);
     assert.match(apps, /<b>Cursor<\/b><div class='help'>In Cursor, open Settings, then MCP/);
     p.ctx.showWelcome(1);
     assert.match(p.el("welcome").innerHTML, /Save to Monomem: we deploy with pnpm/);
@@ -184,7 +184,7 @@ describe("Welcome (first run)", () => {
     p.ctx.showWelcome(2);
     const consent = p.el("welcome").innerHTML as string;
     for (const s of ["Back up my notes every day", "Add matching notes to each prompt", "Start Monomem with my computer"]) assert.ok(consent.includes(s), s);
-    assert.match(consent, /id='sw_recall' onchange/);
+    assert.match(consent, /id='sw_recall' data-chg='setSetting' data-args='\[&quot;prompt_recall&quot;\]'/);
     assert.ok(!/id='sw_recall' checked/.test(consent), "prompt-time notes are off unless switched on");
     assert.match(consent, /You can close this window\. Your apps start Monomem themselves\./);
     p.ctx.finishWelcome();
@@ -209,7 +209,7 @@ describe("Welcome (first run)", () => {
     out = "Monomem 1.6.1 is out (you have 1.6.0). Get it:  monomem update";
     p.ctx.checkUpdate();
     await settle();
-    assert.match(p.el("upd_out").innerHTML, /onclick='doUpdate\(\)'>Update now</);
+    assert.match(p.el("upd_out").innerHTML, /data-do='doUpdate'>Update now</);
     assert.equal(p.calls.filter((c) => c === "POST /ui/update").length, 2);
   });
   test("Update now: shows the update's output while it runs, reloads once /health names the new version", async () => {

@@ -9,6 +9,11 @@ export async function recallHookCheck(dr: Doctor): Promise<void> {
   // Recall hook smoke test: run the real SessionStart path against this
   // database and check the payload shape. Also budget-check it: the hook
   // blocks session start, so a slow recall is worth knowing about.
+  // No database yet: running recall would create it (and its keys). Say so instead; setup or start makes it.
+  if (DB_PATH !== ":memory:" && !(await import("node:fs")).existsSync(DB_PATH)) {
+    ok("recall hook smoke test skipped: there is no database yet (it is made by monomem setup or monomem start)");
+    return;
+  }
   try {
     const { runRecall } = await import("../recall.js");
     const t0 = Date.now();

@@ -16,16 +16,22 @@ another tool: [upgrading.md](./upgrading.md), [switching.md](./switching.md).
 ## Automatic daily backups
 
 While Monomem's server is running (`monomem start`, or "Start Monomem with my computer" in the dashboard's Settings),
-it makes one backup a day in `<data folder>/backups`. It keeps the 7 newest days plus one backup from each of the 4
-weeks before them, and deletes older ones. The encryption key is never copied into them. When the server is not
-running, no daily backup is made: `monomem check` says how old your last backup is. Turn them off in the dashboard's
+or while any app is connected to it over MCP (the usual way), it makes one backup a day in `<data folder>/backups`. Each
+connected app looks about a minute after it starts and then every hour; only one copy is made at a time, so several apps
+do not repeat the work. It keeps the 7 newest days plus one backup from each of the 4
+weeks before them, and deletes older ones. The encryption key is never copied into them. When neither the server nor
+any connected app is running, no daily backup is made: `monomem check` says how old your last backup is. Turn them off in the dashboard's
 Settings, or with `MONOMEM_AUTO_BACKUP=off` ([configuration.md](./configuration.md)).
 
 ## Backing up by hand
 
 ```bash
 monomem backup --out ~/om-backup     # a consistent copy; safe while the server runs
+monomem backup                        # the same, into <data folder>/backups/monomem-backup-<time>
 ```
+
+With no folder given, `monomem backup` writes into the `backups` folder inside your data folder (beside the automatic daily
+ones), never into the system's temporary folder, which the system empties.
 
 `monomem backup` writes `state.db` (through SQLite `VACUUM INTO`) and a `README.txt` that says what is and is not in
 the folder. It leaves the keys out unless you ask:

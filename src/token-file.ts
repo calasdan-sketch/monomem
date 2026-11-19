@@ -6,6 +6,7 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { audit } from "./security.js";
+import { restrictFile } from "./private-dir.js";
 
 export type TokenScope = "read" | "write" | "admin";
 export interface TokenRow {
@@ -45,6 +46,7 @@ function save(file: string, rows: TokenRow[]): void {
   rmSync(tmp, { force: true }); // a stale tmp file would keep whatever mode it already had
   writeFileSync(tmp, JSON.stringify(rows, null, 2) + "\n", { mode: 0o600, flag: "wx" });
   chmodSync(tmp, 0o600); // explicit, whatever the umask
+  restrictFile(tmp); // Windows ACL: the current user only (best effort)
   renameSync(tmp, file); // atomic; the new file keeps the tmp file's 0600 on POSIX (Windows ignores modes)
 }
 

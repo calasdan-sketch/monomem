@@ -21,25 +21,25 @@ function loadReview(){
     CFG = cf; CFACT = {};
     $("count").textContent = plural(j.count, "note waits", "notes wait") + (cf.length ? "; " + plural(cf.length, "fact has", "facts have") + " two answers" : "");
     var out = [];
-    if(j.held_writes){ out.push("<div class='banner'><span>"+plural(j.held_writes, "write is", "writes are")+" held for your decision.</span><button onclick='loadHeld()'>Open Held</button></div>"); }
+    if(j.held_writes){ out.push("<div class='banner'><span>"+plural(j.held_writes, "write is", "writes are")+" held for your decision.</span><button"+actA("loadHeld")+">Open Held</button></div>"); }
     if(j.notes.length){
       out.push("<h3 class='section t-title'>Waiting for you to confirm</h3>");
       out = out.concat(j.notes.map(function(r){
-        return reviewRow(r, whyWords(r.why), "<button class='primary' aria-label='confirm note #"+Number(r.id)+"' onclick='reviewConfirm("+Number(r.id)+")'>Confirm: I checked it</button><button aria-label='archive note #"+Number(r.id)+"' onclick='archiveNote("+Number(r.id)+")'>Archive</button>");
+        return reviewRow(r, whyWords(r.why), "<button class='primary' aria-label='confirm note #"+Number(r.id)+"'"+actA("reviewConfirm",[Number(r.id)])+">Confirm: I checked it</button><button aria-label='archive note #"+Number(r.id)+"'"+actA("archiveNote",[Number(r.id)])+">Archive</button>");
       }));
     }
     if(j.flagged.length){
       out.push("<h3 class='section t-title'>Flagged by an app</h3>");
       out = out.concat(j.flagged.map(function(f){
         var why = (f.flags || []).map(function(x){ return chip(x.by)+" says: "+esc(x.reason); }).join("<br>");
-        return reviewRow(f, why, "<button class='primary' aria-label='keep note #"+Number(f.id)+"' onclick='reviewKeep("+Number(f.id)+")'>Keep as it is</button><button aria-label='archive note #"+Number(f.id)+"' onclick='archiveNote("+Number(f.id)+")'>Archive</button>");
+        return reviewRow(f, why, "<button class='primary' aria-label='keep note #"+Number(f.id)+"'"+actA("reviewKeep",[Number(f.id)])+">Keep as it is</button><button aria-label='archive note #"+Number(f.id)+"'"+actA("archiveNote",[Number(f.id)])+">Archive</button>");
       }));
     }
     if(j.code_changed.length){
       out.push("<h3 class='section t-title'>The code it describes changed</h3>");
       out = out.concat(j.code_changed.map(function(c){
         var why = "Changed since it was written: " + (c.changed || []).map(function(x){ return "<code>"+esc(x.path)+"</code>"; }).join(", ");
-        return reviewRow(c, why, "<button class='primary' aria-label='keep note #"+Number(c.id)+"' onclick='reviewKeep("+Number(c.id)+")'>Still true</button><button aria-label='archive note #"+Number(c.id)+"' onclick='archiveNote("+Number(c.id)+")'>Archive</button>");
+        return reviewRow(c, why, "<button class='primary' aria-label='keep note #"+Number(c.id)+"'"+actA("reviewKeep",[Number(c.id)])+">Still true</button><button aria-label='archive note #"+Number(c.id)+"'"+actA("archiveNote",[Number(c.id)])+">Archive</button>");
       }));
     }
     if(cf.length){
@@ -72,8 +72,8 @@ function loadHeld(){
         "<div class='chips'>"+(why || "<span class='tag why'>held by your approve-first rule</span>")+"</div>"+tagsHtml(q.tags)+
         (q.body ? "<div class='heldbody'>"+esc(q.body)+"</div>" : "")+
         "<div id='qctx"+Number(q.id)+"' class='meta'></div>"+
-        acts("<button class='primary' aria-label='reject held write #"+Number(q.id)+"' onclick='arm(this,function(){qHeld("+Number(q.id)+",&quot;reject&quot;)})'>Reject</button>"+
-          "<button aria-label='approve held write #"+Number(q.id)+"' onclick='arm(this,function(){qHeld("+Number(q.id)+",&quot;approve&quot;)})'>Approve</button>")+"</article>";
+        acts("<button class='primary' aria-label='reject held write #"+Number(q.id)+"'"+actA("armHeld",[Number(q.id),"reject"])+">Reject</button>"+
+          "<button aria-label='approve held write #"+Number(q.id)+"'"+actA("armHeld",[Number(q.id),"approve"])+">Approve</button>")+"</article>";
     }).join("") : empty("Nothing is held", "Writes that look like a secret or an injected instruction wait here for you.");
     held.forEach(function(q){ loadHeldContext(Number(q.id)); });
   }).catch(failList);
@@ -85,7 +85,7 @@ function loadHeldContext(id){
     var rows = notes.map(function(n){ return "<li>&ldquo;"+esc(n.title)+"&rdquo; ("+(n.written_by ? esc(shownWriter(n.written_by))+", " : "")+esc(ago(n.updated_at))+")</li>"; }).join("");
     box.innerHTML = (c.diff ? "<div>What this change does to the note (- now, + held):</div>" + diffHtml(c.diff) : "") +
       (notes.length ? "Saved on the same topic since:<ul>"+rows+"</ul>"+
-        acts("<button aria-label='keep held write #"+id+" as history' onclick='arm(this,function(){qHeld("+id+",&quot;keep-history&quot;)})'>Keep as history</button>") : "") +
+        acts("<button aria-label='keep held write #"+id+" as history'"+actA("armHeld",[id,"keep-history"])+">Keep as history</button>") : "") +
       (c.target_changed ? "<div>The note it changes was edited since, so Approve will not work.</div>" : "") +
       (c.clears && c.clears.length ? "<div>Approving it also clears the note's " + esc(c.clears.map(function(x){ return x === "forget_after" ? "forget date" : x; }).join(" and ")) + ".</div>" : "") +
       (c.note ? "<div>" + esc(c.note) + "</div>" : "");
@@ -112,10 +112,10 @@ function loadQuality(){
       // A duplicate group keeps keep_id and replaces every other copy in it (ids holds the whole group).
       var keepId = i.type === "duplicate" && i.keep_id != null ? Number(i.keep_id) : b;
       var olds = i.type === "duplicate" ? (i.ids || []).map(Number).filter(function(x){ return x !== keepId; }) : [a];
-      if(i.type === "duplicate" || i.type === "stale_twin" || i.type === "contradiction" || i.type === "restated"){ btn = "<button class='primary' onclick='qReplace(["+olds.join(",")+"],"+keepId+")'>Replace "+olds.map(function(x){ return "#"+x; }).join(", ")+" with #"+keepId+"</button>"; }
-      else if(i.type === "pii"){ btn = "<button class='primary' onclick='qPrivate("+a+")'>Make #"+a+" private</button>"; }
-      else if(i.type === "quarantined"){ btn = "<button class='primary' onclick='loadHeld()'>Open Held</button>"; }
-      else { btn = "<button onclick='archiveNote("+a+")'>Archive #"+a+"</button>"; }
+      if(i.type === "duplicate" || i.type === "stale_twin" || i.type === "contradiction" || i.type === "restated"){ btn = "<button class='primary'"+actA("qReplace",[olds,keepId])+">Replace "+olds.map(function(x){ return "#"+x; }).join(", ")+" with #"+keepId+"</button>"; }
+      else if(i.type === "pii"){ btn = "<button class='primary'"+actA("qPrivate",[a])+">Make #"+a+" private</button>"; }
+      else if(i.type === "quarantined"){ btn = "<button class='primary'"+actA("loadHeld")+">Open Held</button>"; }
+      else { btn = "<button"+actA("archiveNote",[a])+">Archive #"+a+"</button>"; }
       return "<article class='card'><div class='chips' style='margin:0 0 8px'><span class='lbl'>"+esc(typeLabel(i.type))+"</span></div><h3 class='t-head'>"+esc(i.detail)+"</h3>"+
         "<div class='meta'>"+esc(i.namespace)+"</div>"+acts(btn)+"</article>";
     }).join("");
@@ -150,13 +150,13 @@ function cfRow(g, gi){
     v.notes.forEach(function(n){ all.push(n); });
     // Keeping one value changes the other values' notes, and a pinned note can only be changed by you, not here.
     var blocked = g.values.some(function(o, oi){ return oi !== vi && o.notes.some(function(n){ return n.pinned; }); });
-    if(!blocked){ btns.push("<button onclick='cfKeep("+gi+","+vi+")'>Keep "+esc(v.value)+"</button>"); }
+    if(!blocked){ btns.push("<button"+actA("cfKeep",[gi,vi])+">Keep "+esc(v.value)+"</button>"); }
   });
   all.forEach(function(n){
-    if(!n.pinned){ more.push("<button onclick='var x=this;arm(x,function(){qPin("+Number(n.id)+")})'>Pin #"+Number(n.id)+"</button>"); }
+    if(!n.pinned){ more.push("<button "+actA("armPin",[Number(n.id)])+">Pin #"+Number(n.id)+"</button>"); }
     if(!seen[n.writer]){
       seen[n.writer] = 1;
-      more.push("<button data-ns='"+esc(g.namespace)+"' data-w='"+esc(n.writer)+"' onclick='var x=this;arm(x,function(){qDistrust(x)})'>Distrust "+esc(shownWriter(n.writer))+"</button>");
+      more.push("<button data-ns='"+esc(g.namespace)+"' data-w='"+esc(n.writer)+"'"+actA("armDistrust")+">Distrust "+esc(shownWriter(n.writer))+"</button>");
     }
   });
   var pins = all.filter(function(n){ return n.pinned; }).map(function(n){ return "#"+Number(n.id); });
@@ -169,8 +169,8 @@ function cfRow(g, gi){
 function cfDialog(gi, bullets, actions){
   CFACT[gi] = actions.map(function(a){ return a[1]; });
   $("cfdlg"+gi).innerHTML = "<ul>"+bullets.map(function(b){ return "<li>"+b+"</li>"; }).join("")+"</ul><div class='acts'>"+
-    actions.map(function(a, i){ return "<button"+(a[2] ? "" : " class='primary'")+" onclick='cfAct("+gi+","+i+")'>"+esc(a[0])+"</button>"; }).join("")+
-    "<button class='plain' onclick='cfClose("+gi+")'>Cancel</button></div>";
+    actions.map(function(a, i){ return "<button"+(a[2] ? "" : " class='primary'")+""+actA("cfAct",[gi,i])+">"+esc(a[0])+"</button>"; }).join("")+
+    "<button class='plain'"+actA("cfClose",[gi])+">Cancel</button></div>";
 }
 function cfAct(gi, i){ var f = CFACT[gi] && CFACT[gi][i]; if(f){ f(); } }
 function cfClose(gi){ var d = $("cfdlg"+gi); if(d){ d.innerHTML = ""; } CFACT[gi] = []; }

@@ -21,6 +21,16 @@ both with Reciprocal Rank Fusion). If the endpoint is unavailable, search and
 writes silently fall back to keyword — an optional embedder can never fail a
 write or a query.
 
+## Code identifiers (2026-11-18)
+
+Keyword search finds `user_session_timeout`, `user-session-timeout` and `src/auth/session.ts` by their separate words, and now
+also finds a camelCase note from the words apart: "get user by id" finds `getUserById`, "user session timeout" finds
+`userSessionTimeout`. A query word such as `getUserById` or `user_session_timeout` is also matched in the other written
+forms. This widens the QUERY (`src/query-expand.ts`); the index is unchanged, so no migration is needed. Limits: only the
+whole identifier is found (a single part such as "timeout" does not find `userSessionTimeout`), the words must be in the
+identifier's order, and a query of 7 or more words is not glued. Regression cases: `evals/identifier-queries.json`.
+A paraphrase with no shared word ("where is the app hosted" vs "API is deployed on Fly.io") needs semantic search.
+
 ## Time-aware search
 
 `memory_search` takes an optional `when` parameter (and `GET /search` takes

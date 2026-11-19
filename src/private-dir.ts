@@ -39,12 +39,42 @@ export function wideAccessGroups(icaclsOutput: string): string[] {
   return WIDE_GROUPS.filter((g) => new RegExp(`(^|\\s)${g.replace(/\\/g, "\\\\")}:`, "im").test(icaclsOutput));
 }
 
+/** The icacls arguments that leave ONE file to the current user alone (inheritance removed). null when the user name is unknown. */
+export function fileLockdownArgs(file: string, env: NodeJS.ProcessEnv = process.env): string[] | null {
+  const user = env.USERNAME?.trim();
+  if (!user) return null;
+  const domain = env.USERDOMAIN?.trim();
+  return [file, "/inheritance:r", "/grant:r", `${domain ? domain + "\\" : ""}${user}:F`];
+}
+
 export interface PrivateDirOptions {
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
   run?: (args: string[]) => void;
 }
 const runIcacls = (args: string[]): void => void execFileSync("icacls", args, { stdio: "ignore", timeout: 15_000, windowsHide: true });
+
+let warnedFileAcl = false;
+/**
+ * 2026-11-18: the Windows counterpart of mode 0600 for a key or token file (the access token, the signing and encryption
+ * keys, tokens.json): remove inherited permissions and grant only the current user, with icacls (no shell). Best effort: a
+ * failure (icacls missing, unknown user name, a file system without ACLs) prints one warning per process and never stops
+ * startup. It protects from other accounts on this PC, not from programs running as you. A no-op off Windows.
+ */
+export function restrictFile(file: string, o: PrivateDirOptions = {}): void {
+  if ((o.platform ?? process.platform) !== "win32") return;
+  const env = o.env ?? process.env;
+  if (!o.run && env.MONOMEM_NO_CHMOD === "1") return; // deliberately shared files: leave the permissions alone
+  try {
+    const args = fileLockdownArgs(file, env);
+    if (!args) throw new Error("the Windows user name is unknown");
+    (o.run ?? runIcacls)(args);
+  } catch (e) {
+    if (warnedFileAcl) return;
+    warnedFileAcl = true;
+    console.error(`[monomem] could not restrict ${file} to your account with icacls (${(e as Error).message}); other accounts on this PC may be able to read it. Fix: icacls "${file}" /inheritance:r /grant:r "%USERDOMAIN%\\%USERNAME%:F"`);
+  }
+}
 
 /**
  * Create `dir` owner-only (0700) and re-tighten it if it already existed looser. On Windows a folder created here is also

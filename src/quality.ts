@@ -18,12 +18,12 @@
 // writer's notes, distrusted ones included.
 import type { Store, NoteRecord } from "./store.js";
 import { findCandidatesCooperative } from "./consolidate.js";
-import { lintContent, describeFindings } from "./lint.js";
+import { lintContent, lintBatch, describeFindings } from "./lint.js";
 import { isStale, stalenessConfig } from "./staleness.js";
 import { findConflicts, conflictReport, type Conflict, type ConflictGroup } from "./conflicts.js";
 import { scanPii, describePii } from "./pii.js";
 import { findContradictions } from "./contradiction.js";
-import { factClash } from "./facts.js";
+import { factClash, noteFacts, canonKey } from "./facts.js";
 import { heldFromSessionStart } from "./taint.js";
 import { RESTATE_MIN_SIM, expiryEnforced } from "./search-service.js";
 
@@ -64,7 +64,12 @@ const PER_TYPE = 200; // ponytail: fixed cap per issue type, add paging if a sto
 const quote = (s: string): string => JSON.stringify(s.length > 80 ? s.slice(0, 80) + "…" : s);
 
 /** namespaces: undefined = the whole store. */
-export async function qualityReport(store: Store, namespaces?: string[]): Promise<QualityReport> {
+/**
+ * `only`: build just these kinds (the others stay empty, and the conflicts list is skipped). `monomem check` needs three counts,
+ * and at 20,000 notes building the rest (a lint pass over every note, personal-data and contradiction scans) was most of its time.
+ */
+export async function qualityReport(store: Store, namespaces?: string[], only?: readonly QualityType[]): Promise<QualityReport> {
+  const want = (t: QualityType): boolean => !only || only.includes(t);
   const inScope = (ns: string): boolean => !namespaces || namespaces.includes(ns);
   const notes = store.exportAll({ live: true }).filter((n) => inScope(n.namespace)); // gate-ok: admin-only report
   const byId = new Map(notes.map((n) => [n.id, n]));
@@ -72,7 +77,7 @@ export async function qualityReport(store: Store, namespaces?: string[]): Promis
   const pairKey = (a: number, b: number): string => (a < b ? `${a}-${b}` : `${b}-${a}`);
   const seen = new Set<string>();
 
-  for (const g of duplicateGroups(await findCandidatesCooperative(notes, { threshold: 0.95 })).slice(0, PER_TYPE)) {
+  for (const g of want("duplicate") ? duplicateGroups(await findCandidatesCooperative(notes, { threshold: 0.95 })).slice(0, PER_TYPE) : []) {
     // Newest last: it is the one that stays.
     const sorted = g.ids.map((id) => byId.get(id)!).sort((a, b) => Date.parse(a.updated_at) - Date.parse(b.updated_at) || a.id - b.id);
     const keep = sorted[sorted.length - 1];
@@ -91,7 +96,7 @@ export async function qualityReport(store: Store, namespaces?: string[]): Promis
 
   const cfg = stalenessConfig();
   let twins = 0;
-  for (const n of notes) {
+  for (const n of want("stale_twin") ? notes : []) {
     if (twins >= PER_TYPE) break;
     if (!isStale(n, cfg).stale) continue;
     for (const id of store.neighbourIds(n.id)) {
@@ -111,7 +116,7 @@ export async function qualityReport(store: Store, namespaces?: string[]): Promis
     }
   }
 
-  for (const q of store.listQuarantine({ namespaces, limit: PER_TYPE })) {
+  for (const q of want("quarantined") ? store.listQuarantine({ namespaces, limit: PER_TYPE }) : []) {
     issues.push({
       type: "quarantined",
       namespace: q.namespace,
@@ -124,22 +129,25 @@ export async function qualityReport(store: Store, namespaces?: string[]): Promis
   }
 
   let linted = 0;
-  for (const n of notes) {
-    if (linted >= PER_TYPE) break;
-    const found = lintContent({ title: n.title, body: n.body, tags: n.tags });
-    if (!found.length) continue;
-    linted++;
-    issues.push({
-      type: "lint",
-      namespace: n.namespace,
-      ids: [n.id],
-      detail: `#${n.id} ${quote(n.title)}: ${describeFindings(found)}`,
-      fix: `monomem archive ${n.id}`,
-      alt: `monomem restore ${n.id}`,
-    });
-  }
+  // One look at the access-token files for the whole pass, not one per note (lintBatch).
+  lintBatch(() => {
+    for (const n of want("lint") ? notes : []) {
+      if (linted >= PER_TYPE) break;
+      const found = lintContent({ title: n.title, body: n.body, tags: n.tags });
+      if (!found.length) continue;
+      linted++;
+      issues.push({
+        type: "lint",
+        namespace: n.namespace,
+        ids: [n.id],
+        detail: `#${n.id} ${quote(n.title)}: ${describeFindings(found)}`,
+        fix: `monomem archive ${n.id}`,
+        alt: `monomem restore ${n.id}`,
+      });
+    }
+  });
 
-  for (const d of store.decayCandidates(Date.now(), namespaces, PER_TYPE)) {
+  for (const d of want("decay") ? store.decayCandidates(Date.now(), namespaces, PER_TYPE) : []) {
     issues.push({
       type: "decay",
       namespace: d.namespace,
@@ -150,7 +158,7 @@ export async function qualityReport(store: Store, namespaces?: string[]): Promis
     });
   }
 
-  for (const p of scanPii(notes, PER_TYPE).suggestions) {
+  for (const p of want("pii") ? scanPii(notes, PER_TYPE).suggestions : []) {
     issues.push({
       type: "pii",
       namespace: p.namespace,
@@ -162,7 +170,7 @@ export async function qualityReport(store: Store, namespaces?: string[]): Promis
   }
 
   const byIdAll = new Map(notes.map((n) => [n.id, n]));
-  for (const c of findContradictions(notes, { max: PER_TYPE }).found) {
+  for (const c of want("contradiction") ? findContradictions(notes, { max: PER_TYPE }).found : []) {
     issues.push({
       type: "contradiction",
       namespace: c.namespace,
@@ -174,7 +182,7 @@ export async function qualityReport(store: Store, namespaces?: string[]): Promis
   }
 
   let empties = 0;
-  for (const n of notes) {
+  for (const n of want("empty") ? notes : []) {
     if (empties >= PER_TYPE) break;
     if ((n.kind ?? "note") !== "note" || n.body.trim() !== "") continue;
     empties++;
@@ -189,7 +197,7 @@ export async function qualityReport(store: Store, namespaces?: string[]): Promis
   }
 
   let restated = 0;
-  for (const [o, n] of restatedPairs(store, notes, PER_TYPE * 2)) {
+  for (const [o, n] of want("restated") ? restatedPairs(store, notes, PER_TYPE * 2) : []) {
     if (restated >= PER_TYPE) break;
     if (seen.has(pairKey(o.id, n.id))) continue;
     seen.add(pairKey(o.id, n.id));
@@ -205,7 +213,7 @@ export async function qualityReport(store: Store, namespaces?: string[]): Promis
   }
 
   const counts = Object.fromEntries(QUALITY_TYPES.map((t) => [t, issues.filter((i) => i.type === t).length])) as Record<QualityType, number>;
-  const pairs = findConflicts(store, { namespaces, notes });
+  const pairs = only ? [] : findConflicts(store, { namespaces, notes });
   const grouped = conflictReport(pairs, PER_TYPE);
   return { counts, issues, conflicts: pairs.slice(0, PER_TYPE), conflict_groups: grouped.groups, conflict_total: grouped.total, conflict_capped: grouped.capped };
 }
@@ -251,14 +259,19 @@ const personConfirmed = (n: NoteRecord): boolean => (n.confirmed_kind === "human
 export function restatedPairs(store: Store, notes: NoteRecord[], max = Infinity): Array<[NoteRecord, NoteRecord]> {
   const enforce = expiryEnforced(store);
   const plain = notes.filter((n) => (n.kind ?? "note") === "note" && !n.superseded_by);
-  // One group per namespace + writer (only same-writer pairs count), so a store with many writers stays cheap.
-  // ponytail: still O(k^2) inside one writer's group of k notes; index by created_at if one writer reaches tens of thousands
-  const groups = new Map<string, NoteRecord[]>();
+  // Only same-writer pairs count. The candidates for an older note O are the notes its similarity links point to and the notes
+  // that give one of O's facts another value, found through two indexes, so the cost grows with the number of links, not with the
+  // square of one writer's notes (a store of 20,000 notes by one writer took minutes).
+  const byId = new Map(plain.map((n) => [n.id, n]));
+  const wk = new Map(plain.map((n) => [n.id, writerKey(n)]));
+  const factIdx = new Map<string, NoteRecord[]>();
   for (const n of plain) {
-    const k = writerKey(n);
-    const g = groups.get(k);
-    if (g) g.push(n);
-    else groups.set(k, [n]);
+    for (const [k] of noteFacts(n.tags ?? [])) {
+      const key = `${wk.get(n.id)}\0${canonKey(k)}`;
+      const g = factIdx.get(key);
+      if (g) g.push(n);
+      else factIdx.set(key, [n]);
+    }
   }
   const created = new Map(plain.map((n) => [n.id, Date.parse(n.created_at)]));
   // Newest first, ties in the original order: the answer is "the newest valid N", so the first valid one found is it and the scan stops
@@ -277,20 +290,22 @@ export function restatedPairs(store: Store, notes: NoteRecord[], max = Infinity)
   }
   const out: Array<[NoteRecord, NoteRecord]> = [];
   for (const o of plain) {
-    let best: NoteRecord | undefined;
-    let sims: Map<number, number> | undefined; // read only when a cheap candidate exists
+    const w = wk.get(o.id)!;
     const oUpdated = Date.parse(o.updated_at);
-    if (!Number.isNaN(oUpdated)) {
-      for (const n of newestFirst.get(writerKey(o))!) {
-        if (!(created.get(n.id)! > oUpdated)) break; // sorted newest first: every note after this one is older still
-        if (n.id === o.id) continue;
-        if (n.distrusted || heldFromSessionStart(n, enforce) || (personConfirmed(o) && !personConfirmed(n))) continue;
-        const sameSubject = factClash(o.tags ?? [], n.tags ?? []) || ((sims ??= store.neighbourScores(o.id)).get(n.id) ?? 0) >= RESTATE_MIN_SIM;
-        if (sameSubject && !(typeof store.isDistrusted === "function" && store.isDistrusted(n))) {
-          best = n;
-          break;
-        }
-      }
+    const cands = new Map<number, NoteRecord>();
+    for (const [k] of noteFacts(o.tags ?? [])) for (const n of factIdx.get(`${w}\0${canonKey(k)}`) ?? []) cands.set(n.id, n);
+    const sims = store.neighbourScores(o.id);
+    for (const id of sims.keys()) {
+      const n = byId.get(id);
+      if (n && wk.get(id) === w) cands.set(id, n);
+    }
+    let best: NoteRecord | undefined;
+    for (const n of cands.values()) {
+      if (n.id === o.id || !(created.get(n.id)! > oUpdated)) continue;
+      if (best && (created.get(n.id)! < created.get(best.id)! || (created.get(n.id) === created.get(best.id) && n.id > best.id))) continue;
+      if (n.distrusted || heldFromSessionStart(n, enforce) || (personConfirmed(o) && !personConfirmed(n))) continue;
+      const sameSubject = factClash(o.tags ?? [], n.tags ?? []) || (sims.get(n.id) ?? 0) >= RESTATE_MIN_SIM;
+      if (sameSubject && !(typeof store.isDistrusted === "function" && store.isDistrusted(n))) best = n;
     }
     if (best && out.push([o, best]) >= max) break;
   }

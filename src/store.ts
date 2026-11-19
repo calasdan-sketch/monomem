@@ -16,9 +16,8 @@ import { mkdirSync, statSync, statfsSync, readdirSync, renameSync, linkSync, exi
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { dirname, basename, join, resolve } from "node:path";
 import { privateDir } from "./private-dir.js";
-import { checkSizes, checkNames, audit, auditHead, auditPath, beginKeyRotation, withAuditPath, ADMIN_SCOPE_NEEDED } from "./security.js";
+import { checkSizes, checkNames, audit, auditBatch, auditHead, auditPath, beginKeyRotation, withAuditPath, ADMIN_SCOPE_NEEDED, SECRET_ASSIGN_LABEL } from "./security.js";
 import { chmodQuiet } from "./config.js";
-import { SECRET_ASSIGN_LABEL } from "./security.js";
 import { lintContent, lintPolicy, describeFindings, type LintFinding, type LintAction, type LintCategory } from "./lint.js";
 // The zero-dependency text similarity for the note similarity graph (shared with consolidate.ts).
 import {
@@ -41,6 +40,7 @@ import { BodyIndex, type BodyIndexInfo } from "./store/body-index.js";
 import { ensureCaptureColumns, migrate as migrateSchema } from "./store/migrate.js";
 import { beginImmediate } from "./store/write-lock.js";
 import { CHANGE_LOG_RETENTION_DAYS, FTS_PREFIX_OPT, SQL_NOW, DEFAULT_NAMESPACE } from "./store/schema-constants.js";
+import { expandIdentifiers } from "./query-expand.js";
 export { CHANGE_LOG_RETENTION_DAYS, DEFAULT_NAMESPACE } from "./store/schema-constants.js";
 import { encrypt, decryptIfEncrypted, isEncrypted, loadKey, keyPath, noteAad, captureAad } from "./crypto.js";
 import { currentActor, currentWriter, cleanWriter, currentCeiling, actorStore } from "./actor.js";
@@ -97,7 +97,7 @@ import {
   type Attestation,
   type SigningKey,
   type TrustedAttester,
-  type VerifyContext,
+  type VerifyContext, stripImportTrust, type TrustStripped,
 } from "./attest.js";
 import {
   ValidationError,
@@ -126,7 +126,7 @@ import type { CodeChange, CodeChangedItem } from "./store/code-anchors.js";
 export type { CodeChange, CodeChangedItem };
 import type { FlaggedItem, NoteFlag } from "./store/flags.js";
 import * as reputationOps from "./store/reputation.js";
-import type { WriterCounts, WriterEvent } from "./store/reputation.js";
+import type { WriterCounts, WriterEvent, WriterNoticeEvent } from "./store/reputation.js";
 export type { FlaggedItem, NoteFlag, WriterCounts, WriterEvent };
 import { tagsToStorage, parseTags, dueBase, needsHumanConfirm, sealQuarantineCol, openQuarantineCol, isoOrNull, clampInt, envCount, floodWritesPerHour, isOperatorWrite, isPlainObject } from "./store/rows.js";
 import { recordNoteReads, purgeNoteReads } from "./store/note-reads.js";
@@ -316,7 +316,7 @@ function lintFor(
   mode: LintMode
 ): LintFinding[] {
   if (mode === "none") return [];
-  const all = lintContent(fields);
+  const all = lintContent({ ...fields, writer: currentWriter() }); // writer: lint-tool-steer.ts holds tool-choice steering from writers that are not the owner
   return mode === "trusted" ? all.filter((f) => f.category === "secret") : all;
 }
 
@@ -471,6 +471,8 @@ export interface ImportReport {
   skipped?: number;
   /** Set by importNotes: how many notes carried a verifiable attestation. */
   attestations?: AttestationReport;
+  /** Set by importNotes: trust marks removed from notes without a verified signature (import-trust.ts). */
+  trustStripped?: TrustStripped;
 }
 
 /** One entry of the change feed (Store.changes). No bodies: titles only. */
@@ -1051,16 +1053,11 @@ export function queryTooLong(q: unknown): string {
 }
 
 function buildMatchQuery(q: string, any = false): string {
-  const tokens = q
-    .slice(0, QUERY_MAX_CHARS)
-    .trim()
-    .split(/\s+/)
-    .filter((t) => /[\p{L}\p{N}]/u.test(t)) // keep only tokens with a letter/number
-    .slice(0, QUERY_MAX_WORDS)
-    // Any-term searches run on extracted keywords: a keyword of one or two letters is matched exactly there ("go" must not
-    // match every word starting with go). A typed search keeps prefix matching for every word.
-    .map((t) => `"${t.replace(/"/g, '""')}"${any && /^[\p{L}]{1,2}$/u.test(t) ? "" : "*"}`);
-  return tokens.join(any ? " OR " : " AND "); // "" when nothing usable; caller returns []
+  const words = q.slice(0, QUERY_MAX_CHARS).trim().split(/\s+/).filter((t) => /[\p{L}\p{N}]/u.test(t)).slice(0, QUERY_MAX_WORDS); // keep only tokens with a letter/number
+  // Any-term searches run on extracted keywords: a keyword of one or two letters is matched exactly there ("go" must not
+  // match every word starting with go). A typed search keeps prefix matching for every word.
+  const tokens = words.map((t) => `"${t.replace(/"/g, '""')}"${any && /^[\p{L}]{1,2}$/u.test(t) ? "" : "*"}`);
+  return any ? tokens.join(" OR ") : expandIdentifiers(words, tokens); // "" when nothing usable; caller returns []; identifiers are widened (query-expand.ts)
 }
 
 // --- Similarity edge graph (v4) -------------------------------------------
@@ -1727,6 +1724,7 @@ export class Store {
   /** A one-line, actionable message for "the data directory cannot be written" (a `:ro` Docker volume, wrong owner), instead of SQLite's bare text. */
   private static explainOpenError(e: unknown, dbPath: string): string {
     const m = e instanceof Error ? e.message : String(e);
+    if ((process.platform === "win32" || (e as { code?: string }).code === "ENAMETOOLONG") && dbPath.length >= 250) return `monomem cannot open its database: the folder path is too long (${dbPath.length} characters; Windows allows 259). Use a shorter folder, for example set MONOMEM_DB_PATH to C:\\monomem\\state.db. Path: ${dbPath}`;
     if (!Store.isReadOnlyError(e)) return m;
     return (
       `monomem cannot write to its data directory ${dirname(dbPath)} (${m}). The directory is read-only, or not writable by this user ` +
@@ -2497,7 +2495,7 @@ export class Store {
     if (!input.title || !input.title.trim()) {
       throw new ValidationError("title is required");
     }
-    validateSizes(input);
+    validateSizes((input = receiptOps.cleanTexts(this, input)));
     // Imports too (importNotes reports the row as rejected and keeps going): a backup or a hand-made file must not bring
     // in a namespace or tag no live write could create.
     validateNames(input);
@@ -3286,7 +3284,7 @@ export class Store {
     } & LintOpts = {}
   ): NoteRecord | null {
     this.floodGate(opts.lint ?? "full", false); // a paused writer is refused even for a no-op; the write is counted below
-    validateNames(patch);
+    validateNames((patch = receiptOps.cleanTexts(this, patch)));
     validateForgetAfter(patch.forget_after);
     validateConfidence(patch.confidence);
     const existing = this.read(id);
@@ -5255,12 +5253,13 @@ export class Store {
               continue;
             }
             const carried = verdict.ok ? this.attestedProvenance(note, verdict.attester.server_id) : null;
+            const safe = verdict.ok ? note : stripImportTrust(note, opts.report); // no verified signature: no reviewed/confirmed/pinned/rev marks
             const madeNote = this.create(
                 {
                   namespace: note.namespace,
                   title: note.title,
                   body: note.body,
-                  tags: note.tags,
+                  tags: safe.tags,
                   source: note.source, // preserve provenance across export -> import
                   created_at: note.created_at,
                   // The label travels with the note; none (an older export) means the default. Checked against the ceiling.
@@ -5282,7 +5281,7 @@ export class Store {
                   skipEdges: true,
                   bulkImport: true,
                   updatedAt: note.updated_at,
-                  startRev: note.rev,
+                  startRev: safe.rev,
                   // Retention state survives a backup/restore: an archived
                   // note stays archived, a TTL note keeps its deadline.
                   // Garbage values are rejected (ValidationError), never
@@ -7602,7 +7601,7 @@ export class Store {
   }
 
   /** R2-08: record what happened to a writer's write (inside the action's own transaction). */
-  /** @internal */ recordWriterEvent(writer: string, event: WriterEvent, noteId: number | null): void {
+  /** @internal */ recordWriterEvent(writer: string, event: WriterEvent | WriterNoticeEvent, noteId: number | null): void {
     reputationOps.recordWriterEvent(this, writer, event, noteId);
   }
 
@@ -7676,7 +7675,7 @@ export class Store {
   private flushAudit(): void {
     const q = this.pendingAudit;
     this.pendingAudit = [];
-    for (const [e, r] of q) receiptOps.noteAudited(this, e.op, withAuditPath(this.auditLog, () => audit(e)), r);
+    (q.length > 1 ? auditBatch : (f: () => void) => f())(() => { for (const [e, r] of q) receiptOps.noteAudited(this, e.op, withAuditPath(this.auditLog, () => audit(e)), r); }); // many lines (an import batch): one open, one write
   }
 
   /**
@@ -7742,6 +7741,7 @@ export class Store {
   /** @internal R2-06: the newest write decision this store audited, until a surface takes it (store/write-receipt.ts). */
   lastWriteReceipt: receiptOps.PendingReceipt | undefined;
 
+  /** The notice for what the last write replaced (NUL, broken characters), or null; cleared as read. */ takeCleanedNotice(): string | null { return receiptOps.takeCleanedNotice(this); }
   /** R2-06: the receipt `{seq, chain_hash, decision}` of the write that just ran, cleared as it is read. */
   takeWriteReceipt(): receiptOps.WriteReceipt | undefined {
     return receiptOps.takeWriteReceipt(this);

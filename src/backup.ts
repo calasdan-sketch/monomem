@@ -65,7 +65,7 @@ function landCopy(b: { db: string; part: string }): void {
   } catch {
     /* windows */
   }
-  if (existsSync(b.db)) throw new Error(`${b.db} appeared while the backup ran; choose another --out directory (backups never overwrite)`);
+  if (existsSync(b.db)) throw Object.assign(new Error(`${b.db} appeared while the backup ran; choose another --out directory (backups never overwrite)`), { code: "EBACKUP_EXISTS" });
   renameSync(b.part, b.db);
 }
 

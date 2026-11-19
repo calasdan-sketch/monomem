@@ -19,7 +19,8 @@ import { dirname, join, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 
 export const TRAILER_KEY = "Monomem-Notes";
-const GIT_TIMEOUT_MS = 400;
+/** MONOMEM_GIT_TIMEOUT_MS (100-30000, default 400): how long one quick git question may take before it counts as "git did not answer". A loaded Windows machine can need more (the test suite sets 5000). */
+const GIT_TIMEOUT_MS = ((n: number) => (Number.isFinite(n) && n >= 100 ? Math.min(n, 30_000) : 400))(Number(process.env.MONOMEM_GIT_TIMEOUT_MS));
 const LOG_TIMEOUT_MS = 3000;
 
 /**

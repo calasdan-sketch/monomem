@@ -38,7 +38,7 @@ test("memory_save evidence: observed with the cited item, [] is inferred, none k
     const n = s.read(o.id)!;
     assert.equal(n.basis, "observed");
     assert.deepEqual(n.evidence, [{ kind: "file", ref: "src/server.ts:12" }, { kind: "test", ref: "api.test.ts passes" }]);
-    assert.match(noteFlags(n), /\[observed: file src\/server\.ts:12, \+1; cited by the writer, not checked\]/);
+    assert.match(noteFlags(n), /\[observed: file "src\/server\.ts:12", \+1; cited by the writer, not checked\]/);
     const i = (await save({ title: "guess", body: "the cache is probably the slow part", evidence: [] })).note;
     assert.equal(s.read(i.id)!.basis, "inferred");
     assert.match(noteFlags(s.read(i.id)!), /\[inferred/);

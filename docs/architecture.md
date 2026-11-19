@@ -123,6 +123,7 @@ outside as data.
 Docker healthcheck), `GET /proof?nonce=` (1.5.0: an HMAC of the nonce and the store id under the main key's hash, so the
 session-start hook can check it reached this store's server before it sends the key; no key or note data) and the
 dashboard at `/`. Every route except `/health`, `/ready`, `/proof` and the dashboard requires an app key: `Authorization: Bearer <token>`.
+Unauthenticated, `GET /health` answers `{"status":"ok"}` only; with a valid key it also names the version and schema (2026-11-18).
 `GET /status` (admin) adds what `/health` leaves out for unauthenticated callers: the in-memory body index's state, note
 count, unreadable bodies and how many searches fell back to titles and tags (with the last reason); `monomem check --setup` shows
 it for a verified server of this store.

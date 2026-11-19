@@ -13,7 +13,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomBytes, createHash, timingSafeEqual } from "node:crypto";
 import { readBody, PayloadTooLargeError } from "../http-common.js";
-import { RateLimiter, AuthTarpit, clientKey, audit } from "../security.js";
+import { RateLimiter, AuthTarpit, audit } from "../security.js";
+import { oauthAllow, oauthClientKey } from "./rate.js";
 import { isLoopback, type TokenEntry } from "../config.js";
 import { setOAuthKey, takenLabels, oauthKeyRows } from "../tokens-admin.js";
 import { clock, readState, updateState, usePairCode, sha256, cleanClientName, CLIENT_UNUSED_TTL_MS, MAX_CLIENTS, KNOWN_REDIRECT_HOSTS, type OAuthClient, type OAuthGrant, type OAuthState } from "./state.js";
@@ -43,6 +44,10 @@ const freshLimits = () => ({
   token: new RateLimiter(30, 60_000),
   authorize: new RateLimiter(60, 60_000),
   register: new RateLimiter(10, 600_000),
+  // Global caps (rate.ts): one caller cannot use them up by being refused, but together they bound a flood.
+  gToken: new RateLimiter(600, 60_000),
+  gAuthorize: new RateLimiter(600, 60_000),
+  gRegister: new RateLimiter(60, 600_000),
   tarpit: new AuthTarpit(),
 });
 let limits = freshLimits();
@@ -267,7 +272,7 @@ export async function handleOAuth(req: IncomingMessage, res: ServerResponse, url
 }
 
 async function register(req: IncomingMessage, res: ServerResponse, tokens: TokenEntry[]): Promise<void> {
-  if (!limits.register.check(clientKey(req))) return oauthError(res, 429, "too_many_requests");
+  if (!oauthAllow(limits.register, limits.gRegister, req)) return oauthError(res, 429, "too_many_requests");
   let body: Record<string, unknown>;
   try {
     body = JSON.parse(await readBody(req, 16_384)) as Record<string, unknown>;
@@ -309,7 +314,7 @@ async function register(req: IncomingMessage, res: ServerResponse, tokens: Token
 }
 
 function authorizeGet(req: IncomingMessage, res: ServerResponse, url: URL, st: OAuthState): void {
-  if (!limits.authorize.check(clientKey(req))) return htmlError(res, 429, "Too many tries. Wait a minute and start again from the app.");
+  if (!oauthAllow(limits.authorize, limits.gAuthorize, req)) return htmlError(res, 429, "Too many tries. Wait a minute and start again from the app.");
   const q = url.searchParams;
   const client = st.clients.find((c) => c.client_id === q.get("client_id"));
   const to = q.get("redirect_uri") ?? (client?.redirect_uris.length === 1 ? client.redirect_uris[0] : null);
@@ -351,8 +356,8 @@ function cookie(req: IncomingMessage, name: string): string {
 }
 
 async function authorizePost(req: IncomingMessage, res: ServerResponse, st: OAuthState): Promise<void> {
-  const ckey = clientKey(req);
-  if (!limits.authorize.check(ckey)) return htmlError(res, 429, "Too many tries. Wait a minute and start again from the app.");
+  const ckey = oauthClientKey(req);
+  if (!oauthAllow(limits.authorize, limits.gAuthorize, req)) return htmlError(res, 429, "Too many tries. Wait a minute and start again from the app.");
   // CSRF: the form must come from this page (same origin) and carry the cookie set with it.
   const origin = req.headers.origin;
   const site = req.headers["sec-fetch-site"];
@@ -396,7 +401,7 @@ async function authorizePost(req: IncomingMessage, res: ServerResponse, st: OAut
 }
 
 async function token(req: IncomingMessage, res: ServerResponse, tokens: TokenEntry[], issuer: string): Promise<void> {
-  if (!limits.token.check(clientKey(req))) return oauthError(res, 429, "too_many_requests");
+  if (!oauthAllow(limits.token, limits.gToken, req)) return oauthError(res, 429, "too_many_requests");
   const f = await form(req);
   const clientId = f.get("client_id") ?? "";
   const grantType = f.get("grant_type");
@@ -469,7 +474,7 @@ async function token(req: IncomingMessage, res: ServerResponse, tokens: TokenEnt
 
 /** RFC 7009: always 200, whether or not the token was known. */
 async function revoke(req: IncomingMessage, res: ServerResponse, tokens: TokenEntry[]): Promise<void> {
-  if (!limits.token.check(clientKey(req))) return oauthError(res, 429, "too_many_requests");
+  if (!oauthAllow(limits.token, limits.gToken, req)) return oauthError(res, 429, "too_many_requests");
   const f = await form(req);
   const h = sha256(f.get("token") ?? "");
   const clientId = f.get("client_id") ?? "";

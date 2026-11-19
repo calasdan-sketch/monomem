@@ -39,6 +39,9 @@ import { isIPv4, isIPv6 } from "node:net";
 import { HIGH_ENTROPY_LABEL, normalizeForScan, scanForSecrets } from "./security.js";
 import { configuredTokenValues, sha256Hex } from "./config.js";
 import { scanOutboundDirective, scanOutboundInjection } from "./lint-outbound.js";
+import { scanEncodedBlob, scanMultilingual, scanStandingInstruction } from "./lint-evasion.js";
+import { scanForToolSteering, steerChecked } from "./lint-tool-steer.js";
+import { evasionVariants, scanExternalEmbeds, scanHiddenComments, scanMemoryPoison, scanMoreLanguages } from "./lint-evasion2.js";
 
 export type LintCategory = "secret" | "injection" | "entropy" | "pii" | "directive";
 export type LintAction = "block" | "quarantine" | "warn";
@@ -273,9 +276,26 @@ function unLeet(t: string): string {
   return t.replace(/\S+/g, (w) => (/[a-z]/i.test(w) && /[013457@$]/.test(w) ? w.replace(/[013457@$]/g, (c) => LEET[c]) : w));
 }
 
-/** First injection label found in `text`, or null. */
+/** First injection label found in `text`, or null. Also looks inside base64 / hex blobs that decode to text (one level). */
 export function scanForInjection(text: string | undefined): string | null {
   if (!text) return null;
+  const direct = scanInjectionCore(text);
+  if (direct) return direct;
+  // Encoded blobs are scanned on the normalized text, so a blob split by invisible characters is still found.
+  const blob = scanEncodedBlob(normalizeForScan(text), scanInjectionCore);
+  if (blob) return blob;
+  // Round 2 evasions (lint-evasion2.ts): the same text rewritten (entities, percent-escapes, hyphen-broken words, letter-spaced
+  // words, separators, accents), then the languages the word lists above do not cover.
+  const ev = evasionVariants(text);
+  if (ev.compactHit) return "instruction override";
+  for (const v of ev.variants) {
+    const r = scanInjectionCore(v);
+    if (r) return r;
+  }
+  return scanMoreLanguages(text);
+}
+
+function scanInjectionCore(text: string): string | null {
   const t = normalizeForScan(text);
   // Chat-template tokens inside inline code are quoted, not a prompt
   // (`<|im_start|>` in a doc); only the marker rule skips code spans.
@@ -284,12 +304,18 @@ export function scanForInjection(text: string | undefined): string | null {
   // Any TAG char is invisible; only the three subdivision flags are exempt.
   if (/[\u{E0000}-\u{E007F}]/u.test(text.replace(FLAG_TAGS_RE, "")) || VS_RUN_RE.test(text.replace(/\p{Cf}/gu, ""))) return "hidden Unicode tag text";
   const unleeted = unLeet(prose);
+  // "harness tool-syntax" is deliberately last: any real signal in the same text (including the 2026-11-18 additions) wins the label.
+  let harness: string | null = null;
   for (const [label, re] of INJECTION_PATTERNS) {
     if (re === REF_IMAGE_DEF && !REF_IMAGE_USE.test(t)) continue;
-    if (re.test(label === "system-prompt marker" ? prose : t)) return label;
-    if (unleeted !== prose && label !== "system-prompt marker" && re.test(unleeted)) return label;
+    const hit = re.test(label === "system-prompt marker" ? prose : t) || (unleeted !== prose && label !== "system-prompt marker" && re.test(unleeted));
+    if (!hit) continue;
+    if (label === "harness tool-syntax") harness = label;
+    else return label;
   }
-  return scanOutboundInjection(t);
+  const evasion = scanMultilingual(t) ?? scanStandingInstruction(t) ?? scanMemoryPoison(t) ?? scanHiddenComments(t) ?? scanExternalEmbeds(t);
+  if (evasion) return evasion;
+  return harness ?? scanOutboundInjection(t);
 }
 
 // ---- PII (warn by default) ------------------------------------------------
@@ -400,11 +426,34 @@ function containsHashedKey(hashes: ReadonlySet<string>, ...texts: string[]): boo
  * Lint a note's free-text fields. Returns every finding (at most one per
  * category per field) so the caller can apply the policy and report them.
  */
+let tokenSnapshot: ReturnType<typeof configuredTokenValues> | null = null;
+/**
+ * Run `fn` (a loop of many lintContent calls: an import, a store-wide scan) with the access-token list read once, instead of
+ * checking the token files before every note. A promise is awaited; the snapshot ends when it settles.
+ */
+export function lintBatch<T>(fn: () => T): T {
+  if (tokenSnapshot) return fn(); // already inside a batch
+  tokenSnapshot = configuredTokenValues();
+  let async = false;
+  try {
+    const r = fn();
+    if (r && typeof (r as { then?: unknown }).then === "function") {
+      async = true;
+      return (r as unknown as Promise<unknown>).finally(() => void (tokenSnapshot = null)) as unknown as T;
+    }
+    return r;
+  } finally {
+    if (!async) tokenSnapshot = null;
+  }
+}
+
 export function lintContent(input: {
   title?: string;
   body?: string;
   tags?: string[];
   source?: string;
+  /** Who is writing (written_by). Given, a writer that is not the owner is also checked for steering the agent's tool choice. */
+  writer?: string;
 }): LintFinding[] {
   const fields: Array<[string, string | undefined]> = [
     ["title", input.title],
@@ -413,21 +462,39 @@ export function lintContent(input: {
     ["source", input.source],
   ];
   const out: LintFinding[] = [];
-  const liveTokens = configuredTokenValues();
+  const liveTokens = tokenSnapshot ?? configuredTokenValues();
   for (const [field, text] of fields) {
     // One of this server's own access tokens, pasted verbatim. The label never carries the value.
     const norm = text && (liveTokens.plain.length || liveTokens.hashes.size) ? normalizeForScan(text) : "";
     const live = !!text && (liveTokens.plain.some((tok) => text.includes(tok) || norm.includes(tok)) || containsHashedKey(liveTokens.hashes, text, norm));
     const s = live ? OWN_TOKEN_LABEL : scanForSecrets(text);
     if (s) out.push({ category: s === HIGH_ENTROPY_LABEL ? "entropy" : "secret", label: s, field });
-    // Provenance labels are not instructions an agent reads as prose.
-    if (field === "source") continue;
+    // A provenance label is echoed back to agents next to the "who wrote this" line, so it is scanned for injection too
+    // (round 2). Not for PII or directives: a label is short and those two are loose.
     const inj = scanForInjection(text);
     if (inj) out.push({ category: "injection", label: inj, field });
+    if (field === "source") continue;
     const pii = scanForPii(text);
     if (pii) out.push({ category: "pii", label: pii, field });
     const dir = scanForDirective(text);
     if (dir) out.push({ category: "directive", label: dir, field });
+  }
+  // Tool-choice steering (lint-tool-steer.ts): only for a writer that is not the owner, or a note written after outside content.
+  if (steerChecked(input.writer, input.tags)) {
+    for (const [field, text] of fields) if (field !== "source" && scanForToolSteering(text)) {
+      out.push({ category: "injection", label: scanForToolSteering(text) as string, field });
+      break;
+    }
+  }
+  // An instruction split across fields ("ignore previous" in the title, "instructions" in the body) reads as one to an agent
+  // that is shown title, body and tags together. Scanned joined, only when no single field already held it.
+  if (!out.some((f) => f.category === "injection") && [input.title, input.body, input.tags?.length ? "t" : ""].filter(Boolean).length >= 2) {
+    // Only the seams are joined (the title, the first and last 600 characters of the body, the tags): a split instruction
+    // meets there, and a second full scan of a 256KB body on every write would slow imports for nothing.
+    const body = input.body ?? "";
+    const joined = [input.title, body.length > 1200 ? `${body.slice(0, 600)}\n${body.slice(-600)}` : body, input.tags?.join(" ")].filter(Boolean).join("\n");
+    const inj = scanForInjection(joined);
+    if (inj) out.push({ category: "injection", label: inj, field: "title and body together" });
   }
   return out;
 }

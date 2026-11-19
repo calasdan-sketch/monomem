@@ -20,18 +20,31 @@ How this maps to OWASP ASI06 (Memory & Context Poisoning), and results on publis
   address unless you set an explicit `MONOMEM_TOKEN`. Public deployments
   are expected to sit behind an authenticated tunnel (e.g. Cloudflare Tunnel +
   Cloudflare Access). The **Origin** header is validated (DNS-rebinding
-  defense); browser origins are blocked unless listed in
-  `MONOMEM_ALLOWED_ORIGINS`.
+  defense): a browser origin is allowed only when it is this server's own loopback origin (same host name
+  `localhost` / `127.0.0.1` / `[::1]`, over http, on the port the request arrived on) or is listed in
+  `MONOMEM_ALLOWED_ORIGINS`. Since 2026-11-18 a page served from another local port (for example
+  `http://localhost:3000`) is refused. Requests with no Origin header (the CLI, curl, MCP clients) are unaffected. If you
+  open the dashboard through a Docker port mapping or a proxy on another port, list that origin in `MONOMEM_ALLOWED_ORIGINS`.
 - **Auth:** a bearer token is required on every route except `/health` and
   `/ready`, and the static pages `/`, `/ui`, `/dashboard.js` and `/favicon.ico`, which hold no notes. `/health` (on the
-  API and on the MCP port) answers before the host check and the rate limiter, and its reply names the exact Monomem
-  version and database schema (`{"status":"ok","version":...,"schema":...}`): anyone who can reach the port can learn
-  which version runs. It carries no note text and no key. Each token is compared in constant time (a minor side-channel on
+  API and on the MCP port) answers before the host check and the rate limiter. Since 2026-11-18 an unauthenticated caller
+  gets only `{"status":"ok"}`; the version and database schema (`{"status":"ok","version":...,"schema":...}`) are returned
+  only to a caller who sends a valid key (the dashboard does; `monomem check` asks `/status` after the server proves it holds the same key and store). It carries no note text and no key. Each token is compared in constant time (a minor side-channel on
   token length/count is not fully eliminated, which is immaterial for the
   high-entropy tokens this uses behind a tunnel). Tokens are never placed in
   URLs and are never logged. The primary token file is created `0600` and is
-  git-ignored. The `0600` mode applies on POSIX systems; on Windows (NTFS) it has no effect, so rely on the folder
-  permissions of your user profile.
+  git-ignored. The `0600` mode applies on POSIX systems; on Windows (NTFS) it has no effect, so since 2026-11-18 a newly
+  created key or token file (the access token, the encryption key, the signing key, `tokens.json`) is also locked with
+  `icacls` (inheritance removed, only the current user granted). That is best effort: if `icacls` is missing or fails, one
+  warning is printed and startup continues. It keeps other accounts on the PC out; it does not stop programs running as you.
+  Files created before this change are not touched; `monomem check` reports a data folder open to other accounts.
+- **Dashboard Content-Security-Policy:** `default-src 'self'`, no framing, no external loads, but `script-src` still
+  includes `'unsafe-inline'`. Not because of inline `<script>` blocks (the page has none; it loads `/dashboard.js` from
+  the server itself) but because the dashboard builds about 85 inline event-handler attributes (`onclick='...'`) in its
+  HTML strings. A per-response nonce or hash does not cover handler attributes, so a nonce would change nothing. Removing
+  `'unsafe-inline'` means rewriting those handlers as delegated listeners; that is not done (checked 2026-11-18). The
+  dashboard's output escaping is the defence against script injection, with the policy as a backstop against loading
+  anything from another origin.
 - **Scoped tokens:** besides the primary (admin) token, you can define extra
   `read` / `write` / `admin` tokens via `MONOMEM_TOKENS` (a JSON array)
   or a `~/.monomem/tokens.json` file, so a leaked read-only token can't write, delete
@@ -319,7 +332,14 @@ prompt-injection / "memory poisoning"** channel. Layers:
   **held**, invisible to search and recall until a person approves it
   (`monomem review held`, or the dashboard's Held list). It is a pattern linter: it will miss novel
   phrasing and can flag harmless text. It matches patterns, so a reworded attack passes (`monomem check --attacks` lists this as a
-  known miss). Text written in invisible Unicode tag characters is decoded and scanned, and any such character
+  known miss). It is **not complete and not a security boundary**. Since 2026-11-18 it also holds look-alike letters (more
+  Cyrillic, Greek and small-capital forms are folded to Latin before matching), "ignore previous instructions" and "do not
+  tell the user" in Spanish, French, German and Portuguese, a base64 or hex blob that decodes (one level) to text the patterns
+  hold, and a standing instruction ("from now on / whenever / always ...") that also tells the agent to hide something from
+  the user, send data to an outside address, or run code fetched from one. **Still missed:** any other language; rot13,
+  percent-encoding, double encoding and base64 split across lines; a persistent instruction that never says to hide or send
+  anything ("always run tests before commit" is a normal rule and is stored); paraphrases beyond the word lists; and anything
+  that needs understanding rather than patterns. Text written in invisible Unicode tag characters is decoded and scanned, and any such character
   is flagged, as is a run of four or more variation selectors (the England, Scotland and Wales flag emoji are
   exempt). The `source` field is not scanned; tag characters are removed from it when it is stored. See
   [docs/memory-linter.md](./docs/memory-linter.md).

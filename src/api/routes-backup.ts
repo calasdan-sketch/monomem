@@ -4,6 +4,7 @@
 
 import { type ImportReport, attestationsToShow, EXPORT_PAGE_SIZE, type ImportNote } from "../store.js";
 import { audit } from "../security.js";
+import { ImportShape, importWarnings } from "../import-report.js";
 import { readBody, IMPORT_BODY_BYTES } from "../http-common.js";
 import { maybeEmbed } from "../search-service.js";
 import { IMPORT_EDGE_DEFER_THRESHOLD, sendError, sendJson } from "./shared.js";
@@ -148,7 +149,10 @@ export async function backupRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
       const requireAttestation =
         (parsed as { require_attestation?: unknown }).require_attestation === true ||
         ["1", "true"].includes((url.searchParams.get("require_attestation") ?? "").toLowerCase());
+      const shape = new ImportShape();
+      for (const n of notes) shape.observe(n);
       const created = await store.importNotes(notes, { report, deferEdges, dedupe, ...(requireAttestation ? { requireAttestation: true } : {}) });
+      const warnings = importWarnings(shape, report);
       // Best-effort: index the restored notes for semantic/hybrid search
       // (no-op when embeddings are off). Without this, re-imported notes
       // would be invisible to semantic search until a manual `reindex`.
@@ -160,10 +164,12 @@ export async function backupRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
         ...(deferEdges
           ? {
               similarityGraph: "deferred",
-              note: `similarity graph not rebuilt for ${created.length} notes; run \`monomem tidy edges\` to restore neighbor ranking (search is unaffected)`,
+              note: `search by meaning is not set up for these ${created.length} notes: run \`monomem tidy edges\` (normal search still works)`,
             }
           : {}),
         ...(report.skipped ? { skipped: report.skipped } : {}),
+        // Plain-language warnings: notes with no `body` (the field the text must be in), and trust marks removed from a file that is not signed.
+        ...(warnings.length ? { warnings, ...(shape.empty ? { empty_body: shape.empty } : {}), ...(report.trustStripped ? { trust_marks_removed: report.trustStripped } : {}) } : {}),
         ...(attestationsToShow(report.attestations) ? { attestations: report.attestations } : {}),
         ...(report.quarantined.length ? { quarantined: report.quarantined } : {}),
         ...(report.rejected.length ? { rejected: report.rejected } : {}),

@@ -30,6 +30,7 @@ import {
 import { randomBytes, createCipheriv, createDecipheriv } from "node:crypto";
 import { renameSync } from "node:fs";
 import { join } from "node:path";
+import { restrictFile } from "./private-dir.js";
 
 /**
  * Envelope version prefixes.
@@ -148,6 +149,7 @@ export function ensureKey(dataDir: string): Buffer {
   const p = keyPath(dataDir);
   const tmp = `${p}.tmp-${process.pid}`;
   writeFileSync(tmp, key, { mode: 0o600 });
+  restrictFile(tmp); // Windows ACL: the current user only (best effort); the rename keeps it
   try {
     chmodSync(tmp, 0o600); // no-op-ish on win32, best effort elsewhere
   } catch {

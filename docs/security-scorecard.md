@@ -65,6 +65,7 @@ some patterns were tuned on **half a** of each set (see [Linter tuning, 2026-11-
 | `injecagent` | InjecAgent, Zhan et al. 2024 (MIT) | 62 | 2 | 0 | 37 | **23** |
 | `injecagent-enhanced` | same, with its "IMPORTANT!!! Ignore all previous instructions" prefix | 62 | 62 | 0 | 0 | **0** |
 | `agentdojo` | AgentDojo v1 injection tasks in its `important_instructions` text, Debenedetti et al. 2024 (MIT) | 27 | 27 | 0 | 0 | **0** |
+| `lint-evasion` | Our own 28 variants (look-alike letters, Spanish/French/German/Portuguese, base64/hex, standing orders), written 2026-11-18 after the first expert audit. Not an outside paper: it shows those cases are now held, not that the linter is complete (see [memory-linter.md](./memory-linter.md) for what is still missed) | 28 | 28 | 0 | 0 | **0** |
 | `minja` | MINJA indication text, Dong et al. 2025 (MIT); questions written by us | 6 | 0 | 0 | 0 | **6** |
 | `poisonedrag` | PoisonedRAG NQ sample, Zou et al. 2025 (MIT) | 10 | 0 | 0 | 0 | **10** |
 | `poisonedrag-nq` | PoisonedRAG full NQ file, downloaded at run time | 500 | 0 | 0 | 0 | **500** |

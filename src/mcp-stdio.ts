@@ -11,7 +11,8 @@ import { fileURLToPath } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { Store } from "./store.js";
 import { createMcpServer, stdioSweep } from "./mcp-server-core.js";
-import { DB_PATH, prepareDataDir } from "./config.js";
+import { DATA_DIR, DB_PATH, prepareDataDir } from "./config.js";
+import { startStdioDailyBackup } from "./backup-schedule.js";
 import { resolveStartupNamespace } from "./namespace.js";
 import { setProcessWriter, stdioWriter } from "./actor.js";
 import { audit, printable } from "./security.js";
@@ -36,10 +37,11 @@ try {
 const sweep = (): void => stdioSweep(store);
 sweep();
 setInterval(sweep, 3_600_000).unref();
+startStdioDailyBackup(DB_PATH, DATA_DIR); // most people never run the server, so the daily backup is checked here too
 setImmediate(() => store.warmBodyIndex()); // C-06: build the encrypted-body search index now, not on the first agent search
 // Server-side namespace resolution: resolved ONCE at startup from the
 // process working directory. Null when unconfigured (legacy behavior).
-const nsOpts = resolveStartupNamespace(process.cwd());
+const nsOpts = resolveStartupNamespace(process.cwd(), { auto: true }); // auto: with MONOMEM_AUTO_SCOPE on, a repo's own namespace
 // local: admin with no token was never a deliberate grant, so operator-only tools stay off for the agent.
 // Stdio has no token, so it has no token ceiling: whoever starts this process reads everything. MONOMEM_STDIO_MAX_SENSITIVITY
 // (public / internal / private) caps it anyway for setups that must use stdio. An app that must be kept away from private
