@@ -43,7 +43,7 @@ describe("outsideRate", () => {
       const r = outsideRate(s)!;
       assert.equal(r.sessions, 2);
       assert.equal(r.allSessions, 3);
-      assert.match(renderOutsideRate(r), /of all 3 captured sessions/);
+      assert.match(renderOutsideRate(r, true), /of all 3 captured sessions/);
     }));
 
   test("hours: a long session does not inflate the hour share", () =>
@@ -57,7 +57,7 @@ describe("outsideRate", () => {
       assert.equal(r.outside, 1); // the session share says 100%
       assert.equal(r.hours, 10);
       assert.equal(r.outsideHours, 1); // the hour share says 10%
-      assert.match(renderOutsideRate(r), /1 of 10 hours \(10%\)/);
+      assert.match(renderOutsideRate(r, true), /1 of 10 hours \(10%\)/);
     }));
 
   test("an outside tool with no output does not count (same as the live rule)", () =>

@@ -4,7 +4,7 @@ What Monomem does, and does not do, against memory and context poisoning, checke
 attack text that other researchers published. Every miss is shown. This is our own check, not a certification or an audit
 by OWASP or anyone else.
 
-- **Checked:** 2026-11-17, Monomem 1.5.0 (branch `feat/next`, base `6d5445b`); outside sets re-run 2026-11-17 after the linter patterns in `src/lint-outbound.ts` (branch `f2/lint-harden`).
+- **Checked:** 2026-11-17, Monomem 1.5.0; the drill (`monomem drill`) was reproduced on 2026-11-19 on 1.6.0, the outside attack sets were not re-run on that date (branch `feat/next`, base `6d5445b`); outside sets re-run 2026-11-17 after the linter patterns in `src/lint-outbound.ts` (branch `f2/lint-harden`).
 - **Settings:** defaults (`MONOMEM_LINT` unset, no approve-first, no namespaces, embeddings off).
 - **Re-run it yourself:** `monomem check --attacks` and `monomem check --attacks --set <name>` (see [Method](#method)).
 

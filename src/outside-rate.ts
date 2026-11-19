@@ -84,15 +84,21 @@ export function outsideRate(store: Store, sinceIso?: string): OutsideRate | null
   };
 }
 
-export function renderOutsideRate(r: OutsideRate | null): string {
+export function renderOutsideRate(r: OutsideRate | null, verbose = false): string {
   if (!r) return "Outside reads: no captured session has run a tool yet, so there is nothing to count.";
   const pct = (100 * r.outside) / r.sessions;
   const pctAll = r.allSessions > 0 ? (100 * r.outside) / r.allSessions : 0;
   const thin = r.sessions < 30 ? " Too few sessions for a steady rate." : "";
+  if (!verbose) {
+    return (
+      `Outside reads since ${(r.since ?? "").slice(0, 10)}: ${r.outside} of ${r.sessions} sessions that ran tools read the web or another MCP server (${pct.toFixed(0)}%).${thin} ` +
+      "Local file reads are not counted and shell fetches only as a weak hint; run `monomem digest --verbose` for the ranges and the hour counts."
+    );
+  }
   return (
     `Outside reads since ${(r.since ?? "").slice(0, 10)}: ${r.outside} of ${r.sessions} sessions that ran tools read the web or another MCP server ` +
     `(${pct.toFixed(0)}%, rough 95% range ${r.low.toFixed(0)}-${r.high.toFixed(0)}%, which treats sessions as independent samples; they are not, so the real uncertainty is larger); that is ${pctAll.toFixed(1)}% of all ${r.allSessions} captured sessions. ` +
-    `Per clock hour (UTC) with any tool activity: ${r.outsideHours} of ${r.hours} hours (${((100 * r.outsideHours) / Math.max(1, r.hours)).toFixed(0)}%) included an outside read, (hours of different sessions are pooled, so this is one rate for all of your work, not per session). ` +
+    `Per clock hour (UTC) with any tool activity: ${r.outsideHours} of ${r.hours} hours (${((100 * r.outsideHours) / Math.max(1, r.hours)).toFixed(0)}%) included an outside read (hours of different sessions are pooled, so this is one rate for all of your work, not per session). ` +
     `Sessions that ran tools tend to be long, so the first figure is per working session, not per chat.${thin} ` +
     (r.shellFetchHours > 0
       ? `A weaker hint, recorded only since this version: ${r.shellFetchHours} hours had a shell command that looked like a network fetch (curl, wget, git clone and the like), ${r.shellOnlyHours} of them with no outside read. It is a hint, not a mark: it changes no note and no guard, and it misses obfuscated or scripted fetches. `

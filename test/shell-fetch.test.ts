@@ -109,7 +109,7 @@ describe("capture and the digest line", () => {
       const r = outsideRate(s)!;
       assert.equal(r.shellFetchHours, 1);
       assert.equal(r.shellOnlyHours, 1);
-      const line = renderOutsideRate(r);
+      const line = renderOutsideRate(r, true);
       assert.match(line, /weaker hint/);
       assert.match(line, /changes no note and no guard/);
       assert.doesNotMatch(line, /github\.com|evil/); // counts only, never a host

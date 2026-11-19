@@ -163,7 +163,7 @@ export async function buildDigest(store: Store, since: string, opts: { namespace
   return { since: first.since, until: first.until, counts: { created: first.counts.created, updated: first.counts.updated, deleted: first.counts.deleted }, byWriter, topIssues, outsideReads: outsideRate(store) };
 }
 
-export function renderDigest(d: Digest): string {
+export function renderDigest(d: Digest, verbose = false): string {
   const c = d.counts;
   const lines = [`Since ${d.since.slice(0, 16).replace("T", " ")}: ${c.created} added, ${c.updated} edited, ${c.deleted} deleted.`];
   const writers = Object.keys(d.byWriter).sort();
@@ -174,6 +174,6 @@ export function renderDigest(d: Digest): string {
   if (!writers.length) lines.push("  Nothing changed.");
   lines.push(d.topIssues.length ? "Worth a look:" : "Nothing needs your attention.");
   d.topIssues.forEach((t, i) => lines.push(`  ${i + 1}. ${t}`));
-  if (d.outsideReads) lines.push(renderOutsideRate(d.outsideReads));
+  if (d.outsideReads) lines.push(renderOutsideRate(d.outsideReads, verbose));
   return lines.join("\n");
 }

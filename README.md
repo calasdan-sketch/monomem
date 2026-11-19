@@ -12,8 +12,8 @@ Tell Claude Code something once, and Cursor, Codex, Gemini CLI and your other as
 ## Get it
 
 [![Download for Windows](https://img.shields.io/badge/Download-Windows-0B2E45?style=for-the-badge)](https://github.com/calasdan-sketch/monomem/releases/latest)
-[![Download for Mac](https://img.shields.io/badge/Download-Mac-0B2E45?style=for-the-badge)](https://github.com/calasdan-sketch/monomem/releases/latest)
-[![Download for Linux](https://img.shields.io/badge/Download-Linux-0B2E45?style=for-the-badge)](https://github.com/calasdan-sketch/monomem/releases/latest)
+[![Download for Mac (untested)](https://img.shields.io/badge/Download-Mac%20(untested)-0B2E45?style=for-the-badge)](https://github.com/calasdan-sketch/monomem/releases/latest)
+[![Download for Linux (untested)](https://img.shields.io/badge/Download-Linux%20(untested)-0B2E45?style=for-the-badge)](https://github.com/calasdan-sketch/monomem/releases/latest)
 
 One download, nothing else to install (no Node needed): each release has one archive per computer (a zip of about 40 MB on Windows) and a `SHA256SUMS` file to check it. Node is inside the folder (Node's own signed program, about 96 MB of the 105 MB unpacked), so you do not install Node. On Windows: right-click the zip, **Properties**, tick **Unblock**, **OK**; then **Extract All**, open the `Monomem` folder and double-click `monomem` to open your notes. The download is not code-signed yet: if you skip Unblock, Windows may ask before it runs `monomem.cmd` (INSTALL.md shows what you will see). To connect your apps, run this one command from the folder you unpacked into (`.\Monomem\monomem.cmd setup` on Windows):
 
@@ -23,7 +23,7 @@ One download, nothing else to install (no Node needed): each release has one arc
 
 Setup finds your apps (Claude Code, Claude Desktop, Cursor, Codex, Gemini CLI, VS Code, Zed and ten more, listed in docs/apps.md), shows exactly what it will change, keeps a backup of every file, and asks before it writes. `monomem setup --undo` takes it all back. Already have Node 22.16 or newer? `npx monomem setup` does the same. Which file to pick, and what Windows or macOS may say about an unsigned download: [INSTALL.md](./INSTALL.md#download-no-nodejs-needed).
 
-**What it costs your assistant.** The seven tools shown by default add 6,160 characters of tool descriptions, about 1,540 tokens. A session start adds up to about 1,500 tokens of your notes (you can change that limit).
+**What it costs your assistant.** The seven tools shown by default add 6,160 characters of tool descriptions, about 1,540 tokens (estimated: characters divided by 4, not a tokenizer count). A session start adds up to about 1,500 tokens of your notes (you can change that limit).
 
 **What it does not do.** Please read this before you rely on it:
 
@@ -31,7 +31,7 @@ Setup finds your apps (Claude Code, Claude Desktop, Cursor, Codex, Gemini CLI, V
 - It only guards what goes through Monomem. An app that can run shell commands (Claude Code included) or open the database file can read or change your notes directly.
 - For apps connected on your computer, the writer name comes from that app's config file. It tells your apps apart; it is not proof.
 - Keyword search finds words, not meaning, unless you run a local embedding model (Ollama).
-- The download is not code-signed yet, and it has not been tested with Windows Smart App Control switched on or on a Mac.
+- The download is not code-signed yet, and it has not been tested with Windows Smart App Control switched on or on a Mac or Linux.
 - claude.ai and ChatGPT can connect only through OAuth, which is off by default and a preview (one internal security review, no outside review). You need your own HTTPS address that reaches your computer: [docs/oauth.md](./docs/oauth.md).
 
 More: [install it with your agent](./docs/install-with-your-agent.md) · [what it does, in detail](./docs/features.md) · [how it compares](./docs/comparison.md) · [all tools and commands](./docs/tools.md) · [backups](./docs/backups.md) · [known limits](#known-limits) · [security](./SECURITY.md)
@@ -40,7 +40,9 @@ More: [install it with your agent](./docs/install-with-your-agent.md) · [what i
 
 ![A write that matches a known attack pattern is held, a second agent's search never sees it, and the dashboard rejects it](https://raw.githubusercontent.com/calasdan-sketch/monomem/main/docs/monomem-demo.gif)
 
-*Recorded 2026-11-05 on 1.5.0, before the dashboard redesign, from a real run against a throwaway store ([transcript](https://github.com/calasdan-sketch/monomem/blob/main/docs/brand/demo-transcript.txt)): a write containing an injected instruction is held and never reaches the other agent's search, then rejected from the real dashboard. The two terminal panes are drawn from the real REST responses; the dashboard is a screen recording. Nothing sped up.*
+*Recorded on 1.5.0; the screens have changed since. Recorded 2026-11-05, before the dashboard redesign, from a real run against a throwaway store ([transcript](https://github.com/calasdan-sketch/monomem/blob/main/docs/brand/demo-transcript.txt)): a write containing an injected instruction is held and never reaches the other agent's search, then rejected from the real dashboard. The two terminal panes are drawn from the real REST responses; the dashboard is a screen recording. Nothing sped up.*
+
+Useful commands: `monomem digest` (same as `monomem activity --summary`; add `--verbose` for the outside-read ranges) says in plain words what changed; `monomem bench --longmemeval --data <file> --per-question out.ndjson` writes one line per question so two systems can be compared question by question; `monomem tidy marks` is a dry run until you add `--yes`.
 
 Want to see it before you set anything up? `monomem demo` (or `npx monomem demo`) runs a short tour on a throwaway store that is deleted at the end; it never touches your notes.
 
@@ -63,7 +65,7 @@ After setup, restart your apps. Then, in one of them, say **"Save to Monomem: my
 ![License](https://img.shields.io/badge/license-MIT-blue)
 [![Monomem MCP server](https://mcprush.com/badge/monomem-mcp/card.svg)](https://mcprush.com/to/monomem-mcp?ref=badge)
 
-*The mcprush card is an independent scan's grade, updated after each scan: it reads the published package, not our claims.*
+*The mcprush card is a third-party scan's grade, updated after each scan: it reads the published package, not our claims.*
 
 ## Benchmark
 
@@ -78,17 +80,19 @@ It has five suites, as plain JSON scenario files you can extend in [`bench/scena
 | B  Contradiction recovery | 31 | writer A against writer B, then a trusted correction; distrusting the bad writer; a weak overwrite of a trusted note | resolved to the correction, loser stays visible, overwrite protected |
 | C  Permission isolation | 27 | one tenant cannot read, write, search, export or undo another's notes; key scopes; signed imports | `leakage-count` (must be 0), `unexpected-denials` |
 | D  Provenance retention | 19 | source, writer, creator, timestamps and confidence survive export, import, merge and update | `fields-lost` |
-| E  Memory poisoning | 22 | injected or malicious memories never reach an agent as trusted content (held, refused, stored with a warning, or left out once the writer is distrusted) | `poison-reach-count` (must be 0) |
+| E  Memory poisoning | 22 | injected or malicious memories never reach an agent as trusted content (held, refused, stored with a warning, or left out once the writer is distrusted) | `poison-reach-count` (must be 0; two designed misses are not counted, see below) |
 
 **What it does not measure.** The provenance suites are not a retrieval-quality or semantic-search benchmark (keyword
 search, made-up unique words, no embeddings). It does not measure speed, scale or concurrency, and "0 leaks" means none of
-*these* probes leaked: it is a regression gate, not an audit. **Known gaps in the benchmark:** none open; the history of each
+*these* probes leaked: it is a regression gate, not an audit. **Known gaps in the benchmark:** none open, but poison-reach 0 does not mean every attack is stopped: two of the probes are designed misses, E16 (a reworded override) and SELF (self-poisoning), and they get in until a person distrusts the writer (see "What it does not do" above and `monomem drill`); the history of each
 one and how it was fixed is in [docs/BENCHMARK.md](./docs/BENCHMARK.md#known-gaps-history).
 
-**Retrieval.** On LongMemEval-S (470 questions) keyword search finds a right conversation in the top 5 for 97.2 % of
-questions, and every right conversation for 85.7 % (one Windows PC, measured 2026-11-15 on 1.5.0; search ranking is
-unchanged since). These are retrieval numbers, not the answer accuracy memory vendors usually publish, and they are not the
-highest published either: as of 2026-11-16 Vestige's README reports 97.45 % and 86.60 % on the same 470 questions (its own
+**Retrieval.** On LongMemEval-S, keyword search finds a right conversation in the top 5 for 97.5 % of questions, and every right
+conversation for 86.2 %, on the 239 questions of half b (the current code; 87.0 % before 1.6.0's title weighting; one Windows PC). Ranking was tuned on the
+other half of this set (half a), so the full 470-question figures (97.2 % and 85.7 %, 2026-11-15, 1.5.0) are not quoted as the headline: half b is the fairer one, though it
+also checked each tuning candidate, so it is a validation half and not an untouched test set. A re-run on 2026-11-19 gave 86.0 % on all 470 against 85.7 %; we
+have not found what moved the 0.3. These are retrieval numbers, not the answer accuracy memory vendors usually publish, and they are not the
+highest published either: as of 2026-11-16 Vestige's README reports 97.45 % and 86.60 % on the same 470 questions (all 470, so not like-for-like with half b) (its own
 numbers, not re-run by us). LoCoMo figures are not comparable between the two projects, because Vestige reports its 1,536-question
 CORE set and Monomem all 1,982 questions. Every number, hybrid search, and where it is worse: [docs/BENCHMARK.md](./docs/BENCHMARK.md#retrieval-longmemeval-s-and-locomo).
 

@@ -1,36 +1,36 @@
 # Launch checklist
 
-Nothing here has been published. Every step that posts, submits or signs in under your name is marked **needs Dan**. Files that
+Nothing here has been published. Every step that posts, submits or signs in under your name is marked **needs the maintainer**. Files that
 can be prepared in the repository are marked **done** (they exist and are checked by the tests).
 
 ## Files in the repository
 
 | What | Status |
 |---|---|
-| `server.json` for the official MCP Registry | done (not yet validated against the registry: run `mcp-publisher validate`, needs Dan) |
+| `server.json` for the official MCP Registry | done (not yet validated against the registry: run `mcp-publisher validate`, needs the maintainer) |
 | `mcpName` in `package.json` | done. The registry's quickstart says an npm package must carry `mcpName` equal to the server name, and that GitHub sign-in needs it to start with `io.github.<your GitHub name>/` (source: the registry's own docs, `docs/modelcontextprotocol-io/quickstart.mdx` in github.com/modelcontextprotocol/registry, read when this was prepared) |
 | Social-preview picture | done: `docs/brand/social-preview.svg` (1280 x 640). GitHub wants a PNG or JPG for the repository setting: export it first (any browser can save it as an image) |
 | README badges | done: CI, npm version, license and Node badges sit under the demo GIF, near the top of the README |
 
-## Repository settings (needs Dan)
+## Repository settings (needs the maintainer)
 
 - Description: `One memory, shared by all your AI apps. Self-hosted, one SQLite file, every note says who wrote it.`
 - Topics to add: `mcp`, `model-context-protocol`, `memory`, `ai-agents`, `claude`, `cursor`, `sqlite`, `self-hosted`, `llm`, `local-first`
-- Upload the social-preview image: Settings, General, Social preview. **needs Dan**
+- Upload the social-preview image: Settings, General, Social preview. **needs the maintainer**
 
 ## Listings
 
 | Step | Status | Notes |
 |---|---|---|
-| Official MCP Registry | needs Dan | Publish to npm first (the registry only stores a pointer; the package must exist). Then install `mcp-publisher`, `mcp-publisher login github`, `mcp-publisher publish`. The `version` in `server.json` must match the npm version you publish |
-| Glama | needs Dan | Claim the server on glama.ai (sign-in) once the repository is public and has a license. Check their current instructions before submitting |
-| PulseMCP | needs Dan | Their site lists servers from the official registry; submit through their form if it does not appear. Check their current instructions |
-| mcp.so | needs Dan | Submit through their site (sign-in). Check their current instructions |
-| awesome-mcp-servers | needs Dan | Open a pull request adding one line to the list; read that repository's CONTRIBUTING file first for the exact format and category |
-| Show HN | needs Dan | Read the Show HN rules first (news.ycombinator.com/showhn.html): it has to be something people can try, no sign-up wall, and you answer questions yourself. Do not ask friends to upvote or comment |
-| r/opensource | needs Dan, likely blocked | Reported by the Round 4 launch review (Nov 2026): the subreddit bans AI-built projects since Oct 2026 and wants projects at least a year old. Monomem is AI-assisted and months old, so assume a post is removed. Re-read the sidebar before deciding |
-| r/ClaudeAI | needs Dan | Reported by the same review: showcases go in the "Built with Claude" megathread, and a normal feed post needs 50+ karma. Use the megathread |
-| r/selfhosted | needs Dan | Reported by the same review: projects under 3 months old go in the New Project Megathread, not as a post of their own |
+| Official MCP Registry | needs the maintainer | Publish to npm first (the registry only stores a pointer; the package must exist). Then install `mcp-publisher`, `mcp-publisher login github`, `mcp-publisher publish`. The `version` in `server.json` must match the npm version you publish |
+| Glama | needs the maintainer | Claim the server on glama.ai (sign-in) once the repository is public and has a license. Check their current instructions before submitting |
+| PulseMCP | needs the maintainer | Their site lists servers from the official registry; submit through their form if it does not appear. Check their current instructions |
+| mcp.so | needs the maintainer | Submit through their site (sign-in). Check their current instructions |
+| awesome-mcp-servers | needs the maintainer | Open a pull request adding one line to the list; read that repository's CONTRIBUTING file first for the exact format and category |
+| Show HN | needs the maintainer | Read the Show HN rules first (news.ycombinator.com/showhn.html): it has to be something people can try, no sign-up wall, and you answer questions yourself. Do not ask friends to upvote or comment |
+| r/opensource | needs the maintainer, likely blocked | Reported by the Round 4 launch review (Nov 2026): the subreddit bans AI-built projects since Oct 2026 and wants projects at least a year old. Monomem is AI-assisted and months old, so assume a post is removed. Re-read the sidebar before deciding |
+| r/ClaudeAI | needs the maintainer | Reported by the same review: showcases go in the "Built with Claude" megathread, and a normal feed post needs 50+ karma. Use the megathread |
+| r/selfhosted | needs the maintainer | Reported by the same review: projects under 3 months old go in the New Project Megathread, not as a post of their own |
 | r/mcp, r/cursor, r/LocalLLaMA, r/OpenSourceAI | UNVERIFIED | Nobody has read these rules. Read each sidebar first; do not post on a guess |
 
 The Reddit rows come from a review, not from reading each sidebar today: rules change, so open the sidebar and the rules page of the exact
@@ -62,6 +62,6 @@ Do not offer a download from anywhere else.
 
 ## Before any post
 
-1. `npm publish` is a separate decision (needs Dan). The version in the README, `server.json` and npm must agree.
+1. `npm publish` is a separate decision (needs the maintainer). The version in the README, `server.json` and npm must agree.
 2. Run `monomem demo --out receipt.html` and keep the receipt: it shows what the tool does without claiming more than it measures.
 3. Say plainly what it is not (README, "What it does not do" and "Known limits").

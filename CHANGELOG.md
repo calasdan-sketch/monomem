@@ -19,8 +19,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A test that no MCP tool description reads like a poisoned instruction (the MCPTox concern, pointed at our own tools).
 
 ### Changed
-- `digest` and `check` are faster on large stores (10,000 single-writer notes: digest 8.4 s to 3.0 s, check 12.5 s to 6.9 s) with
-  identical results, checked against copies of the old code on random stores.
+- `digest` and `check` are faster on large stores (10,000 single-writer notes: digest 8.4 s to 3.0 s, check 12.5 s to 6.9 s; timed on one store of that shape, other stores may differ; the digest query was also reorganised, which is a second change from the speed-up of `check`) with
+  the same results in a one-off check against copies of the old code on 300 random stores (not a standing test).
 - **Database:** one column was added to the raw capture table (`capture_events.shell_fetch`, default 0). It is added when a database is
   opened, including one already at schema v22, so no restore is needed to go back. The schema version did not change.
 
@@ -28,6 +28,47 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - BENCHMARK.md: agentmemory's LongMemEval-S figure was re-run on the same data file (it reproduced exactly: 84.7). Ours on the same
   470 questions and metric is 86.0; 14 questions only we got, 8 only they got (exact McNemar p = 0.29): a tie, not a win.
 
+
+## [1.6.2] - 2026-11-18 (ported from main; this branch's package.json still says 1.6.0)
+
+### Changed
+
+- Tool descriptions: every argument of `memory_save`, `memory_search`, `memory_read`, `memory_list`, `memory_replace` and `memory_archive` now says what it is, and each tool says when to use it instead of its neighbours (edit in place with `memory_save id`, retire with `memory_replace`, hide with `memory_archive`), what it returns, whether it is read-only, and that only a person can restore an archived note. This is a cost: the seven default tools are now 9,239 characters in `tools/list` (about 2,310 tokens), up from 6,160 (about 1,540). Written to raise the tool-quality score that directories such as Glama give; whether the score rises is theirs to decide on a re-scan.
+- A session summary of a session that read outside content is now written in two parts, and the start-up briefing shows
+  the first. Before, the whole summary was held back until a person confirmed it, so a session that looked up a library
+  version or read an issue lost its whole summary. Now the first part (what the session did before its first outside read:
+  the request, commands, files and closing words) is shown, with a line saying the rest is held back; the second part
+  (everything from the read on) is never shown. An event the store recorded late is counted as from the read on. A summary
+  of a very long session (20,000 events or more), a model-written summary, a summary held for another reason (written after
+  reading an unconfirmed note, declared outside, distrusted, flagged or expired) and a 1.6.0 summary (no split yet) are
+  still held back whole. `MONOMEM_SUMMARY_SPLIT=0` restores the old behaviour. Limits: the split is at the first outside
+  read Monomem's hooks recognise, not at content fetched with a shell command; observation notes are not stamped and are not
+  covered; the count line still counts the summary as waiting.
+
+## [1.6.1] - 2026-11-18
+
+A small update. No database change (still schema v22), so there is nothing to re-run after upgrading.
+
+### Fixed
+
+- Daily backups now happen when you only use Monomem through your apps. Before, the automatic daily copy ran only
+  inside the HTTP server, so anyone who used Monomem just over MCP stdio and never started the server got no automatic
+  backup at all. Each connected app now checks about a minute after it starts and then every hour, with the same rules as
+  the server (one copy a day; `MONOMEM_AUTO_BACKUP=off` and the Settings switch still apply). A lock folder keeps the
+  server and several apps from making the same day's copy at once. If the backup folder cannot be written, that is
+  reported once a day on stderr instead of every hour. Not yet tried with a real app connected, only in automated
+  tests, and not tested on macOS or Linux. A process killed mid-copy can leave a `.partial` file behind; it never
+  replaces a good backup, but nothing cleans it up yet.
+
+### Added
+
+- A writer is now told what became of a held write. Before, the write was answered "held" and the writer never learned
+  whether a person approved or rejected it, so it could go on assuming the note existed or was visible to others. The
+  next `catch_up` (as `held_decided`) and the next session start say how many were approved (with the note ids) and how
+  many were rejected and not stored. The notice never repeats the held text, only ids, counts and dates, and other
+  writers do not see it. It covers the last 7 days, like the overwrite notice. Only decisions made after upgrading are
+  reported, and the match relies on the writer name, which for local apps comes from the app's config and is not proof.
+  The held reply now says the outcome will be reported there.
 
 ## [1.6.0] - 2026-11-17
 

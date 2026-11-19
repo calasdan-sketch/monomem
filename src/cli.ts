@@ -1568,7 +1568,7 @@ async function backfillMarksCmd(): Promise<void> {
       return;
     }
     for (const r of found) console.log(`  session ${r.id.slice(0, 8)}: last outside read ${r.at}`);
-    if (!apply) console.log(`${found.length} ended session(s) would be stamped. Open sessions are never touched. Run \`monomem tidy marks --yes\` to apply (a backup first: \`monomem backup\`).`);
+    if (!apply) console.log(`DRY RUN: nothing was changed. ${found.length} ended session(s) would be stamped. Open sessions are never touched. Run \`monomem tidy marks --yes\` to apply (a backup first: \`monomem backup\`).`);
     else {
       audit({ op: "tidy.marks", label: "cli", kind: "session", detail: `stamped ${applied} ended session(s) with an outside-read mark` });
       console.log(`Stamped ${applied} ended session(s).`);
