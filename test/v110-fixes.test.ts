@@ -420,7 +420,7 @@ describe("7: doctor flags a store with notes but no edges", () => {
         stdio: ["ignore", "pipe", "pipe"],
       }) as unknown as string;
     try {
-      assert.match(doctor(), /no similarity edges[\s\S]*tidy edges/);
+      assert.match(doctor(), /search by meaning is not set up[\s\S]*tidy edges/);
       await s.rebuildEdgesCooperative();
       assert.doesNotMatch(doctor(), /no similarity edges/);
     } finally {

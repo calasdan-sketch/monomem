@@ -115,12 +115,12 @@ describe("LOW: one filled button per view, labels that name where they go", () =
     const p = page(() => ({}));
     p.ctx.VIEW = "list";
     p.ctx.setNeeds({ count: 1, items: [{ view: "held", count: 1, text: "1 write is held." }] });
-    assert.match(p.el("needs").innerHTML, /onclick='loadHeld\(\)'>Open Held</);
+    assert.match(p.el("needs").innerHTML, /data-do='loadHeld'>Open Held</);
     assert.equal(primaries(p.el("needs").innerHTML), 0);
     p.ctx.setNeeds({ count: 1, items: [{ view: "review", count: 1, text: "1 note waits." }] });
-    assert.match(p.el("needs").innerHTML, /onclick='loadReview\(\)'>Open Review</);
+    assert.match(p.el("needs").innerHTML, /data-do='loadReview'>Open Review</);
     p.ctx.setNeeds({ count: 1, items: [{ view: "settings", count: 1, text: "The last backup failed." }] });
-    assert.match(p.el("needs").innerHTML, /onclick='openSettings\(\)'>Open Settings</);
+    assert.match(p.el("needs").innerHTML, /data-do='openSettings'>Open Settings</);
   });
   test("Welcome step 1: Connect buttons are plain, Next is the one filled button", async () => {
     const p = page((path) => (path === "/ui/apps" ? { apps: [{ id: "a", label: "A" }, { id: "b", label: "B" }, { id: "c", label: "C" }] } : {}));
@@ -128,14 +128,14 @@ describe("LOW: one filled button per view, labels that name where they go", () =
     await settle();
     const all = (p.el("welcome").innerHTML as string) + (p.el("wl_apps").innerHTML as string);
     assert.equal(primaries(all), 1, all);
-    assert.match(all, /class='primary' onclick='showWelcome\(1\)'>Next</);
+    assert.match(all, /class='primary' data-do='showWelcome' data-args='\[1\]'>Next</);
   });
   test("Review: the held banner's Open Held is not a filled button", async () => {
     const p = page((path) => (path === "/ui/review" ? { notes: [], flagged: [], code_changed: [], held_writes: 2, count: 0 } : { conflicts: [] }));
     p.ctx.loadReview();
     await settle();
-    assert.match(p.el("list").innerHTML, /<button[^>]*onclick='loadHeld\(\)'>Open Held</);
-    assert.ok(!/class='primary' onclick='loadHeld\(\)'/.test(p.el("list").innerHTML));
+    assert.match(p.el("list").innerHTML, /<button[^>]*data-do='loadHeld'>Open Held</);
+    assert.ok(!/class='primary' data-do='loadHeld'/.test(p.el("list").innerHTML));
   });
 });
 

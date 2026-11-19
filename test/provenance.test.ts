@@ -411,7 +411,7 @@ describe("MCP tools", () => {
     assert.ok(w.content[0].text.startsWith(UNTRUSTED_BANNER));
     // ... and a second block says who wrote it, with the claim marked unverified.
     assert.equal(w.content.length, 2);
-    assert.match(w.content[1].text, /written by claude-code \(token\)/);
+    assert.match(w.content[1].text, /written by \"claude-code\" \(token\)/);
     assert.match(w.content[1].text, /claims source="cursor" \(unverified\)/);
 
     const u: any = await cursor.callTool({ name: "state_write", arguments: { id: note.id, body: "GraphQL" } });
@@ -491,7 +491,7 @@ describe("recall + banner text", () => {
       { ...base, id: 1, title: "A", written_by: "claude-desktop", source: "cursor" },
       { ...base, id: 2, title: "B", written_by: "" , source: "cursor" },
     ]);
-    assert.match(s, /#1 claude-desktop \(token\), claims source="cursor": \[A\]: B/);
+    assert.match(s, /#1 \"claude-desktop\" \(token\), claims source="cursor": \[A\]: B/);
     assert.match(s, /#2 \[B\]$/m); // a body that only repeats the title is not printed twice
   });
   test("provenanceBanner is capped, one-line per entry and strips injected line breaks", () => {

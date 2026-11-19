@@ -73,7 +73,7 @@ export function createMcpHttpServer(
     const url = new URL(req.url ?? "/", "http://localhost");
 
     if (req.method === "GET" && url.pathname === "/health") {
-      sendJson(res, 200, healthBody());
+      sendJson(res, 200, healthBody(authenticateEntry(req, tokens, "mcp") !== null));
       return;
     }
 

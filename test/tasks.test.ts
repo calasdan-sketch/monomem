@@ -525,9 +525,9 @@ describe("recall: task board in the SessionStart hook", () => {
       s.close();
       const ctx = ctxOf(await runRecall({ dbPath: db }));
       assert.match(ctx, /Open tasks \(1\):/);
-      assert.match(ctx, /#\d+ \[running\] Build the hoodie page \(pc\) -> next: pick fonts/);
+      assert.match(ctx, /#\d+ \[running\] "Build the hoodie page" \(pc\) -> next: "pick fonts"/); // writer text is JSON-quoted
       assert.match(ctx, /Latest handoff from phone/);
-      assert.match(ctx, /next: PC: check vendor/);
+      assert.match(ctx, /next: "PC: check vendor"/);
       assert.ok(!ctx.includes("Already shipped"), "done tasks stay out");
       assert.ok(ctx.includes("Keep replies short."), "ordinary recall still works");
       assert.ok(ctx.indexOf("Open tasks") < ctx.indexOf("Recent memory"));

@@ -39,6 +39,8 @@ process.env.MONOMEM_FLOOD_WRITES_PER_HOUR = "0";
 process.env.MONOMEM_NO_SERVER_PROBE = "1";
 // Session start gives up after 5 s; on a loaded CI runner that cap fired in recall/everyday-cli/overdue-board tests.
 process.env.MONOMEM_RECALL_TIMEOUT_MS = "30000";
+// git-trail asks git quick questions with a 400 ms cap; a loaded Windows run spawned git slower than that and the merged-branch test flaked.
+process.env.MONOMEM_GIT_TIMEOUT_MS = "5000";
 process.env.MONOMEM_SCAN_CACHE_SECONDS = "0"; // the dashboard scans are cached for a minute in real use; tests want fresh answers
 process.on("exit", () => {
   try {

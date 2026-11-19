@@ -4,18 +4,18 @@
 export const SETTINGS_JS = `
 var APPS = [];
 function localMissing(e){ return e && e.body && e.body.local_required; }
-function onOffSwitch(id, label, help, on, handler){
+function onOffSwitch(id, label, help, on, key){
   return "<label class='switch'><span><span>"+label+"</span>"+(help ? "<span class='help' style='display:block'>"+help+"</span>" : "")+"</span>"+
-    "<input type='checkbox' role='switch' id='"+id+"'"+(on ? " checked" : "")+" onchange='"+handler+"'></label>";
+    "<input type='checkbox' role='switch' id='"+id+"'"+(on ? " checked" : "")+actC("setSetting",[key])+"></label>";
 }
 // The automatic behaviours, one switch each: the Welcome consent step and Settings show the same list.
 function autoSwitches(s){
   s = s || {};
-  return onOffSwitch("sw_backups", "Back up my notes every day", "A copy of your notes in your Monomem folder each day. Your encryption key is never copied.", s.daily_backups !== "off", "setSetting(&quot;daily_backups&quot;,this.checked)")+
-    onOffSwitch("sw_recall", "Add matching notes to each prompt", "At each prompt, up to 3 notes that match it are added for your app. Off by default.", s.prompt_recall === "on", "setSetting(&quot;prompt_recall&quot;,this.checked)")+
-    onOffSwitch("sw_claude", "Bring in Claude Code's memory as it changes", "While Monomem runs, files Claude Code changed are copied in every 10 minutes, unconfirmed (from outside) until you confirm them. Off by default.", s.claude_refresh === "on", "setSetting(&quot;claude_refresh&quot;,this.checked)")+
+  return onOffSwitch("sw_backups", "Back up my notes every day", "A copy of your notes in your Monomem folder each day. Your encryption key is never copied.", s.daily_backups !== "off", "daily_backups")+
+    onOffSwitch("sw_recall", "Add matching notes to each prompt", "At each prompt, up to 3 notes that match it are added for your app. Off by default.", s.prompt_recall === "on", "prompt_recall")+
+    onOffSwitch("sw_claude", "Bring in Claude Code's memory as it changes", "While Monomem runs, files Claude Code changed are copied in every 10 minutes, unconfirmed (from outside) until you confirm them. Off by default.", s.claude_refresh === "on", "claude_refresh")+
     "<div class='switch'><span><span>Start Monomem with my computer</span><span class='help' style='display:block'>Keeps this page and backups available. Your apps start Monomem themselves either way.</span></span>"+
-    "<span class='row'><button onclick='setService(true)'>Turn on</button><button class='plain' onclick='setService(false)'>Turn off</button></span></div>";
+    "<span class='row'><button"+actA("setService",[true])+">Turn on</button><button class='plain'"+actA("setService",[false])+">Turn off</button></span></div>";
 }
 function setSetting(key, on){
   var b = {}; b[key] = on ? "on" : "off";
@@ -31,23 +31,23 @@ function showOut(id, r){ var el = $(id); if(el){ el.innerHTML = r && r.output ? 
 function openSettings(){
   var s = STATE.settings || {}, b = STATE.backup;
   var last = b ? (b.ok ? "Last backup " + esc(ago(b.at)) + "." : "<span class='err'>The last backup failed (" + esc(ago(b.at)) + ").</span>") : "No backup yet.";
-  var nav = function(label, fn){ return "<button class='item' onclick='"+fn+"'><span>"+label+"</span><span class='muted' aria-hidden='true'>&rsaquo;</span></button>"; };
+  var nav = function(label, act, args){ return "<button class='item'"+actA(act, args)+"><span>"+label+"</span><span class='muted' aria-hidden='true'>&rsaquo;</span></button>"; };
   $("set_body").innerHTML =
     "<section><h3>Monomem</h3><div class='group'><div class='item'><div><b>Version " + esc(STATE.version || "") + "</b><div class='help'>Updates only when you ask. Checking asks github.com for the newest version; nothing else is sent.</div></div>"+
-      "<button id='upd_btn' onclick='checkUpdate()'>Check for updates</button></div><div id='upd_out'></div></div></section>"+
+      "<button id='upd_btn'"+actA("checkUpdate")+">Check for updates</button></div><div id='upd_out'></div></div></section>"+
     "<section><h3>Your apps</h3><div class='group' id='set_apps'><div class='item muted'>Looking for apps...</div></div>"+
-      "<div class='acts' id='undo_row' hidden><button class='plain' onclick='undoConnect()'>Undo the last connect</button></div><div id='set_out'></div></section>"+
+      "<div class='acts' id='undo_row' hidden><button class='plain'"+actA("undoConnect")+">Undo the last connect</button></div><div id='set_out'></div></section>"+
     "<section><h3>Automatic</h3><div class='group'>"+autoSwitches(s)+"</div></section>"+
     syncSection()+
-    "<section><h3>Backups</h3><div class='group'><div class='item'><div id='bk_line'>"+last+"</div><button onclick='backupNow()'>Back up now</button></div>"+
-      "<div class='item'><div>A copy you can read (.json). It holds every note this key can see, not encrypted.</div><button onclick='doExport()'>Download</button></div>"+
-      "<div class='item'><div>Add notes from a .json copy</div><button onclick='document.getElementById(&quot;imp&quot;).click()'>Choose file</button></div>"+
-      "<input id='imp' type='file' accept='application/json' aria-label='File to add notes from (.json)' hidden onchange='doImport(this)'></div></section>"+
-    "<section><h3>More</h3><div class='group list'>"+nav("Usage", "fromSettings(loadMeter)()")+nav("Tidy up", "fromSettings(loadQuality)()")+nav("Apps and keys", "fromSettings(loadApps)()")+
-      nav("Activity log", "fromSettings(loadAudit)()")+nav("Archived notes", "fromSettings(loadArchived)()")+nav("Keyboard shortcuts", "closeSheet(&quot;settings&quot;);openSheet(&quot;helpsheet&quot;)")+
-      nav("Show the Welcome screen", "closeSheet(&quot;settings&quot;);showWelcome(0)")+"</div></section>"+
-    "<section><div class='group'><div class='item'><div>Take Monomem out of every app. Your notes stay.</div><button class='destructive' onclick='removeMonomem()'>Remove</button></div>"+
-      "<div class='item'><div>Sign out of this page</div><button class='plain' onclick='closeSheet(&quot;settings&quot;);logout()'>Sign out</button></div></div></section>";
+    "<section><h3>Backups</h3><div class='group'><div class='item'><div id='bk_line'>"+last+"</div><button"+actA("backupNow")+">Back up now</button></div>"+
+      "<div class='item'><div>A copy you can read (.json). It holds every note this key can see, not encrypted.</div><button"+actA("doExport")+">Download</button></div>"+
+      "<div class='item'><div>Add notes from a .json copy</div><button "+actA("pickImport")+">Choose file</button></div>"+
+      "<input id='imp' type='file' accept='application/json' aria-label='File to add notes from (.json)' hidden "+actC("doImport")+"></div></section>"+
+    "<section><h3>More</h3><div class='group list'>"+nav("Usage", "fromSettings", ["loadMeter"])+nav("Tidy up", "fromSettings", ["loadQuality"])+nav("Apps and keys", "fromSettings", ["loadApps"])+
+      nav("Activity log", "fromSettings", ["loadAudit"])+nav("Archived notes", "fromSettings", ["loadArchived"])+nav("Keyboard shortcuts", "helpFromSettings")+
+      nav("Show the Welcome screen", "welcomeFromSettings")+"</div></section>"+
+    "<section><div class='group'><div class='item'><div>Take Monomem out of every app. Your notes stay.</div><button class='destructive'"+actA("removeMonomem")+">Remove</button></div>"+
+      "<div class='item'><div>Sign out of this page</div><button class='plain'"+actA("signOut")+">Sign out</button></div></div></section>";
   openSheet("settings");
   loadApps2("set_apps", false);
   loadSync();
@@ -64,7 +64,7 @@ function syncSection(){
     "<div id='sync_now' class='help'></div>"+
     "<label class='field'><span>Shared folder or private git address</span><input id='sync_target' placeholder='For example: your OneDrive folder'></label>"+
     "<label class='field'><span>Name for this computer (optional)</span><input id='sync_name' maxlength='40' placeholder='For example: Work laptop'></label>"+
-    "<div class='acts'><button class='primary' onclick='syncSetup()'>Set up</button></div><div id='sync_out'></div></div></div></div></section>";
+    "<div class='acts'><button class='primary'"+actA("syncSetup")+">Set up</button></div><div id='sync_out'></div></div></div></div></section>";
 }
 function loadSync(){
   api("/ui/sync").then(function(j){
@@ -72,12 +72,12 @@ function loadSync(){
     var line = j.set ? "Set up on this computer (" + (j.kind === "git" ? "git: " : "folder: ") + esc(j.where) + "). " : "Not set up on this computer yet.";
     var p = j.problem;
     // A failed or late sync: what happened, when, and what to do, with a button (Needs you sends the person here).
-    el.innerHTML = !p ? line + (j.set ? (j.auto ? "Syncs by itself every " + Number(j.every_minutes) + " minutes." : "Press Sync now when you switch computers.") + " <button class='plain' onclick='syncNow()'>Sync now</button>" : "")
+    el.innerHTML = !p ? line + (j.set ? (j.auto ? "Syncs by itself every " + Number(j.every_minutes) + " minutes." : "Press Sync now when you switch computers.") + " <button class='plain'"+actA("syncNow")+">Sync now</button>" : "")
       : line + "<span class='err'>" + (p.kind === "failed" ? "The last sync failed " + esc(ago(p.at)) + (p.error ? ": " + esc(String(p.error).replace(/[.\\s]+$/, "")) : "") + "."
         : "Automatic sync is on, but the last one was " + esc(ago(p.at)) + ".") + "</span> " +
         (p.kind === "failed" ? "Check that this computer can reach the shared folder or the git address, then press Sync now."
           : "It only runs while Monomem is running: turn on Start Monomem with my computer above, or press Sync now.") +
-        " <button onclick='syncNow()'>Sync now</button>";
+        " <button"+actA("syncNow")+">Sync now</button>";
   }).catch(function(e){ var el = $("sync_now"); if(el){ el.textContent = localMissing(e) ? "To set this up from here, open Monomem from " + whereEntry() + ", or run monomem open on this computer." : ""; } });
 }
 function syncNow(){
@@ -102,11 +102,11 @@ function syncSetup(){
 function appRow(a, welcome){
   var id = esc(a.id);
   if(a.problem){
-    return "<div class='app'><div><b>"+esc(a.label)+"</b><div class='help'>Needs repair: "+esc(a.problem)+"</div></div><button onclick='connectApp(&quot;"+id+"&quot;)'>Repair</button></div>";
+    return "<div class='app'><div><b>"+esc(a.label)+"</b><div class='help'>Needs repair: "+esc(a.problem)+"</div></div><button"+actA("connectApp",[id])+">Repair</button></div>";
   }
   var right = a.connected ? "<span class='lbl ok'>Connected</span>"
-    : a.declined && !welcome ? "<span class='muted t-foot'>Skipped</span> <button class='plain' onclick='connectApp(&quot;"+id+"&quot;)'>Connect</button>"
-    : "<span class='row'><button onclick='connectApp(&quot;"+id+"&quot;)'>Connect</button><button class='plain' onclick='declineApp(&quot;"+id+"&quot;)'>Not this one</button></span>";
+    : a.declined && !welcome ? "<span class='muted t-foot'>Skipped</span> <button class='plain'"+actA("connectApp",[id])+">Connect</button>"
+    : "<span class='row'><button"+actA("connectApp",[id])+">Connect</button><button class='plain'"+actA("declineApp",[id])+">Not this one</button></span>";
   return "<div class='app'><div><b>"+esc(a.label)+"</b>"+(a.new && !a.connected ? " <span class='lbl'>New<span class='sr'>: installed after Monomem was set up</span></span>" : "")+(a.connected ? "<div class='help'>"+esc(restartHint(a.id))+"</div>" : "")+"</div>"+right+"</div>";
 }
 function restartHint(id){
@@ -145,7 +145,7 @@ function checkUpdate(){
   var out = $("upd_out"); if(out){ out.innerHTML = "<p class='help'>Asking github.com...</p>"; }
   api("/ui/update", { method:"POST", body: JSON.stringify({ check: true }) }).then(function(r){
     var newer = r.ok && / is out /.test(r.output || "");
-    if(out){ out.innerHTML = "<pre class='out'>"+esc(r.output || "")+"</pre>" + (newer ? "<div class='acts'><button class='primary' onclick='doUpdate()'>Update now</button></div>" : ""); }
+    if(out){ out.innerHTML = "<pre class='out'>"+esc(r.output || "")+"</pre>" + (newer ? "<div class='acts'><button class='primary'"+actA("doUpdate")+">Update now</button></div>" : ""); }
   }).catch(function(e){ if(out){ out.innerHTML = "<p class='err'>"+esc(e.message)+"</p>"; } });
 }
 // The update runs apart from this server, then stops it and starts the new version: show its output, reload on the new one.
@@ -158,7 +158,7 @@ function waitUpdate(n){
   var out = $("upd_out");
   if(n >= 180){ if(out){ out.innerHTML += "<p class='help'>Still restarting. Reload this page in a moment (when Monomem is set to start with " + osName() + ", it can take up to 5 minutes).</p>"; } return; }
   setTimeout(function(){
-    fetch("/health").then(function(r){ return r.json(); }).then(function(h){
+    api("/health").then(function(h){
       if(h.version && h.version !== STATE.version){ location.reload(); return; }
       return api("/ui/update/log").then(function(l){
         if(out){ out.innerHTML = "<pre class='out'>"+esc(l.output || "")+"</pre>"; }
@@ -214,14 +214,14 @@ function showWelcome(n){
       "<p class='help'>Monomem adds one entry to each app's settings and keeps a copy of every file it changes. Changed your mind? Settings, then Undo the last connect, puts it back.</p>"+
       "<p style='margin-top:16px'><b>Bring in memories</b> from other tools on this computer (optional):</p><div id='wl_mem'><p class='muted'>Looking...</p></div>"+
       "<p class='help'>Each note comes in unconfirmed (from outside): your apps do not get it at session start until you confirm it (the Review tab, or <code>monomem confirm &lt;id&gt;</code>). A Notion export or a mem0 file: <code>monomem import --from notion --path &lt;export.zip&gt;</code> (or <code>--from mem0</code>).</p>",
-      "<button class='plain' onclick='finishWelcome()'>Skip</button><button class='primary' onclick='showWelcome(1)'>Next</button>");
+      "<button class='plain'"+actA("finishWelcome")+">Skip</button><button class='primary'"+actA("showWelcome",[1])+">Next</button>");
     loadApps2("wl_apps", true);
     loadMemSources();
   } else if(n === 1){
     TRY_SINCE = new Date().toISOString();
     w.innerHTML = wcard(1, "Try it", "<p>In one of your connected apps, type:</p><p class='say' id='wl_say'>Save to Monomem: we deploy with pnpm</p>"+
-      "<div class='acts'><button onclick='copyText(&quot;wl_say&quot;)'>Copy</button></div><p class='t-callout' id='wl_seen' role='status' aria-live='polite'>Waiting for your app to save it...</p>",
-      "<button class='plain' onclick='showWelcome(0)'>Back</button><button class='primary' onclick='showWelcome(2)'>Next</button>");
+      "<div class='acts'><button"+actA("copyText",["wl_say"])+">Copy</button></div><p class='t-callout' id='wl_seen' role='status' aria-live='polite'>Waiting for your app to save it...</p>",
+      "<button class='plain'"+actA("showWelcome",[0])+">Back</button><button class='primary'"+actA("showWelcome",[2])+">Next</button>");
     TRY_T = setInterval(trySeen, 3000);
   } else {
     w.innerHTML = wcard(2, "You're set", "<p><b>Monomem does these by itself.</b> Change them any time in Settings.</p><div class='group'>"+autoSwitches(STATE.settings)+"</div>"+
@@ -229,8 +229,8 @@ function showWelcome(n){
       "<li>Writes that hold a secret are refused; writes that look like an injected instruction are held until you decide (the Held tab).</li>"+
       "<li>You can close this window. Your apps start Monomem themselves.</li>"+
       "<li>To come back, open Monomem from " + whereEntry() + (INSTALL_EVT ? ", or install this page as an app" : "") + ".</li></ul>"+
-      (INSTALL_EVT ? "<div class='acts'><button onclick='installApp()'>Install as an app</button></div>" : ""),
-      "<button class='plain' onclick='showWelcome(1)'>Back</button><button class='primary' onclick='finishWelcome()'>Open my notes</button>");
+      (INSTALL_EVT ? "<div class='acts'><button"+actA("installApp")+">Install as an app</button></div>" : ""),
+      "<button class='plain'"+actA("showWelcome",[1])+">Back</button><button class='primary'"+actA("finishWelcome")+">Open my notes</button>");
   }
 }
 // Other memory tools found on this computer: one "Bring in" each, asked first, then the ordinary import runs.
@@ -239,7 +239,7 @@ function loadMemSources(){
     var box = $("wl_mem"); if(!box){ return; }
     var list = j.sources || [];
     box.innerHTML = list.length ? list.map(function(s){
-      return "<div class='app'><div><b>"+esc(s.label)+"</b><div class='help'>"+esc(s.where)+"</div></div><button onclick='bringIn(&quot;"+esc(s.id)+"&quot;,&quot;"+esc(s.label)+"&quot;)'>Bring in</button></div>";
+      return "<div class='app'><div><b>"+esc(s.label)+"</b><div class='help'>"+esc(s.where)+"</div></div><button "+actA("bringIn",[s.id,s.label])+">Bring in</button></div>";
     }).join("") : "<p class='muted'>No other memory tools found here.</p>";
   }).catch(function(e){ var box = $("wl_mem"); if(box){ box.innerHTML = "<p class='muted'>" + (localMissing(e) ? "To look for them, open Monomem from " + whereEntry() + ", or run monomem open on this computer." : esc(e.message)) + "</p>"; } });
 }

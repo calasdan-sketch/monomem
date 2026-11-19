@@ -363,7 +363,7 @@ describe("distrust list: the banner", () => {
     });
     const lines = text.split("\n");
     assert.match(lines[1], /^- #2: DISTRUSTED WRITER/);
-    assert.match(lines[2], /^- #1: written by good/);
+    assert.match(lines[2], /^- #1: written by "good"/);
   });
 
   test("the warning survives the line cap", () => {

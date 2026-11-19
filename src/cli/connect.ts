@@ -1,6 +1,8 @@
 // `monomem connect`, `open`, `init` and `setup`: wiring apps to Monomem. Moved out of cli.ts unchanged, except that the
 // path of cli.js (which these write into app settings or start) is passed in, since this file is not cli.js.
 
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { requireOperator } from "../operator-gate.js";
 import { didYouMean } from "../suggest.js";
 import { parseFlags, str, terminalIO } from "./shared.js";
@@ -240,6 +242,22 @@ export async function setupCmd(cliPath: string): Promise<void> {
   }
   const { PACKAGE_VERSION } = await import("../config.js");
   const e = realEnv(PACKAGE_VERSION, cliPath);
+  // Per-project scope is the default for a brand-new install only. Decide BEFORE setup runs: setup writes a test note.
+  const freshInstall = flags["dry-run"] !== true && flags.undo !== true && str(flags.db) === undefined && (await isFreshInstall());
+  // The marker goes in first, so setup's own test note lands in the same scoped space the apps will read from.
+  let wroteMarker: string | null = null;
+  if (freshInstall) {
+    try {
+      const { AUTO_SCOPE_FILE, namespaceConfigSource } = await import("../namespace.js");
+      if (!namespaceConfigSource() && !existsSync(AUTO_SCOPE_FILE)) {
+        mkdirSync(dirname(AUTO_SCOPE_FILE), { recursive: true });
+        writeFileSync(AUTO_SCOPE_FILE, "on\n", { mode: 0o600 });
+        wroteMarker = AUTO_SCOPE_FILE;
+      }
+    } catch {
+      // best effort: without the marker everything simply shares one space, as before
+    }
+  }
   process.exitCode = await runSetup(e, terminalIO(), {
     ...DEFAULT_OPTIONS,
     dryRun: flags["dry-run"] === true,
@@ -260,4 +278,31 @@ export async function setupCmd(cliPath: string): Promise<void> {
     // C22: offered only when a local Ollama already has nomic-embed-text; --no-embeddings and --undo skip the probe.
     embeddings: flags["no-embeddings"] !== true && flags.undo !== true && (await (await import("../embeddings-offer.js")).localEmbeddingsAvailable(process.env)),
   });
+  if (wroteMarker) {
+    if (process.exitCode === 0) console.log("Each git repository keeps its own notes, so one project's notes do not show up in another. Turn that off with: monomem scope off");
+    else {
+      try {
+        rmSync(wroteMarker, { force: true }); // setup did not finish: leave the store as it was
+      } catch {
+        /* best effort */
+      }
+    }
+  }
+}
+
+/** True when there is no store yet, or it holds no notes. */
+async function isFreshInstall(): Promise<boolean> {
+  try {
+    const { DB_PATH } = await import("../config.js");
+    if (!existsSync(DB_PATH)) return true;
+    const { Store } = await import("../store.js");
+    const s = new Store(DB_PATH);
+    try {
+      return s.countAll() === 0;
+    } finally {
+      s.close();
+    }
+  } catch {
+    return false;
+  }
 }

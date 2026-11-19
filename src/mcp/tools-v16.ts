@@ -12,6 +12,7 @@ import { bestPassage } from "../search-service.js";
 import { NEW_TOOLS, OLD_TOOL_ALIASES } from "./tool-names.js";
 import { errorResult, zFacts, zTags } from "./shared.js";
 import type { McpCtx } from "./context.js";
+import { plainArgError } from "./call-guard.js";
 
 /** Body characters a compact note keeps (memory_read has the rest). */
 export const PREVIEW_CHARS = 200;
@@ -337,7 +338,7 @@ export function registerV16Tools(c: McpCtx): void {
         if (oldName === "memory_supersede_undo" || oldName === "memory_supersede_confirm") delete oldArgs.old_ids;
         if (oldName === "memory_supersede_confirm") delete oldArgs.new_id;
         const parsed = old.schema ? old.schema.safeParse(oldArgs) : { success: true as const, data: oldArgs };
-        if (!parsed.success) return errorResult(`invalid arguments for ${s.name}${single ? "" : ` (${action})`}: ${z.prettifyError(parsed.error)}`);
+        if (!parsed.success) return errorResult(plainArgError(s.name, parsed.error, oldArgs));
         // 1.6 (PLAN D): `evidence` is memory_save's own; the 1.5 state_write schema stays as it was (its wrapper drops
         // arguments it does not list), so the value rides on the request context instead.
         const ctx = oldName === "state_write" && rest.evidence !== undefined ? { ...(extra as object), monomemEvidence: rest.evidence } : extra;

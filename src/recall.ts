@@ -18,6 +18,7 @@ import { UNTRUSTED_BANNER, describeWriter } from "./security.js";
 import {
   namespaceConfigSource,
   resolveStartupNamespace,
+  resolveAutoScope,
 } from "./namespace.js";
 
 /**
@@ -190,7 +191,12 @@ export async function resolveRecallNamespace(cwd: string = process.cwd()): Promi
     );
     return { kind: "unresolvable" };
   }
-  if (!source) return { kind: "disabled" };
+  if (!source) {
+    // No spaces map: with auto-scope on, a folder inside a git repository recalls that repository's own namespace, the
+    // same one the stdio server writes to (both call resolveAutoScope). Anywhere else the shared space is kept.
+    const auto = resolveAutoScope(cwd);
+    return auto ? { kind: "resolved", namespace: auto.namespace } : { kind: "disabled" };
+  }
 
   // Namespaces are configured. resolveStartupNamespace() throws on ambiguous
   // overlap and returns null when the config is present-but-invalid

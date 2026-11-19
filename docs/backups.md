@@ -27,7 +27,11 @@ Settings, or with `MONOMEM_AUTO_BACKUP=off` ([configuration.md](./configuration.
 
 ```bash
 monomem backup --out ~/om-backup     # a consistent copy; safe while the server runs
+monomem backup                        # the same, into <data folder>/backups/monomem-backup-<time>
 ```
+
+With no folder given, `monomem backup` writes into the `backups` folder inside your data folder (beside the automatic daily
+ones), never into the system's temporary folder, which the system empties.
 
 `monomem backup` writes `state.db` (through SQLite `VACUUM INTO`) and a `README.txt` that says what is and is not in
 the folder. It leaves the keys out unless you ask:

@@ -13,8 +13,10 @@
 // exactly as before -- model-supplied namespaces keep working. Resolution
 // only activates when configured.
 
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { join, posix, win32 } from "node:path";
+import { homedir } from "node:os";
+import { basename, dirname, join, posix, win32 } from "node:path";
 import { DATA_DIR } from "./config.js";
 
 /** Path of the spaces config file (in the data dir). */
@@ -95,7 +97,7 @@ function canonicalDir(dir: string, f: PathFlavor): string {
   let p = dir;
   if (f.realpath && p) {
     try {
-      p = realpathSync(p);
+      p = realpathSync.native(p); // native: expands Windows 8.3 short names, so every comparison uses one spelling
     } catch {
       /* not on disk: compare lexically */
     }
@@ -365,8 +367,127 @@ export function resolveRequestNamespace(
  * Throws on ambiguous overlap -- startup must fail loudly, never silently
  * pick a namespace.
  */
-export function resolveStartupNamespace(cwd: string): ResolvedNamespace | null {
+export function resolveStartupNamespace(cwd: string, opts: { auto?: boolean } = {}): ResolvedNamespace | null {
   const cfg = loadNamespaceConfig();
-  if (!cfg) return null;
-  return { namespace: resolveNamespace(cwd, cfg), readsFrom: cfg.reads_from ?? {} };
+  if (cfg) return { namespace: resolveNamespace(cwd, cfg), readsFrom: cfg.reads_from ?? {} };
+  // No spaces map: only a per-app stdio server or the session-start hook may scope itself to the repo it was started in
+  // (opts.auto). The HTTP server and `monomem start` serve several agents from one folder and never do.
+  return opts.auto ? resolveAutoScope(cwd) : null;
+}
+
+/** Per-project scope without a spaces map. MONOMEM_AUTO_SCOPE=1 / 0 wins; else the `auto-scope` file in the data dir says "on". */
+export const AUTO_SCOPE_ENV = "MONOMEM_AUTO_SCOPE";
+export const AUTO_SCOPE_FILE = join(DATA_DIR, "auto-scope");
+
+let warnedBadScopeEnv = false;
+export function autoScopeMode(): { on: boolean; source: "env" | "file" | "off"; invalid?: string } {
+  const rawEnv = (process.env[AUTO_SCOPE_ENV] ?? "").trim();
+  const env = rawEnv.toLowerCase();
+  if (["1", "on", "true", "yes"].includes(env)) return { on: true, source: "env" };
+  if (["0", "off", "false", "no"].includes(env)) return { on: false, source: "env" };
+  // A value that is neither: say so once (a typo such as "ture" must not look like a deliberate "off"), then use the saved setting.
+  const invalid = rawEnv ? rawEnv.slice(0, 40) : undefined;
+  if (invalid && !warnedBadScopeEnv) {
+    warnedBadScopeEnv = true;
+    process.stderr.write(`[monomem] ${AUTO_SCOPE_ENV}="${invalid}" is not understood (use 1 for on or 0 for off), so it is ignored. The saved setting (monomem scope status) is used instead.\n`);
+  }
+  try {
+    if (existsSync(AUTO_SCOPE_FILE) && readFileSync(AUTO_SCOPE_FILE, "utf8").trim().toLowerCase() === "on") return { on: true, source: "file", ...(invalid ? { invalid } : {}) };
+  } catch {
+    /* unreadable: stays off (the shared space, as before) */
+  }
+  return { on: false, source: "off", ...(invalid ? { invalid } : {}) };
+}
+
+/**
+ * A folder whose `.git` is a FILE ("gitdir: <path>"): when that path is `<main>/.git/worktrees/<name>` the folder is a git
+ * worktree and the answer is `<main>`, the repository it was made from (so both share notes). A submodule's gitdir is under
+ * `.git/modules`, a bare repository has no working folder: those return null and the folder stays its own project.
+ */
+function worktreeMainRoot(dir: string, f: PathFlavor): string | null {
+  let text: string;
+  try {
+    text = readFileSync(join(dir, ".git"), "utf8");
+  } catch {
+    return null; // `.git` is a folder (an ordinary repository) or unreadable
+  }
+  const m = /^gitdir:\s*(.+?)\s*$/m.exec(text);
+  if (!m) return null;
+  const gitdir = f.path.resolve(dir, m[1]);
+  const worktrees = f.path.dirname(gitdir);
+  const commonGit = f.path.dirname(worktrees);
+  if (f.path.basename(worktrees) !== "worktrees" || f.path.basename(commonGit) !== ".git") return null;
+  const main = f.path.dirname(commonGit);
+  if (!existsSync(join(commonGit, "worktrees"))) return null;
+  // What git itself requires: `<gitdir>/gitdir` must exist and point back at THIS folder's own `.git`. Without it any folder
+  // could write a `.git` file naming someone else's repository and read that repository's notes (a forged worktree).
+  try {
+    const back = readFileSync(join(gitdir, "gitdir"), "utf8").split(/\r?\n/)[0].trim();
+    if (!back || back.length > 4096 || back.includes("\0")) return null;
+    const backPath = f.path.resolve(gitdir, back); // git may store this relative to the worktree's admin folder
+    const same = (a: string, b: string): boolean => {
+      const real = (p: string): string => {
+        try {
+          return realpathSync.native(p);
+        } catch {
+          return p;
+        }
+      };
+      return canonicalDir(lexicalDir(real(a), f), f) === canonicalDir(lexicalDir(real(b), f), f);
+    };
+    if (!same(backPath, join(dir, ".git"))) return null;
+  } catch {
+    return null; // no back-pointer: not a real worktree, so the folder is its own project
+  }
+  try {
+    return lexicalDir(realpathSync.native(main), f);
+  } catch {
+    return null; // the main repository is gone (a removed or moved folder): keep the worktree as its own project
+  }
+}
+
+/**
+ * The repository a folder belongs to: the nearest parent (or the folder itself) holding `.git`. A git worktree belongs to
+ * the repository it was made from (its notes are that repository's notes); a submodule is its own project. null for the
+ * home folder, a drive root, or a folder in no repository: those stay in the shared space, so an app launched outside any
+ * project is not given a namespace from wherever it happened to start.
+ */
+export function findRepoRoot(cwd: string, home: string = homedir()): string | null {
+  const f = pathFlavor();
+  let real = cwd;
+  try {
+    real = realpathSync.native(cwd); // a folder reached through a symlink or junction is the same project as its real path
+  } catch {
+    /* not on disk: walk the path as given */
+  }
+  let dir = lexicalDir(real, f);
+  const homeDir = canonicalDir(home, f);
+  for (let i = 0; i < 64; i++) {
+    const canon = canonicalDir(dir, f);
+    if (canon === homeDir || dir === f.path.parse(dir).root) return null;
+    if (existsSync(join(dir, ".git"))) {
+      const main = worktreeMainRoot(dir, f);
+      if (main !== null && canonicalDir(main, f) === homeDir) return null; // a worktree of a repository in the home folder: shared, like that repository
+      return main ?? dir;
+    }
+    const up = dirname(dir);
+    if (up === dir) return null;
+    dir = up;
+  }
+  return null;
+}
+
+/** `<folder name>-<6 hex of a hash of the repo's real path>`: readable, stable, and different for two repos with the same name. */
+export function autoScopeName(root: string): string {
+  const f = pathFlavor();
+  const canon = canonicalDir(root, f);
+  const slug = basename(root).toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "project";
+  return `${slug}-${createHash("sha256").update(canon).digest("hex").slice(0, 6)}`;
+}
+
+/** The repo-scoped namespace for a folder when auto-scope is on and the folder is in a repo; null otherwise. No read grants: repos are isolated. */
+export function resolveAutoScope(cwd: string): ResolvedNamespace | null {
+  if (!autoScopeMode().on) return null;
+  const root = findRepoRoot(cwd);
+  return root ? { namespace: autoScopeName(root), readsFrom: {} } : null;
 }

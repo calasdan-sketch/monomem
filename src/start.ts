@@ -172,7 +172,10 @@ transportFailed(apiServer, API_PORT, "MONOMEM_PORT", "API + dashboard").listen(A
   console.error(`[monomem] Open the dashboard: http://127.0.0.1:${API_PORT}/  (key in ${tokenFromEnv ? "MONOMEM_TOKEN" : TOKEN_FILE}; or run: monomem open)`);
   const tokenExpr = tokenFromEnv ? "$MONOMEM_TOKEN" : `$(cat "${TOKEN_FILE}")`;
   console.error(
-    `[monomem] try: curl -H "Authorization: Bearer ${tokenExpr}" "http://127.0.0.1:${API_PORT}/notes?limit=5"`
+    `[monomem] try: curl -H "Authorization: Bearer ${tokenExpr}" "http://127.0.0.1:${API_PORT}/notes?limit=5"` +
+      (process.platform === "win32"
+        ? `\n[monomem] PowerShell: curl.exe -H "Authorization: Bearer $(${tokenFromEnv ? "$env:MONOMEM_TOKEN" : `Get-Content '${TOKEN_FILE}'`})" "http://127.0.0.1:${API_PORT}/notes?limit=5"   (or: Invoke-RestMethod -Headers @{Authorization="Bearer $(${tokenFromEnv ? "$env:MONOMEM_TOKEN" : `Get-Content '${TOKEN_FILE}'`})"} "http://127.0.0.1:${API_PORT}/notes?limit=5")`
+        : "")
   );
   scheduleJanitor(true);
 });

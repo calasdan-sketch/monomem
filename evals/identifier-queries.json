@@ -1,0 +1,34 @@
+{
+  "format": "identifier-queries/1",
+  "what": "Keyword-search regression cases for code identifiers (src/query-expand.ts). Each case writes the notes, then each query must return the note titled in `finds` and must NOT return any title in `not` . A case with `needs` is skipped unless that capability is on. Replayed by test/identifier-search.test.ts.",
+  "notes": [
+    { "title": "camel", "body": "The handler getUserById loads one account row." },
+    { "title": "snake", "body": "Config key user_session_timeout is 30 minutes." },
+    { "title": "kebab", "body": "Flag name is retry-on-failure for the uploader." },
+    { "title": "pascal", "body": "Use the HttpServerConfig class when binding." },
+    { "title": "path", "body": "The entry point is src/auth/session_store.ts in this repo." },
+    { "title": "glued-camel", "body": "We call refreshAccessToken before every request." },
+    { "title": "unrelated", "body": "Weekly standup is on Monday at ten." }
+  ],
+  "queries": [
+    { "q": "get user by id", "finds": "camel" },
+    { "q": "getUserById", "finds": "camel" },
+    { "q": "get_user_by_id", "finds": "camel" },
+    { "q": "user session timeout", "finds": "snake" },
+    { "q": "userSessionTimeout", "finds": "snake" },
+    { "q": "user-session-timeout", "finds": "snake" },
+    { "q": "retry on failure", "finds": "kebab" },
+    { "q": "retryOnFailure", "finds": "kebab" },
+    { "q": "http server config", "finds": "pascal" },
+    { "q": "HttpServerConfig", "finds": "pascal" },
+    { "q": "src/auth/session_store.ts", "finds": "path" },
+    { "q": "session store ts", "finds": "path" },
+    { "q": "refresh access token", "finds": "glued-camel" },
+    { "q": "refresh_access_token", "finds": "glued-camel" },
+    { "q": "standup monday", "finds": "unrelated", "not": ["camel", "snake"] },
+    { "q": "get user by name", "not": ["camel"], "note": "a different last word must not match" }
+  ],
+  "skipped_needs_embeddings": [
+    { "q": "where is the app hosted", "finds_body": "API is deployed on Fly.io", "needs": "MONOMEM_EMBEDDINGS=on and a local embedding model", "note": "a paraphrase with no shared word: keyword search cannot find it; not run in the default suite" }
+  ]
+}

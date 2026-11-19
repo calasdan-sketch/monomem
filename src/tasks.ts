@@ -1402,6 +1402,8 @@ export function buildBoardSummary(
     const v = safeLine(s);
     return v.length > n ? v.slice(0, n - 1) + "…" : v;
   };
+  // Writer-chosen free text is JSON-quoted (one line, quotes escaped) so it cannot read as this server's own wording (round 2).
+  const q = (s: unknown, n: number): string => JSON.stringify(clip(s, n));
   const taskBudget = Math.floor(maxChars * 0.6);
   const handoffBudget = maxChars - taskBudget - 1;
   const sections: string[] = [];
@@ -1412,10 +1414,10 @@ export function buildBoardSummary(
     let shown = 0;
     for (const t of tasks) {
       const line =
-        `- #${t.id} [${clip(t.status, 12)}] ${clip(t.title, 100)}` +
+        `- #${t.id} [${clip(t.status, 12)}] ${q(t.title, 100)}` +
         (t.owner ? ` (${clip(t.owner, 40)})` : "") +
         (t.due ? ` due ${clip(t.due, 25)}${isOverdue(t.due) ? " OVERDUE" : ""}` : "") +
-        (t.next_step ? ` -> next: ${clip(t.next_step, 120)}` : "") +
+        (t.next_step ? ` -> next: ${q(t.next_step, 120)}` : "") +
         // Server-stamped writer, so an overdue task from an access key never surfaces unlabelled.
         (t.written_by ? ` [by ${clip(t.written_by, 40)}]` : "");
       if (used + line.length + 1 > taskBudget - 60) break;
@@ -1430,10 +1432,10 @@ export function buildBoardSummary(
   }
   if (handoff) {
     const lines = [`Latest handoff from ${clip(handoff.surface, 40)} (${clip(handoff.at.slice(0, 16).replace("T", " "), 20)}Z):`];
-    if (handoff.summary) lines.push(`- summary: ${clip(handoff.summary, 240)}`);
-    if (handoff.next_step) lines.push(`- next: ${clip(handoff.next_step, 240)}`);
+    if (handoff.summary) lines.push(`- summary: ${q(handoff.summary, 240)}`);
+    if (handoff.next_step) lines.push(`- next: ${q(handoff.next_step, 240)}`);
     for (const [k, list] of [["pending", handoff.pending], ["decisions", handoff.decisions]] as const) {
-      if (list.length) lines.push(`- ${k}: ${clip(list.join("; "), 300)}`);
+      if (list.length) lines.push(`- ${k}: ${q(list.join("; "), 300)}`);
     }
     let text = lines.join("\n");
     if (text.length > handoffBudget) text = text.slice(0, handoffBudget - 1) + "…";

@@ -172,7 +172,7 @@ describe("doctor security warnings", () => {
       s.create({ title: "alpha project status two", body: "alpha project report" }, { skipEdges: true });
       s.close();
       // other notes already have no edges (unrelated), the similar pair was written without them
-      assert.match(cli(home, ["doctor"]).stdout, /no similarity edges/);
+      assert.match(cli(home, ["doctor"]).stdout, /search by meaning is not set up/);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

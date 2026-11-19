@@ -117,7 +117,7 @@ var UNDO = null, TOAST_T = 0;
 function toast(text, undoFn){
   var t = $("toast"); clearTimeout(TOAST_T);
   UNDO = undoFn || null;
-  t.innerHTML = "<span>"+esc(text)+"</span>" + (undoFn ? "<button onclick='undoLast()'>Undo</button>" : "");
+  t.innerHTML = "<span>"+esc(text)+"</span>" + (undoFn ? "<button"+actA("undoLast")+">Undo</button>" : "");
   TOAST_T = setTimeout(function(){ t.innerHTML = ""; }, undoFn ? 8000 : 4000);
 }
 function undoLast(){ var f = UNDO; UNDO = null; $("toast").innerHTML = ""; if(f){ f(); } else { toast("Nothing to undo."); } }
@@ -189,9 +189,9 @@ function showNeeds(){
   if(b.hidden){ return; }
   var per = {}, top = items[0].view;
   items.forEach(function(i){ per[i.view] = (per[i.view] || 0) + Number(i.count || 0); if(per[i.view] > (per[top] || 0)){ top = i.view; } });
-  var go = { held:["loadHeld()", "Open Held"], review:["loadReview()", "Open Review"], settings:["openSettings()", "Open Settings"] }[top] || ["loadReview()", "Open Review"];
+  var go = { held:["loadHeld", "Open Held"], review:["loadReview", "Open Review"], settings:["openSettings", "Open Settings"] }[top] || ["loadReview", "Open Review"];
   b.innerHTML = "<div><b>" + (NEEDS.count === 1 ? "1 thing needs you" : Number(NEEDS.count) + " things need you") + "</b><ul class='t-callout'>" +
-    items.map(function(i){ return "<li>"+esc(i.text)+"</li>"; }).join("") + "</ul></div><button onclick='"+go[0]+"'>"+go[1]+"</button>";
+    items.map(function(i){ return "<li>"+esc(i.text)+"</li>"; }).join("") + "</ul></div><button"+actA(go[0])+">"+go[1]+"</button>";
 }
 function loadNeeds(){ if(!IS_ADMIN){ return; } api("/ui/needs-you").then(setNeeds).catch(function(){ setNeeds(null); }); }
 
@@ -241,7 +241,7 @@ var PAL = [];
 function palFilter(){
   var q = String($("pal_q").value || "").toLowerCase().trim();
   PAL = COMMANDS.filter(function(c){ return !q || c[0].toLowerCase().indexOf(q) >= 0; });
-  $("pal_list").innerHTML = PAL.map(function(c, i){ return "<li><button role='option' aria-selected='"+(i === 0)+"' onclick='palRun("+i+")'>"+esc(c[0])+"</button></li>"; }).join("") || "<li class='muted' style='padding:8px'>No command matches.</li>";
+  $("pal_list").innerHTML = PAL.map(function(c, i){ return "<li><button role='option' aria-selected='"+(i === 0)+"'"+actA("palRun",[i])+">"+esc(c[0])+"</button></li>"; }).join("") || "<li class='muted' style='padding:8px'>No command matches.</li>";
 }
 function palRun(i){ var c = PAL[i]; closeSheet("palette"); if(c){ c[1](); } }
 function openPalette(){ if($("app").hidden){ return; } $("pal_q").value = ""; palFilter(); openSheet("palette"); try { $("pal_q").focus(); } catch(e){} }

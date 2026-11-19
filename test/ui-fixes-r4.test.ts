@@ -77,7 +77,7 @@ describe("SF-C: a failed sync is explained in Settings, with what to do", () => 
     await settle();
     const h = p.el("sync_now").innerHTML as string;
     assert.match(h, /The last sync failed 5 minutes ago: the folder D:\/Sync is missing\./);
-    assert.match(h, /onclick='syncNow\(\)'>Sync now</);
+    assert.match(h, /data-do='syncNow'>Sync now</);
     assert.doesNotMatch(h, /Syncs by itself/);
   });
   test("Sync now runs `monomem sync` behind the local sign-in only", async () => {
@@ -172,7 +172,7 @@ describe("LOW: small wording and layout fixes", () => {
     const p = page(() => ({}));
     p.ctx.VIEW = "list";
     p.ctx.setNeeds({ count: 4, items: [{ view: "held", count: 1, text: "a" }, { view: "settings", count: 1, text: "b" }, { view: "settings", count: 1, text: "c" }, { view: "review", count: 1, text: "d" }] });
-    assert.match(p.el("needs").innerHTML, /onclick='openSettings\(\)'>Open Settings</);
+    assert.match(p.el("needs").innerHTML, /data-do='openSettings'>Open Settings</);
   });
   test("Welcome Bring in memories: proper plurals and no raw Codex folder", async () => {
     const home = mkdtempSync(join(tmpdir(), "om-r4-src-"));

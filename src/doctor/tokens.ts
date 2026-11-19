@@ -29,6 +29,11 @@ export async function distrustCheck(dr: Doctor): Promise<void> {
 export async function tokenCheck(dr: Doctor): Promise<void> {
   const { ok, fail } = dr;
   const { resolveToken, TOKEN_FILE } = await import("../config.js");
+  const { existsSync } = await import("node:fs");
+  if (!existsSync(TOKEN_FILE) && !process.env.MONOMEM_TOKEN?.trim()) {
+    dr.ok("no main app key yet. It is made the first time you run monomem setup or monomem start (checking does not create it)");
+    return;
+  }
   try {
     resolveToken();
     ok(

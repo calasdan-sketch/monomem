@@ -81,7 +81,7 @@ export async function auditVerifyCmd(args: string[]): Promise<void> {
     `${r.signed} signed line(s)${r.head_key_id ? `, newest under key ${r.head_key_id}` : ""}; ${r.unsigned_before_signing} unsigned line(s) from before signing began (protected by the hash chain only)` +
     (r.unsigned_after_signing ? `; WARNING: ${r.unsigned_after_signing} unsigned line(s) after signing began (an older Monomem, a process that could not read the key, or a stripped signature)` : "");
   if (!r.ok) {
-    if (r.breaks) fail(`Audit chain BROKEN: ${r.breaks} break(s), first at line ${r.brokenLine} of ${r.file} (it follows from none of the lines before it). ${extra}.`);
+    if (r.breaks) fail(`Audit chain BROKEN: ${r.breaks} place(s) where the log does not follow on from the line before it, first at line ${r.brokenLine} of ${r.file}. ${extra}.`);
     if (r.bad_signature) fail(`Audit chain BROKEN: ${r.bad_signature} bad signature(s), first at line ${r.badSignatureLine} (edited, or signed by a key the log never handed over to). ${sigs}.`);
     if (r.head_key_trusted === false) fail(`Audit chain NOT trusted: the newest signed line is under key ${r.head_key_id}, which is not this store's key (${Object.keys(keys)[0] ?? "none"}) and no key-rotate line hands over to it.`);
     fail(`Audit chain NOT accepted with --strict: ${sigs}.`);
@@ -181,7 +181,7 @@ async function verifyLine(args: string[], usage: string): Promise<void> {
   const hash = hashRaw?.trim().toLowerCase();
   if (!/^\d{1,15}$/.test(seqRaw ?? "") || !HEX64.test(hash ?? "") || args.length > 2) fail(usage + "   (seq and chain_hash from the `receipt` a write returned)", 2);
   const r = verifyAuditChain(undefined, hash, { keys: logKeyring() });
-  if (r.breaks) fail(`Receipt NOT verified: the audit chain is BROKEN at line ${r.brokenLine} of ${r.file} (it follows from none of the lines before it: a line was edited or removed). ${r.breaks} break(s) in all.`);
+  if (r.breaks) fail(`Receipt NOT verified: the audit chain is BROKEN at line ${r.brokenLine} of ${r.file} (it does not follow on from the line before it: a line was edited or removed). ${r.breaks} such place(s) in all.`);
   if (!r.ok) fail(`Receipt NOT verified: ${r.bad_signature} bad signature(s) in the audit log${r.badSignatureLine ? `, first at line ${r.badSignatureLine}` : ""}${r.head_key_trusted === false ? "; the newest line is under a key that is not this store's" : ""}.`);
   if (!r.anchor?.found) fail("Receipt NOT verified: no line in the audit log has that hash. The line was edited or removed, the log was cut off or rotated past it, or the receipt is from another store.");
   if (r.anchor.seq !== Number(seqRaw)) fail(`Receipt NOT verified: the line with that hash has seq ${r.anchor.seq || "(none)"}, not ${seqRaw}.`);

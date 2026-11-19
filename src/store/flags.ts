@@ -120,3 +120,21 @@ export function keepFlagged(s: Store, id: number): number {
   if (c) s.audit({ op: "flag-keep", id, namespace: n.namespace });
   return c;
 }
+
+/** `monomem check --rescan` (src/rescan.ts): the current version of the note already has an open flag (anyone's). */
+export function hasOpenFlag(s: Store, id: number, rev: number): boolean {
+  if (!anyFlags(s)) return false;
+  return s.db.prepare("SELECT 1 FROM note_flags WHERE note_id = ? AND note_rev = ? AND cleared_at IS NULL LIMIT 1").get(id, rev) !== undefined;
+}
+
+/**
+ * `monomem check --rescan`: hold a stored note that today's linter matches. An ordinary flag by `by` (not counted toward the
+ * per-writer daily limit or the flood guard: it is the owner's own command, and the reason is a linter label, never note text).
+ */
+export function holdByRescan(s: Store, n: { id: number; rev: number; namespace: string }, by: string, reason: string): void {
+  s.transaction(() => {
+    s.db.prepare("INSERT INTO note_flags (note_id, note_rev, flagged_by, reason, at) VALUES (?, ?, ?, ?, ?)").run(n.id, n.rev, by, printable(reason, MAX_FLAG_REASON), new Date().toISOString());
+    seen.set(s, { any: true, at: Date.now() });
+    s.audit({ op: "rescan-hold", id: n.id, namespace: n.namespace });
+  });
+}

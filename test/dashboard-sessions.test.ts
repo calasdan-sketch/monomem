@@ -40,7 +40,7 @@ function noLiveMarkup(html: string): void {
 
 describe("dashboard: Sessions view", () => {
   test("has a Sessions button", () => {
-    assert.match(DASHBOARD_JS, /onclick='loadSessions\(\)'>App sessions/); // from the Activity tab
+    assert.match(DASHBOARD_JS, /actA\("loadSessions"\)\+">App sessions/); // from the Activity tab
   });
 
   test("the session list escapes everything and passes the id through a data attribute", async () => {
@@ -52,7 +52,7 @@ describe("dashboard: Sessions view", () => {
     noLiveMarkup(html);
     assert.doesNotMatch(html, /data-sid='[^']*'"/, "the quote in the id cannot close the attribute");
     assert.match(html, /data-sid='s1&lt;img src=x onerror=alert\(1\)&gt;&#39;&quot;'/);
-    assert.match(html, /onclick='loadSession\(this\.getAttribute\(&quot;data-sid&quot;\)\)'/);
+    assert.match(html, /data-do='loadSession'/);
     assert.equal(p.el("count").textContent, "1 session");
   });
 

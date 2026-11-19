@@ -58,7 +58,7 @@ function run(name, texts) {
   const labels = {};
   const t0 = performance.now();
   for (const body of texts) {
-    const f = lintContent({ body });
+    const f = lintContent({ body, writer: "token:bench-agent" }); // an app's key: the tool-choice steering check applies to it too
     const held = f.some((x) => x.category === "injection");
     const refused = f.some((x) => x.category === "secret");
     if (refused) count.refused++;

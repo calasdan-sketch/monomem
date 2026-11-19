@@ -64,6 +64,16 @@ const STOP_WORDS: ReadonlySet<string> = new Set([
   "remind", "recall", "remember", "tell", "know", "please", "want", "wanted", "need", "let", "show", "find",
 ]);
 
+/** The words of `text` that extractKeywords drops as too common (stop words), each once, as typed in lower case: "hello", "the". */
+export function tooCommonWords(text: string): string[] {
+  const out: string[] = [];
+  for (const raw of text.split(/[^\p{L}\p{N}]+/u)) {
+    const w = raw.toLowerCase();
+    if (w && STOP_WORDS.has(w) && !out.includes(w)) out.push(w);
+  }
+  return out.slice(0, 10);
+}
+
 /** Max keywords returned -- keeps the downstream FTS fan-out bounded. */
 export const MAX_KEYWORDS = 20;
 

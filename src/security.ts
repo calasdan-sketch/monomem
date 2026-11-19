@@ -8,6 +8,7 @@ import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, re
 import { createHash, timingSafeEqual } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import type { IncomingMessage } from "node:http";
+import { takeAuditLock, releaseAuditLock } from "./audit-lock.js";
 import { DATA_DIR, envNum, isLoopback, sha256Hex, type Scope, type TokenEntry } from "./config.js";
 import { isWriterMarker, MARKER_DESCRIPTIONS } from "./actor.js";
 import { ORIGIN_TOOL_PREFIX } from "./reserved-tags.js";
@@ -42,14 +43,17 @@ export function describeWriter(writtenBy: unknown): string {
   const w = oneLine(writtenBy, 100);
   if (!w) return "an unknown writer (stored before writers were recorded)";
   if (isWriterMarker(w)) return `${w} (${MARKER_DESCRIPTIONS[w]})`;
-  if (w.startsWith("stdio:")) return `${w} (local MCP client, no sign-in; app name self-declared by its launch config)`;
-  return `${w} (token)`;
+  // The app name after "stdio:" and a token label are chosen by whoever wrote the launch config or created the key, so they are
+  // shown JSON-quoted (one line, capped, control characters removed) and never read as the server's own wording (round 2).
+  if (w.startsWith("stdio:")) return `stdio:${JSON.stringify(oneLine(w.slice(6), 60))} (local MCP client, no sign-in; app name self-declared by its launch config)`;
+  return `${JSON.stringify(w.slice(0, 60))} (token)`;
 }
 
 /** created_by for the banner: a fixed marker as-is, a token label JSON-quoted. */
 export function describeCreator(createdBy: unknown): string {
   const w = oneLine(createdBy, 100);
-  return isWriterMarker(w) || w.startsWith("stdio:") ? w : `${JSON.stringify(w.slice(0, 60))} (token)`;
+  if (w.startsWith("stdio:")) return `stdio:${JSON.stringify(oneLine(w.slice(6), 60))}`;
+  return isWriterMarker(w) ? w : `${JSON.stringify(w.slice(0, 60))} (token)`;
 }
 
 /**
@@ -150,9 +154,9 @@ export function checkSizes(input: {
   tags?: string[];
 }): string | null {
   if (input.title !== undefined && input.title.length > LIMITS.title)
-    return `title exceeds ${LIMITS.title} chars`;
+    return `title exceeds ${LIMITS.title} chars (this one has ${input.title.length}). Use a short title and put the rest in the note text`;
   if (input.body !== undefined && input.body.length > LIMITS.body)
-    return `body exceeds ${LIMITS.body} chars`;
+    return `body exceeds ${LIMITS.body} chars (this one has ${input.body.length}). Split it: save it as several notes of under ${LIMITS.body} characters each (part 1, part 2, ...), or put the parts in separate files in one folder and bring them in with: monomem import --dir <folder>`;
   if (input.tags) {
     if (input.tags.length > LIMITS.tagCount)
       return `too many tags (max ${LIMITS.tagCount})`;
@@ -187,6 +191,11 @@ const CONFUSABLES: Record<string, string> = {
   α: "a", ο: "o", ν: "v", ι: "i", κ: "k", ρ: "p", τ: "t", υ: "u", ε: "e",
   Α: "A", Β: "B", Ε: "E", Ζ: "Z", Η: "H", Ι: "I", Κ: "K", Μ: "M", Ν: "N", Ο: "O",
   Ρ: "P", Τ: "T", Υ: "Y", Χ: "X",
+  // More Cyrillic and Greek look-alikes (2026-11-18)
+  к: "k", м: "m", н: "h", т: "t", в: "b", ґ: "r", ӎ: "m", γ: "y", χ: "x", ϲ: "c", ϳ: "j", ѵ: "v", ԍ: "g", ԃ: "d",
+  // Latin-script look-alikes that NFKC leaves alone: dotless i, script g / a, small capitals (ᴏ ᴇ ɪ ...), Armenian
+  ı: "i", ɡ: "g", ɑ: "a", ɩ: "i", ɪ: "i", ᴏ: "o", ᴇ: "e", ᴀ: "a", ʀ: "r", ɴ: "n", ᴛ: "t", ᴜ: "u", ᴅ: "d", ᴘ: "p", ʟ: "l",
+  ᴍ: "m", ᴄ: "c", ʙ: "b", ᴋ: "k", ᴠ: "v", ᴡ: "w", ᴢ: "z", ɢ: "g", ʜ: "h", ս: "u", ո: "n", օ: "o", ց: "g",
 };
 const CONFUSABLE_RE = new RegExp(`[${Object.keys(CONFUSABLES).join("")}]`, "gu");
 
@@ -360,9 +369,10 @@ export function scanForSecrets(text: string | undefined): string | null {
 // ---- Origin check (DNS-rebinding defense for browser-based callers) ----------
 // Non-browser clients (Claude Code, curl, the MCP SDK) send no Origin header --
 // those are allowed. A browser sends Origin; we allow it only if explicitly
-// listed in MONOMEM_ALLOWED_ORIGINS (comma-separated). Default: no
-// browser origins allowed, which blocks a malicious web page from reaching a
-// localhost/tunnelled server via DNS rebinding.
+// listed in MONOMEM_ALLOWED_ORIGINS (comma-separated), or if it is this server's
+// own loopback origin (same port the request arrived on). Default: no other
+// browser origins, which blocks a malicious web page from reaching a
+// localhost/tunnelled server via DNS rebinding or from another local port.
 export function originAllowed(req: IncomingMessage): boolean {
   const origin = req.headers["origin"];
   if (!origin || Array.isArray(origin)) return true; // no Origin = non-browser
@@ -371,20 +381,28 @@ export function originAllowed(req: IncomingMessage): boolean {
     .map((s) => s.trim())
     .filter(Boolean);
   let host: string;
+  let port: string;
+  let protocol: string;
   try {
     // URL.hostname keeps the brackets on an IPv6 literal ("[::1]"); strip them
     // so the loopback check below matches "::1".
-    host = new URL(origin).hostname.replace(/^\[|\]$/g, "");
+    const u = new URL(origin);
+    host = u.hostname.replace(/^\[|\]$/g, "");
+    port = u.port;
+    protocol = u.protocol;
   } catch {
     // Malformed Origin: allow only if someone listed it verbatim (they won't).
     return allowed.includes(origin);
   }
-  // The built-in dashboard is served from loopback, so its same-origin fetch
-  // carries a loopback Origin -- allow that. We deliberately do NOT trust a
-  // match against the Host header: under DNS rebinding the attacker controls
-  // both Origin and Host, so Origin==Host would wave the attack straight
-  // through. A real browser hitting the tunnel must be allowlisted explicitly.
-  if (isLoopback(host)) return true;
+  // The built-in dashboard is served from loopback, so its same-origin fetch carries a loopback Origin on THIS server's own
+  // port -- allow exactly that (2026-11-18: it used to allow any loopback origin, so a page served from another local
+  // program, http://localhost:3000, could call this API from the browser). The port is the one the connection arrived on
+  // (the socket), which a caller cannot choose. We deliberately do NOT trust a match against the Host header: under DNS
+  // rebinding the attacker controls both Origin and Host, so Origin==Host would wave the attack straight through. A real
+  // browser hitting the tunnel, or this server through another local port or a proxy, must be allowlisted explicitly.
+  const own = req.socket?.localPort;
+  const originPort = port || (protocol === "https:" ? "443" : "80");
+  if (protocol === "http:" && isLoopback(host) && own !== undefined && String(own) === originPort) return true;
   return allowed.includes(origin);
 }
 
@@ -729,6 +747,7 @@ function lastAuditLine(path: string): { hash: string; seq: number; signed: boole
 
 /** Hash and seq of the newest line of the log (what a checkpoint signs); undefined for an empty log. */
 export function auditHead(path: string = auditPath()): { hash: string; seq: number } | undefined {
+  flushAuditBatch(); // a head read inside a batch must see the buffered lines
   const l = lastAuditLine(path);
   return l.hash === GENESIS ? undefined : { hash: l.hash, seq: l.seq };
 }
@@ -836,6 +855,7 @@ export function verifyAuditChain(
   let chained = false; // once a line carries `prev`, a later line without one was not written by this version: a break
   let brokenLine: number | undefined;
   let file: string | undefined;
+  let genesisKid: string | undefined; // key id (or "" unsigned) of the first line that follows the start of the log
   let anchorAt = -1; // line number whose hash equals `expect`
   let anchorSeq = 0;
   let signed = 0;
@@ -876,11 +896,13 @@ export function verifyAuditChain(
         if (rec.prev === recent[recent.length - 1]) {
           /* follows the line before it */
         } else if (recent.includes(rec.prev)) forks++;
+        else if (rec.prev === GENESIS && n <= FORK_WINDOW && lineSeq(line) === 1 && genesisKid === (typeof rec.kid === "string" ? rec.kid : "")) forks++; // several programs wrote line 1 at once
         else {
           breaks++;
           if (brokenLine === undefined) [brokenLine, file] = [n, f];
         }
       }
+      if (genesisKid === undefined && rec && rec.prev === GENESIS) genesisKid = typeof rec.kid === "string" ? rec.kid : "";
       const h = sha(line);
       if (expect !== undefined && h === expect) [anchorAt, anchorSeq] = [n, lineSeq(line)];
       recent.push(h);
@@ -1005,6 +1027,123 @@ function waitWhileRotating(path: string): void {
   }
 }
 
+/**
+ * The log has no lines yet: take a lock folder beside it so only one process writes line 1. Returns the lock to remove after the
+ * write, or undefined when another process holds it (this one waited until that process had written, or gave up after about 3
+ * seconds and goes on without the lock; verifyAuditChain treats a duplicate line 1 from the same key as a harmless fork).
+ */
+function takeGenesisLock(path: string): string | undefined {
+  const lock = `${path}.genesis.lock`;
+  for (let i = 0; i < 600; i++) {
+    try {
+      mkdirSync(lock);
+      return lock;
+    } catch {
+      try {
+        if (Date.now() - statSync(lock).mtimeMs > 5000) rmSync(lock, { recursive: true, force: true }); // left by a crashed process
+      } catch {
+        /* just released */
+      }
+    }
+    if (lastAuditLine(path).hash !== GENESIS) return undefined; // the other process has written line 1
+    sleepMs(5);
+  }
+  return undefined;
+}
+
+/**
+ * Batched audit appends (import speed). Inside auditBatch(fn) each audit() line is built and chained in memory (the same
+ * hash chain, signed the same way, with the real seq and hash handed back to the caller) and the lines reach the file in
+ * ONE open and ONE write when the batch ends (or every AUDIT_BATCH_MAX lines / bytes). The file is exactly what one-by-one
+ * appends would have written, so `monomem audit verify` reads it the same. A restore of 20,000 notes used to open, stat and
+ * close the log once per note.
+ */
+const AUDIT_BATCH_MAX = 1000;
+const AUDIT_BATCH_BYTES = 512 * 1024;
+let batchDepth = 0;
+/** `lock` is the cross-process append lock, held from the first buffered line until the batch is written (see audit-lock.ts). */
+let pending: { path: string; out: string; lines: number; last: { hash: string; seq: number; signed: boolean }; signer: SigningKey | null; lock: string | undefined } | null = null;
+
+/** Run fn with audit lines batched (nesting is fine); everything buffered is written before this returns, even on an error. */
+export function auditBatch<T>(fn: () => T): T {
+  batchDepth++;
+  try {
+    return fn();
+  } finally {
+    batchDepth--;
+    if (batchDepth === 0) flushAuditBatch();
+  }
+}
+
+/** Write the buffered lines now: one open, one write. A failure counts like any other audit failure and never throws. */
+export function flushAuditBatch(): void {
+  const b = pending;
+  if (!b) return;
+  pending = null;
+  try {
+    waitWhileRotating(b.path);
+    rotateAuditIfNeeded(b.path);
+    const fd = openSync(b.path, "a+", 0o600);
+    try {
+      const before = fstatSync(fd).size;
+      writeSync(fd, b.out);
+      const after = fstatSync(fd);
+      const lastLine = b.out.slice(0, -1).split("\n").pop() as string;
+      auditTail = after.size === before + Buffer.byteLength(b.out) ? { path: b.path, size: after.size, mtime: after.mtimeMs, hash: b.last.hash, seq: b.last.seq, len: Buffer.byteLength(lastLine), signed: b.last.signed } : null;
+    } finally {
+      closeSync(fd);
+    }
+  } catch (e) {
+    auditTail = null;
+    auditFailures += b.lines;
+    console.error(`[monomem] could not write the audit log (${(e as Error)?.message ?? e}); ${auditFailures} entries missing so far`);
+  } finally {
+    releaseAuditLock(b.lock); // another program may append only now: the lines were chained from the end of the log as it stood under the lock
+  }
+}
+
+/** One audit line into the batch. "single" = write this one the ordinary way (the log is brand new: the first line takes the lock). */
+function auditBuffered(path: string, entry: Record<string, unknown>): { seq: number; chain_hash: string; ts: string; signer?: SigningKey } | "single" {
+  if (pending && pending.path !== path) flushAuditBatch();
+  if (!pending) {
+    // Take the lock BEFORE reading the end of the log: the lines are chained from what is read here, so nobody may append
+    // between this read and the write at the end of the batch.
+    const lock = takeAuditLock(path);
+    let last: ReturnType<typeof lastAuditLine>;
+    try {
+      last = lastAuditLine(path);
+    } catch (e) {
+      releaseAuditLock(lock);
+      throw e;
+    }
+    if (last.hash === GENESIS) {
+      releaseAuditLock(lock);
+      return "single";
+    }
+    pending = { path, out: "", lines: 0, last, signer: auditSigner(path), lock };
+  }
+  const b = pending;
+  const ts = new Date().toISOString();
+  let { hash: prev, seq } = b.last;
+  seq += 1;
+  const signer = b.signer;
+  if (signer && !b.last.signed) {
+    const start = signLine({ ts, prev, seq, op: "sign-start", detail: `${unsignedTail(path)} unsigned lines before; head ${prev}`, pub: signer.publicKey }, signer);
+    b.out += start + "\n";
+    b.lines++;
+    prev = sha(start);
+    seq += 1;
+  }
+  const line = signer ? signLine({ ts, prev, seq, ...entry }, signer) : JSON.stringify({ ts, prev, seq, ...entry });
+  b.out += line + "\n";
+  b.lines++;
+  const hash = sha(line);
+  b.last = { hash, seq, signed: !!signer };
+  const result = { seq, chain_hash: hash, ts, ...(signer ? { signer } : {}) };
+  if (b.lines >= AUDIT_BATCH_MAX || b.out.length >= AUDIT_BATCH_BYTES) flushAuditBatch();
+  return result;
+}
+
 export function audit(entry: {
   op: string;
   id?: number;
@@ -1025,8 +1164,15 @@ export function audit(entry: {
       mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
       auditDirMade = path;
     }
+    if (pending && (!batchDepth || entry.new_pub)) flushAuditBatch(); // a line outside the batch (or a key hand-over) goes after the buffered ones
+    if (batchDepth > 0 && !entry.new_pub) {
+      const r = auditBuffered(path, entry);
+      if (r !== "single") return r;
+    }
     waitWhileRotating(path);
     rotateAuditIfNeeded(path);
+    const appendLock = takeAuditLock(path); // nobody else appends between reading the end of the log and writing after it
+    try {
     // Hash chain: `prev` = sha256 of the previous line (carried across rotation from audit.log.1).
     // F-03: the tail is re-read only when the file is not the size this process left it at (another process
     // appended, the file rotated or was replaced); otherwise the hash of our own last line is the answer.
@@ -1040,9 +1186,16 @@ export function audit(entry: {
     }
     // One open per line: the same descriptor checks the cached tail and appends.
     const fd = openSync(path, "a+", 0o600);
+    let genesisLock: string | undefined;
     try {
       const tail = auditTail;
-      const last = tail && tail.path === path && tail.size === size && tail.mtime === mtime && tailStillOurs(fd, tail) ? tail : lastAuditLine(path);
+      let last = tail && tail.path === path && tail.size === size && tail.mtime === mtime && tailStillOurs(fd, tail) ? tail : lastAuditLine(path);
+      // First line of a brand-new log: several programs starting together (every app you connect starts its own server) must not
+      // each write line number 1. One takes the lock and writes it; the others wait, then continue after it.
+      if (last.hash === GENESIS) {
+        genesisLock = takeGenesisLock(path);
+        last = lastAuditLine(path);
+      }
       // R2-06: `seq` counts on from the line before (1 after a log from before 1.5.0). Two processes appending at once can
       // write the same seq (a fork); a receipt is found by its hash, the seq is checked against that line.
       let seq = last.seq + 1;
@@ -1068,6 +1221,10 @@ export function audit(entry: {
       return { seq, chain_hash: hash, ts, ...(signer ? { signer } : {}) };
     } finally {
       closeSync(fd);
+      if (genesisLock) rmSync(genesisLock, { recursive: true, force: true });
+    }
+    } finally {
+      releaseAuditLock(appendLock);
     }
   } catch (e) {
     auditDirMade = undefined;

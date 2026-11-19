@@ -20,8 +20,8 @@ import {
 import type { TokenEntry } from "../src/config.js";
 
 // Minimal fake request: only the fields these helpers read.
-function req(headers: Record<string, string> = {}, remoteAddress = "203.0.113.7"): IncomingMessage {
-  return { headers, socket: { remoteAddress } } as unknown as IncomingMessage;
+function req(headers: Record<string, string> = {}, remoteAddress = "203.0.113.7", localPort?: number): IncomingMessage {
+  return { headers, socket: { remoteAddress, ...(localPort !== undefined ? { localPort } : {}) } } as unknown as IncomingMessage;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -62,10 +62,11 @@ describe("originAllowed (DNS-rebinding defense)", () => {
     assert.equal(originAllowed(req({})), true);
   });
 
-  test("a loopback Origin (the local dashboard) is allowed", () => {
-    assert.equal(originAllowed(req({ origin: "http://127.0.0.1:8790" })), true);
-    assert.equal(originAllowed(req({ origin: "http://localhost:8790" })), true);
-    assert.equal(originAllowed(req({ origin: "http://[::1]:8790" })), true);
+  test("this server's own loopback Origin (the local dashboard, same port) is allowed; another loopback port is not (2026-11-18)", () => {
+    assert.equal(originAllowed(req({ origin: "http://127.0.0.1:8790" }, "127.0.0.1", 8790)), true);
+    assert.equal(originAllowed(req({ origin: "http://localhost:8790" }, "127.0.0.1", 8790)), true);
+    assert.equal(originAllowed(req({ origin: "http://[::1]:8790" }, "127.0.0.1", 8790)), true);
+    assert.equal(originAllowed(req({ origin: "http://localhost:3000" }, "127.0.0.1", 8790)), false);
   });
 
   test("an unlisted browser Origin is blocked", () => {
