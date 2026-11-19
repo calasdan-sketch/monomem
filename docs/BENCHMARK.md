@@ -287,8 +287,7 @@ measures whether an agent then answers the question or finishes its task better 
 | LoCoMo-10 session (1,982) | keyword | 90.4 | **81.5** | 95.5 | 87.7 | 80.3 | 78.6 | 2.1 / 5.6 ms |
 | LoCoMo-10 session (1,982) | relevant | 90.5 | **81.6** | 95.5 | 87.7 | 80.5 | 78.8 | 1.6 / 5.6 ms |
 
-On that run the strict LongMemEval-S figure was 84.0, 0.7 below agentmemory 0.9.31's reported 84.7 (BM25, its own figure, not
-re-run here). The next block is the change that closed that gap. It did not close the gap to Vestige, which reports a higher
+On that run the strict LongMemEval-S figure was 84.0, 0.7 below agentmemory 0.9.31's reported 84.7 (BM25; re-run on the same data on 2026-11-19, see the comparison below). The next block is the change that closed that gap. It did not close the gap to Vestige, which reports a higher
 figure (see the comparison after the full-set table).
 
 **Search stems and rarity-weighted coverage, 2026-11-15 (round 3, item 4).** Two ranking changes in the any-keyword search,
@@ -328,7 +327,7 @@ Full set, measured one run at a time on an otherwise idle PC (2026-11-15, same h
 | LoCoMo-10 session (1,982) | relevant | 91.1 | **82.5** | 96.0 | 88.9 | 81.1 | 79.4 | 1.3 / 1.8 ms |
 
 The honest headline for LongMemEval-S is now **85.7 strict / 97.2 any-hit at k = 5**, keyword-only, no embeddings. It is not
-the highest published figure. Other systems' own numbers (none re-run by us), read 2026-11-15:
+the highest published figure. Other systems' own numbers (none re-run by us except agentmemory, re-run on 2026-11-19 below), read 2026-11-15:
 
 - **Vestige v6.2.1** (github.com/samvallad33/vestige, `benchmarks/README.md`; also no embeddings and no LLM) reports
   LongMemEval-S strict recall-all@5 **91.28** on the same 470 questions (5.6 above our 85.7), any-hit recall@5 98.6 and
@@ -342,10 +341,17 @@ the highest published figure. Other systems' own numbers (none re-run by us), re
 - **MemPalace** self-reports LongMemEval-S any-hit R@5 **98.4** on a 450-question held-out set (tuned on the other 50;
   reported in arXiv 2604.21284), 1.2 above our 97.2 on 470. A different question set, so not like-for-like; its earlier "100 %"
   needed hand patches to failing questions (github.com/MemPalace/mempalace/discussions/747).
-- **agentmemory 0.9.31** reports 84.7 (BM25). Ours is 1.0 above it: we score 470 of the 500 questions, dropping the 30
-  abstention ones, by session, and its v0.9.31 release notes give 398 of 470, the same 470-question count; 1.0 point is about 5 questions, near the
-  0.1-0.2 a re-run can move from ties. agentmemory 0.9.33 (2026-11-09) removed a three-results-per-query search cap, so its
-  figure may change; it has published no new one.
+- **agentmemory, re-run here (2026-11-19).** We ran agentmemory's own evaluation (`npm run eval:longmemeval`, checkout
+  `5c9e2e69`, its BM25 component, strict recall-all@5) on the same dataset file (SHA-256 `d6f21ea9...3c442`, the hash it pins) and
+  got its published numbers back exactly: BM25 **84.7** (398 of 470), its grep baseline 72.1. Ours on the same 470 questions, same
+  metric, keyword mode: **86.0** (404 of 470). Question by question, 14 were answered only by us and 8 only by agentmemory;
+  that is **not a significant difference** (exact McNemar, two-sided p = 0.29). Read it as a tie, not a win. (The 86.0 is a
+  fresh run on the current code; the table above is the 2026-11-15 run, 85.7. We have not tracked down what moved the 0.3.) By question type the
+  two are within two questions of each other in every type (multi-session 88 vs 86, temporal 101 vs 99, preference 25 vs 25).
+  Caveats: its repository has no lockfile, so dependencies resolved fresh on the day; its BM25 component is the lexical index
+  alone, not its full hybrid product (its own historical hybrid report uses a different, looser metric); one run each, on one
+  machine. To reproduce ours with per-question output: `monomem bench --longmemeval --data <file> --mode keyword --granularity
+  session --per-question out.ndjson`.
 
 LoCoMo-10 by turn is still our weakest number.
 

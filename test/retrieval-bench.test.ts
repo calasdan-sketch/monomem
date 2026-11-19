@@ -126,6 +126,28 @@ test("encrypted retrieval run (C-06): same corpus with a key file; recall equals
   assert.deepEqual(enc.relevant.metrics, plain.relevant.metrics);
 });
 
+test("--per-question writes one line per question with the same scores the report averages, and changes none of them", async () => {
+  const { mkdtempSync, writeFileSync, readFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { runRetrieval } = await import("../src/bench/retrieval.js");
+  const dir = mkdtempSync(join(tmpdir(), "monomem-pq-"));
+  const file = join(dir, "lme.json");
+  const sessions = Array.from({ length: 6 }, (_, i) => [{ role: "user", content: i === 3 ? "my giraffe is named Zuzu" : `filler talk ${i}` }]);
+  writeFileSync(file, JSON.stringify([{
+    question_id: "q1", question_type: "single-session-user", question: "What is my giraffe named?", answer_session_ids: ["s3"],
+    haystack_session_ids: sessions.map((_, i) => `s${i}`), haystack_dates: [], haystack_sessions: sessions,
+  }]));
+  const out = join(dir, "pq.ndjson");
+  const plain = await runRetrieval({ dataset: "longmemeval", data: file, mode: "keyword", granularity: "session" });
+  const withDump = await runRetrieval({ dataset: "longmemeval", data: file, mode: "keyword", granularity: "session", perQuestion: out });
+  assert.deepEqual(withDump.keyword.metrics, plain.keyword.metrics);
+  const lines = readFileSync(out, "utf8").trim().split("\n").map((l) => JSON.parse(l) as { id: string; type: string; mode: string; rAll5: number });
+  assert.equal(lines.length, 1);
+  assert.deepEqual([lines[0].id, lines[0].type, lines[0].mode], ["q1", "single-session-user", "keyword"]);
+  assert.equal(lines[0].rAll5, withDump.keyword.metrics.all.rAll5);
+});
+
 test("--split a|b: LongMemEval halves by question-id hash, LoCoMo by conversation (1-5 / 6-10); disjoint, union is all", async () => {
   const { splitHaystacks } = await import("../src/bench/retrieval.js");
   const lme = Array.from({ length: 40 }, (_, i) => ({ docs: [], questions: [{ id: `q${i}`, type: "t", query: "x", gold: new Set(["s"]) }] }));
