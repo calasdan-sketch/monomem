@@ -8,6 +8,7 @@ import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, re
 import { createHash, timingSafeEqual } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import type { IncomingMessage } from "node:http";
+import { takeAuditLock, releaseAuditLock } from "./audit-lock.js";
 import { DATA_DIR, envNum, isLoopback, sha256Hex, type Scope, type TokenEntry } from "./config.js";
 import { isWriterMarker, MARKER_DESCRIPTIONS } from "./actor.js";
 import { ORIGIN_TOOL_PREFIX } from "./reserved-tags.js";
@@ -1060,7 +1061,8 @@ function takeGenesisLock(path: string): string | undefined {
 const AUDIT_BATCH_MAX = 1000;
 const AUDIT_BATCH_BYTES = 512 * 1024;
 let batchDepth = 0;
-let pending: { path: string; out: string; lines: number; last: { hash: string; seq: number; signed: boolean }; signer: SigningKey | null } | null = null;
+/** `lock` is the cross-process append lock, held from the first buffered line until the batch is written (see audit-lock.ts). */
+let pending: { path: string; out: string; lines: number; last: { hash: string; seq: number; signed: boolean }; signer: SigningKey | null; lock: string | undefined } | null = null;
 
 /** Run fn with audit lines batched (nesting is fine); everything buffered is written before this returns, even on an error. */
 export function auditBatch<T>(fn: () => T): T {
@@ -1095,6 +1097,8 @@ export function flushAuditBatch(): void {
     auditTail = null;
     auditFailures += b.lines;
     console.error(`[monomem] could not write the audit log (${(e as Error)?.message ?? e}); ${auditFailures} entries missing so far`);
+  } finally {
+    releaseAuditLock(b.lock); // another program may append only now: the lines were chained from the end of the log as it stood under the lock
   }
 }
 
@@ -1102,9 +1106,21 @@ export function flushAuditBatch(): void {
 function auditBuffered(path: string, entry: Record<string, unknown>): { seq: number; chain_hash: string; ts: string; signer?: SigningKey } | "single" {
   if (pending && pending.path !== path) flushAuditBatch();
   if (!pending) {
-    const last = lastAuditLine(path);
-    if (last.hash === GENESIS) return "single";
-    pending = { path, out: "", lines: 0, last, signer: auditSigner(path) };
+    // Take the lock BEFORE reading the end of the log: the lines are chained from what is read here, so nobody may append
+    // between this read and the write at the end of the batch.
+    const lock = takeAuditLock(path);
+    let last: ReturnType<typeof lastAuditLine>;
+    try {
+      last = lastAuditLine(path);
+    } catch (e) {
+      releaseAuditLock(lock);
+      throw e;
+    }
+    if (last.hash === GENESIS) {
+      releaseAuditLock(lock);
+      return "single";
+    }
+    pending = { path, out: "", lines: 0, last, signer: auditSigner(path), lock };
   }
   const b = pending;
   const ts = new Date().toISOString();
@@ -1155,6 +1171,8 @@ export function audit(entry: {
     }
     waitWhileRotating(path);
     rotateAuditIfNeeded(path);
+    const appendLock = takeAuditLock(path); // nobody else appends between reading the end of the log and writing after it
+    try {
     // Hash chain: `prev` = sha256 of the previous line (carried across rotation from audit.log.1).
     // F-03: the tail is re-read only when the file is not the size this process left it at (another process
     // appended, the file rotated or was replaced); otherwise the hash of our own last line is the answer.
@@ -1204,6 +1222,9 @@ export function audit(entry: {
     } finally {
       closeSync(fd);
       if (genesisLock) rmSync(genesisLock, { recursive: true, force: true });
+    }
+    } finally {
+      releaseAuditLock(appendLock);
     }
   } catch (e) {
     auditDirMade = undefined;

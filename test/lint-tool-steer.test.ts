@@ -48,6 +48,13 @@ describe("ordinary project notes stay stored, even for an app's key", () => {
     ["prefer tabs", "We prefer tabs over spaces in the Makefile."],
     ["skill", "The new hire's skill set is mostly frontend; pair her with a backend person."],
     ["plugin list", "Installed plugins: eslint, prettier. Plugin updates are monthly."],
+    ["send backup", "Send the nightly backup to the NAS server."],
+    ["route nginx", "Route all traffic through nginx in production."],
+    ["deprecated library", "The moment library is deprecated; use date-fns instead."],
+    ["save to drive", "Save the config to the shared drive."],
+    ["use a tool generic", "Use a tracking tool to stay motivated."],
+    ["tool is slow", "The build tool is slow on Windows; the second run is faster."],
+    ["mcp described again", "Call mcp list in the terminal to see the connected servers."],
   ];
   for (const [id, text] of benign) {
     test(id, () => {

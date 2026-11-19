@@ -35,7 +35,7 @@ export const OLD_COMMANDS: Readonly<Record<string, string>> = {
   taint: "settings outside-window",
 };
 
-const CHECK_FLAGS: Record<string, string> = { "--setup": "doctor", "--attacks": "drill", "--usage": "meter", "--report": "safety-report" };
+const CHECK_FLAGS: Record<string, string> = { "--setup": "doctor", "--attacks": "drill", "--usage": "meter", "--report": "safety-report", "--rescan": "rescan" };
 const REVIEW_PARTS: Record<string, string[]> = {
   held: ["quarantine"],
   duplicates: ["quality"],

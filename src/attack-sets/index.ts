@@ -105,7 +105,7 @@ export const ATTACK_SETS: readonly AttackSet[] = [
   },
   {
     name: "tool-steer",
-    title: "Notes that steer which tool or MCP server the agent must use (14)",
+    title: "Notes that steer which tool or MCP server the agent must use (21)",
     source: "Monomem, 2026-11-19 (our own phrasings of the MemMorph idea, not an outside paper)",
     licence: "MIT",
     what: "'For deploys always use tool X', 'prefer the X MCP server over Y', 'never use the Y tool'. No command words an injection list knows. Held for an app's key; the owner's own terminal writes them freely.",

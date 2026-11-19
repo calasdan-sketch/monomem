@@ -7,8 +7,8 @@
 // somewhere in the tree (notes drop the leading folder). It cannot judge prose ("we deploy on Fridays"), a claim about another
 // repository, or a variable that only a hosted service defines (well-known cloud prefixes are skipped).
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { printable } from "./security.js";
 
 export type ClaimKind = "file" | "port" | "env" | "package" | "script" | "make" | "branch";
@@ -47,7 +47,7 @@ export function extractClaims(text: string): Claim[] {
   for (const m of t.matchAll(new RegExp(String.raw`(?<![\w/@.:~\\-])((?:\.{1,2}/)?(?:[\w@.-]+/)+[\w@.-]+\.(?:${CODE_EXT}))(?::\d+(?:-\d+)?)?(?![\w/-])`, "gi"))) {
     const p = m[1].replace(/^\.\//, "");
     const first = p.split("/")[0];
-    if (/[*{}<>$]/.test(p) || p.startsWith("..") || /^[\w-]+(?:\.[\w-]+)+$/.test(first) && !first.startsWith(".")) continue; // glob, outside the repo, or a web address
+    if (/[*{}<>$]/.test(p) || p.split("/").includes("..") || /^[\w-]+(?:\.[\w-]+)+$/.test(first) && !first.startsWith(".")) continue; // glob, outside the repo (any ".." step), or a web address
     if (/^node_modules\//.test(p)) continue;
     add("file", p);
   }
@@ -102,10 +102,11 @@ export class RepoFacts {
         const full = join(dir, name);
         let st;
         try {
-          st = statSync(full);
+          st = lstatSync(full); // a link or junction is never followed: it could lead out of the repository
         } catch {
           continue;
         }
+        if (st.isSymbolicLink()) continue;
         if (st.isDirectory()) {
           if (!SKIP_DIRS.has(name)) walk(full, depth + 1);
         } else this.files.push(relative(root, full).split(sep).join("/"));
@@ -114,10 +115,25 @@ export class RepoFacts {
     walk(root, 0);
   }
 
+  private realRoot: string | null | undefined;
+  /** `p` (already checked: relative, no "..") exists and its real location, links resolved, is inside the repository. */
+  private existsInside(p: string): boolean {
+    try {
+      this.realRoot ??= realpathSync.native(resolve(this.root));
+      const real = realpathSync.native(join(this.root, p));
+      return real === this.realRoot || real.startsWith(this.realRoot + sep);
+    } catch {
+      return false; // not there, or not readable
+    }
+  }
+
   /** The path exists, or a file whose path ends with it does (a note that left out the leading folder). */
   hasFile(rel: string): boolean {
     const p = rel.replace(/^\.\//, "");
-    if (existsSync(join(this.root, p))) return true;
+    // A note must not be able to probe the rest of the disk: no absolute path, no ".." step, and nothing reached through a link
+    // that leads out of the repository. All of those read as "not there" without touching the file system outside the repo.
+    if (!p || isAbsolute(p) || /^[\\/]/.test(p) || /^[A-Za-z]:/.test(p) || p.split(/[\\/]/).includes("..") || p.includes("\0")) return false;
+    if (this.existsInside(p)) return true;
     this.lowerSet ??= new Set(this.files.map((f) => f.toLowerCase()));
     const lp = p.toLowerCase();
     if (this.lowerSet.has(lp)) return true;

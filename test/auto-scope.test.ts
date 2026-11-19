@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, realpa
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import { PROJECT_ROOT } from "../src/config.js";
 import { autoScopeMode, autoScopeName, findRepoRoot, resolveAutoScope, resolveStartupNamespace } from "../src/namespace.js";
 import { resolveRecallNamespace } from "../src/recall.js";
@@ -291,13 +292,34 @@ describe("monomem scope adopt", () => {
     const { dir, a } = orphaned();
     assert.match(cli(["scope", "status"], dir, on, a).stdout, /Other projects: oldproj \(2 notes\)/);
   });
-  test("shows the count and needs --yes, then moves the notes and keeps their history", () => {
+  /** Run adopt in a child process with the terminal gate replaced by `gateSrc` (a JS function body taking `what`). */
+  function adoptWithGate(dir: string, cwd: string, gateSrc: string) {
+    const scope = pathToFileURL(join(PROJECT_ROOT, "dist", "src", "cli", "scope.js")).href;
+    const code = `const { adopt } = await import(${JSON.stringify(scope)}); await adopt(["oldproj"], async (what) => { ${gateSrc} });`;
+    return spawnSync(process.execPath, ["--input-type=module", "-e", code], {
+      encoding: "utf8",
+      cwd,
+      env: { ...process.env, NO_COLOR: "1", MONOMEM_HOME: dir, MONOMEM_DB_PATH: join(dir, "state.db"), ...on },
+    });
+  }
+  test("from a pipe it is refused, even with --yes: a person must run it in a terminal, and nothing moves", () => {
+    const { dir, a } = orphaned();
+    for (const extra of [[], ["--yes"], ["-y"]]) {
+      const r = cli(["scope", "adopt", "oldproj", ...extra], dir, on, a);
+      assert.equal(r.status, 1, r.stdout + r.stderr);
+      assert.match(r.stdout, /2 notes saved under "oldproj" would be moved/);
+      assert.match(r.stderr, /a person must run it in a terminal/);
+      assert.match(cli(["show", "1"], dir, on, a).stdout, /\[oldproj\]/);
+    }
+  });
+  test("the gate is asked once with the plain facts; a refusal moves nothing; a yes moves the notes and keeps their history", () => {
     const { dir, a, mine } = orphaned();
-    const asked = cli(["scope", "adopt", "oldproj"], dir, on, a);
-    assert.equal(asked.status, 1);
-    assert.match(asked.stdout, /2 notes saved under "oldproj" would be moved into this folder's project/);
+    const no = adoptWithGate(dir, a, `console.log("ASKED: " + what); process.exit(1);`);
+    assert.equal(no.status, 1);
+    assert.match(no.stdout, /ASKED: move 2 notes from "oldproj" into /);
+    assert.doesNotMatch(no.stdout, /still exists/);
     assert.match(cli(["show", "1"], dir, on, a).stdout, /\[oldproj\]/);
-    const done = cli(["scope", "adopt", "oldproj", "--yes"], dir, on, a);
+    const done = adoptWithGate(dir, a, `/* the person typed yes */`);
     assert.equal(done.status, 0, done.stdout + done.stderr);
     assert.match(done.stdout, /Moved 2 notes from "oldproj"/);
     const shown = JSON.parse(cli(["show", "1", "--json"], dir, on, a).stdout);
@@ -306,6 +328,20 @@ describe("monomem scope adopt", () => {
     assert.equal(shown.body, "orphan one");
     assert.match(cli(["ls"], dir, on, a).stdout, /orphan two/);
     assert.doesNotMatch(cli(["scope", "status"], dir, on, a).stdout, /oldproj/);
+  });
+  test("when the old project's repository folder still exists, that fact is in the question the person answers", () => {
+    const root = tmp();
+    const a = repo(root, "alpha");
+    const old = repo(root, "oldproj"); // the old project's repository is still there, beside this one
+    const oldName = autoScopeName(realpathSync.native(old));
+    const dir = tmp();
+    assert.equal(cli(["add", "orphan one", "--ns", oldName], dir, on, a).status, 0);
+    const scope = pathToFileURL(join(PROJECT_ROOT, "dist", "src", "cli", "scope.js")).href;
+    const code = `const { adopt } = await import(${JSON.stringify(scope)}); await adopt([${JSON.stringify(oldName)}], async (what) => { console.log("ASKED: " + what); process.exit(1); });`;
+    const r = spawnSync(process.execPath, ["--input-type=module", "-e", code], { encoding: "utf8", cwd: a, env: { ...process.env, NO_COLOR: "1", MONOMEM_HOME: dir, MONOMEM_DB_PATH: join(dir, "state.db"), ...on } });
+    assert.match(r.stdout, /Careful: that project appears to be in use/);
+    assert.match(r.stdout, /ASKED: .*although the repository folder .*oldproj.* still exists/);
+    assert.match(cli(["show", "1"], dir, on, a).stdout, new RegExp(`\\[${oldName}\\]`));
   });
   test("refuses with no repository, scope off, no name, a spaces map, an unknown name or the current project", () => {
     const { dir, a, mine } = orphaned();

@@ -78,11 +78,18 @@ async function status(): Promise<void> {
   }
 }
 
-/** `monomem scope adopt <old-project> [--yes]`: re-label the notes of `old` so they belong to this folder's project. */
-async function adopt(args: string[], yes: boolean): Promise<void> {
+/** The check before notes move: by default the operator gate (a real terminal and a typed yes); tests hand in their own. */
+export type AdoptGate = (what: string) => Promise<void>;
+
+/**
+ * `monomem scope adopt <old-project>`: re-label the notes of `old` so they belong to this folder's project. Taking notes away
+ * from a project is a protection change, so it needs a person at a terminal who types yes (no --yes: a pipe or an agent's shell
+ * cannot answer). When the old project's repository folder still exists, that fact is part of the question the person answers.
+ */
+export async function adopt(args: string[], gate?: AdoptGate): Promise<void> {
   const old = args.find((a) => !a.startsWith("-"));
   if (!old) {
-    out("Usage: monomem scope adopt <old-project-name> [--yes]");
+    out("Usage: monomem scope adopt <old-project-name>   (run it in a terminal; it asks you to type yes)");
     out("Find the names with: monomem scope status   (the \"Other projects\" line)");
     process.exitCode = 2;
     return;
@@ -135,12 +142,9 @@ async function adopt(args: string[], yes: boolean): Promise<void> {
     out(`${n} note${n === 1 ? "" : "s"} saved under "${printable(old, 100)}" would be moved into this folder's project "${mine}".`);
     const live = liveRepoForProject(root, old);
     if (live) out(`Careful: that project appears to be in use, because the repository folder ${live} still exists. Moving its notes here takes them away from that repository.`);
-    if (!yes) {
-      out("Each note keeps its text, its history and its writer; only the project it belongs to changes. Notes saved elsewhere are not touched.");
-      out(`To go ahead: monomem scope adopt ${old} --yes`);
-      process.exitCode = 1;
-      return;
-    }
+    out("Each note keeps its text, its history and its writer; only the project it belongs to changes. Notes saved elsewhere are not touched.");
+    const what = `move ${n} note${n === 1 ? "" : "s"} from "${printable(old, 100)}" into "${mine}"${live ? `, although the repository folder ${printable(live, 200)} still exists and is probably using them,` : ""}`;
+    await (gate ?? (async (w: string) => (await import("../operator-gate.js")).requireOperator(w)))(what);
     let moved = 0;
     const left: string[] = [];
     for (const id of ids) {
@@ -174,7 +178,7 @@ export async function scopeCmd(): Promise<void> {
   if (sub === "adopt") {
     const rest = [...args];
     rest.splice(rest.indexOf("adopt"), 1);
-    return adopt(rest, yes);
+    return adopt(rest);
   }
   if (sub === "off") {
     rmSync(AUTO_SCOPE_FILE, { force: true });

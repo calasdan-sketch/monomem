@@ -2,7 +2,7 @@
 // GEMINI.md, Cursor and Windsurf rules, Copilot instructions ...) for passwords, keys and text that tries to give an AI orders.
 // Read-only: it never changes a file. It uses the same secret check and injection check every Monomem write goes through
 // (lint.ts), line by line so a finding has a place, and a secret is never printed in full: the first four characters and a length.
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { lintBatch, lintContent } from "./lint.js";
@@ -32,11 +32,23 @@ function homeFiles(home: string): string[] {
   const out: string[] = [];
   for (const rel of [".claude/CLAUDE.md", ".gemini/GEMINI.md", ".codex/AGENTS.md", ".cursorrules", "AGENTS.md", "CLAUDE.md"]) {
     const p = join(home, rel);
-    if (existsSync(p) && statSync(p).isFile()) out.push(p);
+    try {
+      const st = lstatSync(p); // a link or junction is skipped: it could point anywhere
+      if (st.isFile() && !st.isSymbolicLink()) out.push(p);
+    } catch {
+      /* not there */
+    }
   }
   for (const rel of [".claude/rules", ".cursor/rules"]) {
     try {
-      for (const n of readdirSync(join(home, rel))) if (/\.(?:md|mdc|txt)$/i.test(n)) out.push(join(home, rel, n));
+      for (const n of readdirSync(join(home, rel))) {
+        if (!/\.(?:md|mdc|txt)$/i.test(n)) continue;
+        try {
+          if (lstatSync(join(home, rel, n)).isFile()) out.push(join(home, rel, n));
+        } catch {
+          /* gone */
+        }
+      }
     } catch {
       /* no such folder */
     }
@@ -59,10 +71,11 @@ function walkFiles(dir: string): string[] {
       const full = join(d, n);
       let st;
       try {
-        st = statSync(full);
+        st = lstatSync(full); // a link or junction is never followed or read
       } catch {
         continue;
       }
+      if (st.isSymbolicLink()) continue;
       if (st.isDirectory()) {
         if (!SKIP.has(n)) walk(full, depth + 1);
       } else if (NAMES.has(n.toLowerCase()) || RULE_DIRS.test(norm(full))) out.push(full);
@@ -73,30 +86,40 @@ function walkFiles(dir: string): string[] {
 }
 
 /** What to scan for each argument: a file as given; a folder's memory files (a home folder: the known places in it). */
-export function memoryFiles(targets: string[]): { files: string[]; missing: string[] } {
+export function memoryFiles(targets: string[]): { files: string[]; missing: string[]; skipped: string[] } {
   const files = new Set<string>();
   const missing: string[] = [];
+  const skipped: string[] = [];
   const home = resolve(homedir());
   for (const t of targets) {
     const p = resolve(t);
     let st;
     try {
-      st = statSync(p);
+      st = lstatSync(p);
     } catch {
       missing.push(t);
+      continue;
+    }
+    if (st.isSymbolicLink()) {
+      skipped.push(t); // a link or junction (it could point at any file on the disk) is not followed
       continue;
     }
     if (st.isFile()) files.add(p);
     else for (const f of p === home ? homeFiles(p) : walkFiles(p)) files.add(f);
   }
-  return { files: [...files].slice(0, MAX_FILES), missing };
+  return { files: [...files].slice(0, MAX_FILES), missing, skipped };
 }
 
-const mask = (s: string): string => `${s.slice(0, 4)}…(${s.length} characters)`;
+/** A secret is never shown whole: under 12 characters only its length (four letters would be a third of it), else the first four and the length. */
+const mask = (s: string): string => (s.length < 12 ? `(${s.length} characters)` : `${s.slice(0, 4)}…(${s.length} characters)`);
+
+const PHRASE_MAX_LINE = 2000; // a longer line is not tested (the pattern is bounded per match, but a huge line could hold very many)
+/** "password = correct horse battery": a password, pw or pass assignment whose value has spaces (a pass phrase), so no token shape fits. */
+const PHRASE_ASSIGN = /\b(?:(?:password|passwd|passphrase|pwd|pw)\s*[:=]|pass\s*=)\s*(?!<|\$|\{|%|your\b|the\b|example\b|none\b|n\/a\b|required\b|optional\b|redacted\b|see\b|ask\b|stored\b|in\b|from\b|set\b|changeme\b)([^\s'"`][^\n]{0,160}?\s+[^\s'"`][^\n]{0,160}?)\s*$/i;
 
 /** `line` with every secret in it hidden. Known key shapes, "password: value" assignments, then any long mixed token. */
 export function maskSecrets(line: string): string {
-  let t = line;
+  let t = line.length <= PHRASE_MAX_LINE ? line.replace(PHRASE_ASSIGN, (m, v: string) => m.replace(v, mask(v))) : line;
   for (const [, re] of SECRET_PATTERNS) t = t.replace(new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g"), (m) => mask(m));
   const spans = secretAssignments(t, 20).sort((a, b) => b.index - a.index);
   for (const s of spans) t = t.slice(0, s.index) + t.slice(s.index, s.index + s.length).replace(/[^\s:="'`]{6,}$/, (v) => mask(v)) + t.slice(s.index + s.length);
@@ -119,7 +142,9 @@ export function scanMemoryText(file: string, text: string): MemoryFinding[] {
         out.push({ file, line: i + 1, kind: "hidden-characters", label: "hidden or control characters", excerpt: maskSecrets(raw) });
       }
       INVISIBLE_RE.lastIndex = 0;
-      for (const f of lintContent({ body: raw })) {
+      const found = lintContent({ body: raw });
+      if (raw.length <= PHRASE_MAX_LINE && PHRASE_ASSIGN.test(raw) && !found.some((f) => f.category === "secret")) found.push({ category: "secret", label: "password with spaces", field: "body" });
+      for (const f of found) {
         if (f.category === "secret") out.push({ file, line: i + 1, kind: "secret", label: f.label, excerpt: maskSecrets(raw) });
         else if (f.category === "entropy") out.push({ file, line: i + 1, kind: "possible-secret", label: f.label, excerpt: maskSecrets(raw) });
         else if (f.category === "injection") {
@@ -138,13 +163,18 @@ export function scanMemoryText(file: string, text: string): MemoryFinding[] {
   return out;
 }
 
-export function auditMemory(targets: string[]): { files: string[]; missing: string[]; findings: MemoryFinding[]; unreadable: string[] } {
-  const { files, missing } = memoryFiles(targets);
+export function auditMemory(targets: string[]): { files: string[]; missing: string[]; findings: MemoryFinding[]; unreadable: string[]; skipped: string[] } {
+  const { files, missing, skipped } = memoryFiles(targets);
   const findings: MemoryFinding[] = [];
   const unreadable: string[] = [];
   for (const f of files) {
     try {
-      if (statSync(f).size > MAX_BYTES) {
+      const st = lstatSync(f); // checked again at read time: a file swapped for a link after it was listed is not read
+      if (st.isSymbolicLink()) {
+        skipped.push(f);
+        continue;
+      }
+      if (st.size > MAX_BYTES) {
         unreadable.push(`${f} (over 1 MB)`);
         continue;
       }
@@ -153,7 +183,7 @@ export function auditMemory(targets: string[]): { files: string[]; missing: stri
       unreadable.push(f);
     }
   }
-  return { files, missing, findings, unreadable };
+  return { files: files.filter((f) => !skipped.includes(f)), missing, findings, unreadable, skipped };
 }
 
 /** The label a person sees for a file: its name with the folder above it. */

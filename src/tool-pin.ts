@@ -2,6 +2,11 @@
 // without you knowing (a "rug pull"), an agent can be steered. `monomem tools --verify` records a hash of the tool names,
 // descriptions and input schemas this build serves, in <data folder>/tool-pin.json, and says so in plain words when they
 // later differ. A change after you upgraded Monomem is expected; a change at the same version is not.
+//
+// What this is NOT: the pin is an unsigned convenience check of the tool list THIS LOCAL BUILD would serve (it starts the server
+// code in memory and lists its tools). It is not proof of what a live server, a remote server or another install is serving to
+// an agent, and anyone who can write to the data folder can replace the file. Use it to notice an upgrade or a changed install,
+// not as a signature.
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -66,11 +71,28 @@ export function readPin(path: string): ToolPin | null {
   }
 }
 
+/**
+ * A tiny file beside the pin that says "a pin was recorded here once". If tool-pin.json later disappears (deleted, or removed by
+ * whoever wants a swapped description to pass as "first run"), the marker is what lets `monomem doctor` say so instead of
+ * quietly treating the missing record as a fresh start.
+ */
+export const pinMarkerPath = (path: string): string => `${path}.recorded`;
+
 export function writePin(path: string, pin: ToolPin): void {
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.tmp`;
   writeFileSync(tmp, JSON.stringify(pin, null, 2) + "\n", { mode: 0o600 });
   renameSync(tmp, path);
+  try {
+    writeFileSync(pinMarkerPath(path), `recorded ${pin.recorded_at} version ${pin.version}\n`, { mode: 0o600 });
+  } catch {
+    /* the pin itself was written; only the "was recorded once" note is missing */
+  }
+}
+
+/** The pin was recorded once but its file is gone (the marker is still there). */
+export function pinWentMissing(path: string): boolean {
+  return !existsSync(path) && existsSync(pinMarkerPath(path));
 }
 
 const list = (a: string[]): string => a.join(", ");
@@ -78,7 +100,7 @@ const list = (a: string[]): string => a.join(", ");
 /** Compare the served tools with the stored pin (null: nothing recorded yet). Pure: writes nothing. */
 export function comparePin(stored: ToolPin | null, now: ToolPin, unreadable = false): PinVerdict {
   const none = { added: [] as string[], removed: [] as string[], changed: [] as string[] };
-  if (unreadable) return { status: "unreadable", ...none, message: "The saved tool record could not be read. Run `monomem tools --verify --accept` to record the current tools again." };
+  if (unreadable) return { status: "unreadable", ...none, message: "The saved tool record is missing (it was recorded once) or could not be read, so nothing could be compared. Run `monomem tools --verify --accept` to record the current tools again." };
   if (!stored) return { status: "recorded", ...none, message: `No tool record yet. This is the first check, so the ${Object.keys(now.tools).length} tools now served were recorded as the baseline.` };
   if (stored.overall === now.overall) return { status: "unchanged", ...none, message: `The ${Object.keys(now.tools).length} tool names, descriptions and inputs are the same as when they were recorded (${stored.recorded_at.slice(0, 10)}, version ${stored.version}).` };
   const added = Object.keys(now.tools).filter((k) => !(k in stored.tools)).sort();

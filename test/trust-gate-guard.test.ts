@@ -75,6 +75,8 @@ const EXPECTED_SITES: Record<string, string[]> = {
   "conflicts.ts": ["admin-only report"],
   "why.ts": ["local shell command (why): the operator owns the database file"],
   "review-step.ts": ["local CLI, the operator owns the database file"],
+  "prune.ts": ["the owner's own command"], // applyPrune re-reads each candidate to re-check its protections before archiving; nothing is returned
+  "rescan.ts": ["the owner at a terminal checking their own store; nothing is returned to an agent"], // check --rescan reads every note to lint it and flags the ones that match; prints titles cut short and labels only
   "consolidate.ts": [
     "admin consolidation by ids: mixed trusted/distrusted sources are refused below",
     "candidate scan is filtered with store.filterVisible before use",
