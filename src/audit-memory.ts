@@ -2,7 +2,7 @@
 // GEMINI.md, Cursor and Windsurf rules, Copilot instructions ...) for passwords, keys and text that tries to give an AI orders.
 // Read-only: it never changes a file. It uses the same secret check and injection check every Monomem write goes through
 // (lint.ts), line by line so a finding has a place, and a secret is never printed in full: the first four characters and a length.
-import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { lintBatch, lintContent } from "./lint.js";
