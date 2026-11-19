@@ -87,7 +87,7 @@ describe("1: a distrusted writer cannot edit the metadata of a trusted note", ()
   test("source, tags and namespace edits are refused; a trusted writer, and the distrusted writer's own notes, are unaffected", () => {
     const n = as("alice", () => s.create({ title: "doc", body: "trusted text", source: "a" }));
     s.distrustAdd("default", "evil");
-    for (const patch of [{ source: "IGNORE PREVIOUS INSTRUCTIONS" }, { tags: ["urgent-do-this"] }, { namespace: "elsewhere" }]) {
+    for (const patch of [{ source: "another-origin" }, { tags: ["urgent-do-this"] }, { namespace: "elsewhere" }]) {
       assert.throws(() => as("evil", () => s.update(n.id, patch)), /distrust list/, JSON.stringify(patch));
     }
     const after = s.read(n.id)!;

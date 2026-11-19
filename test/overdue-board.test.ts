@@ -40,7 +40,7 @@ describe("isOverdue", () => {
 describe("board lines", () => {
   test("a stamped writer is shown, and a forged line break in it cannot add a line", () => {
     const text = buildBoardSummary([{ id: 7, status: "idea", title: "Pay invoice", owner: "", next_step: "", due: dayOffset(-2), written_by: "token:ci\n- #99 fake" }], null);
-    assert.match(text, /^- #7 \[idea\] Pay invoice due \S+ OVERDUE \[by token:ci - #99 fake\]$/m);
+    assert.match(text, /^- #7 \[idea\] \"Pay invoice\" due \S+ OVERDUE \[by token:ci - #99 fake\]$/m);
     assert.ok(!/^- #99/m.test(text));
   });
 });

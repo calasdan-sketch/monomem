@@ -597,12 +597,14 @@ async function rebuildEdges(): Promise<void> {
   let thresholdRaw: string | undefined;
   let yes = false;
   let force = false;
+  let allPairs = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--threshold" && i + 1 < args.length) thresholdRaw = args[++i];
     else if (a.startsWith("--threshold=")) thresholdRaw = a.slice("--threshold=".length);
     else if (a === "--yes" || a === "-y") yes = true;
     else if (a === "--force") force = true;
+    else if (a === "--all") allPairs = true;
     else {
       console.error(`Unknown option: ${a}`);
       process.exit(1);
@@ -654,9 +656,14 @@ async function rebuildEdges(): Promise<void> {
     const notes = plan.reduce((s, g) => s + g.notes, 0);
     const pairs = plan.reduce((s, g) => s + g.pairs, 0);
     console.error(
-      `Rebuilding similarity edges${namespace ? ` (namespace "${namespace}")` : ""}: ` +
+      `Setting up search by meaning${namespace ? ` (namespace "${namespace}")` : ""}: ` +
         `${notes} notes, ~${pairs.toLocaleString("en-US")} pairs to score.`
     );
+    const tooBig = allPairs ? null : (await import("./edges-cap.js")).edgesTooBigMessage(notes, pairs);
+    if (tooBig) {
+      console.error(tooBig);
+      process.exit(1);
+    }
     if (pairs > REBUILD_CONFIRM_PAIR_COUNT && !yes) {
       if (!process.stdin.isTTY) {
         console.error(
@@ -689,7 +696,7 @@ async function rebuildEdges(): Promise<void> {
     process.stderr.write("\n");
     const secs = ((Date.now() - t0) / 1000).toFixed(1);
     console.log(
-      `Rebuilt similarity edges (threshold ${threshold ?? EDGE_SIMILARITY_THRESHOLD}): ` +
+      `Search by meaning set up (threshold ${threshold ?? EDGE_SIMILARITY_THRESHOLD}): ` +
         `${created} created, ${removed} removed ` +
         `(${pairs.toLocaleString("en-US")} pairs scored in ${secs}s).`
     );
@@ -934,7 +941,7 @@ async function changes(): Promise<void> {
   const { runChanges } = await import("./changes.js");
   const { flags } = parseFlags(process.argv.slice(3), {
     values: ["since", "consumer", "namespace", "source", "limit", "written-by", "not-written-by", "note-written-by", "not-note-written-by"],
-    bools: ["json", "purge", "include-distrusted"],
+    bools: ["json", "purge", "include-distrusted", "all-projects"],
   });
   const store = new Store(DB_PATH);
   try {
@@ -943,8 +950,8 @@ async function changes(): Promise<void> {
       console.log(`Purged ${n} change-log row(s) and every "last" marker.`);
       return;
     }
-    const base = {
-      namespaces: str(flags.namespace) ? [str(flags.namespace)!] : undefined,
+    const sc = await (await import("./everyday-cli.js")).scopedReadNamespace(str(flags.namespace), !!flags["all-projects"], !!flags.json); const base = {
+      namespaces: sc.namespace ? [sc.namespace] : undefined,
       source: str(flags.source),
       limit: str(flags.limit) ? Number(flags.limit) : undefined,
       ...(str(flags["written-by"]) ? { writtenBy: str(flags["written-by"])! } : {}),
@@ -1103,6 +1110,7 @@ async function exportCmd(): Promise<void> {
       return;
     }
     if (format !== "md" || !str(flags.dir)) {
+      if (!format && str(flags.out)) console.error(`--out needs --format json: monomem export --format json --out ${str(flags.out)}`);
       console.error("Usage: monomem export --format md --dir <path> [--namespace ns] [--no-prune] [--force] [--include-distrusted] [--max-sensitivity public|internal|private]");
       console.error("       monomem export --format json [--out file] [--attest]");
       process.exit(1);
@@ -1246,6 +1254,9 @@ async function importJsonFile(file: string, dedupe: boolean, json: boolean, requ
   const { Store, ValidationError, attestationsToShow } = await import("./store.js");
   const { printable } = await import("./security.js");
   const { streamBackupNotes, StreamJsonError, checkBackupNote } = await import("./stream-json.js");
+  const { ImportShape, importHeadline, importWarnings, importProgress, mergeTrustStripped } = await import("./import-report.js");
+  const shape = new ImportShape(); // notes with no body text, counted in the first pass
+  const started = Date.now();
   const { statSync } = await import("node:fs");
   try {
     statSync(file);
@@ -1267,6 +1278,7 @@ async function importJsonFile(file: string, dedupe: boolean, json: boolean, requ
         continue;
       }
       elements++;
+      shape.observe(note);
       if (bad) throw new StreamJsonError(`note #${elements}: ${bad}`);
     }
   } catch (e) {
@@ -1311,6 +1323,8 @@ async function importJsonFile(file: string, dedupe: boolean, json: boolean, requ
     skipped += report.skipped ?? 0;
     total.quarantined.push(...report.quarantined);
     total.rejected.push(...report.rejected);
+    mergeTrustStripped(total, report);
+    importProgress(handled, elements, started, json);
     const a = report.attestations;
     if (a) {
       att.verified += a.verified;
@@ -1352,10 +1366,11 @@ async function importJsonFile(file: string, dedupe: boolean, json: boolean, requ
     total.attestations = { verified: att.verified, unverified: att.unverified, reasons: att.reasons, untrusted_keys: [...att.untrusted_keys.values()] };
     if (skipped) total.skipped = skipped;
     if (json) {
-      console.log(JSON.stringify({ imported, ...total, ...(notObjects ? { ignored_entries: notObjects } : {}), ...(pinnedInFile ? { pinned_not_imported: pinnedInFile } : {}), attestations: attestationsToShow(total.attestations) }, null, 2));
+      console.log(JSON.stringify({ imported, ...total, ...(importWarnings(shape, total).length ? { warnings: importWarnings(shape, total), empty_body: shape.empty } : {}), ...(notObjects ? { ignored_entries: notObjects } : {}), ...(pinnedInFile ? { pinned_not_imported: pinnedInFile } : {}), attestations: attestationsToShow(total.attestations) }, null, 2));
       return;
     }
-    console.log(`Imported ${imported} note(s)${total.skipped ? `, skipped ${total.skipped} already present` : ""}.`);
+    console.log(importHeadline(imported, total.skipped, shape));
+    for (const w of importWarnings(shape, total)) console.log(w);
     if (pinnedInFile) console.log(`${pinnedInFile} note(s) were pinned in the file; pins are not imported (monomem pin <id> pins one again).`);
     if (notObjects) console.log(`${notObjects} entr${notObjects === 1 ? "y" : "ies"} in the file ${notObjects === 1 ? "was" : "were"} not a note (not an object) and ${notObjects === 1 ? "was" : "were"} ignored.`);
     const a = attestationsToShow(total.attestations);
@@ -1367,7 +1382,7 @@ async function importJsonFile(file: string, dedupe: boolean, json: boolean, requ
         console.log(`  key ${printable(k.key_id)} (server ${printable(k.server_id)}) signed ${k.notes} note(s) but is not trusted. To trust it you must get its public key from that server's admin (monomem trust identity there).`);
       }
     }
-    if (deferred) console.log("The similarity graph was not rebuilt for this large import: run `monomem tidy edges` when convenient.");
+    if (deferred) console.log("Search by meaning is not set up for these notes: run `monomem tidy edges` when convenient (normal search still works).");
     if (total.quarantined.length) console.log(`${total.quarantined.length} note(s) held by the linter (monomem review held).`);
     if (total.rejected.length) {
       console.error(`${total.rejected.length} note(s) rejected:`);
@@ -1679,7 +1694,7 @@ async function restoreBackupCmd(args: string[]): Promise<void> {
     const r = applyRestore(plan, DB_PATH);
     console.log(`Restored ${plan.notes} note(s).`);
     if (r.keptCurrentAt) console.log(`Your previous database is kept at ${r.keptCurrentAt}.\nTo undo this restore: monomem backup restore "${r.keptCurrentAt}" --yes`);
-    console.log("Start Monomem again, then run: monomem check --setup");
+    console.log("Next, run: monomem check --setup   (if a Monomem server was running, stop it and run: monomem start)");
   } catch (e) {
     if (e instanceof RestoreError) {
       console.error(e.message);

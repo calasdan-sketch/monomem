@@ -8,6 +8,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- A forged worktree pointer can no longer make a folder join another project: the main repository is used only when `<gitdir>/gitdir` exists and points back at the folder's own `.git`.
+- The `source` label an app sends is now checked by the injection linter, and everything a writer types that the server prints back (app labels, task and handoff text, evidence references) is shown in quotes with control characters removed.
+- The injection linter now sees through more disguises: accented and full-width letters, hidden and direction-changing characters, HTML entities and percent-escapes, words split over lines or spaced out, dot and underscore separators, memory-poisoning phrasings, HTML-comment instructions, a title/body/tags combination, and ten more languages (Italian, Dutch, Turkish, Polish, Russian, Chinese, Japanese, Korean, Arabic, Hindi). It is still pattern matching and still misses reworded attacks (see docs/memory-linter.md).
+- Notes with images or links that leak data (a secret-looking value or `{{...}}` in the address), `<iframe src>`, `<script src>` and CSS `@import url(http...)` are now held.
+- Admin import removes the trust marks (`reviewed`, `confirmed`, `pinned`, and the revision number that goes with them) from files that fail the signature check, and the import report says how many it removed.
+- Sign-in (OAuth) rate limits behind a same-machine tunnel now count per forwarded address when a proxy is declared (MONOMEM_TRUST_PROXY), and otherwise share one overall cap, so one caller cannot lock everyone out.
+
 - The write-time linter now also holds: more look-alike letters (Cyrillic, Greek, Latin small capitals, dotless i) folded to Latin before matching; "ignore previous instructions" and "do not tell the user" in Spanish, French, German and Portuguese; a base64 or hex blob that decodes (one level) to text the patterns hold ("encoded instruction"); and a standing instruction ("from now on / whenever / always ...") that also hides something from the user, sends data to an outside address or runs code fetched from one. "Always run tests before commit" and similar rules are still stored. Still pattern matching and not complete; what is still missed is listed in SECURITY.md and docs/memory-linter.md. New attack set `lint-evasion` (28 samples, all held) for `monomem check --attacks`.
 - The Origin check no longer allows any loopback origin: only this server's own loopback origin (the port the request arrived on) and `MONOMEM_ALLOWED_ORIGINS`. A page on another local port (`http://localhost:3000`) is refused; no Origin header (CLI, curl, MCP clients) is unaffected. Behind a Docker port mapping or proxy on another port, list the origin.
 - `GET /health` answers `{"status":"ok"}` only to callers without a valid key; version and schema need a key. The dashboard sends its key; `monomem doctor` reads the version from `GET /status` after the server proves it holds the same key and store (the key is never sent to an unverified listener).
@@ -28,6 +35,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `monomem scope status` in an empty store says new stores start with scope ON after `monomem setup`; `scope adopt` warns when the old project's repository folder still exists; `scope on` and `check` say plainly that apps started outside a repository see every project.
+- Plainer words: the long "Confirm rules" line in `check` is shortened, "similarity graph/edges" became "search by meaning is not set up", the audit message no longer says "breaks/forks", `[new writer]` is explained once in `ls`, restore's last line says what to run, and `export --out x` without `--format` says `--format json` is needed.
+
 - `monomem search`, `relevant` and `ls` now stay inside the current repository's project when per-project scope is on (and no spaces map is set); one plain line names the project. Unchanged with scope off.
 - A git worktree now belongs to its main repository's project; a submodule stays its own project.
 - A bad `MONOMEM_AUTO_SCOPE` value now prints one warning on stderr, in `doctor` and in `check`.
@@ -35,6 +45,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `monomem search hello` no longer says "no words to search for" when a note has that word; a too-common word says "too common to search; try another word".
 
 - Per-project scope: `monomem scope [status|on|off]` keeps each git repository's notes in its own project, so one repo's notes stop showing up in an unrelated one. It is on by default for a new `monomem setup` (empty store) and off for stores that already have notes; `MONOMEM_AUTO_SCOPE` overrides. A spaces map, when set, still decides. Nothing is moved or deleted when it is turned on or off. `monomem doctor` shows the mode and the project this folder uses. Limits: an app started outside any git repository is not scoped and can still search every project's notes; this is a convenience against cross-project bleed, not a security boundary (use a spaces map or per-token namespaces for that).
+
+### Fixed
+
+- First run with several apps starting at once no longer breaks the audit log (grade D forever): the first line is written under a lock, and a duplicate first line from the same key is treated as a harmless overlap.
+- `monomem check --quick` on 20,000 notes: 51 s before, about 3 s after (the duplicate scan is near-linear and the safety scan reads settings once). Full check about 9 s.
+- `monomem tidy edges` refuses jobs over 20 million comparisons with a plain message (use `--all --yes` to do it anyway, or run it inside one project).
+- Import prints progress on big files, and a note with no `body` (for example `content` instead) now gives a warning that names the expected field instead of plain success.
+- A data path that is too long on Windows now says so ("the folder path is too long (N characters; Windows allows 259)") instead of the read-only/Docker message.
+- `monomem check --setup` no longer creates the app key, attestation key, database or anything else on a folder that has none.
+- `monomem start` also shows a PowerShell form of the test command on Windows.
+- `monomem activity` follows per-project scope like search (`--all-projects` shows everything).
 
 ## [1.6.2] - 2026-11-18
 

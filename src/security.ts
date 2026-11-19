@@ -42,14 +42,17 @@ export function describeWriter(writtenBy: unknown): string {
   const w = oneLine(writtenBy, 100);
   if (!w) return "an unknown writer (stored before writers were recorded)";
   if (isWriterMarker(w)) return `${w} (${MARKER_DESCRIPTIONS[w]})`;
-  if (w.startsWith("stdio:")) return `${w} (local MCP client, no sign-in; app name self-declared by its launch config)`;
-  return `${w} (token)`;
+  // The app name after "stdio:" and a token label are chosen by whoever wrote the launch config or created the key, so they are
+  // shown JSON-quoted (one line, capped, control characters removed) and never read as the server's own wording (round 2).
+  if (w.startsWith("stdio:")) return `stdio:${JSON.stringify(oneLine(w.slice(6), 60))} (local MCP client, no sign-in; app name self-declared by its launch config)`;
+  return `${JSON.stringify(w.slice(0, 60))} (token)`;
 }
 
 /** created_by for the banner: a fixed marker as-is, a token label JSON-quoted. */
 export function describeCreator(createdBy: unknown): string {
   const w = oneLine(createdBy, 100);
-  return isWriterMarker(w) || w.startsWith("stdio:") ? w : `${JSON.stringify(w.slice(0, 60))} (token)`;
+  if (w.startsWith("stdio:")) return `stdio:${JSON.stringify(oneLine(w.slice(6), 60))}`;
+  return isWriterMarker(w) ? w : `${JSON.stringify(w.slice(0, 60))} (token)`;
 }
 
 /**
@@ -850,6 +853,7 @@ export function verifyAuditChain(
   let chained = false; // once a line carries `prev`, a later line without one was not written by this version: a break
   let brokenLine: number | undefined;
   let file: string | undefined;
+  let genesisKid: string | undefined; // key id (or "" unsigned) of the first line that follows the start of the log
   let anchorAt = -1; // line number whose hash equals `expect`
   let anchorSeq = 0;
   let signed = 0;
@@ -890,11 +894,13 @@ export function verifyAuditChain(
         if (rec.prev === recent[recent.length - 1]) {
           /* follows the line before it */
         } else if (recent.includes(rec.prev)) forks++;
+        else if (rec.prev === GENESIS && n <= FORK_WINDOW && lineSeq(line) === 1 && genesisKid === (typeof rec.kid === "string" ? rec.kid : "")) forks++; // several programs wrote line 1 at once
         else {
           breaks++;
           if (brokenLine === undefined) [brokenLine, file] = [n, f];
         }
       }
+      if (genesisKid === undefined && rec && rec.prev === GENESIS) genesisKid = typeof rec.kid === "string" ? rec.kid : "";
       const h = sha(line);
       if (expect !== undefined && h === expect) [anchorAt, anchorSeq] = [n, lineSeq(line)];
       recent.push(h);
@@ -1019,6 +1025,30 @@ function waitWhileRotating(path: string): void {
   }
 }
 
+/**
+ * The log has no lines yet: take a lock folder beside it so only one process writes line 1. Returns the lock to remove after the
+ * write, or undefined when another process holds it (this one waited until that process had written, or gave up after about 3
+ * seconds and goes on without the lock; verifyAuditChain treats a duplicate line 1 from the same key as a harmless fork).
+ */
+function takeGenesisLock(path: string): string | undefined {
+  const lock = `${path}.genesis.lock`;
+  for (let i = 0; i < 600; i++) {
+    try {
+      mkdirSync(lock);
+      return lock;
+    } catch {
+      try {
+        if (Date.now() - statSync(lock).mtimeMs > 5000) rmSync(lock, { recursive: true, force: true }); // left by a crashed process
+      } catch {
+        /* just released */
+      }
+    }
+    if (lastAuditLine(path).hash !== GENESIS) return undefined; // the other process has written line 1
+    sleepMs(5);
+  }
+  return undefined;
+}
+
 export function audit(entry: {
   op: string;
   id?: number;
@@ -1054,9 +1084,16 @@ export function audit(entry: {
     }
     // One open per line: the same descriptor checks the cached tail and appends.
     const fd = openSync(path, "a+", 0o600);
+    let genesisLock: string | undefined;
     try {
       const tail = auditTail;
-      const last = tail && tail.path === path && tail.size === size && tail.mtime === mtime && tailStillOurs(fd, tail) ? tail : lastAuditLine(path);
+      let last = tail && tail.path === path && tail.size === size && tail.mtime === mtime && tailStillOurs(fd, tail) ? tail : lastAuditLine(path);
+      // First line of a brand-new log: several programs starting together (every app you connect starts its own server) must not
+      // each write line number 1. One takes the lock and writes it; the others wait, then continue after it.
+      if (last.hash === GENESIS) {
+        genesisLock = takeGenesisLock(path);
+        last = lastAuditLine(path);
+      }
       // R2-06: `seq` counts on from the line before (1 after a log from before 1.5.0). Two processes appending at once can
       // write the same seq (a fork); a receipt is found by its hash, the seq is checked against that line.
       let seq = last.seq + 1;
@@ -1082,6 +1119,7 @@ export function audit(entry: {
       return { seq, chain_hash: hash, ts, ...(signer ? { signer } : {}) };
     } finally {
       closeSync(fd);
+      if (genesisLock) rmSync(genesisLock, { recursive: true, force: true });
     }
   } catch (e) {
     auditDirMade = undefined;

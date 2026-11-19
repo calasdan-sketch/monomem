@@ -181,6 +181,7 @@ export async function lsCmd(args: string[]): Promise<void> {
     }
     if (!notes.length) return void console.log("No notes yet. Add one with: monomem add \"something worth remembering\"");
     for (const n of notes) console.log(`#${n.id} [${printable(n.namespace, 100)}] ${printable(n.title, 70)}${noteFlags(n)}${n.sensitivity === "private" ? "  (private)" : ""}${distrustMark(n)}`);
+    if (notes.some((n) => (n as { new_writer_label?: string }).new_writer_label)) console.log("[new writer] means an app that has not written here before saved that note. It is shown, but does not count as a second source until it has a track record.");
     moreLine();
     hiddenLine();
   } finally {

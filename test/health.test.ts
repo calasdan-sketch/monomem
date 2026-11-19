@@ -46,7 +46,7 @@ describe("monomem health", () => {
       assert.equal(r.checks.length, 15);
       assert.equal(find(r, "backup").status, "info");
       assert.equal(find(r, "hygiene").status, "info");
-      assert.match(find(r, "confirm").text, /Unconfirmed notes .*: 0; Re-confirmation expiry: label, every 30 days.*per connection/);
+      assert.match(find(r, "confirm").text, /Unconfirmed notes .*: 0; Re-confirmation expiry: label, every 30 days/);
       assert.equal(r.date, "2026-11-05");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });

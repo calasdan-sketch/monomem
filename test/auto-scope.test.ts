@@ -184,12 +184,28 @@ describe("git worktrees and submodules", () => {
     const wt = join(root, "wt");
     mkdirSync(join(wt, "src"), { recursive: true });
     writeFileSync(join(wt, ".git"), `gitdir: ${join(main, ".git", "worktrees", "wt1")}\n`);
+    writeFileSync(join(main, ".git", "worktrees", "wt1", "gitdir"), `${join(wt, ".git")}\n`); // git's own back-pointer
     assert.equal(findRepoRoot(join(wt, "src"), noHome(root)), realpathSync.native(main));
     assert.equal(autoScopeName(findRepoRoot(wt, noHome(root))!), autoScopeName(main));
     const wt2 = join(root, "wt2");
     mkdirSync(wt2);
-    writeFileSync(join(wt2, ".git"), "gitdir: ../main/.git/worktrees/wt1\n");
+    mkdirSync(join(main, ".git", "worktrees", "wt2"), { recursive: true });
+    writeFileSync(join(wt2, ".git"), "gitdir: ../main/.git/worktrees/wt2\n");
+    writeFileSync(join(main, ".git", "worktrees", "wt2", "gitdir"), "../../../../wt2/.git\n"); // relative back-pointer
     assert.equal(findRepoRoot(wt2, noHome(root)), realpathSync.native(main));
+  });
+  test("a forged worktree (a .git file naming someone else's repository, no back-pointer to it) stays its own project", () => {
+    const root = tmp();
+    const victim = repo(root, "victim");
+    mkdirSync(join(victim, ".git", "worktrees", "w"), { recursive: true });
+    const evil = join(root, "evil");
+    mkdirSync(evil);
+    writeFileSync(join(evil, ".git"), `gitdir: ${join(victim, ".git", "worktrees", "w")}\n`);
+    assert.equal(findRepoRoot(evil, noHome(root)), realpathSync.native(evil), "no gitdir file inside the victim's worktrees/w");
+    // A back-pointer that names a different folder is no better.
+    writeFileSync(join(victim, ".git", "worktrees", "w", "gitdir"), `${join(root, "someone-else", ".git")}\n`);
+    assert.equal(findRepoRoot(evil, noHome(root)), realpathSync.native(evil), "back-pointer names another folder");
+    assert.notEqual(autoScopeName(findRepoRoot(evil, noHome(root))!), autoScopeName(victim));
   });
   test("a submodule, a worktree whose main repository is gone, and a bare repository stay their own project", () => {
     const root = tmp();

@@ -96,7 +96,7 @@ export const ATTACK_SETS: readonly AttackSet[] = [
   },
   {
     name: "lint-evasion",
-    title: "Linter evasions: homoglyphs, other languages, encoded blobs, standing orders (28)",
+    title: "Linter evasions: homoglyphs, other languages, encoded blobs, standing orders, round 2 rewrites, memory poison, ten more languages, embeds (61)",
     source: "Monomem expert audit round 1, 2026-11-18 (our own variants, not an outside paper)",
     licence: "MIT",
     what: "Variants of 'ignore previous instructions' that the first audit found stored: look-alike letters, Spanish / French / German / Portuguese, base64 and hex, and a standing order that hides or sends data. Closing these says the audit's cases are held, not that the linter is complete.",

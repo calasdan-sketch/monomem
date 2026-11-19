@@ -330,6 +330,8 @@ export function resolveToken(): string {
     if (existing) return existing;
   }
   const token = randomBytes(32).toString("hex");
+  // monomem check --setup only looks: it must not leave a key behind on a folder that has none (setup and start make it).
+  if (process.env.MONOMEM_NO_KEY_CREATE === "1") return token;
   privateDir(dirname(TOKEN_FILE));
   try {
     // "wx": only the first of several processes starting at once creates the file; the others use its value.

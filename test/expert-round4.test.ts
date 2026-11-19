@@ -159,7 +159,7 @@ describe("2. verifier carryovers", () => {
       else process.env.MONOMEM_AUDIT_LOG = prev;
     }
     const r = await runHealth({ dbPath: db, dataDir: dir, bindHost: "127.0.0.1", settingsPath: join(dir, "h", ".claude", "settings.json"), pluginsPath: join(dir, "p.json"), auditPath: log });
-    assert.match(r.checks.find((c) => c.id === "audit")?.text ?? "", /no breaks \(the database is damaged, so the log length was not checked\)/);
+    assert.match(r.checks.find((c) => c.id === "audit")?.text ?? "", /no tampering found \(the database is damaged, so the log length was not checked\)/);
   });
 
   test("doctor prints a [warn] line for an app entry that points at a removed install", () => {

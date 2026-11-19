@@ -3,8 +3,8 @@
 // on / off change only the `auto-scope` file in the data dir and never move, edit or delete a note.
 // adopt is the one that moves notes: it re-labels the notes of an old project name into this folder's project.
 
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { AUTO_SCOPE_ENV, AUTO_SCOPE_FILE, autoScopeMode, autoScopeName, findRepoRoot, namespaceConfigSource } from "../namespace.js";
 
 const out = (s = ""): void => void process.stdout.write(s + "\n");
@@ -35,6 +35,20 @@ async function projectCounts(): Promise<Array<{ namespace: string; notes: number
   }
 }
 
+/** A repository folder next to this one (or in the same parent) whose project name is `old`, if it still exists: that project is probably in use. */
+export function liveRepoForProject(root: string, old: string): string | null {
+  try {
+    for (const e of readdirSync(dirname(root), { withFileTypes: true })) {
+      if (!e.isDirectory()) continue;
+      const p = join(dirname(root), e.name);
+      if (existsSync(join(p, ".git")) && autoScopeName(p) === old) return p;
+    }
+  } catch {
+    /* an unreadable parent folder: say nothing */
+  }
+  return null;
+}
+
 async function status(): Promise<void> {
   const mode = autoScopeMode();
   const root = findRepoRoot(process.cwd());
@@ -42,7 +56,7 @@ async function status(): Promise<void> {
     out("A spaces map is set (MONOMEM_SPACES or spaces.json). It decides which project a folder belongs to, so per-repo scope is not used.");
     return;
   }
-  out(`Per-project scope: ${mode.on ? "ON" : "OFF"}${mode.source === "env" ? ` (set by ${AUTO_SCOPE_ENV})` : mode.source === "file" ? " (set by monomem scope on)" : " (default for stores that already have notes)"}`);
+  out(`Per-project scope: ${mode.on ? "ON" : "OFF"}${mode.source === "env" ? ` (set by ${AUTO_SCOPE_ENV})` : mode.source === "file" ? " (set by monomem scope on)" : (await noteCount()) === 0 ? " (nothing is set yet: new stores start with it ON after \`monomem setup\`)" : " (default for stores that already have notes)"}`);
   if (mode.invalid) out(`Note: ${AUTO_SCOPE_ENV} is set to "${mode.invalid}", which is not understood (use 1 or 0), so it is ignored.`);
   if (!mode.on) {
     out("Every project shares one space. Turn it on with: monomem scope on");
@@ -50,7 +64,7 @@ async function status(): Promise<void> {
   }
   const mine = root ? autoScopeName(root) : null;
   out(root ? `This folder is in the repository ${root}, so its notes go to the project "${mine}".` : "This folder is not inside a git repository, so it uses the shared space.");
-  out("Limit: an app started outside any repository (a global app setting, for example) is not scoped, and can still search every project's notes.");
+  out("WARNING: an app started outside any repository (a global app setting, for example) is not scoped, and sees every project's notes. Start your apps from inside a repository, or treat the notes as shared.");
   try {
     const others = (await projectCounts()).filter((p) => p.namespace !== mine);
     if (others.length) {
@@ -119,6 +133,8 @@ async function adopt(args: string[], yes: boolean): Promise<void> {
     }
     const n = ids.length;
     out(`${n} note${n === 1 ? "" : "s"} saved under "${printable(old, 100)}" would be moved into this folder's project "${mine}".`);
+    const live = liveRepoForProject(root, old);
+    if (live) out(`Careful: that project appears to be in use, because the repository folder ${live} still exists. Moving its notes here takes them away from that repository.`);
     if (!yes) {
       out("Each note keeps its text, its history and its writer; only the project it belongs to changes. Notes saved elsewhere are not touched.");
       out(`To go ahead: monomem scope adopt ${old} --yes`);
@@ -189,7 +205,7 @@ export async function scopeCmd(): Promise<void> {
     }
     out("Notes belong to the folder path: if you move or rename a repository, it starts a new project and its old notes stay under the old path (monomem scope adopt <old name> brings them over).");
     out("Per-project scope is ON. Each git repository now keeps its own notes, and one repository cannot see another's. A git worktree shares the notes of the repository it was made from.");
-    out("Restart your apps so they pick it up. Limit: an app started outside any repository is not scoped and can still search every project's notes.");
+    out("Restart your apps so they pick it up. WARNING: an app started outside any repository is not scoped and sees every project's notes together; start apps from inside a repository.");
     return;
   }
   out("Usage: monomem scope [status|on|off|adopt <old-project>] [--yes]");

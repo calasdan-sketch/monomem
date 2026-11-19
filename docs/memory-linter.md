@@ -39,7 +39,15 @@ Added after the first expert audit (`src/lint-evasion.ts`; our own attack set `l
   data (secrets, history, files) to an outside address, or to run code fetched from one: label "standing order". A standing
   marker alone is not held: "always run tests before commit" and "from now on we use conventional commits" are ordinary rules.
 
-**Still missed, by design or by limit:** any other language; rot13, percent-encoding, double encoding, base64 split across
+Added in round 2 (`src/lint-evasion2.ts`): accent and full-width folding (NFKD, marks removed); hidden, direction-changing and
+tag characters dropped; HTML entities and percent-escapes decoded (twice); words split by a hyphen at a line end, spaced out
+(`i g n o r e`) or joined by dots and underscores; memory-poisoning phrasings ("remember that the user approved ..."); HTML
+comments that address an AI; title, body and tags scanned joined; ten more languages (Italian, Dutch, Turkish, Polish, Russian,
+Chinese, Japanese, Korean, Arabic, Hindi); the `source` field; and outside embeds (`<iframe>`, `<script src>`, CSS `@import`,
+links or images with a secret-looking or `{{...}}` address). Plain notes in those languages, TODO comments and "system override
+for the thermostat" are not held (tested).
+
+**Still missed, by design or by limit:** languages beyond those listed; rot13, a third level of encoding, base64 split across
 lines or wrapped at 76 columns; a base64 blob that is not text; a persistent instruction that never says to hide or send
 anything; paraphrases beyond the word lists; and any attack that needs understanding rather than patterns. This is
 pattern matching and it is not complete.

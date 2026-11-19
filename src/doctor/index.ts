@@ -51,14 +51,16 @@ export async function notSetUp(): Promise<boolean> {
 
 /** `cliPath`: the path of cli.js (app entries and hooks are checked against it). */
 export async function doctor(cliPath: string): Promise<void> {
-  const { BIND_HOST, API_PORT, MCP_HTTP_PORT, resolveToken, takeNewKeyNotice } = await import("../config.js");
-  await import("node:fs");
+  const { BIND_HOST, API_PORT, MCP_HTTP_PORT, resolveToken, takeNewKeyNotice, TOKEN_FILE } = await import("../config.js");
+  const { existsSync } = await import("node:fs");
   await import("node:path");
   await import("../store.js");
   const d = newDoctor(cliPath);
   // The first run of anything that needs the key creates it; doctor reports that in its own line below.
+  if (!existsSync(TOKEN_FILE)) process.env.MONOMEM_NO_KEY_CREATE = "1";
+  // Checking must not change anything: on a folder with no key yet, doctor does not make one (setup or start does).
   try {
-    resolveToken();
+    if (existsSync(TOKEN_FILE) || process.env.MONOMEM_TOKEN?.trim()) resolveToken();
   } catch {
     /* reported below */
   }

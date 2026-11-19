@@ -419,6 +419,26 @@ function worktreeMainRoot(dir: string, f: PathFlavor): string | null {
   if (f.path.basename(worktrees) !== "worktrees" || f.path.basename(commonGit) !== ".git") return null;
   const main = f.path.dirname(commonGit);
   if (!existsSync(join(commonGit, "worktrees"))) return null;
+  // What git itself requires: `<gitdir>/gitdir` must exist and point back at THIS folder's own `.git`. Without it any folder
+  // could write a `.git` file naming someone else's repository and read that repository's notes (a forged worktree).
+  try {
+    const back = readFileSync(join(gitdir, "gitdir"), "utf8").split(/\r?\n/)[0].trim();
+    if (!back || back.length > 4096 || back.includes("\0")) return null;
+    const backPath = f.path.resolve(gitdir, back); // git may store this relative to the worktree's admin folder
+    const same = (a: string, b: string): boolean => {
+      const real = (p: string): string => {
+        try {
+          return realpathSync.native(p);
+        } catch {
+          return p;
+        }
+      };
+      return canonicalDir(lexicalDir(real(a), f), f) === canonicalDir(lexicalDir(real(b), f), f);
+    };
+    if (!same(backPath, join(dir, ".git"))) return null;
+  } catch {
+    return null; // no back-pointer: not a real worktree, so the folder is its own project
+  }
   try {
     return lexicalDir(realpathSync.native(main), f);
   } catch {

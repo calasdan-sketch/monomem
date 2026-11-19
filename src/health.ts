@@ -221,7 +221,7 @@ function auditLines(path: string): string[] {
  */
 function auditCheck(path: string | undefined, db: Db | undefined, notes: number, readOnly = false): Result {
   const a = verifyAuditChain(path);
-  if (a.breaks > 0) return { status: "fail", text: `${plural(a.breaks, "break")} (first at line ${a.brokenLine}): a log line was edited or removed` };
+  if (a.breaks > 0) return { status: "fail", text: `${plural(a.breaks, "place")} where the log does not follow on from the line before it (first at line ${a.brokenLine}): a line was edited or removed` };
   let seen: { lines: number; hash: string; ts?: string } | undefined;
   try {
     const row = db?.prepare("SELECT value FROM _meta WHERE key = ?").get(SEEN_KEY) as { value: string } | undefined;
@@ -256,7 +256,7 @@ function auditCheck(path: string | undefined, db: Db | undefined, notes: number,
   } catch {
     /* read-only database: skip the note */
   }
-  return { status: "ok", text: `${plural(a.lines, "line")}, no breaks, ${plural(a.forks, "fork")} (forks are concurrent writers, not tampering)${note}` };
+  return { status: "ok", text: `${plural(a.lines, "line")}, no tampering found${a.forks ? `, ${plural(a.forks, "time")} two apps wrote at the same moment (harmless)` : ""}${note}` };
 }
 
 export interface HealthOpts {
@@ -354,7 +354,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
           }
           // Memory hygiene is heuristic, so it informs and never costs a grade step.
           try {
-            const c = (await qualityReport(s)).counts;
+            const c = (await qualityReport(s, undefined, ["empty", "restated", "duplicate"])).counts;
             hygiene = c.empty + c.restated + c.duplicate
               ? `${plural(c.empty, "empty note")}, ${plural(c.restated, "note")} restated but never retired, ${c.duplicate} ${c.duplicate === 1 ? "group" : "groups"} of duplicates: monomem review duplicates lists each with its fix`
               : "no empty notes, no notes restated but never retired, no duplicates";
@@ -414,7 +414,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
       else if (!m.on) add("scope", "Per-project scope", "info", "off: every project shares one space (monomem scope on keeps each git repository's notes apart)");
       else {
         const here = resolveAutoScope(process.cwd());
-        add("scope", "Per-project scope", "info", here ? `on: this folder is in the project "${here.namespace}"` : "on, but this folder is not in a git repository, so it uses the shared space");
+        add("scope", "Per-project scope", "info", here ? `on: this folder is in the project "${here.namespace}". Apps started outside a repository are not scoped and see every project's notes` : "on, but this folder is not in a git repository, so it uses the shared space");
       }
     }
   } catch {
@@ -470,7 +470,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
   else {
     try {
       const a = verifyAuditChain(o.auditPath);
-      add("audit", "Audit chain", a.breaks > 0 ? "fail" : "info", a.breaks > 0 ? `${plural(a.breaks, "break")} (first at line ${a.brokenLine}): a log line was edited or removed` : a.lines === 0 ? "no audit log yet" : `${plural(a.lines, "line")}, no breaks (${dbDamaged ? "the database is damaged, so the log length was not checked" : "no database, so the log length was not recorded"})`);
+      add("audit", "Audit chain", a.breaks > 0 ? "fail" : "info", a.breaks > 0 ? `${plural(a.breaks, "place")} where the log does not follow on from the line before it (first at line ${a.brokenLine}): a line was edited or removed` : a.lines === 0 ? "no audit log yet" : `${plural(a.lines, "line")}, no tampering found (${dbDamaged ? "the database is damaged, so the log length was not checked" : "no database, so the log length was not recorded"})`);
     } catch (e) {
       add("audit", "Audit chain", "warn", `could not read the audit log: ${(e as Error).message}`);
     }
@@ -496,7 +496,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
     const claudeLine = await bridgeLine(o.setupEnv ?? { home: dirname(dirname(settingsPath)), env: o.settingsPath ? {} : process.env, cwd: process.cwd() }, dbPath, claudeHeld).catch(() => null);
     if (claudeLine) add("claude-memory", "Claude Code memory", "info", claudeLine);
     add("distrust", "Distrusted writers", "info",`${plural(distrust, "distrust rule")}${distrust ? " (their notes are hidden from agents)" : ""}`);
-    if (confirmLines.length) add("confirm", "Confirm rules", "info", confirmLines.join("; "));
+    if (confirmLines.length) add("confirm", "Confirm rules", "info", confirmLines.length <= 2 ? confirmLines.join("; ").slice(0, 160) : `${confirmLines.slice(0, 2).join("; ").slice(0, 140)}; and ${confirmLines.length - 2} more`);
     if (backlog) add("confirm-backlog", "Unconfirmed backlog", "warn", `${backlog}: review them with monomem review (the grade is capped at B until they are dealt with)`);
     if (o.quick) add("redacted", "Note scan", "info", "skipped (--quick): redaction markers, personal-data suggestions and sensitivity labels were not counted; run monomem check for the full scan");
     else add("redacted", "Redacted notes", "info", `notes with a [REDACTED:...] marker (secret redaction replaced a credential): ${marked}`);

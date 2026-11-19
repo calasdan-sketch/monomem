@@ -530,3 +530,6 @@ export function parseTrustedAttestersEnvDetailed(raw: string | undefined): { att
 export function parseTrustedAttestersEnv(raw: string | undefined): TrustedAttester[] {
   return parseTrustedAttestersEnvDetailed(raw).attesters;
 }
+
+// Import trust marks (kept in its own file; re-exported here because store.ts has a hard size limit and already imports this module).
+export { stripImportTrust, describeTrustStripped, type TrustStripped } from "./import-trust.js";

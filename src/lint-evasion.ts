@@ -13,9 +13,9 @@
 // characters dropped, confusable Cyrillic / Greek / small-capital letters folded to Latin, one whitespace character per run).
 // Every window is bounded, so the cost stays linear in the text length.
 
-/** Accents off, ÃŸ -> ss, so "prÃ©cÃ©dentes" / "frÃ¼heren" / "instruÃ§Ãµes" match plain-ASCII patterns. */
+/** Accents off, \u00df -> ss, so "pr\u00e9c\u00e9dentes" / "fr\u00fcheren" / "instru\u00e7\u00f5es" match plain-ASCII patterns. */
 export function stripAccents(t: string): string {
-  return t.normalize("NFD").replace(/\p{M}+/gu, "").replace(/ÃŸ/g, "ss");
+  return t.normalize("NFD").replace(/\p{M}+/gu, "").replace(/\u00df/g, "ss");
 }
 
 const Q = (words: string) => String.raw`(?:(?:${words})\s+){0,3}`;
@@ -66,13 +66,13 @@ const HIDE_BY_LANGUAGE: RegExp[] = [
   // Spanish: "no le digas nada al usuario", "sin avisar al usuario"
   /\bno\s+(?:le\s+|les\s+|se\s+lo\s+)?(?:digas|diga|cuentes|cuente|menciones|mencione|informes|informe|avises|avise|reveles|revele)\s+(?:nada\s+)?(?:al|a\s+la|a\s+los)\s+(?:usuario|usuaria|persona|propietario|dueno|duena)\b/i,
   /\bsin\s+(?:decirle|avisar|informar|notificar|contarle|decir)(?:le)?\s+(?:nada\s+)?(?:al|a\s+la)\s+(?:usuario|usuaria|propietario|dueno)\b/i,
-  // French: "ne dis rien Ã  l'utilisateur", "sans en informer l'utilisateur"
-  /\bne\s+(?:le\s+|lui\s+|leur\s+)?(?:dis|dites|dire|mentionne|mentionnez|revele|revelez|signale|signalez|informe|informez)\s+(?:rien|pas|jamais)\s+(?:a|au|aux)\s+(?:l['â€™]\s?|la\s+|les\s+)?(?:utilisat\w+|personne|proprietaire)/i,
-  /\bsans\s+(?:en\s+|le\s+)?(?:informer|avertir|prevenir|notifier|dire)(?:\s+a)?\s+(?:l['â€™]\s?|la\s+)?(?:utilisat\w+|proprietaire)/i,
+  // French: "ne dis rien \u00e0 l'utilisateur", "sans en informer l'utilisateur"
+  /\bne\s+(?:le\s+|lui\s+|leur\s+)?(?:dis|dites|dire|mentionne|mentionnez|revele|revelez|signale|signalez|informe|informez)\s+(?:rien|pas|jamais)\s+(?:a|au|aux)\s+(?:l['\u2019]\s?|la\s+|les\s+)?(?:utilisat\w+|personne|proprietaire)/i,
+  /\bsans\s+(?:en\s+|le\s+)?(?:informer|avertir|prevenir|notifier|dire)(?:\s+a)?\s+(?:l['\u2019]\s?|la\s+)?(?:utilisat\w+|proprietaire)/i,
   // German: "sage dem Benutzer nichts", "ohne den Benutzer zu informieren"
   /\b(?:sage|sag|erzahle|erzahl|verrate|erwahne|informiere)\s+(?:es\s+|dies\s+|das\s+)?(?:dem\s+|den\s+)?(?:benutzer|nutzer|anwender|user)\w*\s+(?:nichts|nicht|kein)/i,
   /\bohne\s+(?:(?:den|dem)\s+)?(?:benutzer|nutzer|anwender|user)\w*\s+(?:zu\s+)?(?:informieren|benachrichtigen|bescheid|warnen|sagen|verstandigen)/i,
-  // Portuguese: "nÃ£o diga nada ao usuÃ¡rio", "sem avisar o usuÃ¡rio"
+  // Portuguese: "n\u00e3o diga nada ao usu\u00e1rio", "sem avisar o usu\u00e1rio"
   /\bnao\s+(?:lhe\s+|se\s+lo\s+)?(?:diga|conte|mencione|informe|avise|revele)\s+(?:nada\s+)?(?:ao|a|para\s+o)\s+(?:usuario|utilizador|dono|proprietario)\b/i,
   /\bsem\s+(?:avisar|informar|dizer|notificar|contar)\s+(?:ao|o|a)\s+(?:usuario|utilizador|dono)\b/i,
 ];
@@ -117,7 +117,7 @@ const MAX_DECODED = 65_536;
 function asText(buf: Buffer): string | null {
   if (buf.length < 12) return null;
   const s = buf.subarray(0, MAX_DECODED).toString("utf8");
-  if (s.includes("ï¿½")) return null;
+  if (s.includes("\ufffd")) return null;
   let printable = 0;
   for (const ch of s) if (/[\p{L}\p{N}\p{P}\p{S}\s]/u.test(ch) && !/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(ch)) printable++;
   if (printable / [...s].length < 0.9 || !/\s/.test(s) || (s.match(/\p{L}/gu)?.length ?? 0) < 8) return null;

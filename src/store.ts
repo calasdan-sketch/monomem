@@ -97,7 +97,7 @@ import {
   type Attestation,
   type SigningKey,
   type TrustedAttester,
-  type VerifyContext,
+  type VerifyContext, stripImportTrust, type TrustStripped,
 } from "./attest.js";
 import {
   ValidationError,
@@ -471,6 +471,8 @@ export interface ImportReport {
   skipped?: number;
   /** Set by importNotes: how many notes carried a verifiable attestation. */
   attestations?: AttestationReport;
+  /** Set by importNotes: trust marks removed from notes without a verified signature (import-trust.ts). */
+  trustStripped?: TrustStripped;
 }
 
 /** One entry of the change feed (Store.changes). No bodies: titles only. */
@@ -1722,6 +1724,7 @@ export class Store {
   /** A one-line, actionable message for "the data directory cannot be written" (a `:ro` Docker volume, wrong owner), instead of SQLite's bare text. */
   private static explainOpenError(e: unknown, dbPath: string): string {
     const m = e instanceof Error ? e.message : String(e);
+    if ((process.platform === "win32" || (e as { code?: string }).code === "ENAMETOOLONG") && dbPath.length >= 250) return `monomem cannot open its database: the folder path is too long (${dbPath.length} characters; Windows allows 259). Use a shorter folder, for example set MONOMEM_DB_PATH to C:\\monomem\\state.db. Path: ${dbPath}`;
     if (!Store.isReadOnlyError(e)) return m;
     return (
       `monomem cannot write to its data directory ${dirname(dbPath)} (${m}). The directory is read-only, or not writable by this user ` +
@@ -5250,12 +5253,13 @@ export class Store {
               continue;
             }
             const carried = verdict.ok ? this.attestedProvenance(note, verdict.attester.server_id) : null;
+            const safe = verdict.ok ? note : stripImportTrust(note, opts.report); // no verified signature: no reviewed/confirmed/pinned/rev marks
             const madeNote = this.create(
                 {
                   namespace: note.namespace,
                   title: note.title,
                   body: note.body,
-                  tags: note.tags,
+                  tags: safe.tags,
                   source: note.source, // preserve provenance across export -> import
                   created_at: note.created_at,
                   // The label travels with the note; none (an older export) means the default. Checked against the ceiling.
@@ -5277,7 +5281,7 @@ export class Store {
                   skipEdges: true,
                   bulkImport: true,
                   updatedAt: note.updated_at,
-                  startRev: note.rev,
+                  startRev: safe.rev,
                   // Retention state survives a backup/restore: an archived
                   // note stays archived, a TTL note keeps its deadline.
                   // Garbage values are rejected (ValidationError), never
