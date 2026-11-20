@@ -6,6 +6,7 @@ import { join } from "node:path";
 import type { Store } from "./store.js";
 import { qualityReport, type QualityReport, type QualityType } from "./quality.js";
 import { runChanges } from "./changes.js";
+import { outsideRate, renderOutsideRate, type OutsideRate } from "./outside-rate.js";
 
 export interface HealthInput {
   counts: Record<QualityType, number>;
@@ -108,6 +109,7 @@ export interface Digest {
   counts: { created: number; updated: number; deleted: number };
   byWriter: Record<string, { created: number; updated: number; deleted: number }>;
   topIssues: string[];
+  outsideReads: OutsideRate | null;
 }
 
 const TYPE_WORDS: Record<QualityType, [string, string]> = {
@@ -158,10 +160,10 @@ export async function buildDigest(store: Store, since: string, opts: { namespace
     .sort((a, b) => b.n - a.n || a.i - b.i)
     .slice(0, 3)
     .map((x) => `${x.n} ${TYPE_WORDS[x.t][x.n === 1 ? 0 : 1]} (${TYPE_COMMAND(x.t)})`);
-  return { since: first.since, until: first.until, counts: { created: first.counts.created, updated: first.counts.updated, deleted: first.counts.deleted }, byWriter, topIssues };
+  return { since: first.since, until: first.until, counts: { created: first.counts.created, updated: first.counts.updated, deleted: first.counts.deleted }, byWriter, topIssues, outsideReads: outsideRate(store) };
 }
 
-export function renderDigest(d: Digest): string {
+export function renderDigest(d: Digest, verbose = false): string {
   const c = d.counts;
   const lines = [`Since ${d.since.slice(0, 16).replace("T", " ")}: ${c.created} added, ${c.updated} edited, ${c.deleted} deleted.`];
   const writers = Object.keys(d.byWriter).sort();
@@ -172,5 +174,6 @@ export function renderDigest(d: Digest): string {
   if (!writers.length) lines.push("  Nothing changed.");
   lines.push(d.topIssues.length ? "Worth a look:" : "Nothing needs your attention.");
   d.topIssues.forEach((t, i) => lines.push(`  ${i + 1}. ${t}`));
+  if (d.outsideReads) lines.push(renderOutsideRate(d.outsideReads, verbose));
   return lines.join("\n");
 }

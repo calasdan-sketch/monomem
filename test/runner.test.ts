@@ -601,7 +601,7 @@ describe("round 3 fixes", () => {
 
     const note = post(store, JSON.stringify(buildCommand(SECRET, "status", {}, "OTHER-PC")));
     const verdict = await processNote(
-      { store, secret: SECRET, allow, ledger, runnerId: "DANITA" },
+      { store, secret: SECRET, allow, ledger, runnerId: "WORKSTATION-1" },
       note
     );
     assert.match(verdict, /addressed to OTHER-PC/);
@@ -621,15 +621,15 @@ describe("round 3 fixes", () => {
     const ledger = new Ledger(join(dir, "seen.json"));
     const allow: Allowlist = { status: { file: "echo", args: ["ok"] } };
 
-    post(store, JSON.stringify(buildCommand(SECRET, "status", {}, "DANITA")));
-    await pollOnce({ store, secret: SECRET, allow, ledger, runnerId: "DANITA" });
+    post(store, JSON.stringify(buildCommand(SECRET, "status", {}, "WORKSTATION-1")));
+    await pollOnce({ store, secret: SECRET, allow, ledger, runnerId: "WORKSTATION-1" });
     assert.equal((JSON.parse(results(store)[0].body) as { status: string }).status, "ok");
     store.close();
     rmSync(dir, { recursive: true, force: true });
   });
 
   test("re-targeting a captured command breaks its signature", () => {
-    const cmd = buildCommand(SECRET, "status", {}, "DANITA");
+    const cmd = buildCommand(SECRET, "status", {}, "WORKSTATION-1");
     cmd.target = "ATTACKER-PC";
     assert.equal(verifyCommand(SECRET, JSON.stringify(cmd)).ok, false);
   });

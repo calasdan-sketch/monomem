@@ -364,6 +364,6 @@ describe("B9 and B10: snippet and distribution files", () => {
     assert.doesNotMatch(svg, /<script|href=|https?:\/\/(?!www\.w3\.org)/);
     const launch = readFileSync(join(root, "docs/LAUNCH.md"), "utf8");
     for (const w of ["Official MCP Registry", "Glama", "PulseMCP", "mcp.so", "awesome-mcp-servers", "Show HN", "Reddit"]) assert.ok(launch.includes(w), w);
-    assert.match(launch, /needs Dan/);
+    assert.match(launch, /needs the maintainer/);
   });
 });

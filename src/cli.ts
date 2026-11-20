@@ -22,7 +22,7 @@ const COMMANDS = [
   "consolidate", "rebuild-edges", "relevant", "search", "token", "changes", "scope", "backup", "runner-status", "watch", "export", "import", "trust",
   "quarantine", "approve-first", "access", "flood", "resume", "decay", "archive", "restore", "delete", "quality", "conflicts", "facts", "fact",
   "encrypt", "meter", "receipts", "why", "never-show", "supersede", "history", "pin", "unpin", "rollback", "bench", "drill", "health", "audit", "verify-receipt",
-  "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet", "confirm", "review", "taint", "config", "service", "stale", "project-rules", "update", "stop", "commit-trail",
+  "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet", "confirm", "review", "taint", "config", "service", "stale", "project-rules", "update", "stop", "commit-trail", "backfill-marks",
   "help", "--help", "-h", "--version", "-v", "version",
   "check", "activity", "tidy", "keys", "settings", "replace", "tasks", "oauth", "drift", "audit-memory", "prune", "handoff", "tools", "rescan",
 ];
@@ -2219,9 +2219,8 @@ async function main(): Promise<void> {
     case "resume":
       await floodCmd(true);
       break;
-    case "decay":
-      await decayCmd();
-      break;
+    case "decay": await decayCmd(); break;
+    case "backfill-marks": await (await import("./cli/backfill-marks.js")).backfillMarksCmd(); break;
     case "tasks":
       await (await import("./cli/tasks.js")).tasksCmd(process.argv.slice(3));
       break;

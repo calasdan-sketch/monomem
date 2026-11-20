@@ -61,17 +61,17 @@ describe("origin check allows this server's own origin only", () => {
 });
 
 describe("key files get a Windows ACL (best effort)", () => {
-  const env = { USERNAME: "danie", USERDOMAIN: "DANITA" } as NodeJS.ProcessEnv;
+  const env = { USERNAME: "testuser", USERDOMAIN: "TESTPC" } as NodeJS.ProcessEnv;
 
   test("the icacls arguments: inheritance removed, only the current user granted", () => {
-    assert.deepEqual(fileLockdownArgs("C:\\d\\.token", env), ["C:\\d\\.token", "/inheritance:r", "/grant:r", "DANITA\\danie:F"]);
+    assert.deepEqual(fileLockdownArgs("C:\\d\\.token", env), ["C:\\d\\.token", "/inheritance:r", "/grant:r", "TESTPC\\testuser:F"]);
     assert.deepEqual(fileLockdownArgs("f", { USERNAME: "bob" } as NodeJS.ProcessEnv), ["f", "/inheritance:r", "/grant:r", "bob:F"]);
     assert.equal(fileLockdownArgs("f", {} as NodeJS.ProcessEnv), null);
   });
   test("on win32 the runner is called with those arguments", () => {
     const calls: string[][] = [];
     restrictFile("C:\\d\\.token", { platform: "win32", env, run: (a) => void calls.push(a) });
-    assert.deepEqual(calls, [["C:\\d\\.token", "/inheritance:r", "/grant:r", "DANITA\\danie:F"]]);
+    assert.deepEqual(calls, [["C:\\d\\.token", "/inheritance:r", "/grant:r", "TESTPC\\testuser:F"]]);
   });
   test("off Windows nothing runs", () => {
     const calls: string[][] = [];

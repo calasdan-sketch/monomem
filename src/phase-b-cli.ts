@@ -88,13 +88,13 @@ async function openAll(): Promise<{ store: import("./store.js").Store; DATA_DIR:
 }
 
 export async function digestCmd(): Promise<void> {
-  const { v } = args({ since: { type: "string" }, namespace: { type: "string" }, json: { type: "boolean" } });
+  const { v } = args({ since: { type: "string" }, namespace: { type: "string" }, json: { type: "boolean" }, verbose: { type: "boolean" } });
   const { store } = await openAll();
   try {
     const { buildDigest, renderDigest } = await import("./digest.js");
     const ns = s(v.namespace);
     const d = await buildDigest(store, s(v.since) ?? "24h", { namespaces: ns ? [ns] : undefined });
-    console.log(v.json === true ? JSON.stringify(d, null, 2) : renderDigest(d));
+    console.log(v.json === true ? JSON.stringify(d, null, 2) : renderDigest(d, v.verbose === true));
   } catch (e) {
     console.error((e as Error).message);
     process.exit(1);

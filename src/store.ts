@@ -37,7 +37,7 @@ import { isStale, stalenessConfig, annotateStaleness } from "./staleness.js";
 // At-rest encryption for note bodies. No module cycle: crypto.ts imports
 // only node: builtins, never store.ts.
 import { BodyIndex, type BodyIndexInfo } from "./store/body-index.js";
-import { migrate as migrateSchema } from "./store/migrate.js";
+import { ensureCaptureColumns, migrate as migrateSchema } from "./store/migrate.js";
 import { beginImmediate } from "./store/write-lock.js";
 import { CHANGE_LOG_RETENTION_DAYS, FTS_PREFIX_OPT, SQL_NOW, DEFAULT_NAMESPACE } from "./store/schema-constants.js";
 import { expandIdentifiers } from "./query-expand.js";
@@ -1904,12 +1904,12 @@ export class Store {
       /* read-only file: the flag stays unset until a writer opens the database */
     }
     try {
-      // 2.0.0 (v16, before release): capture inputs are sealed like outputs; databases made by the first v16 builds lack the column.
-      if (this.hasColumn("capture_events", "input_enc") === false && this.hasColumn("capture_events", "seq")) {
-        this.addColumn("capture_events", "input_enc", "TEXT");
-      }
-    } catch {
-      /* read-only file: no writer can store a capture event either */
+      ensureCaptureColumns({ hasColumn: (t, c) => this.hasColumn(t, c), addColumn: (t, c, d) => this.addColumn(t, c, d) }); // databases a dev build already took to this schema version lack the newest capture columns
+    } catch (e) {
+      // A read-only file cannot take the column and no writer can store a capture event there either: fine. Anything else (a busy
+      // database, a full disk) is NOT fine, because capture would then fail on every event: say so.
+      const why = String((e as Error)?.message ?? e);
+      if (!/readonly|read-only|attempt to write/i.test(why)) console.error(`[monomem] could not add the capture_events.shell_fetch column (${why.slice(0, 120)}); capture may fail until the next start`);
     }
     try {
       // sessions.writer: who opened the session (set on first insert, NULL for older rows). POST /capture refuses a

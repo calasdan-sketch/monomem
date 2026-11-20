@@ -21,6 +21,18 @@ export interface MigrateCtx {
 }
 
 /** Bring a schema at version `v` up to SCHEMA_VERSION. Caller holds the write lock. */
+/**
+ * Columns of capture_events that were added AFTER some dev build had already set this schema version: the version step is skipped for
+ * such a database, so each is added here when it is missing (idempotent, nothing to do on a fresh or fully migrated one).
+ *  - input_enc (2.0.0, v16, before release): capture inputs are sealed like outputs.
+ *  - shell_fetch (v22): a shell tool call that looked like a network fetch (a weak digest hint, see shell-fetch.ts).
+ */
+export function ensureCaptureColumns(self: Pick<MigrateCtx, "hasColumn" | "addColumn">): void {
+  if (!self.hasColumn("capture_events", "seq")) return;
+  if (self.hasColumn("capture_events", "input_enc") === false) self.addColumn("capture_events", "input_enc", "TEXT");
+  if (self.hasColumn("capture_events", "shell_fetch") === false) self.addColumn("capture_events", "shell_fetch", "INTEGER NOT NULL DEFAULT 0");
+}
+
 export function migrate(self: MigrateCtx, v: number): void {
     if (v < 1) {
       self.db.exec(`
@@ -633,6 +645,8 @@ export function migrate(self: MigrateCtx, v: number): void {
       self.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_capture_spool ON capture_events(spool_id) WHERE spool_id IS NOT NULL");
     }
     if (v < 22) {
+      // capture_events.shell_fetch: 1 when a shell tool call looked like a network fetch (a weak digest hint, see shell-fetch.ts). Old rows are 0.
+      self.addColumn("capture_events", "shell_fetch", "INTEGER NOT NULL DEFAULT 0");
       // v22 (1.5.0, round 2): one more step for the round-2 items (one backup, one transaction). Unreleased: later round-2
       // items add their tables HERE. To add a table: CREATE it in this exec, add its "DELETE FROM <table> WHERE note_id =
       // old.id;" line to the notes_links_ad trigger at the end, and drop it in test/legacy-db.ts (the v22 block). Idempotent.

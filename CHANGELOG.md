@@ -6,6 +6,31 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-11-19
+
+### Added
+- `monomem activity --summary` (the digest) now says how often sessions read outside content, counted from the stored tool events with
+  the same rule that sets the mark (so sessions from before the mark existed count): per session that ran tools (with a 95% range), per
+  captured session of any kind, and per active clock hour. It says which denominator is which and that local file reads are not counted.
+- A weaker hint beside it: how many active hours had a shell command that looked like a network fetch (`curl`, `wget`, `git clone`,
+  `gh api`, `iwr`...). It is a hint, not a mark: it changes no note, no taint window and no guard, and it misses obfuscated or scripted
+  fetches. It is recorded from this version on.
+- `monomem tidy marks [--yes]`: stamps ENDED sessions that read outside content before the mark existed. Dry run without `--yes`; never
+  touches an open session (so `outside-window clear` is not undone); running it twice changes nothing.
+- `monomem bench --longmemeval ... --per-question <file>`: one line per question, so two systems can be compared question by question.
+- A test that no MCP tool description reads like a poisoned instruction (the MCPTox concern, pointed at our own tools).
+
+### Changed
+- `digest` and `check` are faster on large stores (10,000 single-writer notes: digest 8.4 s to 3.0 s, check 12.5 s to 6.9 s; timed on one store of that shape, other stores may differ; the digest query was also reorganised, which is a second change from the speed-up of `check`) with
+  the same results in a one-off check against copies of the old code on 300 random stores (not a standing test).
+- **Database:** one column was added to the raw capture table (`capture_events.shell_fetch`, default 0). It is added when a database is
+  opened, including one already at schema v22, so no restore is needed to go back. The schema version did not change.
+
+### Documentation
+- BENCHMARK.md: agentmemory's LongMemEval-S figure was re-run on the same data file (it reproduced exactly: 84.7). Ours on the same
+  470 questions and metric is 86.0; 14 questions only we got, 8 only they got (exact McNemar p = 0.29): a tie, not a win.
+
+
 ### Round 3
 - Dashboard: the page no longer allows inline scripts (`script-src 'self'` only). The ~85 inline `onclick` handlers are delegated listeners over one fixed list of actions.
 - Import: audit lines are written in one batch per transaction (one open, chain still verifiable). 20,000 notes: about 32 s down to about 16 s.

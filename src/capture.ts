@@ -15,6 +15,7 @@ import { redact } from "./redact.js";
 import { captureAad, encrypt, spoolAad } from "./crypto.js";
 import { currentWriter } from "./actor.js";
 import { isOutsideTool } from "./taint.js";
+import { isShellFetch } from "./shell-fetch.js";
 import { audit } from "./security.js";
 import { beginImmediate } from "./store/write-lock.js";
 
@@ -42,6 +43,8 @@ export interface CaptureEvent {
   at: string;
   /** session-start only: the model the app reported (Claude Code sends it sometimes). Unverified. */
   model?: string;
+  /** A shell tool call whose command looks like a network fetch (shell-fetch.ts). A weak hint for the digest only; never a trust mark. */
+  shell_fetch?: boolean;
 }
 
 export interface CaptureSettings {
@@ -140,7 +143,10 @@ export function normalizeHookInput(event: HookEvent, raw: unknown, now: Date = n
   const bytes = input.length + output.length;
   // One printable line, at most 100 chars: it is shown in the dashboard and must not forge extra lines.
   const model = event === "session-start" && typeof r.model === "string" ? r.model.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2028\u2029\u2066-\u2069]/g, "").trim().slice(0, 100) : "";
-  return { session_id: sid, cwd, event, tool, input: cleanField(input), output: cleanField(output), ok, bytes, at: now.toISOString(), ...(model ? { model } : {}) };
+  // Classified on the RAW command (before it is cut to FIELD_MAX); only the yes/no is kept.
+  const toolInput = r.tool_input && typeof r.tool_input === "object" ? (r.tool_input as Record<string, unknown>) : null;
+  const fetched = (event === "post-tool" || event === "post-tool-failure") && typeof toolInput?.command === "string" && isShellFetch(tool, toolInput.command);
+  return { session_id: sid, cwd, event, tool, input: cleanField(input), output: cleanField(output), ok, bytes, at: now.toISOString(), ...(model ? { model } : {}), ...(fetched ? { shell_fetch: true } : {}) };
 }
 
 /** A tool result from outside content (the web, another MCP server): what marks a session as having read outside content. */
@@ -165,8 +171,8 @@ export function recordEvent(store: Store, ev: CaptureEvent & { spool_id?: string
         .run(ev.session_id, namespace, ev.cwd, ev.at, currentWriter() || null).changes ?? 0
     );
     const res = db
-      .prepare("INSERT INTO capture_events (session_id, at, event, tool, input, input_enc, output, output_enc, ok, bytes, spool_id) VALUES (?, ?, ?, ?, '', NULL, '', NULL, ?, ?, ?)")
-      .run(ev.session_id, ev.at, ev.event, ev.tool, ev.ok ? 1 : 0, ev.bytes, ev.spool_id ?? null);
+      .prepare("INSERT INTO capture_events (session_id, at, event, tool, input, input_enc, output, output_enc, ok, bytes, spool_id, shell_fetch) VALUES (?, ?, ?, ?, '', NULL, '', NULL, ?, ?, ?, ?)")
+      .run(ev.session_id, ev.at, ev.event, ev.tool, ev.ok ? 1 : 0, ev.bytes, ev.spool_id ?? null, ev.shell_fetch === true ? 1 : 0);
     const seq = Number(res.lastInsertRowid);
     if (ev.input) {
       const sealed = store.sealCapture(ev.input, captureAad(seq, ev.session_id, "input"));

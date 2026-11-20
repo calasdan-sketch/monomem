@@ -17,6 +17,12 @@ import { PROJECT_ROOT } from "../src/config.js";
  * Extract a .tgz with Node alone (no `tar` binary: Windows images and minimal containers do not all have
  * one). Handles what `npm pack` writes: ustar entries with a name prefix, and pax `path` overrides.
  */
+// Outside `npm test` there is no npm_execpath; on Windows plain "npm" is npm.cmd and execFileSync cannot start it, so use the npm that ships beside node.
+function bundledNpmCli(): string | undefined {
+  const p = join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
+  return existsSync(p) ? p : undefined;
+}
+
 function untarGz(file: string, outDir: string): void {
   const buf = gunzipSync(readFileSync(file));
   const field = (o: number, n: number): string => {
@@ -54,7 +60,7 @@ function untarGz(file: string, outDir: string): void {
 }
 
 function packAndExtract(root: string): string {
-  const npmCli = process.env.npm_execpath;
+  const npmCli = process.env.npm_execpath || bundledNpmCli();
   const [cmd, pre] = npmCli ? [process.execPath, [npmCli]] : ["npm", []];
   const dest = join(root, "tgz");
   execFileSync(process.execPath, ["-e", `require("fs").mkdirSync(${JSON.stringify(dest)})`]);

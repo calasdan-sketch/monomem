@@ -1,6 +1,6 @@
 {
   "name": "monomem",
-  "version": "1.6.2",
+  "version": "1.7.0",
   "mcpName": "io.github.calasdan-sketch/monomem",
   "description": "Shared memory for AI coding agents. A writer on every note (stamped by the server for token callers; a config label for local stdio apps), injection-linted writes, undo for replacements and edits. Self-hosted, MIT.",
   "license": "MIT",
@@ -65,6 +65,7 @@
     "INSTALL.md",
     "INFRA.md",
     "SECURITY.md",
+    "THIRD_PARTY_NOTICES.md",
     "SKILL.md",
     "skills/*/SKILL.md",
     "LICENSE",

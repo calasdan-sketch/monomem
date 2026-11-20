@@ -5,7 +5,7 @@ import { BENCH_HOME } from "./retrieval-env.js"; // first: isolate MONOMEM_HOME 
 import { createHash } from "node:crypto";
 import { chatNotes, sealedChatNote } from "../chat-import.js";
 import { replyContextIsClean } from "../claude-import.js";
-import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { appendFileSync, createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { Readable, Transform } from "node:stream";
@@ -188,6 +188,8 @@ export interface RetrievalOptions {
   split?: Split;
   /** Passage pooling on in every throwaway store (store/passages.ts); its index is built inside the indexing time. */
   passages?: boolean;
+  /** Write one JSON line per question and mode (id, type, recall-any/all at 5 and 10) so two systems can be compared question by question. */
+  perQuestion?: string;
 }
 
 interface ModeResult {
@@ -284,6 +286,7 @@ export async function runRetrieval(o: RetrievalOptions): Promise<RetrievalReport
         const hits = await runSearch(store, q.query, { mode: "keyword", limit: TOP, asOf });
         kwLat.push(performance.now() - t);
         kw.push({ type: q.type, score: scoreQuestion(units(hits.map((n) => n.id)), q.gold) });
+      if (o.perQuestion) appendFileSync(o.perQuestion, JSON.stringify({ id: q.id, type: q.type, mode: "keyword", ...kw[kw.length - 1].score }) + "\n");
         t = performance.now();
         const relHits = (await runRelevantSearch(store, q.query, { limit: TOP, asOf })).results;
         relLat.push(performance.now() - t);
@@ -362,6 +365,7 @@ export async function retrievalMain(argv: string[], out: (s: string) => void = c
       else if (a === "--json") json = true;
       else if (a === "--encrypted") o.encrypted = true;
       else if (a === "--passages") o.passages = true;
+      else if (a === "--per-question") o.perQuestion = resolve(take(i++, a));
       else if (a === "--split") {
         const v = take(i++, a);
         if (v !== "a" && v !== "b") throw new Error("--split must be a or b");

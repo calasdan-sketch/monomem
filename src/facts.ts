@@ -111,10 +111,27 @@ export const canonKey = (key: string): string => {
   return g ? prefixOf(key) + g[0] : key;
 };
 
+// A store scan compares every note's tags with many others'. Parsing them again for each pair was most of the time of
+// `check` and `digest` on a big store (3.4 s of 16 s at 10,000 notes), so the parsed form is kept per tags array.
+// Tags arrays are read-only snapshots on this path; a new array (an edited note) is parsed afresh.
+const canonFactsCache = new WeakMap<readonly string[], Array<[string, string]>>();
+const canonFactMapCache = new WeakMap<readonly string[], Map<string, string>>();
+function canonFacts(tags: readonly string[]): Array<[string, string]> {
+  let l = canonFactsCache.get(tags);
+  if (!l) canonFactsCache.set(tags, (l = noteFacts(tags).map(([k, v]): [string, string] => [canonKey(k), normFact(v)])));
+  return l;
+}
+function canonFactMap(tags: readonly string[]): Map<string, string> {
+  let m = canonFactMapCache.get(tags);
+  if (!m) canonFactMapCache.set(tags, (m = new Map(canonFacts(tags))));
+  return m;
+}
+
 /** Two notes give one fact key (same common spelling) different values: they are about the same setting. */
 export function factClash(a: readonly string[], b: readonly string[]): boolean {
-  const mine = new Map(noteFacts(a).map(([k, v]) => [canonKey(k), normFact(v)]));
-  return noteFacts(b).some(([k, v]) => mine.has(canonKey(k)) && mine.get(canonKey(k)) !== normFact(v));
+  const mine = canonFactMap(a);
+  if (mine.size === 0) return false;
+  return canonFacts(b).some(([k, v]) => mine.has(k) && mine.get(k) !== v);
 }
 
 /** Plural / one-edit spellings of one word ("deploy_targets", "deploy_targt"). Short words are skipped: "db" vs "dr" is not drift. */

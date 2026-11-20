@@ -5,16 +5,22 @@ import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file r
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { dirname, join, normalize } from "node:path";
 import { PROJECT_ROOT } from "../src/config.js";
 
 const RUNNER_FILE = /runner|(^|\/)sign(er)?\.(html|js)$|RUNNER\.md|install-runner-task|(^|\/)api\.cmd$/i;
 
+// Outside `npm test` there is no npm_execpath; on Windows plain "npm" is npm.cmd and execFileSync cannot start it, so use the npm that ships beside node.
+function bundledNpmCli(): string | undefined {
+  const p = join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
+  return existsSync(p) ? p : undefined;
+}
+
 test("npm pack ships no runner file", () => {
   // npm_execpath is npm's own CLI script when run via `npm test`; invoking it
   // with node avoids needing a shell to find npm(.cmd) on Windows.
-  const npmCli = process.env.npm_execpath;
+  const npmCli = process.env.npm_execpath || bundledNpmCli();
   const [cmd, pre] = npmCli ? [process.execPath, [npmCli]] : ["npm", []];
   const out = execFileSync(cmd, [...pre, "pack", "--dry-run", "--json", "--ignore-scripts"], {
     cwd: PROJECT_ROOT,
