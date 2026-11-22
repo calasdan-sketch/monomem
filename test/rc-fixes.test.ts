@@ -85,7 +85,8 @@ describe("1: multi-process create() never throws SQLITE_BUSY", () => {
   // commits and begins again at once wins the lock over a sleeping waiter. Made deterministic here: a child process
   // re-takes the lock right after every commit for 1.6 s, while this store's wait is 1 s. Before, the create threw after
   // ~1 s; now a wait fails only when nobody commits for the whole wait (store/write-lock.ts), so it gets in afterwards.
-  test("a waiting writer does not fail while another writer keeps committing", async () => {
+  // One round: the create's wait in ms. It throws if the create fails, which is the bug this test is for.
+  const starveOnce = async (): Promise<number> => {
     const dir = mkdtempSync(join(tmpdir(), "om-starve-"));
     const path = join(dir, "s.db");
     const s = new Store(path, { busyTimeoutMs: 1000 });
@@ -112,8 +113,7 @@ describe("1: multi-process create() never throws SQLITE_BUSY", () => {
       });
       const t = Date.now();
       s.create({ title: "victim", body: "waits behind the hog" });
-      assert.ok(Date.now() - t > 1000, "the create really waited past its busy timeout");
-      await exited;
+      return Date.now() - t;
     } finally {
       // Windows cannot delete a database another process still has open: stop the child first, so a real failure
       // above is reported instead of an EPERM from this cleanup (seen on CI).
@@ -122,6 +122,14 @@ describe("1: multi-process create() never throws SQLITE_BUSY", () => {
       s.close();
       rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
     }
+  };
+
+  test("a waiting writer does not fail while another writer keeps committing", async (t) => {
+    // The busy handler polls, so now and then the waiter slips in between a commit and the next BEGIN before its 1 s
+    // is up (0.85 s on a macOS runner). That round proves nothing either way, so it is tried again. A create that
+    // throws fails the test in any round; only "never had to wait" ends in a skip, and says so.
+    for (let round = 0; round < 3; round++) if ((await starveOnce()) > 1000) return;
+    t.skip("the writer got the lock before its busy timeout in 3 rounds, so the wait was never exercised");
   });
 
   test("a lock held with no commit still fails after the wait, not later", () => {
