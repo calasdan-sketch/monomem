@@ -17,7 +17,7 @@ import { currentWriter } from "../actor.js";
 import { UNTRUSTED_BANNER } from "../security.js";
 import { ReadTaint, unconfirmedIdsIn } from "../taint.js";
 import type { LintFinding } from "../lint.js";
-import { POST_NOTE_FIELDS, PUT_NOTE_FIELDS, PUT_READ_ONLY_FIELDS, unknownNoteFields, sendError, sendJson, flagParam } from "./shared.js";
+import { POST_NOTE_FIELDS, PUT_NOTE_FIELDS, PUT_READ_ONLY_FIELDS, unknownNoteFields, sendError, sendJson, flagParam, parseJsonBody } from "./shared.js";
 import type { ApiCtx, ApiReq } from "./context.js";
 
 export async function noteRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
@@ -28,7 +28,7 @@ export async function noteRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
     const raw = await readBody(req);
     let parsed: NoteInput;
     try {
-      parsed = JSON.parse(raw || "{}");
+      parsed = parseJsonBody(raw);
     } catch {
       sendJson(res, 400, { error: "invalid JSON body" });
       return true;
@@ -150,7 +150,7 @@ export async function noteRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
     const raw = await readBody(req);
     let parsed: NotePatch;
     try {
-      parsed = JSON.parse(raw || "{}");
+      parsed = parseJsonBody(raw);
     } catch {
       sendJson(res, 400, { error: "invalid JSON body" });
       return true;
@@ -226,7 +226,7 @@ export async function noteRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
     const id = Number(confirmMatch[1]);
     let body: { source?: unknown };
     try {
-      body = JSON.parse((await readBody(req)) || "{}") as { source?: unknown };
+      body = parseJsonBody(await readBody(req)) as { source?: unknown };
     } catch {
       sendJson(res, 400, { error: "invalid JSON body" });
       return true;
@@ -263,7 +263,7 @@ export async function noteRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
     const id = Number(flagMatch[1]);
     let body: { reason?: unknown };
     try {
-      body = JSON.parse((await readBody(req)) || "{}") as { reason?: unknown };
+      body = parseJsonBody(await readBody(req)) as { reason?: unknown };
     } catch {
       sendJson(res, 400, { error: "invalid JSON body" });
       return true;
@@ -386,7 +386,7 @@ export async function noteRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
     const raw = await readBody(req);
     let b: Record<string, unknown>;
     try {
-      const v = JSON.parse(raw || "{}") as unknown;
+      const v = parseJsonBody(raw) as unknown;
       if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error("not an object");
       b = v as Record<string, unknown>;
     } catch {
@@ -428,7 +428,7 @@ export async function noteRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
         const raw = await readBody(req);
         let b: { version?: unknown; if_rev?: unknown };
         try {
-          b = JSON.parse(raw || "{}");
+          b = parseJsonBody(raw);
         } catch {
           sendJson(res, 400, { error: "invalid JSON body" });
           return true;

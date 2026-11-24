@@ -302,6 +302,13 @@ export function waitScopeKey(namespaces: string[] | undefined): string {
   return namespaces ? [...namespaces].sort().join(",") : "*";
 }
 
+/** JSON.parse for a request body: an empty body is {}, and a literal `null` is {} too (it would otherwise reach a handler as
+ * null and fail with a TypeError, a 500). Throws SyntaxError on invalid JSON, like JSON.parse. (Audit 2026-11-23.) */
+export function parseJsonBody(raw: string): any { // eslint-disable-line @typescript-eslint/no-explicit-any
+  const v: unknown = JSON.parse(raw || "{}");
+  return v === null ? {} : v;
+}
+
 export function intParam(url: URL, name: string, min: number): number | undefined {
   const raw = url.searchParams.get(name);
   if (raw === null || raw === "") return undefined;

@@ -60,13 +60,28 @@ export const IMPORT_BODY_BYTES = (() => {
  * (memory stays bounded); it does NOT destroy the socket, so the handler can
  * still deliver a 413 response rather than resetting the connection.
  */
-export function readBody(req: IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<string> {
+export function readBody(req: IncomingMessage, maxBytes = MAX_BODY_BYTES, idleMs = 0): Promise<string> {
   return new Promise((resolve, reject) => {
     const decoder = new StringDecoder("utf8");
     let data = "";
     let bytes = 0;
     let over = false;
+    // idleMs > 0: no byte for that long ends the read and the connection (a slow client before sign-in, see readPreAuthBody).
+    let idle: NodeJS.Timeout | undefined;
+    const arm = (): void => {
+      if (idleMs <= 0) return;
+      clearTimeout(idle);
+      idle = setTimeout(() => {
+        over = true;
+        reject(new Error("request body timed out"));
+        req.socket.destroy();
+      }, idleMs);
+    };
+    arm();
+    req.on("end", () => clearTimeout(idle));
+    req.on("close", () => clearTimeout(idle));
     req.on("data", (chunk: Buffer) => {
+      arm();
       if (over) return; // past the cap: drain remaining chunks without buffering
       bytes += chunk.length;
       if (bytes > maxBytes) {
@@ -81,6 +96,19 @@ export function readBody(req: IncomingMessage, maxBytes = MAX_BODY_BYTES): Promi
     });
     req.on("error", reject);
   });
+}
+
+/** Body cap for a request that has not signed in (POST /login): a sign-in code is 32 characters. */
+export const PRE_AUTH_BODY_BYTES = 4096;
+
+/**
+ * readBody for a caller nobody has authenticated yet. Small cap, and 10 s without a byte ends the read and the connection
+ * (MONOMEM_PREAUTH_BODY_TIMEOUT_MS to change), so slow bodies cannot fill the connection limit (audit 2026-11-23: 600 of
+ * them locked out a valid client). requestTimeout (300 s) still bounds authenticated uploads such as /import.
+ */
+export function readPreAuthBody(req: IncomingMessage, maxBytes = PRE_AUTH_BODY_BYTES): Promise<string> {
+  const ms = Number(process.env.MONOMEM_PREAUTH_BODY_TIMEOUT_MS);
+  return readBody(req, maxBytes, Number.isFinite(ms) && ms > 0 ? ms : 10_000);
 }
 
 // Accept either the historical single admin token (a string) or a scoped list.

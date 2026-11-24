@@ -12,7 +12,7 @@ import { runSearch, runSearchExplained, semanticNotice, parseMode, runRelevantSe
 import { parseTimePhrase } from "../time-parse.js";
 import { listWithDisputes } from "../facts.js";
 import { meterStats } from "../meter.js";
-import { sendError, sendJson, WriterFilter, writerFilter, supersededFilter, flagParam, intParam } from "./shared.js";
+import { sendError, sendJson, WriterFilter, writerFilter, supersededFilter, flagParam, intParam, parseJsonBody } from "./shared.js";
 import type { ApiCtx, ApiReq } from "./context.js";
 
 export async function readRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
@@ -237,7 +237,7 @@ export async function readRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
     };
     let parsed: { message?: unknown; limit?: unknown; namespace?: unknown; written_by?: unknown; not_written_by?: unknown; include_distrusted?: unknown };
     try {
-      parsed = JSON.parse(raw || "{}");
+      parsed = parseJsonBody(raw);
     } catch {
       sendJson(res, 400, { error: "invalid JSON body" });
       return true;

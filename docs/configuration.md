@@ -74,6 +74,7 @@ All environment variables are optional. This table lists **every** `MONOMEM_*` v
 | `MONOMEM_NO_SERVER_PROBE` | unset | `1` stops `monomem check --setup` from asking the server on `127.0.0.1:<MONOMEM_PORT>/health` which version it runs (the test suite sets it) |
 | `MONOMEM_MAX_CONNECTIONS` | `512` | Most connections each server (API, MCP) holds open at once |
 | `MONOMEM_HEADERS_TIMEOUT_MS` | `20000` | How long a client has to send its request headers |
+| `MONOMEM_PREAUTH_BODY_TIMEOUT_MS` | `10000` | How long a client that has not signed in (`POST /login`, OAuth registration) may go without sending a body byte before the connection is closed |
 | `MONOMEM_REQUEST_TIMEOUT_MS` | `300000` | How long a client has to send a whole request (a large `/import` over a slow link needs this) |
 | `MONOMEM_KEEPALIVE_TIMEOUT_MS` | `5000` | How long an idle connection is kept |
 | `MONOMEM_EDGE_SYNC_MAX` | `5000` | A namespace with more live notes than this gets its similarity index built in the background in short slices instead of inside the write that needs it (so the server keeps answering; measured: the build froze it for 2.6 s at 50,000 notes and 41 s at 200,000). Notes written meanwhile are linked when it is ready |

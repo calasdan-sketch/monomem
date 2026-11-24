@@ -11,7 +11,7 @@ import { maybeEmbed } from "../search-service.js";
 import { putTask, listTasks, getTask, writeHandoff, listHandoffs, catchUp, claimTask, approveTask, approveOrHold, TaskNotFoundError, ClaimConflictError } from "../tasks.js";
 import { ackChanges } from "../changes.js";
 import type { LintFinding } from "../lint.js";
-import { sendError, sendJson, ackModeParam, writerFilter, feedWriterFilter, flagParam, intParam } from "./shared.js";
+import { sendError, sendJson, ackModeParam, writerFilter, feedWriterFilter, flagParam, intParam, parseJsonBody } from "./shared.js";
 import type { ApiCtx, ApiReq } from "./context.js";
 
 export async function taskRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
@@ -42,7 +42,7 @@ export async function taskRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
     const jsonBody = async (): Promise<Record<string, unknown> | null> => {
       const raw = await readBody(req);
       try {
-        const v = JSON.parse(raw || "{}");
+        const v = parseJsonBody(raw);
         if (v && typeof v === "object" && !Array.isArray(v)) return v as Record<string, unknown>;
       } catch {
         /* fall through */
