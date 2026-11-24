@@ -45,7 +45,7 @@
     },
     {
       "op": "supersede_preview",
-      "as": "a1",
+      "as": "aAdmin",
       "id": "pv",
       "old": [
         "old"
@@ -54,7 +54,7 @@
     },
     {
       "op": "supersede_confirm",
-      "as": "b1",
+      "as": "bAdmin",
       "id": "steal",
       "from": "pv"
     },

@@ -1,6 +1,9 @@
 // Round 2 review fixes: terminal injection, pin gate on the CLI, linter false positives, drill, setup redact + old entries,
 // token-file, FORCE_COLOR, import without a terminal.
 import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads, so a file run alone never touches the real data folder
+// The drill replays the poisoning attacks under the SHIPPED defaults, where only a person confirms a replacement (E23).
+// setup-env opts the rest of the suite into the older agent mode, which would show E23 as reaching the agent.
+delete process.env.MONOMEM_REPLACE_CONFIRM;
 import { test, describe, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";

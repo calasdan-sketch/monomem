@@ -9,6 +9,9 @@
     },
     "boss": {
       "scope": "admin"
+    },
+    "person": {
+      "scope": "admin"
     }
   },
   "steps": [
@@ -34,7 +37,7 @@
     },
     {
       "op": "supersede_preview",
-      "as": "alice",
+      "as": "person",
       "id": "pv",
       "old": [
         "b"
@@ -43,7 +46,7 @@
     },
     {
       "op": "supersede_confirm",
-      "as": "alice",
+      "as": "person",
       "id": "cf",
       "from": "pv"
     },

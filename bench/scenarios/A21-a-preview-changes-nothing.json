@@ -9,6 +9,9 @@
     },
     "boss": {
       "scope": "admin"
+    },
+    "person": {
+      "scope": "admin"
     }
   },
   "needs": [
@@ -32,7 +35,7 @@
     },
     {
       "op": "supersede_preview",
-      "as": "alice",
+      "as": "person",
       "id": "pv",
       "old": [
         "old"

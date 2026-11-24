@@ -12,6 +12,10 @@ for (const k of Object.keys(process.env)) {
   if (k === "MONOMEM_TEST_TIME_SCALE") continue;
   if (k.startsWith("MONOMEM_") || k.startsWith("ONEMEMORY_") || k.startsWith("CLAUDE_BRIDGE_")) delete process.env[k];
 }
+// Replacing a note: the SHIPPED default is that only a person confirms (MONOMEM_REPLACE_CONFIRM=person, 1.8.0). Most of the
+// suite tests the replace mechanics (codes, undo, staleness) through write-scope callers, so it opts into the older "agent"
+// mode here, openly. test/replace-person-confirm.test.ts turns this off and tests the real default.
+process.env.MONOMEM_REPLACE_CONFIRM = "agent";
 // Each test process gets its own temp root. Test files run in parallel processes, and a shared os.tmpdir() let one
 // file count another's monomem-drill-* copies (r2-fixsec drill flake) and collected folders tests forgot to remove.
 // os.tmpdir() reads these variables on every call; child processes inherit them. Removed on exit with the rest.

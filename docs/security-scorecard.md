@@ -44,11 +44,11 @@ Tally: Does this 0, Partly 8, Does nothing 1. Each guideline has at least one pa
 not served). `warned` = stored and returned with a warning label. **`REACHED`** = stored and returned to a reader's search
 with no warning.
 
-### Monomem's own 26 attacks (`monomem check --attacks`)
+### Monomem's own 27 attacks (`monomem check --attacks`)
 
 | Held | Blocked | Warned | REACHED |
 |---|---|---|---|
-| 8 | 12 | 4 | **2** |
+| 8 | 13 | 4 | **2** |
 
 Misses: **E16** (a reworded override no pattern matches; distrusting the writer removes it afterwards) and **SELF** (a
 trusted writer saves an attacker's instruction in its own words). The linter was tuned on these attacks, so this table

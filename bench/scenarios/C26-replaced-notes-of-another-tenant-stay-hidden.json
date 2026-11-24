@@ -23,6 +23,9 @@
       "scope": "admin",
       "namespace": "tenantB",
       "writer": "adminB"
+    },
+    "person": {
+      "scope": "admin"
     }
   },
   "needs": [
@@ -46,7 +49,7 @@
     },
     {
       "op": "supersede_preview",
-      "as": "a1",
+      "as": "person",
       "id": "pv",
       "old": [
         "old"
@@ -55,7 +58,7 @@
     },
     {
       "op": "supersede_confirm",
-      "as": "a1",
+      "as": "person",
       "id": "cf",
       "from": "pv"
     },

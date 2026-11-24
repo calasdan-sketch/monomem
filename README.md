@@ -82,7 +82,7 @@ It has five suites, as plain JSON scenario files you can extend in [`bench/scena
 | B  Contradiction recovery | 31 | writer A against writer B, then a trusted correction; distrusting the bad writer; a weak overwrite of a trusted note | resolved to the correction, loser stays visible, overwrite protected |
 | C  Permission isolation | 27 | one tenant cannot read, write, search, export or undo another's notes; key scopes; signed imports | `leakage-count` (must be 0), `unexpected-denials` |
 | D  Provenance retention | 19 | source, writer, creator, timestamps and confidence survive export, import, merge and update | `fields-lost` |
-| E  Memory poisoning | 22 | injected or malicious memories never reach an agent as trusted content (held, refused, stored with a warning, or left out once the writer is distrusted) | `poison-reach-count` (must be 0; two designed misses are not counted, see below) |
+| E  Memory poisoning | 23 | injected or malicious memories never reach an agent as trusted content (held, refused, stored with a warning, or left out once the writer is distrusted) | `poison-reach-count` (must be 0; two designed misses are not counted, see below) |
 
 **What it does not measure.** The provenance suites are not a retrieval-quality or semantic-search benchmark (keyword
 search, made-up unique words, no embeddings). It does not measure speed, scale or concurrency, and "0 leaks" means none of

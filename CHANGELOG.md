@@ -6,6 +6,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+- **Replacing a note now needs a person.** Before this, the replace preview handed its one-time code back to the same agent and only
+  the tool text asked the agent to show the warning to a person and wait, so an agent could preview and then confirm its own
+  replacement. Now the server refuses the confirm unless a person makes it: the `monomem supersede` command, or an administrator-scope
+  REST or dashboard caller. An MCP connection is never a person, even with an admin key, and an app that has only a write key is
+  refused too. The refusal comes before the code is opened, so the code is not spent. The preview still works for agents and says how
+  a person confirms. `MONOMEM_REPLACE_CONFIRM=agent` restores the 1.6 and 1.7 behaviour. **This changes behaviour:** an agent that used
+  to confirm replacements by itself is now told to ask the person. Limit: an agent that can also run shell commands as the machine
+  owner can run the CLI; this closes the MCP and write-key paths, not a compromised machine.
+- One new benchmark scenario: E23 (an agent cannot approve its own replacement of a trusted note; counts in `poison-reach-count`). The
+  control, that a person still can, is A29. 23 earlier scenarios (A05, A06, A10, A20 to A25, A27, A28, A30 to A32, A34, B24, C25 to C27, and
+  the confirm steps of A26, A29, B29, C24) now have an administrator, not a write-key app, confirm the replacement, because that is
+  who may confirm; what each one checks is unchanged. Benchmark: **138 deterministic scenarios** (was 137): A 38, B 31, C 27, D 19,
+  E 23; 138 passed, 0 known gaps, `poison-reach-count` 0 over 44 defended probes (was 42). `monomem check --attacks` replays 27 attacks
+  (was 26); its summary is held 8, blocked 13, warned 4, reached 2 (the two known misses).
+
 ## [1.7.0] - 2026-11-19
 
 ### Added
