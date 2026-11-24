@@ -42,6 +42,9 @@ import { scanOutboundDirective, scanOutboundInjection } from "./lint-outbound.js
 import { scanEncodedBlob, scanMultilingual, scanStandingInstruction } from "./lint-evasion.js";
 import { scanForToolSteering, steerChecked } from "./lint-tool-steer.js";
 import { evasionVariants, scanExternalEmbeds, scanHiddenComments, scanMemoryPoison, scanMoreLanguages } from "./lint-evasion2.js";
+import { decodeVariants, scanHiddenData } from "./lint-decode.js";
+import { scanToolPoisoning, scanToolWarning } from "./lint-toolpoison.js";
+import { scanThirdLanguages } from "./lint-langs3.js";
 
 export type LintCategory = "secret" | "injection" | "entropy" | "pii" | "directive";
 export type LintAction = "block" | "quarantine" | "warn";
@@ -292,7 +295,13 @@ export function scanForInjection(text: string | undefined): string | null {
     const r = scanInjectionCore(v);
     if (r) return r;
   }
-  return scanMoreLanguages(text);
+  // 2026-11-23 (lint-decode.ts): invisible characters as word breaks, reversed / rot / numeric / base32 / morse rewrites, then hidden-data
+  // structure and three more languages.
+  for (const v of decodeVariants(text)) {
+    const r = scanInjectionCore(v) ?? scanEncodedBlob(normalizeForScan(v), scanInjectionCore);
+    if (r) return r;
+  }
+  return scanMoreLanguages(text) ?? scanThirdLanguages(text) ?? scanHiddenData(text);
 }
 
 function scanInjectionCore(text: string): string | null {
@@ -313,7 +322,7 @@ function scanInjectionCore(text: string): string | null {
     if (label === "harness tool-syntax") harness = label;
     else return label;
   }
-  const evasion = scanMultilingual(t) ?? scanStandingInstruction(t) ?? scanMemoryPoison(t) ?? scanHiddenComments(t) ?? scanExternalEmbeds(t);
+  const evasion = scanMultilingual(t) ?? scanStandingInstruction(t) ?? scanMemoryPoison(t) ?? scanHiddenComments(t) ?? scanExternalEmbeds(t) ?? scanToolPoisoning(t);
   if (evasion) return evasion;
   return harness ?? scanOutboundInjection(t);
 }
@@ -399,7 +408,7 @@ export function scanForDirective(text: string | undefined): string | null {
   if (!text) return null;
   const t = normalizeForScan(text);
   for (const [label, re] of DIRECTIVE_PATTERNS) if (re.test(t)) return label;
-  return scanOutboundDirective(t);
+  return scanOutboundDirective(t) ?? scanToolWarning(t);
 }
 
 export const OWN_TOKEN_LABEL = "Monomem access token";
@@ -488,12 +497,12 @@ export function lintContent(input: {
   }
   // An instruction split across fields ("ignore previous" in the title, "instructions" in the body) reads as one to an agent
   // that is shown title, body and tags together. Scanned joined, only when no single field already held it.
-  if (!out.some((f) => f.category === "injection") && [input.title, input.body, input.tags?.length ? "t" : ""].filter(Boolean).length >= 2) {
+  if (!out.some((f) => f.category === "injection") && [input.title, input.body, input.tags?.length ? "t" : "", input.source].filter(Boolean).length >= 2) {
     // Only the seams are joined (the title, the first and last 600 characters of the body, the tags): a split instruction
     // meets there, and a second full scan of a 256KB body on every write would slow imports for nothing.
     const body = input.body ?? "";
-    const joined = [input.title, body.length > 1200 ? `${body.slice(0, 600)}\n${body.slice(-600)}` : body, input.tags?.join(" ")].filter(Boolean).join("\n");
-    const inj = scanForInjection(joined);
+    const joined = [input.title, body.length > 1200 ? `${body.slice(0, 600)}\n${body.slice(-600)}` : body, input.tags?.join(" "), input.source].filter(Boolean).join("\n");
+    const inj = scanForInjection(joined) ?? scanForInjection(joined.replace(/[-_]+/g, " ")); // a tag "all-previous" reads as two words
     if (inj) out.push({ category: "injection", label: inj, field: "title and body together" });
   }
   return out;
