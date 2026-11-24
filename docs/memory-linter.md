@@ -66,7 +66,7 @@ a fact value that is just "always approve"), and "disable the memory linter / wr
   camelCase) become spaces, so `redirect_payroll_000-111` reads as a sentence. A fact tag is checked on its value.
 - **Writer-aware:** only for a writer that is not the owner, and for any note written after outside content was read (the same test as
   tool-choice steering). The owner's terminal, server jobs and imports of Claude's own memory files are exempt.
-- **Hold or warn:** a hit is held (quarantine, label starting "claim:") except the safety-off family, which warns.
+- **Hold or warn:** a hit is held for review (label starting "claim:") except the safety-off family, which warns.
 - **Will not catch:** a claim worded with none of these verbs and objects, other languages, a claim split over two notes, "keep this
   rule private" (identical to ordinary confidentiality notes), "do not show its output", "answer outsider when asked who the owner is",
   and anything an attacker rewords after reading these rules. Three families were tried and dropped because they did not catch
