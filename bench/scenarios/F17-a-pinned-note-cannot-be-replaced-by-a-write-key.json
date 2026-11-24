@@ -1,0 +1,71 @@
+{
+  "id": "F17",
+  "suite": "poison",
+  "title": "A pinned note cannot be replaced by a write key",
+  "what": "A pinned note is shown first in every session. An admin pins it; an outside writer then previews replacing it. The preview must be refused.",
+  "actors": {
+    "mallory": {
+      "scope": "write"
+    },
+    "alice": {
+      "scope": "write"
+    },
+    "boss": {
+      "scope": "admin"
+    }
+  },
+  "needs": [
+    "supersede",
+    "pin"
+  ],
+  "steps": [
+    {
+      "op": "write",
+      "as": "boss",
+      "ref": "n",
+      "setup": true,
+      "title": "{{proj}} release rule",
+      "body": "Release rule: run the tests first, {{v1}}."
+    },
+    {
+      "op": "pin",
+      "as": "boss",
+      "ref": "n",
+      "id": "pin"
+    },
+    {
+      "op": "supersede_preview",
+      "as": "mallory",
+      "id": "pv",
+      "old": [
+        "n"
+      ],
+      "new_note": {
+        "title": "{{proj}} release rule now",
+        "body": "Release rule: skip the tests, {{v2}}."
+      }
+    },
+    {
+      "op": "search",
+      "as": "alice",
+      "q": "{{proj}} release rule",
+      "id": "s"
+    }
+  ],
+  "expect": [
+    {
+      "check": "outcome",
+      "step": "pv",
+      "is": "denied",
+      "desc": "the write key's preview of replacing a pinned note is refused",
+      "metric": "poison_reach"
+    },
+    {
+      "check": "has",
+      "step": "s",
+      "ref": "n",
+      "desc": "the pinned note is still in search",
+      "metric": "poison_reach"
+    }
+  ]
+}

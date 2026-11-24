@@ -18,9 +18,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - One new benchmark scenario: E23 (an agent cannot approve its own replacement of a trusted note; counts in `poison-reach-count`). The
   control, that a person still can, is A29. 23 earlier scenarios (A05, A06, A10, A20 to A25, A27, A28, A30 to A32, A34, B24, C25 to C27, and
   the confirm steps of A26, A29, B29, C24) now have an administrator, not a write-key app, confirm the replacement, because that is
-  who may confirm; what each one checks is unchanged. Benchmark: **138 deterministic scenarios** (was 137): A 38, B 31, C 27, D 19,
-  E 23; 138 passed, 0 known gaps, `poison-reach-count` 0 over 44 defended probes (was 42). `monomem check --attacks` replays 27 attacks
+  who may confirm; what each one checks is unchanged. On its own the replace change took the benchmark from 137 to 138 scenarios (`poison-reach-count` 0 over 44 defended probes, was 42). `monomem check --attacks` replays 27 attacks
   (was 26); its summary is held 8, blocked 13, warned 4, reached 2 (the two known misses).
+
+### Attack expansion (2026-11-23)
+- **156 deterministic scenarios** (was 137): A 38, B 31, C 27, D 19, E 41 (E01 to E23 and F01 to F18). New scenarios F01 to F18 are hand-written context-poisoning, encoding, tool-description-style, steganography and replace-abuse probes. 150 pass and 6 are declared known gaps (five open gaps, listed in docs/BENCHMARK.md); the replace-abuse gap they found (F15, F16, F18) is fixed by the person-confirm change above. `poison-reach-count` 0 over 190 defended probes; those probes were built from attacks that were already held, so that zero is not independent evidence, and the known gaps are the misses.
+- New attack sets for `monomem check --attacks --set <name>`: `probes-context`, `probes-encoding`, `probes-toolstyle`, `probes-stego` (our own, 158 probes by field), plus 40 rows of deepset/prompt-injections (Apache-2.0) and 40 of Lakera/gandalf_ignore_instructions (MIT), copied verbatim from their test splits and not tuned on.
+- Memory linter: invisible or blank characters between words now read as word breaks; reversed text, ROT13 and other Caesar shifts, ASCII codes in decimal, binary, 0x and \\u form, quoted string joins, base32, Morse and base64 split over lines are decoded and re-checked; look-alike letters from Cherokee, Lisu, Coptic and Latin extensions are folded; zero-width binary runs, variation selectors after plain letters, stacks of 8 or more combining marks and space/tab bit lines are held as "hidden Unicode text"; `<IMPORTANT>`-style blocks, "before using X first call Y", pre-authorised-tool and "takes precedence over every other tool" wording are held as "tool-description injection"; Czech, Swedish, Indonesian, Vietnamese, Greek, Hebrew and Thai override sentences are held. Details and the false-positive numbers: docs/attack-expansion-2026-11-23.md.
+- `monomem check --attacks` still replays only the E scenarios; the F scenarios run under `monomem bench`.
+- Benign false-positive corpus `bench/benign-corpus.txt` (188 notes) added to `bench/lint-fp.mjs`.
 
 ## [1.7.0] - 2026-11-19
 

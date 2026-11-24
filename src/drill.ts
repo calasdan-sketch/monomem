@@ -57,7 +57,8 @@ export const SELF_POISON: Scenario = {
 
 /** The attack scenarios in drill order: every suite-E scenario, then the self-poisoning one. */
 export function attackScenarios(dir: string = defaultScenarioDir()): Scenario[] {
-  return [...loadScenarios(dir, loadKnownGaps(dir)).filter((s) => s.suite === "poison"), SELF_POISON];
+  // E only: the F scenarios (2026-11-23 attack expansion) carry declared known gaps and run under `monomem bench`; the F probes replay with `--set probes-*`.
+  return [...loadScenarios(dir, loadKnownGaps(dir)).filter((s) => s.suite === "poison" && s.id.startsWith("E")), SELF_POISON];
 }
 
 /**

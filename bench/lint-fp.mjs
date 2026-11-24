@@ -82,3 +82,28 @@ run("LongMemEval-S (chat turns)", chat("longmemeval_s_cleaned.json", longMemEval
 run("LoCoMo-10 (chat turns)", chat("locomo10.json", locomoHaystacks));
 run("Monomem CHANGELOG + docs (technical prose)", repoText());
 run("Developer and personal notes (bench/dev-notes-fp.txt)", readFileSync("bench/dev-notes-fp.txt", "utf8").split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean));
+
+// bench/benign-corpus.txt (2026-11-23): hand-written normal notes in categories (see the #cat: lines), including notes that
+// discuss prompt injection on purpose and instruction-shaped everyday rules. Lists every note the check held, refused or warned
+// about, with its category: a wrongly caught note is a false positive and is reported, never tuned away.
+function benign() {
+  const out = [];
+  let cat = "uncategorised";
+  for (const block of readFileSync("bench/benign-corpus.txt", "utf8").split(/\n\s*\n/)) {
+    const t = block.trim();
+    if (!t) continue;
+    const m = /^#cat:(.+)$/.exec(t);
+    if (m) cat = m[1].trim();
+    else out.push({ cat, text: t });
+  }
+  return out;
+}
+{
+  const notes = benign();
+  const verdictOf = (f) => (f.some((x) => x.category === "secret") ? "refused" : f.some((x) => x.category === "injection") ? "held" : f.length ? "warned" : "ok");
+  const wrong = notes.map((n) => ({ ...n, f: lintContent({ body: n.text, writer: "token:bench-agent" }) })).map((n) => ({ ...n, v: verdictOf(n.f) })).filter((n) => n.v !== "ok");
+  const count = (v) => wrong.filter((n) => n.v === v).length;
+  const hard = count("refused") + count("held");
+  console.log(`Benign corpus (bench/benign-corpus.txt): ${notes.length} notes — refused ${count("refused")}, held ${count("held")}, warned only ${count("warned")}; wrongly caught ${wrong.length} (${((100 * wrong.length) / notes.length).toFixed(1)}%), held or refused ${hard} (${((100 * hard) / notes.length).toFixed(1)}%)`);
+  for (const n of wrong) console.log(`    ${n.v.padEnd(7)} [${n.cat}] ${n.f.map((x) => `${x.category}:${x.label}`).join(", ")} :: ${n.text.replace(/\s+/g, " ").slice(0, 110)}`);
+}
