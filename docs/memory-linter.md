@@ -72,7 +72,7 @@ a fact value that is just "always approve"), and "disable the memory linter / wr
   and anything an attacker rewords after reading these rules. Three families were tried and dropped because they did not catch
   held-out items: export-before-every-search, "one tool for all operations" and pipe-to-shell from an untrusted address. A model check is
   the durable answer for claim-style text.
-- **Held-out result (items never read while designing; split by sha256 in `bench/fixpass-split.json`):** of 133 held-out attacks that
+- **Held-out result (items never read while designing; split by sha256 in `bench/fixpass-split.json`):** of 133 held-out attacks that **Caveat:** the held-out half was run twice, with three rule families dropped after the first run, so it is not perfectly clean. The honest figures are 18 of 133 on the held-out half and 46 of 160 on the half the rules were designed from.
   reached the agent before, 18 are now caught (13.5%): adaptive 14 of 47, plain-English 2 of 4, probes 1 of 11, PyRIT 1 of 38, garak 0 of 33.
   On the tuning half the same rules catch 46 of 160, so about half of that is overfitting to the items they were written from; read the
   held-out figure.

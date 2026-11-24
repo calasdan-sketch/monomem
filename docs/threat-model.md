@@ -16,7 +16,7 @@ not remove it. Its write-time checker is pattern matching and says so in its own
    content (a web page, a file) are marked, and cannot be promoted to trusted or pinned by a trusted writer saving them again.
 4. **Trust controls.** A person can distrust a writer. Notes from a distrusted writer are removed from every answer. A weak writer cannot
    silently overwrite a trusted note.
-5. **A person confirms replacements (since 1.8.0).** An agent can preview replacing a note but cannot approve it. See
+5. **A person confirms replacements (on the hardening branch, not yet released; planned for 1.8.0).** An agent can preview replacing a note but cannot approve it. See
    [replacing-memories.md](./replacing-memories.md).
 6. **Approve-first namespaces.** Optional. Agent writes in a namespace wait for review.
 
@@ -32,10 +32,10 @@ Monomem does not try, or cannot.
 | Other hidden or special characters (zero-width, bidi, filler, combining marks) | Partly | Read as word breaks or decoded before matching; flagged only in the structures listed in the matrix (bit patterns, 3+ variation selectors, 8+ stacked marks). A single hidden character is not flagged by itself. Per field, what is stored, refused or replaced is pinned in a test | `test/hidden-char-matrix.test.ts` (140 cells) |
 | Encodings and uncommon channels (ROT13, reversed text, base32, Morse, number codes, string joins) | Partly | 56 of 67 hand-written probes held, 3 blocked, 1 warned, 7 reached. Pig latin, acrostics, NATO spelling, upside-down text are missed | attack-expansion doc |
 | Tool-description style text planted in a note (`<IMPORTANT>` blocks, "before using X first call Y") | Partly | 18 of 23 probes held, 3 warned, 2 reached. Tool steering inside a fact value or a source label is missed | attack-expansion doc |
-| Steganography in text | Partly | 49 of 52 held or blocked. Sparse zero-width marks and only three variation selectors are missed | attack-expansion doc |
-| Multi-session context poisoning | Partly | The weakest class: 10 of 15 single-note probes reached. A claim with no command words (a payment redirect, a false "correction", a dated sleeper rule) looks like an ordinary note. Since 2026-11-24 an app key's claims of the shapes in memory-linter.md ("Claim-style rules") are held, but only 13.5% of held-out claim-style attacks were caught; an attacker who rewords still gets through. A slow drip of harmless fragments reaches. A trusted writer saving an attacker's text in its own words reaches (known miss SELF), as does a reworded override (E16; removable afterwards by distrusting the writer) | bench F01, F03, F04, E16, SELF |
+| Steganography in text | Partly | 50 of 52 held or blocked. Sparse zero-width marks and only three variation selectors are missed | attack-expansion doc |
+| Multi-session context poisoning | Partly | The weakest class: 9 of 15 single-note probes reached. A claim with no command words (a payment redirect, a false "correction", a dated sleeper rule) looks like an ordinary note. Since 2026-11-24 an app key's claims of the shapes in memory-linter.md ("Claim-style rules") are held, but only 13.5% of held-out claim-style attacks were caught; an attacker who rewords still gets through. A slow drip of harmless fragments reaches. A trusted writer saving an attacker's text in its own words reaches (known miss SELF), as does a reworded override (E16; removable afterwards by distrusting the writer) | bench F01, F03, F04, E16, SELF |
 | Flooding to bury the trusted answer | Partly | Near-duplicate flooding is handled (E14). Eight keyword-stuffed notes from an outside writer can push the trusted answer out of the top five (F02, known gap) | E14, F02 |
-| An agent approving its own replacement of a note | Partly (1.8.0) | `memory_replace` and the REST replace refuse unless a person confirms (the `monomem supersede` command at a terminal, or an administrator key over REST or the dashboard). **Other routes are older and unchanged:** an administrator MCP key can still archive (`memory_archive`) or merge (`memory_consolidate`) notes, and a write key can overwrite a note's text with `memory_save` and its id (the earlier version is kept). An agent that can run shell commands as you can run the `monomem` command. | E23, F15, F16, F18 |
+| An agent approving its own replacement of a note | Partly (1.8.0) | `memory_replace` and the REST replace refuse unless a person confirms (the `monomem supersede` command at a terminal, or an administrator key over REST or the dashboard). **An administrator MCP key is a full operator grant, and these older tools are unchanged for it:** `memory_quarantine` (approve a held write, including its own, or keep its history), `trust_policy` (undistrust a writer), `memory_rollback`,  `memory_archive` and `memory_consolidate` (merge), and a write key can overwrite a note's text with `memory_save` and its id (the earlier version is kept). An agent that can run shell commands as you can run the `monomem` command. | E23, F15, F16, F18 |
 | Replacement text that is itself an attack | Partly | Checked by the same write gate at preview, so it is only as good as the gate (a reworded override gets through, E16) | F13, F14 |
 | Cross-tenant reads and writes | Covered | 0 leaks over the probes in the benchmark | bench suite C |
 | Secrets written into a note | Covered | Blocked or redacted | E06, E07 |
@@ -55,7 +55,7 @@ expansion, most of the defended probes were built from attacks that were already
 real misses are the declared known gaps and the two designed misses (E16 and SELF). The scorecard ([security-scorecard.md](./security-scorecard.md))
 lists outside attack sets where many attacks reach the agent; those numbers are published, not hidden.
 
-On the hand-written expansion probes, the plain count is: 157 attacks, 127 held, 4 blocked, 5 warned, **21 reached**. On a benign set of
+On the hand-written expansion probes, the plain count is: 157 attacks, 128 held, 4 blocked, 5 warned, **20 reached**. On a benign set of
 188 notes the linter wrongly held 7 and warned on 2 (4.8%), mostly notes that quote an attack phrase on purpose. Details:
 [attack-expansion-2026-11-23.md](./attack-expansion-2026-11-23.md).
 

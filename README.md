@@ -29,7 +29,7 @@ Setup finds your apps (Claude Code, Claude Desktop, Cursor, Codex, Gemini CLI, V
 
 **What it does not do.** Please read this before you rely on it:
 
-- The write check is pattern matching. A reworded attack it does not know can get through; `monomem check --attacks` replays the 26 it knows (2 are known misses).
+- The write check is pattern matching. A reworded attack it does not know can get through; `monomem check --attacks` replays the 27 it knows (2 are known misses).
 - It only guards what goes through Monomem. An app that can run shell commands (Claude Code included) or open the database file can read or change your notes directly.
 - For apps connected on your computer, the writer name comes from that app's config file. It tells your apps apart; it is not proof.
 - Keyword search finds words, not meaning, unless you run a local embedding model (Ollama).

@@ -273,7 +273,7 @@ monomem bench --locomo      [--data file] [--limit N] [--mode keyword|hybrid] [-
   server is down, every mode falls back to keyword results.
 - **How hybrid fuses.** Each side's scores are min-max scaled to 0..1 within the search and blended 0.5 keyword / 0.5 semantic; a note found
   by only one side gets 0 from the other (`blendHybrid` in `src/search-service.ts`; it replaced equal-weight RRF on 2026-11-04).
-  `docs/search.md` still says hybrid uses Reciprocal Rank Fusion; that is out of date.
+  `docs/search.md` describes the blend (it said Reciprocal Rank Fusion until 2026-11-23).
 - **There is no reranker and no LLM in the retrieval path.** `relevant` is a second keyword mode (stop words dropped, any keyword matches).
 - **What the two benchmarks measure.** `monomem bench` (above) is a behaviour benchmark: keyword search on made-up unique words, stale-hit
   rate at 1, 5 and 10. It says nothing about retrieval quality. `monomem bench --longmemeval` / `--locomo` measure retrieval quality: is the

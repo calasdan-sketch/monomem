@@ -188,7 +188,7 @@ them all, `?archived=1` shows only the archive (the restore view).
 ## Retrieval visibility ("why did I get this?")
 
 Search ranking is three multiplicative stages — native relevance
-(bm25 / cosine / RRF) → recency-decayed access boost → graded staleness
+(bm25 / cosine / 50-50 score blend) → recency-decayed access boost → graded staleness
 penalty — and every intermediate used to be discarded. An agent could see
 *which* notes came back but never *why* one outranked another.
 

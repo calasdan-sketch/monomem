@@ -50,9 +50,9 @@ shortened warning, or confirm without asking. The tool descriptions tell the age
 you. The command line is the strongest gate: it asks you, at your own keyboard, and cannot be answered by an agent.
 For notes you care about, replace from the command line.
 
-## Who confirms: a person, not an agent (since 1.8.0)
+## Who confirms: a person, not an agent (on the hardening branch; planned for 1.8.0, not yet released)
 
-Before 1.8.0 the preview handed the one-time code back to the same agent, and the tool text only *asked* the agent to show the warning to a person and wait. Nothing in the server enforced it, so an agent could preview and then confirm its own replacement. Now the server enforces it.
+Before this change (1.7.0 and earlier) the preview handed the one-time code back to the same agent, and the tool text only *asked* the agent to show the warning to a person and wait. Nothing in the server enforced it, so an agent could preview and then confirm its own replacement. Now the server enforces it.
 
 - **An agent can still preview.** A preview changes nothing, so an agent can run it and show you the warning.
 - **An agent cannot confirm.** An MCP connection is never treated as a person, not even with an admin key, because the agent behind it is the one that would be approving its own replacement. An app with only a write key over REST is refused too. The refusal happens before the code is opened, so the code is not spent and nothing about it is revealed.

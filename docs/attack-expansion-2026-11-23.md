@@ -31,13 +31,13 @@ The control probe (a real flag emoji) is not counted.
 
 | Class | Probes | Held | Blocked | Warned | REACHED |
 |---|---|---|---|---|---|
-| 1 Context poisoning (single-note shapes) | 15 | 4 | 0 | 1 | 10 |
+| 1 Context poisoning (single-note shapes) | 15 | 5 | 0 | 1 | 9 |
 | 2 Encodings and uncommon channels | 67 | 56 | 3 | 1 | 7 |
 | 3 Tool-description style text | 23 | 18 | 0 | 3 | 2 |
 | 4 Steganography and look-alikes | 52 (+1 control) | 49 | 1 | 0 | 2 |
-| Total | 157 | 127 | 4 | 5 | 21 |
+| Total | 157 | 128 | 4 | 5 | 20 |
 
-By field (same 157): body 121 (101 held, 5 warned, 15 REACHED), title 15 (12 held, 3 REACHED), tags 8 (7 held, 1 blocked), source 6 (5 held,
+By field (same 157, measured on an earlier run; the class totals above are the latest): body 121 (101 held, 5 warned, 15 REACHED), title 15 (12 held, 3 REACHED), tags 8 (7 held, 1 blocked), source 6 (5 held,
 1 REACHED), fact value 5 (3 blocked, 2 REACHED), fact key 2 (2 held).
 
 Before the linter changes in this round the same 157 probes scored held 74, blocked 4, warned 3, **REACHED 76** (so 55 probes were closed here).

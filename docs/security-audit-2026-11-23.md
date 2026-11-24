@@ -16,7 +16,7 @@ Tools live under `D:\security-lab\` (venvs and local folders; no system-wide ins
 | Low | 2 | 1 | 1 |
 | Info | 6 | n/a | 6 |
 
-Nothing in the MCP surface looks like tool poisoning. Every scanner flag on tool descriptions was a false positive (details below).
+Nothing in the MCP surface looks like tool poisoning. Every scanner flag on tool descriptions was a false positive (details below). **Scanner caveats:** Snyk agent-scan ran in inspect mode only (it lists the tools and gives no verdict; its verdict mode uploads descriptions to a vendor, so it was not used). mcp-shield reported 7 flags, all judged false positives. Cisco mcp-scanner, Ramparts and mcpscan did not run. The review and the fuzzing were done by AI agents, not by a human penetration tester.
 Namespace isolation, scope enforcement, Host and Origin checks held under every probe tried.
 
 ## Findings
