@@ -42,12 +42,14 @@ function readable(s: string): string | null {
 }
 const fromBytes = (bytes: number[]): string | null => readable(Buffer.from(bytes).toString("utf8"));
 
+// Every repeat in this file has an upper bound (400): an unbounded `{6,}` group overflows V8's regex stack on a multi-MB body of one
+// short repeating unit (code review 2026-11-23, F9). A longer run is read as consecutive chunks of at most 400 items, so nothing is hidden.
 function numericVariants(t: string): string[] {
   const out: string[] = [];
-  const dec = /(?:\b\d{2,3}[ ,;]+){7,}\d{2,3}\b/g;
-  const bin = /(?:\b[01]{8}\b[ ,;]*){6,}/g;
-  const hex = /(?:\b0x[0-9a-fA-F]{2}\b[ ,;]*){6,}/g;
-  const esc = /(?:\\u[0-9a-fA-F]{4}|\\x[0-9a-fA-F]{2}){6,}/g;
+  const dec = /(?:\b\d{2,3}[ ,;]+){7,400}\d{2,3}\b/g;
+  const bin = /(?:\b[01]{8}\b[ ,;]*){6,400}/g;
+  const hex = /(?:\b0x[0-9a-fA-F]{2}\b[ ,;]*){6,400}/g;
+  const esc = /(?:\\u[0-9a-fA-F]{4}|\\x[0-9a-fA-F]{2}){6,400}/g;
   const take = (re: RegExp, bytes: (m: string) => number[]): void => {
     let n = 0;
     for (const m of t.matchAll(re)) {
@@ -66,7 +68,7 @@ function numericVariants(t: string): string[] {
 const MORSE: Record<string, string> = Object.fromEntries(Object.entries({ a: ".-", b: "-...", c: "-.-.", d: "-..", e: ".", f: "..-.", g: "--.", h: "....", i: "..", j: ".---", k: "-.-", l: ".-..", m: "--", n: "-.", o: "---", p: ".--.", q: "--.-", r: ".-.", s: "...", t: "-", u: "..-", v: "...-", w: ".--", x: "-..-", y: "-.--", z: "--.." }).map(([k, v]) => [v, k]));
 function morseVariants(t: string): string[] {
   const out: string[] = [];
-  for (const m of [...t.matchAll(/(?:[.\-]{1,5}(?: +\/ +| +|\/)){7,}[.\-]{1,5}/g)].slice(0, 6)) {
+  for (const m of [...t.matchAll(/(?:[.\-]{1,5}(?: +\/ +| +|\/)){7,400}[.\-]{1,5}/g)].slice(0, 6)) {
     const s = m[0].split(/ *\/ */).map((w) => w.split(/ +/).map((c) => MORSE[c] ?? "").join("")).join(" ");
     if (s.length >= 8) out.push(s);
   }
@@ -88,7 +90,11 @@ function base32Variants(t: string): string[] {
 }
 
 /** Extra texts to scan with the ordinary patterns (at most about 12). A rewrite is built only when the text looks like it needs one. */
-export function decodeVariants(t: string): string[] {
+/** Decoders read at most this many characters of one text (code review F9). REST caps a note at 1 MB; only an admin import can be larger. */
+export const DECODE_MAX_CHARS = 2 * 1024 * 1024;
+
+export function decodeVariants(whole: string): string[] {
+  const t = whole.length > DECODE_MAX_CHARS ? whole.slice(0, DECODE_MAX_CHARS) : whole;
   const out: string[] = [];
   if (BREAKERS.test(t)) out.push(t.replace(BREAKERS, " "), t.replace(EXTRA_DROP, ""));
   BREAKERS.lastIndex = 0;

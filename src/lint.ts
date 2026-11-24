@@ -280,8 +280,24 @@ function unLeet(t: string): string {
   return t.replace(/\S+/g, (w) => (/[a-z]/i.test(w) && /[013457@$]/.test(w) ? w.replace(/[013457@$]/g, (c) => LEET[c]) : w));
 }
 
-/** First injection label found in `text`, or null. Also looks inside base64 / hex blobs that decode to text (one level). */
+/** The label when a scanner could not finish (see scanForInjection). */
+export const UNSCANNABLE_LABEL = "text too large or repetitive to scan";
+
+/**
+ * First injection label found in `text`, or null. Also looks inside base64 / hex blobs that decode to text (one level).
+ * It never throws on odd input: a regex that overflows V8's stack on a multi-MB body of one repeating unit (code review 2026-11-23,
+ * F9) means the text could not be fully scanned, so the note is held (fail closed) instead of crashing the write or the import.
+ */
 export function scanForInjection(text: string | undefined): string | null {
+  try {
+    return scanForInjectionUnguarded(text);
+  } catch (e) {
+    if (e instanceof RangeError) return UNSCANNABLE_LABEL;
+    throw e;
+  }
+}
+
+function scanForInjectionUnguarded(text: string | undefined): string | null {
   if (!text) return null;
   const direct = scanInjectionCore(text);
   if (direct) return direct;

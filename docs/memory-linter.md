@@ -340,6 +340,10 @@ Responses:
   "rejected": [{ "title": "…", "error": "refusing to store what looks like a JWT; …" }] }
 ```
 
+## Very large or repetitive text
+
+The decoders (reversed text, ROT13, number codes, base32, Morse and so on) read at most the first 2 MB of a note. REST caps a note at 1 MB, so only an administrator import can be larger. If a scanner cannot finish at all (a multi-MB body of one repeating unit can overflow the regex engine's stack), the note is **held** with the label "text too large or repetitive to scan" instead of crashing the write or the import.
+
 ## Optional second opinion from a local model (off by default)
 
 The pattern linter above cannot catch a reworded or novel instruction attack. You can add a second opinion
@@ -381,3 +385,6 @@ Two ways it is used:
    it carries the usual outside/unconfirmed labelling and nothing more. An attack the model misses is not held at all.
 
 Measured results on one machine and the attacks it was tested on are in `bench/lint-model-eval/` (run it yourself).
+
+**Which writes get the second opinion.** Only notes written through `POST /notes`, `PUT /notes/:id` and `memory_save`. Tasks, handoffs, captured work, replacement-created notes, imports and merges (`memory_consolidate`) are **not** sent to the model. The model reads only the first 4,000 characters of a note. A hostile note can try to talk the model into calling it `instruction_like`, which only gets that note held for you to review: it cannot clear or lower anything the pattern linter found.
+
