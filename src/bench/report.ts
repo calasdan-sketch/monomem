@@ -61,6 +61,7 @@ function suiteMetrics(suite: Suite, all: ScenarioResult[]): Record<string, unkno
     out.queries = withOld.length;
     out["stale-hit-rate@1"] = rate(withOld.filter((c) => c.measure!.stale_at_1).length, withOld.length);
     out["stale-hit-rate@5"] = rate(withOld.filter((c) => c.measure!.stale_at_5).length, withOld.length);
+    out["stale-hit-rate@10"] = rate(withOld.filter((c) => c.measure!.stale_at_10).length, withOld.length);
     out["unflagged-stale-hit-rate@5"] = rate(withOld.filter((c) => c.measure!.unflagged_stale_at_5).length, withOld.length);
     out["current-recall@1"] = rate(withCurrent.filter((c) => c.measure!.current_at_1).length, withCurrent.length);
   }
@@ -161,7 +162,7 @@ const pct = (m: unknown): string => {
 export function headline(suite: Suite, m: Record<string, unknown>): string[] {
   if (suite === "stale")
     return [
-      `stale-hit-rate@1 ${pct(m["stale-hit-rate@1"])}   @5 ${pct(m["stale-hit-rate@5"])}   unflagged@5 ${pct(m["unflagged-stale-hit-rate@5"])}`,
+      `stale-hit-rate@1 ${pct(m["stale-hit-rate@1"])}   @5 ${pct(m["stale-hit-rate@5"])}   @10 ${pct(m["stale-hit-rate@10"])}   unflagged@5 ${pct(m["unflagged-stale-hit-rate@5"])}`,
       `current-recall@1 ${pct(m["current-recall@1"])}`,
     ];
   if (suite === "contradiction") {

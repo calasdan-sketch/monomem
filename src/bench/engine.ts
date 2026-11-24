@@ -475,6 +475,7 @@ function judge(run: Run, c: Check): CheckResult {
       const top5 = hits.slice(0, 5);
       const stale1 = hits[0] !== undefined && isOld(hits[0]);
       const stale5 = top5.some(isOld);
+      const stale10 = hits.slice(0, 10).some(isOld);
       const unflagged5 = top5.filter((h) => isOld(h) && h.stale !== true);
       const current1 = cur !== undefined && hits[0]?.id === cur;
       const pass = (c.current === undefined || current1) && unflagged5.length === 0;
@@ -484,7 +485,7 @@ function judge(run: Run, c: Check): CheckResult {
       const flaggedNote = top5.some((h) => isOld(h) && h.stale === true) ? " (an old one is flagged stale)" : "";
       const got = `${hits.length ? `first is ${name(hits[0]?.id)}` : "no results"}; old values in top 5: ${top5.filter(isOld).map((h) => name(h.id)).join(", ") || "none"}${flaggedNote}`;
       // Only a query that names an old value can have a stale hit; the rates are over those queries.
-      const measure: Record<string, boolean> = { has_old_value: staleIds.size > 0 || oldTexts.length > 0, stale_at_1: stale1, stale_at_5: stale5, unflagged_stale_at_5: unflagged5.length > 0 };
+      const measure: Record<string, boolean> = { has_old_value: staleIds.size > 0 || oldTexts.length > 0, stale_at_1: stale1, stale_at_5: stale5, stale_at_10: stale10, unflagged_stale_at_5: unflagged5.length > 0 };
       if (c.current !== undefined) measure.current_at_1 = current1;
       return mk(pass, want, got, measure);
     }
