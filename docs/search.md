@@ -16,8 +16,10 @@ monomem tidy reindex   # backfill embeddings for existing notes
 Embeddings come from **your own** OpenAI-compatible endpoint (local Ollama,
 or any OpenAI-shaped `/v1/embeddings` API) — still zero native modules, still
 nothing sent to a third party you didn't configure. `memory_search` /
-`GET /search` then accept `mode=keyword | semantic | hybrid` (hybrid fuses
-both with Reciprocal Rank Fusion). If the endpoint is unavailable, search and
+`GET /search` then accept `mode=keyword | semantic | hybrid` (hybrid scales the
+keyword scores and the semantic scores to 0..1 inside each search and blends them 50/50; a note only one side finds gets 0 from the
+other. It replaced Reciprocal Rank Fusion on 2026-11-04, because a rank-only merge let a weak semantic list pull confident keyword
+hits down). If the endpoint is unavailable, search and
 writes silently fall back to keyword — an optional embedder can never fail a
 write or a query.
 

@@ -3,7 +3,7 @@
 // Three modes:
 //   - "keyword"  : FTS5 only (the default, zero-dependency path).
 //   - "semantic" : embedding cosine only (needs embeddings enabled).
-//   - "hybrid"   : fuse keyword + semantic with Reciprocal Rank Fusion.
+//   - "hybrid"   : blend keyword + semantic scores 50/50 (min-max scaled per search; it replaced Reciprocal Rank Fusion on 2026-11-04).
 //
 // If embeddings are disabled, the endpoint is down, or the query can't be
 // embedded, every mode degrades to keyword search -- a query must never fail
