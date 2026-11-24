@@ -66,6 +66,7 @@ After setup, restart your apps. Then, in one of them, say **"Save to Monomem: my
 [![npm](https://img.shields.io/npm/v/monomem)](https://www.npmjs.com/package/monomem)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 [![Monomem MCP server](https://mcprush.com/badge/monomem-mcp/card.svg)](https://mcprush.com/to/monomem-mcp?ref=badge)
+[![calasdan-sketch/monomem MCP server](https://glama.ai/mcp/servers/calasdan-sketch/monomem/badges/score.svg)](https://glama.ai/mcp/servers/calasdan-sketch/monomem)
 
 *The mcprush card is a third-party scan's grade, updated after each scan: it reads the published package, not our claims.*
 
