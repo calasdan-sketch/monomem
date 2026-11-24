@@ -21,9 +21,9 @@
 // under the writer name "cli". Everything goes through supersede.ts, like the REST and MCP surfaces.
 import { readFileSync } from "node:fs";
 import { Store, QuarantinedError, ValidationError } from "./store.js";
-import { SupersedeError, supersedePreview, supersedeConfirm, supersedeUndo, supersedeTokenTargets, noteHistory, restoreVersion, purgeNoteHistory, type Caller } from "./supersede.js";
+import { SupersedeError, replaceConfirmMode, supersedePreview, supersedeConfirm, supersedeUndo, supersedeTokenTargets, noteHistory, restoreVersion, purgeNoteHistory, type Caller } from "./supersede.js";
 import type { SupersedeReplacementInput } from "./supersede-shared.js";
-import { safe } from "./supersede-text.js";
+import { personTerminalText, safe } from "./supersede-text.js";
 import { maybeEmbed } from "./search-service.js";
 import { rollbackPreview, rollbackConfirm, embedRestored } from "./rollback.js";
 
@@ -120,6 +120,10 @@ export async function supersedeCli(store: Store, args: string[], io: CliIO, call
 
     const token = s(flags["confirm-token"]);
     if (token !== undefined) {
+      // 1.8.0: with the default "person" rule, a code is confirmed by someone at a terminal. A script (no terminal) is refused,
+      // so an agent that only has a shell tool is not handed a two-command way around the rule. This is a speed bump, not a wall:
+      // a shell as the machine owner can still open a terminal, or set MONOMEM_REPLACE_CONFIRM=agent itself.
+      if (replaceConfirmMode() === "person" && !io.interactive) throw new SupersedeError(personTerminalText(), 403);
       // The code names the notes: gate on those (the CLI's yes is recorded as a human confirm of the replacement).
       const t = supersedeTokenTargets(store, token);
       await gate("pinned", t.oldIds, "supersede");
@@ -141,7 +145,9 @@ export async function supersedeCli(store: Store, args: string[], io: CliIO, call
     if (newIdRaw !== undefined) await gate("outside", [Number(newIdRaw)], "replacing notes with");
     const how = io.interactive
       ? "Type the number of notes you are replacing, or yes, to go ahead. Anything else cancels and nothing is changed."
-      : "Nothing was changed. To go ahead from a script, run the same command again with --confirm-token {token} (and the same --title/--body).";
+      : replaceConfirmMode() === "person"
+        ? "Nothing was changed. Replacing a note needs a person at a terminal: run this command yourself in a terminal and type the number to confirm."
+        : "Nothing was changed. To go ahead from a script, run the same command again with --confirm-token {token} (and the same --title/--body).";
     const preview = supersedePreview(store, caller, { old_ids: oldIds, new_note: newNote, new_id: newIdRaw !== undefined ? Number(newIdRaw) : undefined }, how);
     if (json) {
       emit(preview);

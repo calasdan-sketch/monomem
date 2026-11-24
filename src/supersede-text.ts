@@ -193,6 +193,15 @@ export function personConfirmText(oldIds: readonly number[] | null, newId: numbe
   return lines.join("\n");
 }
 
+/** The CLI refusal when a code is confirmed with no terminal (a script, or an agent's shell tool) under the person rule. */
+export function personTerminalText(): string {
+  return [
+    "Confirming a replacement needs a person at a terminal: type the command in a terminal window and answer the question there.",
+    "A script with no terminal is refused. (An operator who wants scripts to confirm can set MONOMEM_REPLACE_CONFIRM=agent.)",
+    "Note: this is a speed bump, not a wall. An agent that can open a terminal as you can still do it, so do not give an agent a shell you would not trust with your notes.",
+  ].join("\n");
+}
+
 /** What a confirmed replacement did, in plain words. */
 export function doneText(retired: Array<{ id: number; title: string }>, replacementId: number, created: boolean): string {
   const lines = [

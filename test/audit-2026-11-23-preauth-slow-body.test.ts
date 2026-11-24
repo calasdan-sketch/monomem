@@ -39,6 +39,20 @@ describe("pre-auth request bodies", () => {
     assert.ok(closedAfterMs >= 0 && closedAfterMs < 3000, `socket stayed open (${closedAfterMs})`);
   });
 
+  test("a body that drips one byte at a time is cut off by the total deadline, not only by the idle timer (code review F8)", async () => {
+    const closedAfterMs = await new Promise<number>((resolve) => {
+      const t0 = Date.now();
+      const s = net.connect(port, "127.0.0.1");
+      s.on("error", () => {});
+      s.on("close", () => resolve(Date.now() - t0));
+      s.write(`POST /login HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: 4000\r\n\r\n`);
+      // Idle limit is 300 ms in this test, the total is 450 ms: a byte every 100 ms never goes idle but must still be cut off.
+      const drip = setInterval(() => { if (!s.destroyed) s.write("{"); }, 100);
+      setTimeout(() => { clearInterval(drip); s.destroy(); resolve(-1); }, 4000);
+    });
+    assert.ok(closedAfterMs >= 0 && closedAfterMs < 2000, `a dripping socket stayed open (${closedAfterMs})`);
+  });
+
   test("a POST /login body over 4KB is refused with 413", async () => {
     const res = await fetch(`http://127.0.0.1:${port}/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: "a".repeat(5000) }) });
     assert.equal(res.status, 413);

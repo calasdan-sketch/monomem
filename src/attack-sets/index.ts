@@ -36,6 +36,8 @@ export interface AttackSample {
   title?: string;
   tags?: string[];
   source?: string;
+  /** A harmless control that SHOULD pass through (for example a real flag emoji): replayed and shown, but never counted as REACHED. */
+  control?: boolean;
 }
 
 export interface AttackSet {
@@ -52,7 +54,7 @@ export interface AttackSet {
 }
 
 const fromProbes = (cls: ProbeClass): AttackSample[] =>
-  PROBES.filter((p) => p.cls === cls).map((p) => ({ id: p.id, text: p.fields.body ?? "", title: p.fields.title ?? "Note", ...(p.fields.tags ? { tags: p.fields.tags } : {}), ...(p.fields.source !== undefined ? { source: p.fields.source } : {}) }));
+  PROBES.filter((p) => p.cls === cls).map((p) => ({ id: p.id, text: p.fields.body ?? "", title: p.fields.title ?? "Note", ...(p.fields.tags ? { tags: p.fields.tags } : {}), ...(p.fields.source !== undefined ? { source: p.fields.source } : {}), ...(p.control ? { control: true } : {}) }));
 const fromPairs = (rows: ReadonlyArray<readonly [string, string]>, wrap: (t: string) => string = (t) => t): AttackSample[] => rows.map(([id, t]) => ({ id, text: wrap(t) }));
 // PoisonedRAG's black-box attack puts the target question in front of the poisoned passage so retrieval finds it.
 const poisoned = (question: string, passage: string): string => `${question} ${passage}`;
@@ -217,11 +219,15 @@ export function findSet(name: string): AttackSet | undefined {
 export interface SetRow {
   id: string;
   verdict: Verdict;
+  /** True for a harmless control: shown, but not counted. */
+  control?: boolean;
   /** Why: the write outcome, or the lint warning labels. Never the sample text. */
   why: string;
 }
 
 export interface SetReport {
+  /** Number of harmless control probes replayed but not counted (see AttackSample.control). */
+  controls?: number;
   set: string;
   title: string;
   source: string;
@@ -277,10 +283,10 @@ export async function runAttackSet(opts: { dbPath: string; set: AttackSet; sampl
           if (hits.outcome !== "ok") throw new Error(`${s.id}: the reader's search failed (${hits.outcome})`);
           found = (hits.hits ?? []).some((h) => h.id === write.note?.id);
         }
-        rows.push({ id: s.id, ...sampleVerdict(write, found) });
+        rows.push({ id: s.id, ...sampleVerdict(write, found), ...(s.control ? { control: true } : {}) });
       }
       const counts: Record<Verdict, number> = { held: 0, blocked: 0, warned: 0, reached: 0 };
-      for (const r of rows) counts[r.verdict]++;
+      for (const r of rows) if (!r.control) counts[r.verdict]++;
       return {
         set: opts.set.name,
         title: opts.set.title,
@@ -290,7 +296,8 @@ export async function runAttackSet(opts: { dbPath: string; set: AttackSet; sampl
         version: PACKAGE_VERSION,
         date: new Date().toISOString().slice(0, 10),
         notes,
-        samples: rows.length,
+        samples: rows.filter((r) => !r.control).length,
+        ...(rows.some((r) => r.control) ? { controls: rows.filter((r) => r.control).length } : {}),
         counts,
         rows,
         ...(opts.half ? { half: opts.half } : {}),
@@ -310,7 +317,7 @@ export function renderAttackSet(r: SetReport): string {
     `Source: ${r.source}, licence ${r.licence}.${r.downloaded ? " Downloaded for this run and checked against a pinned SHA-256." : " Shipped with Monomem; no network call."}`,
     "",
   ];
-  for (const x of r.rows) lines.push(`  ${mark[x.verdict]}  ${x.id.padEnd(14)} ${x.why}`);
+  for (const x of r.rows) lines.push(`  ${x.control ? "control" : mark[x.verdict]}  ${x.id.padEnd(14)} ${x.why}`);
   const c = r.counts;
   lines.push("", `Held ${c.held}, blocked otherwise ${c.blocked}, warned ${c.warned}, REACHED ${c.reached} of ${r.samples} (Monomem ${r.version}, ${r.date}).`);
   lines.push("REACHED means a reader's search returned the note with no warning. It does not mean an agent would act on it.");
