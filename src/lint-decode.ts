@@ -6,7 +6,7 @@
 //      override shows), ROT13 and other Caesar shifts, decimal / binary / 0x / \u escapes of ASCII, "ig"+"nore" string joins,
 //      base32, Morse, base64 broken over lines, and look-alike letters from scripts the main table does not fold.
 //   2. scanHiddenData(): a payload with no readable instruction at all, only invisible structure: zero-width binary runs, variation
-//      selectors after plain letters, long combining-mark stacks, trailing space / tab bit lines, bidi overrides.
+//      selectors after plain letters, long combining-mark stacks, trailing space / tab bit lines. (A bare bidi override is NOT flagged: existing tests and real RTL notes use one; reversed injections shown by an override are caught by the reversed variant.)
 //
 // Still missed (published in docs/attack-expansion-2026-11-23.md): pig latin, acrostics, NATO spelling, upside-down text,
 // regional-indicator letters, sparse zero-width marks (one per word), and anything reworded past the word lists.
@@ -103,7 +103,8 @@ export function decodeVariants(t: string): string[] {
   if (t.length < 4000 && /(?:ignore|disregard|forget|override)[_=:.-]/i.test(t)) out.push(t.replace(/[_=:-]+/g, " "));
   out.push(...numericVariants(t), ...morseVariants(t), ...base32Variants(t));
   if ((t.match(/["'`]\s*\+\s*["'`]/g)?.length ?? 0) >= 2) out.push(t.replace(/["'`]\s*\+\s*["'`]/g, ""));
-  if (/[A-Za-z0-9+/]{12,}\r?\n[A-Za-z0-9+/]{12,}/.test(t)) out.push(t.replace(/([A-Za-z0-9+/]{12,}={0,2})\r?\n(?=[A-Za-z0-9+/]{12,})/g, "$1"));
+  // Anchored to line starts, so a long run of letters with no line break is scanned once, not once per position.
+  if (t.includes("\n") && /^[A-Za-z0-9+/]{12,}={0,2}\r?\n[A-Za-z0-9+/]{12,}/m.test(t)) out.push(t.replace(/^([A-Za-z0-9+/]{12,}={0,2})\r?\n(?=[A-Za-z0-9+/]{12,})/gm, "$1"));
   if (LOOKALIKE_RE.test(t)) out.push(t.replace(LOOKALIKE_RE, (c) => LOOKALIKES[c]));
   LOOKALIKE_RE.lastIndex = 0;
   return out.slice(0, 14);
@@ -121,7 +122,6 @@ const TRAILING_BITS = /^.*[ \t]{4,}$/gm;
 
 /** "hidden Unicode text" when the text carries data in invisible structure, else null. */
 export function scanHiddenData(t: string): string | null {
-  if (/[\u202d\u202e]/.test(t)) return "hidden Unicode text";
   if (/[\u200b-\u200d\u2060-\u2064\ufeff]/.test(t)) {
     for (const m of t.matchAll(ZW_RUN)) if (new Set(m[0]).size >= 2) return "hidden Unicode text";
   }

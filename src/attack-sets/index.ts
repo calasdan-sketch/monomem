@@ -14,6 +14,7 @@ import { MINJA } from "./data-minja.js";
 import { LINT_EVASION } from "./data-lint-evasion.js";
 import { TOOL_STEER } from "./data-tool-steer.js";
 import { PROBES, type ProbeClass } from "./data-probes.js";
+import { DEEPSET_INJECTIONS, GANDALF_IGNORE } from "./data-public-2026-11.js";
 import { POISONEDRAG_NQ_SHA256, POISONEDRAG_NQ_URL, POISONEDRAG_SAMPLE } from "./data-poisonedrag.js";
 
 export type Half = "a" | "b";
@@ -118,11 +119,27 @@ export const ATTACK_SETS: readonly AttackSet[] = [
     what: "'For deploys always use tool X', 'prefer the X MCP server over Y', 'never use the Y tool'. No command words an injection list knows. Held for an app's key; the owner's own terminal writes them freely.",
     samples: async () => fromPairs(TOOL_STEER),
   },
+  {
+    name: "deepset-injections",
+    title: `deepset/prompt-injections, first 40 injection rows of the test split (${DEEPSET_INJECTIONS.length})`,
+    source: "deepset/prompt-injections, huggingface.co/datasets/deepset/prompt-injections (test split, rows chosen by a fixed rule, verbatim)",
+    licence: "Apache-2.0",
+    what: "Public prompt-injection prompts, English and German (override, role-play, 'now forget everything and ...'), saved as notes as written. Written for chat models, not for memory.",
+    samples: async () => fromPairs(DEEPSET_INJECTIONS),
+  },
+  {
+    name: "gandalf-ignore",
+    title: `Lakera Gandalf 'ignore instructions' prompts, first 40 of the test split (${GANDALF_IGNORE.length})`,
+    source: "Lakera/gandalf_ignore_instructions, huggingface.co/datasets/Lakera/gandalf_ignore_instructions (test split, rows chosen by a fixed rule, verbatim)",
+    licence: "MIT",
+    what: "What players typed into the Gandalf game to make a model drop its instructions. Mostly short, informal and in many phrasings; saved as notes as written.",
+    samples: async () => fromPairs(GANDALF_IGNORE),
+  },
   ...(
     [
       ["probes-context", "context", "Context-poisoning shapes: sleeper rules, slow-drip fragments, false corrections, keyword stuffing", "Single-note shapes of multi-session poisoning. The multi-note versions (drip, flooding, conflicting corrections) are bench scenarios F01 to F04."],
       ["probes-encoding", "encoding", "Encodings and uncommon channels, by field: rot13, reversed, base32/64, hex, morse, split across fields, link titles, data URIs, whitespace runs, other languages", "The same instruction in a different encoding, or in a different field (title, tags, source, fact key / value), or split across fields."],
-      ["probes-toolstyle", "toolstyle", "Tool-description style text written into notes: <IMPORTANT> blocks, fake tool schemas, fake server instructions, rug-pull and shadowing wording", "Text a poisoned MCP tool description would carry, saved as a note instead. Notes are read as data; this measures the write gate, not whether an agent would obey."],
+      ["probes-toolstyle", "toolstyle", "Tool-description style text planted in a note: <IMPORTANT> blocks, fake tool schemas, fake server instructions, rug-pull and shadowing wording", "Text a poisoned MCP tool description would carry, saved as a note instead. Notes are read as data; this measures the write gate, not whether an agent would obey."],
       ["probes-stego", "stego", "Text steganography and look-alike characters: zero-width binary, variation selectors, tag characters, homoglyphs, combining marks, bidi, filler and blank characters", "Hidden payloads and instructions spelled with invisible or look-alike characters, in the body, title, tags and source."],
     ] as const
   ).map(

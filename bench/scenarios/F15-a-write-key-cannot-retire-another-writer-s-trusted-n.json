@@ -1,0 +1,65 @@
+{
+  "id": "F15",
+  "suite": "poison",
+  "title": "A write key cannot retire another writer's trusted note with a clean-looking replacement alone",
+  "what": "A second writer (not distrusted, not an admin) previews and confirms a replacement of a trusted writer's note with a false but clean-looking value. The preview and confirm are both allowed for any write key today; the check says the trusted note should survive unless an admin agrees. Honest result on this commit: it does not.",
+  "actors": {
+    "mallory": {
+      "scope": "write"
+    },
+    "alice": {
+      "scope": "write"
+    },
+    "boss": {
+      "scope": "admin"
+    }
+  },
+  "needs": [
+    "supersede"
+  ],
+  "steps": [
+    {
+      "op": "write",
+      "as": "alice",
+      "ref": "n",
+      "setup": true,
+      "title": "{{proj}} vault path",
+      "body": "Vault is {{v1}}."
+    },
+    {
+      "op": "supersede_preview",
+      "as": "mallory",
+      "id": "pv",
+      "old": [
+        "n"
+      ],
+      "new_note": {
+        "title": "{{proj}} vault path now",
+        "body": "Vault is {{v2}}."
+      }
+    },
+    {
+      "op": "supersede_confirm",
+      "as": "mallory",
+      "from": "pv",
+      "ref": "new",
+      "id": "cf"
+    },
+    {
+      "op": "search",
+      "as": "alice",
+      "q": "{{proj}} vault",
+      "id": "s"
+    }
+  ],
+  "expect": [
+    {
+      "check": "has",
+      "step": "s",
+      "ref": "n",
+      "desc": "the trusted note is still in an ordinary search after another writer's replacement",
+      "metric": "poison_reach"
+    }
+  ],
+  "known_gap": "GAP-SUPERSEDE-ABUSE"
+}

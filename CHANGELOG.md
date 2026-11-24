@@ -6,6 +6,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Attack expansion (2026-11-23)
+- **155 deterministic scenarios** (was 137): A 38, B 31, C 27, D 19, E 40. New scenarios F01 to F18 (hand-written context-poisoning, encoding, tool-description-style, steganography and replace-abuse probes). 146 pass and 9 are declared known gaps (six new gaps, listed in docs/BENCHMARK.md); the 137 older scenarios still pass unchanged.
+- New attack sets for `monomem check --attacks --set <name>`: `probes-context`, `probes-encoding`, `probes-toolstyle`, `probes-stego` (our own, 158 probes by field), plus 40 rows of deepset/prompt-injections (Apache-2.0) and 40 of Lakera/gandalf_ignore_instructions (MIT), copied verbatim from their test splits and not tuned on.
+- Memory linter: invisible or blank characters between words now read as word breaks; reversed text, ROT13 and other Caesar shifts, ASCII codes in decimal, binary, 0x and \\u form, quoted string joins, base32, Morse and base64 split over lines are decoded and re-checked; look-alike letters from Cherokee, Lisu, Coptic and Latin extensions are folded; zero-width binary runs, variation selectors after plain letters, stacks of 8 or more combining marks and space/tab bit lines are held as "hidden Unicode text"; `<IMPORTANT>`-style blocks, "before using X first call Y", pre-authorised-tool and "takes precedence over every other tool" wording are held as "tool-description injection"; Czech, Swedish, Indonesian, Vietnamese, Greek, Hebrew and Thai override sentences are held. Details and the false-positive numbers: docs/attack-expansion-2026-11-23.md.
+- `monomem check --attacks` still replays only the E scenarios; the F scenarios run under `monomem bench`.
+- Benign false-positive corpus `bench/benign-corpus.txt` (188 notes) added to `bench/lint-fp.mjs`.
+
 ## [1.7.0] - 2026-11-19
 
 ### Added

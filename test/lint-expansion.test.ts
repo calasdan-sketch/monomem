@@ -47,10 +47,10 @@ describe("probes the linter used to miss are held now", () => {
 describe("what must stay stored", () => {
   const BENIGN = [
     "England \u{1F3F4}\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f} fans",
-    "Family: \u{1F468}‍\u{1F469}‍\u{1F467}‍\u{1F466} and the rainbow flag \u{1F3F3}️‍\u{1F308}.",
-    "Keycaps 1️⃣ 2️⃣ and a heart ❤️, text style ☺︎.",
-    "می‌خواهم این گزارش را بخوانم می‌توانیم نیز انجام دهیم",
-    "pre­ven­tion is a soft hyphenated word, and a non‑breaking hyphen too.",
+    "Family: \u{1F468}\u200d\u{1F469}\u200d\u{1F467}\u200d\u{1F466} and the rainbow flag \u{1F3F3}\ufe0f\u200d\u{1F308}.",
+    "Keycaps 1\ufe0f\u20e3 2\ufe0f\u20e3 and a heart ❤\ufe0f, text style ☺\ufe0e.",
+    "می\u200cخواهم این گزارش را بخوانم می\u200cتوانیم نیز انجام دهیم",
+    "pre\u00adven\u00adtion is a soft hyphenated word, and a non‑breaking hyphen too.",
     "Run: echo aGVsbG8gd29ybGQ= | base64 -d, then compare with 68656c6c6f20776f726c64.",
     "Addition 1 2 3 4 5 6 7 8 9 10 11 12 13 14 and the version 2.0.1 build.",
     "Use the string \"a\" + \"b\" and then \"c\" + \"d\" in the example.",

@@ -1,0 +1,65 @@
+{
+  "id": "F18",
+  "suite": "poison",
+  "title": "An agent confirms its own preview with no person involved",
+  "what": "The one-time code is returned to whoever asked for the preview, so an agent can preview and confirm in two calls without showing anything to a person. Documented in docs/replacing-memories.md as a limit (the command line is the strong gate). The check says an agent-only confirmation should not retire a note; honest result: it does.",
+  "actors": {
+    "mallory": {
+      "scope": "write"
+    },
+    "alice": {
+      "scope": "write"
+    },
+    "boss": {
+      "scope": "admin"
+    }
+  },
+  "needs": [
+    "supersede"
+  ],
+  "steps": [
+    {
+      "op": "write",
+      "as": "alice",
+      "ref": "n",
+      "setup": true,
+      "title": "{{proj}} vault path",
+      "body": "Vault is {{v1}}."
+    },
+    {
+      "op": "supersede_preview",
+      "as": "alice",
+      "id": "pv",
+      "old": [
+        "n"
+      ],
+      "new_note": {
+        "title": "{{proj}} vault path now",
+        "body": "Vault is {{v2}}."
+      }
+    },
+    {
+      "op": "supersede_confirm",
+      "as": "alice",
+      "from": "pv",
+      "ref": "new",
+      "id": "cf"
+    },
+    {
+      "op": "search",
+      "as": "alice",
+      "q": "{{proj}} vault",
+      "id": "s"
+    }
+  ],
+  "expect": [
+    {
+      "check": "outcome",
+      "step": "cf",
+      "is": "denied",
+      "desc": "an agent's own confirmation is refused until a person confirms",
+      "metric": "poison_reach"
+    }
+  ],
+  "known_gap": "GAP-SUPERSEDE-ABUSE"
+}
