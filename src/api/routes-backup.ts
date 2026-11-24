@@ -7,7 +7,7 @@ import { audit } from "../security.js";
 import { ImportShape, importWarnings } from "../import-report.js";
 import { readBody, IMPORT_BODY_BYTES } from "../http-common.js";
 import { maybeEmbed } from "../search-service.js";
-import { IMPORT_EDGE_DEFER_THRESHOLD, sendError, sendJson } from "./shared.js";
+import { IMPORT_EDGE_DEFER_THRESHOLD, sendError, sendJson, parseJsonBody } from "./shared.js";
 import type { ApiCtx, ApiReq } from "./context.js";
 
 export async function backupRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
@@ -107,7 +107,7 @@ export async function backupRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
     // per note -- both are restore-fidelity fields the store honors.
     let parsed: { notes?: ImportNote[]; dedupe?: unknown };
     try {
-      const v = JSON.parse(raw || "{}") as unknown;
+      const v = parseJsonBody(raw) as unknown;
       // Both shapes restore: {"notes":[...]} (every release; an attested export adds an `export` header) and a bare [...].
       parsed = Array.isArray(v) ? { notes: v as ImportNote[] } : (v as { notes?: ImportNote[]; dedupe?: unknown });
     } catch {

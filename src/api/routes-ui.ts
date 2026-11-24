@@ -16,7 +16,7 @@ import { execFile, spawn } from "node:child_process";
 import { closeSync, existsSync, openSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { readBody } from "../http-common.js";
-import { sendJson } from "./shared.js";
+import { sendJson, parseJsonBody } from "./shared.js";
 import type { ApiCtx, ApiReq } from "./context.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { DATA_DIR, DB_PATH, PACKAGE_VERSION } from "../config.js";
@@ -110,7 +110,7 @@ export function uiAssetRoute(req: IncomingMessage, res: ServerResponse, path: st
 const APP_ID = /^[a-z-]{1,40}$/;
 async function jsonBody(req: IncomingMessage): Promise<Record<string, unknown> | null> {
   try {
-    const v: unknown = JSON.parse((await readBody(req)) || "{}");
+    const v: unknown = parseJsonBody(await readBody(req));
     return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
   } catch {
     return null;

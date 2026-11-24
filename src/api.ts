@@ -23,7 +23,7 @@ import { type ServerNamespaceOpts, type NsCtx, NS_DISABLED, resolveRequestNamesp
 import { redeemLogin } from "./login-code.js";
 import { randomBytes } from "node:crypto";
 import { ORIGIN_DECLARED, ReadTaint, unconfirmedIdsIn } from "./taint.js";
-import { SIGN_PAGES, signAsset, DASHBOARD_SESSION_TTL_MS, requiredScope, isReadRoute, pendingReads, sendJson, flagParam } from "./api/shared.js";
+import { SIGN_PAGES, signAsset, DASHBOARD_SESSION_TTL_MS, requiredScope, isReadRoute, pendingReads, sendJson, flagParam, parseJsonBody } from "./api/shared.js";
 import { apiContext, type ApiReq } from "./api/context.js";
 import { accountRoutes } from "./api/routes-account.js";
 import { noteRoutes } from "./api/routes-notes.js";
@@ -156,7 +156,7 @@ export function createApiServer(
         if (anonLimited()) return;
         let code: unknown;
         try {
-          code = (JSON.parse((await readBody(req)) || "{}") as { code?: unknown }).code;
+          code = (parseJsonBody(await readBody(req)) as { code?: unknown }).code;
         } catch {
           sendJson(res, 400, { error: "invalid JSON body" });
           return;

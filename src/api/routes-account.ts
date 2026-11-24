@@ -5,7 +5,7 @@
 import { sha256Hex } from "../config.js";
 import { readBody, healthBody } from "../http-common.js";
 import { TokenAdminError, addApp, removeApp, listApps, describeAccess, connectionSnippet } from "../tokens-admin.js";
-import { lastUsed, sendJson } from "./shared.js";
+import { lastUsed, sendJson, parseJsonBody } from "./shared.js";
 import type { ApiCtx, ApiReq } from "./context.js";
 
 export async function accountRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
@@ -42,7 +42,7 @@ export async function accountRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
       if (req.method === "POST" && path === "/tokens") {
         let b: { label?: unknown; scope?: unknown; namespace?: unknown; max?: unknown; max_sensitivity?: unknown; admin?: unknown; no_limit?: unknown };
         try {
-          b = JSON.parse((await readBody(req)) || "{}");
+          b = parseJsonBody(await readBody(req));
         } catch {
           sendJson(res, 400, { error: "invalid JSON body" });
           return true;
