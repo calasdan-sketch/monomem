@@ -111,6 +111,12 @@ All environment variables are optional. This table lists **every** `MONOMEM_*` v
 | `MONOMEM_LLM_URL` | unset (off) | Optional local model for session summaries: base URL of an OpenAI-compatible server (Ollama `http://127.0.0.1:11434`, LM Studio, llama.cpp). One call per session at session-end; on any failure the automatic summary stays. Needs `MONOMEM_LLM_MODEL`. Only loopback hosts are accepted |
 | `MONOMEM_LLM_MODEL` | unset | The model name sent to `MONOMEM_LLM_URL` (e.g. `qwen2.5:7b`) |
 | `MONOMEM_LLM_TIMEOUT_MS` | `30000` | Upper bound on the one summary call (1000 - 300000) |
+| `MONOMEM_LINT_MODEL` | unset | `on` = ask a local model for a best-effort second opinion on notes (see docs/memory-linter.md). Needs `MONOMEM_LINT_MODEL_URL` and `MONOMEM_LINT_MODEL_NAME`; it can only add a hold, never clear one |
+| `MONOMEM_LINT_MODEL_URL` | unset | The model server's address, OpenAI-compatible (e.g. `http://localhost:11434`) |
+| `MONOMEM_LINT_MODEL_NAME` | unset | The model name sent to that server |
+| `MONOMEM_LINT_MODEL_TIMEOUT_MS` | `60000` | Upper bound on one model call (500 - 300000); a timeout means no verdict |
+| `MONOMEM_LINT_MODEL_DELAY_MS` | `500` | How long after an agent's write the background check waits before it asks the model |
+| `MONOMEM_LINT_MODEL_ALLOW_REMOTE` | unset | `1` = allow a URL that is not this machine. Note text then leaves the PC; leave unset unless you mean it |
 | `MONOMEM_LLM_ALLOW_REMOTE` | unset | `1` = allow an `MONOMEM_LLM_URL` that is not this machine. Session text then leaves the PC; leave unset unless you mean it |
 | `MONOMEM_BODY_INDEX` | on | `off` = never build the in-memory index that lets keyword search find words in encrypted note bodies: search then covers titles and tags only on an encrypted store, and no decrypted words are held in RAM. Read by each process when it opens the database. The hooks never build it either way. See [encryption-retention.md](./encryption-retention.md) |
 | `MONOMEM_RECALL_TIMEOUT_MS` | `5000` | The most time the session-start hook may take before it gives up and adds nothing. It can only be raised (at most 60000); a lower value is ignored. The test suite raises it so a loaded CI runner does not trip it; you do not need it |

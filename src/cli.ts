@@ -24,7 +24,7 @@ const COMMANDS = [
   "encrypt", "meter", "receipts", "why", "never-show", "supersede", "history", "pin", "unpin", "rollback", "bench", "drill", "health", "audit", "verify-receipt",
   "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet", "confirm", "review", "taint", "config", "service", "stale", "project-rules", "update", "stop", "commit-trail", "backfill-marks",
   "help", "--help", "-h", "--version", "-v", "version",
-  "check", "activity", "tidy", "keys", "settings", "replace", "tasks", "oauth", "drift", "audit-memory", "prune", "handoff", "tools", "rescan",
+  "check", "activity", "tidy", "keys", "settings", "replace", "tasks", "oauth", "drift", "audit-memory", "prune", "handoff", "tools", "rescan", "lint-model",
 ];
 
 /** Plain edit distance; the command list is tiny, so the simple version is fine. */
@@ -2174,6 +2174,7 @@ async function main(): Promise<void> {
     case "project-rules":
       await projectRulesCmd(process.argv.slice(3));
       break;
+    case "lint-model": await (await import("./cli/lint-model-cmd.js")).lintModelCmd(process.argv.slice(3)); break;
     case "drift": case "audit-memory": case "prune": case "handoff": case "tools": case "rescan":
       await (await import("./cli/round3.js")).round3Cmd(cmd, process.argv.slice(3));
       break;

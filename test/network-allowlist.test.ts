@@ -8,6 +8,7 @@ import { join, relative } from "node:path";
 const ALLOWED = new Map([
   ["src/embeddings.ts", 1],
   ["src/llm.ts", 1],
+  ["src/lint-model.ts", 1], // optional local-model second opinion on a note (loopback only unless MONOMEM_LINT_MODEL_ALLOW_REMOTE=1)
   ["src/hook.ts", 1],
   ["src/runner-sign.ts", 1],
   ["src/ui/js-core.ts", 2], // browser-side fetches to the server that served the page (the API calls, and the one-time sign-in code)

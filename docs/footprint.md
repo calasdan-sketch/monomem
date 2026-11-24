@@ -116,6 +116,7 @@ leaves it running. On Windows the task is found by its `monomem-task.xml` in the
 | Call | Off until | Goes to |
 |---|---|---|
 | Embeddings (`src/embeddings.ts`) | `MONOMEM_EMBEDDINGS=on` or `auto` | `MONOMEM_EMBED_URL` (default `localhost:11434`); a non-local host prints a warning once |
+| Second opinion on a note from a local model (`src/lint-model.ts`) | `MONOMEM_LINT_MODEL=on` with `MONOMEM_LINT_MODEL_URL` and `MONOMEM_LINT_MODEL_NAME` | a loopback address only, unless `MONOMEM_LINT_MODEL_ALLOW_REMOTE=1`; redirects refused; never in the write itself |
 | Session summary by a local model (`src/llm.ts`) | `MONOMEM_LLM_URL` and `MONOMEM_LLM_MODEL` | a loopback address only, unless `MONOMEM_LLM_ALLOW_REMOTE=1`; redirects refused |
 | Capture hook posting to a server (`src/hook.ts`) | `MONOMEM_HOOK_URL` and `MONOMEM_HOOK_TOKEN` | your own Monomem server |
 | Runner `--post` (`src/runner-sign.ts`) | `MONOMEM_URL` and `MONOMEM_TOKEN` | your own Monomem server |

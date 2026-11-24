@@ -7,6 +7,7 @@ import { RECEIPT_CHECK } from "../store/write-receipt.js";
 import { checkFilesInput } from "../code-anchor.js";
 import { readBody } from "../http-common.js";
 import { maybeEmbed } from "../search-service.js";
+import { scheduleModelCheck } from "../lint-model-run.js";
 import { annotateStaleness } from "../staleness.js";
 import { supersedePreview, supersedeConfirm, supersedeUndo, noteHistory, restoreVersion, purgeNoteHistory, type Caller } from "../supersede.js";
 import { withFacts, factFeedback } from "../facts.js";
@@ -86,6 +87,7 @@ export async function noteRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
       }
       const note = once.note;
       await maybeEmbed(store, note);
+      scheduleModelCheck(store, note);
       const sim = store.similarNote(note.id);
       sendJson(res, 201, { note, ...(receipt ? { receipt, receipt_check: RECEIPT_CHECK } : {}), ...(sim ? { similar_note: { id: sim.id, title: sim.title, hint: `looks similar to #${sim.id} - consider updating it (PUT /notes/${sim.id}) if this is the same thing` } } : {}), ...(warnings.length ? { warnings } : {}), ...(facts === undefined ? {} : factFeedback(store, note)) });
     } catch (e) {
@@ -204,6 +206,7 @@ export async function noteRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
       // r2-improvement #3, as MCP state_write: replacing another writer's text without if_rev is said out loud.
       const overwrite = !unchanged && ifRev === undefined ? overwriteNotice(check.target, note as NoteRecord, currentWriter()) : null;
       if (!unchanged) await maybeEmbed(store, note);
+      if (!unchanged) scheduleModelCheck(store, note);
       sendJson(res, 200, { note, ...(unchanged ? { unchanged: true } : {}), ...(overwrite ?? {}), ...(receipt ? { receipt, receipt_check: RECEIPT_CHECK } : {}), ...(warnings.length ? { warnings } : {}), ...(putFacts === undefined ? {} : factFeedback(store, note)) });
     } catch (e) {
       const receipt = store.refusedWriteReceipt(e, id);

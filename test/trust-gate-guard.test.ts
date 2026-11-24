@@ -76,6 +76,7 @@ const EXPECTED_SITES: Record<string, string[]> = {
   "why.ts": ["local shell command (why): the operator owns the database file"],
   "review-step.ts": ["local CLI, the operator owns the database file"],
   "prune.ts": ["the owner's own command"], // applyPrune re-reads each candidate to re-check its protections before archiving; nothing is returned
+  "lint-model-run.ts": ["the owner at a terminal auditing their own store; nothing here goes to an agent", "the owner's own command", "Monomem's own background check", "same"], // check --model and the background second opinion: read a note to classify it; the model's words never go to an agent
   "rescan.ts": ["the owner at a terminal checking their own store; nothing is returned to an agent"], // check --rescan reads every note to lint it and flags the ones that match; prints titles cut short and labels only
   "consolidate.ts": [
     "admin consolidation by ids: mixed trusted/distrusted sources are refused below",
