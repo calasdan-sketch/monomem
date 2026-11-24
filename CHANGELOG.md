@@ -6,6 +6,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Claim-style write rules (2026-11-24)
+- New write-time rules (`src/lint-claims.ts`) for plain-English poisoning claims, for writers that are not the owner: payment redirect, trust grant, approval bypass, concealment from the user, override of the user's instructions, sending notes or secrets to an outside address, label-style holds in tags, titles, sources and fact values, and a warning for "disable the memory linter". Field-aware and linear-time. Measured on held-out items split by sha256 (`bench/fixpass-split.json`): 18 of 133 attacks that reached before are now caught (adaptive 14 of 47, plain-English 2 of 4, probes 1 of 11, PyRIT 1 of 38, garak 0 of 33). Benign cost: 0 new holds in LongMemEval, LoCoMo, dev notes, the benign corpus and 308 new notes; 1 new warning; 3 repo-doc paragraphs that quote attack text are now held. Three families were dropped for not generalising (export before search, one tool for all operations, pipe to shell from an untrusted address). Benchmark: 166 scenarios, 150 pass, 16 known gaps (unchanged; F19 to F23 and F30 to F34 still fail because they expect every sample held).
+
 ### Security
 - **Replacing a note now needs a person.** Before this, the replace preview handed its one-time code back to the same agent and only
   the tool text asked the agent to show the warning to a person and wait, so an agent could preview and then confirm its own

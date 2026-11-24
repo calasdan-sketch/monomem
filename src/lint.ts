@@ -41,6 +41,7 @@ import { configuredTokenValues, sha256Hex } from "./config.js";
 import { scanOutboundDirective, scanOutboundInjection } from "./lint-outbound.js";
 import { scanEncodedBlob, scanMultilingual, scanStandingInstruction } from "./lint-evasion.js";
 import { scanForToolSteering, steerChecked } from "./lint-tool-steer.js";
+import { scanClaims } from "./lint-claims.js";
 import { evasionVariants, scanExternalEmbeds, scanHiddenComments, scanMemoryPoison, scanMoreLanguages } from "./lint-evasion2.js";
 import { decodeVariants, scanHiddenData } from "./lint-decode.js";
 import { scanToolPoisoning, scanToolWarning } from "./lint-toolpoison.js";
@@ -495,6 +496,8 @@ export function lintContent(input: {
       break;
     }
   }
+  // Claim-style poisoning (lint-claims.ts): same writers as above. A hold is an injection finding; a warn is a directive finding (stored with a label).
+  for (const h of scanClaims(input)) out.push({ category: h.action === "hold" ? "injection" : "directive", label: h.label, field: h.field });
   // An instruction split across fields ("ignore previous" in the title, "instructions" in the body) reads as one to an agent
   // that is shown title, body and tags together. Scanned joined, only when no single field already held it.
   if (!out.some((f) => f.category === "injection") && [input.title, input.body, input.tags?.length ? "t" : "", input.source].filter(Boolean).length >= 2) {
