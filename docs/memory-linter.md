@@ -309,3 +309,45 @@ Responses:
 { "imported": 10, "quarantined": [{ "title": "…", "quarantineId": 4 }],
   "rejected": [{ "title": "…", "error": "refusing to store what looks like a JWT; …" }] }
 ```
+
+## Optional second opinion from a local model (off by default)
+
+The pattern linter above cannot catch a reworded or novel instruction attack. You can add a second opinion
+from a model that runs on your own computer. It is best-effort: the model can be wrong, can be fooled, and
+is **not** a guarantee. It never replaces the pattern linter.
+
+Turn it on (all three are needed; nothing is sent anywhere until you do):
+
+```
+MONOMEM_LINT_MODEL=on
+MONOMEM_LINT_MODEL_URL=http://localhost:11434      # an OpenAI-compatible server on this PC, e.g. Ollama
+MONOMEM_LINT_MODEL_NAME=<model name>               # e.g. gpt-oss:20b
+MONOMEM_LINT_MODEL_TIMEOUT_MS=60000                # optional (500 to 300000)
+```
+
+A server that is not this machine is refused unless `MONOMEM_LINT_MODEL_ALLOW_REMOTE=1`, and redirects are refused.
+
+Rules it keeps:
+
+- **Stricter only.** The model can add a hold. It can never clear, approve, un-hold or lower anything the pattern
+  linter or a person decided. If it errors, times out, is unreachable or answers anything but the exact small JSON
+  it was asked for, Monomem behaves as if it were off. It never blocks a write.
+- **Never in the write itself.** Writes stay synchronous. The note text goes to the model between random
+  markers with an instruction to treat it as data, cut to 4,000 characters; the reply must be exactly
+  `{"verdict":"instruction_like"|"benign","reason":"..."}`.
+- **Held means flagged**, as with `check --rescan`: the note stays stored and unedited, leaves session start, and
+  `monomem review keep <id>` puts it back. The model's own words are only shown to you at the terminal, never saved
+  where an agent could read them.
+
+Two ways it is used:
+
+1. `monomem check --model [--ns <name>] [--limit N] [--json]` asks the model about notes already stored and lists
+   the ones it thinks are instruction-like with a one-line reason. Nothing changes. Add `--hold` to hold them;
+   you see the summary first and must type `yes` in a terminal (no `--yes`). Pinned or person-confirmed notes are only reported.
+2. A background check after an agent's write (MCP or REST; not the local `monomem` CLI, not imports). A moment
+   after the write, one request goes to the model, and if it says instruction-like the note is flagged.
+   **There is a window**: from the write until the model answers (usually seconds, longer if the model is busy or
+   still loading, and never if it fails or the queue of 50 is full) the note is only as protected as it is today:
+   it carries the usual outside/unconfirmed labelling and nothing more. An attack the model misses is not held at all.
+
+Measured results on one machine and the attacks it was tested on are in `bench/lint-model-eval/` (run it yourself).

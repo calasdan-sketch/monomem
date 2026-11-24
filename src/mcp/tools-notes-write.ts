@@ -12,6 +12,7 @@ import { withFacts, COMMON_FACT_KEYS } from "../facts.js";
 import { scopeAllows, printableWords } from "../security.js";
 import { checkFilesInput } from "../code-anchor.js";
 import { maybeEmbed } from "../search-service.js";
+import { scheduleModelCheck } from "../lint-model-run.js";
 import { canRead } from "../namespace.js";
 import { RECEIPT_CHECK } from "../store/write-receipt.js";
 import { checkEvidenceInput } from "../store/evidence.js";
@@ -181,6 +182,7 @@ export function registerNotesWriteTools(c: McpCtx): void {
           // r2-improvement #3: replacing another writer's text without if_rev is said out loud (that writer sees it in catch_up).
           const overwrite = !unchanged && if_rev === undefined ? overwriteNotice(check.target, updated, currentWriter()) : null;
           if (!unchanged) await maybeEmbed(store, updated);
+          if (!unchanged) scheduleModelCheck(store, updated);
           // A partial update echoes back the merged note, which can include a
           // pre-existing body planted by someone else -- wrap it as untrusted.
           return untrustedResult(withConflicts(withWarnings({ note: noBody(updated), ...(unchanged ? { unchanged: true } : {}), ...(overwrite ?? {}), ...receipt }, warnings), store, updated, facts));
@@ -207,6 +209,7 @@ export function registerNotesWriteTools(c: McpCtx): void {
         if (once.deduplicated) return untrustedResult({ note: noBody(once.note), deduplicated: true });
         const created = once.note;
         await maybeEmbed(store, created);
+        scheduleModelCheck(store, created);
         const sim = store.similarNote(created.id);
         return untrustedResult(withConflicts(withWarnings({ note: noBody(created), ...receipt, ...(titleGenerated ? { title_generated: `No title was given, so it was made from the body's first line. To change it: memory_save id=${created.id} title="..."` } : {}), ...(sim ? { similar_note: { id: sim.id, title: sim.title, hint: `looks similar to #${sim.id} - consider updating it (memory_save with id=${sim.id}) if this is the same thing` } } : {}) }, warnings), store, created, facts));
       } catch (e) {
