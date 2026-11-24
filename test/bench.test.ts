@@ -382,7 +382,7 @@ describe("against Monomem", () => {
     assert.equal(gaps["GAP-OBSOLETE-UNREPLACED"].status, "fixed");
     assert.equal(gaps["GAP-OBSOLETE-UNREPLACED"].fixed_in, "1.5.0");
     // The 2026-11-23 attack expansion (F scenarios) declares its own open gaps; none of the older ones is open.
-    const OPEN = ["GAP-PROBE-CONTEXT", "GAP-PROBE-ENCODING", "GAP-PROBE-FLOOD", "GAP-PROBE-STEGO", "GAP-PROBE-TOOLSTYLE"];
+    const OPEN = ["GAP-PROBE-CONTEXT", "GAP-PROBE-ENCODING", "GAP-PROBE-FLOOD", "GAP-PROBE-GARAK-PYRIT", "GAP-PROBE-STEGO", "GAP-PROBE-TOOLSTYLE"];
     assert.deepEqual(first.known_gaps.map((g) => g.id).sort(), OPEN);
     assert.equal(first.summary.known_gap, first.scenarios.filter((x) => x.id.startsWith("F") && x.known_gap).length);
     assert.deepEqual(first.scenarios.filter((s) => s.known_gap !== undefined && !s.id.startsWith("F")).map((s) => s.id), []);

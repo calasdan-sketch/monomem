@@ -8,6 +8,8 @@ Monomem's `check --attacks` and benchmark use test cases adapted from these publ
 - PoisonedRAG (retrieval-poisoning patterns)
 - deepset/prompt-injections (40 prompts of its test split, copied verbatim; Apache-2.0; huggingface.co/datasets/deepset/prompt-injections)
 - Lakera/gandalf_ignore_instructions (40 prompts of its test split, copied verbatim; MIT; huggingface.co/datasets/Lakera/gandalf_ignore_instructions)
+- garak 0.17.1 by NVIDIA (75 probe prompts, selected by a fixed rule; Apache-2.0; github.com/NVIDIA/garak)
+- PyRIT 1.2.1 by Microsoft (converter output on our own instructions, 75 samples; MIT; github.com/microsoft/PyRIT)
 - Agent Memory hygiene demo by elizabethfuentes12 (MIT-0), basis for scenarios E15/E16
 
 Monomem itself is MIT licensed (see LICENSE).
