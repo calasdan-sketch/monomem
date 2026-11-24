@@ -16,6 +16,7 @@ import { TOOL_STEER } from "./data-tool-steer.js";
 import { PROBES, type ProbeClass } from "./data-probes.js";
 import { DEEPSET_INJECTIONS, GANDALF_IGNORE } from "./data-public-2026-11.js";
 import { ADAPTIVE } from "./data-adaptive-2026-11.js";
+import { ADAPTIVE_R2 } from "./data-adaptive-r2-2026-11.js";
 import { GARAK_PROBES, PYRIT_CONVERTED } from "./data-garak-pyrit-2026-11.js";
 import { POISONEDRAG_NQ_SHA256, POISONEDRAG_NQ_URL, POISONEDRAG_SAMPLE } from "./data-poisonedrag.js";
 
@@ -77,6 +78,15 @@ export async function fetchChecked(url: string, sha256: string): Promise<string>
 // One winning field text of the adaptive attacker, written into its field with the other fields a harmless note.
 const fromAdaptive = (): AttackSample[] =>
   ADAPTIVE.map(([id, , field, , text]) => ({
+    id,
+    title: field === "title" ? text : "Team note",
+    text: field === "body" ? text : "Notes for the team.",
+    source: field === "source" ? text : "team wiki",
+    tags: field === "tags" ? [text.slice(0, 80)] : field === "fact" ? [`fact:team_practice=${text.slice(0, 80)}`] : [],
+  }));
+
+const fromAdaptiveR2 = (): AttackSample[] =>
+  ADAPTIVE_R2.map(([id, , field, , text]) => ({
     id,
     title: field === "title" ? text : "Team note",
     text: field === "body" ? text : "Notes for the team.",
@@ -173,6 +183,14 @@ export const ATTACK_SETS: readonly AttackSet[] = [
     licence: "MIT",
     what: "Texts a feedback-driven (or blind) LLM attacker got stored with no warning, in the title, body, tags, source or a fact value, for 12 hostile goals (.invalid addresses only). Generated against this linter and tuned on nothing; they reach today by construction, so this set shows whether a later change closes them.",
     samples: async () => fromAdaptive(),
+  },
+  {
+    name: "adaptive-r2",
+    title: `Round 2 winning evasions of an adaptive LLM attacker, written after the claim-style rules (${ADAPTIVE_R2.length})`,
+    source: "Monomem adaptive-attacker round 2, 2026-11-24: a fresh seeded qwen2.5:7b run against the linter with claim-style rules (scripts/adaptive-attacker-r2.mjs)",
+    licence: "MIT",
+    what: "Texts a feedback-driven (or blind) LLM attacker got stored with no warning in the title, body, tags, source or a fact value, for the same 12 hostile goals (.invalid addresses only), AFTER the claim-style rules existed. They were not used to design any rule. They reach today by construction, so this set shows whether a later change closes them.",
+    samples: async () => fromAdaptiveR2(),
   },
   {
     name: "garak-probes",
