@@ -96,7 +96,7 @@ also checked each tuning candidate, so it is a validation half and not an untouc
 have not found what moved the 0.3. These are retrieval numbers, not the answer accuracy memory vendors usually publish, and they are not the
 highest published either: as of 2026-11-16 Vestige's README reports 97.45 % and 86.60 % on the same 470 questions (all 470, so not like-for-like with half b) (its own
 numbers, not re-run by us). LoCoMo figures are not comparable between the two projects, because Vestige reports its 1,536-question
-CORE set and Monomem all 1,982 questions. Every number, hybrid search, and where it is worse: [docs/BENCHMARK.md](./docs/BENCHMARK.md#retrieval-longmemeval-s-and-locomo).
+CORE set and Monomem all 1,982 questions. Every number, hybrid search, and where it is worse: [docs/BENCHMARK.md](./docs/BENCHMARK.md#retrieval-longmemeval-s-and-locomo). **Re-measured 2026-11-23** (one PC, local `nomic-embed-text`): keyword search on all 470 LongMemEval-S questions finds a right conversation in the top 5 for 97.4 % and every right one for 86.0 %. Hybrid (keyword and semantic scores blended 50/50) was run on the first 150 questions only: 98.7 % in the top 5 against 96.0 % for keyword on the same 150. Semantic search alone is worse than keyword on both datasets. Every mode at k = 1, 3, 5, 10 and 20, including where hybrid or semantic loses, is in [docs/BENCHMARK.md](./docs/BENCHMARK.md).
 
 ## Known limits
 
