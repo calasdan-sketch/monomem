@@ -42,6 +42,10 @@ export function percentile(xs: number[], p: number): number {
 }
 
 export interface QuestionScore {
+  /** Any-hit recall at the extra cut-offs (the report shows k = 1, 3, 5, 10, 20, not only 5). */
+  r1: number;
+  r3: number;
+  r20: number;
   r5: number;
   /** Strict: every gold id in the top 5 (agentmemory's "recall-all@5"). */
   rAll5: number;
@@ -53,6 +57,9 @@ export interface QuestionScore {
 
 export function scoreQuestion(ranked: string[], gold: Set<string>): QuestionScore {
   return {
+    r1: recallAny(ranked, gold, 1),
+    r3: recallAny(ranked, gold, 3),
+    r20: recallAny(ranked, gold, 20),
     r5: recallAny(ranked, gold, 5),
     rAll5: recallAll(ranked, gold, 5),
     r10: recallAny(ranked, gold, 10),
@@ -75,7 +82,7 @@ export function aggregate(scores: Array<{ type: string; score: QuestionScore }>)
   const out: Record<string, MetricRow> = {};
   for (const [g, xs] of groups) {
     const mean = (f: keyof QuestionScore): number => xs.reduce((a, x) => a + x[f], 0) / xs.length;
-    out[g] = { n: xs.length, r5: mean("r5"), rAll5: mean("rAll5"), r10: mean("r10"), rAll10: mean("rAll10"), ndcg10: mean("ndcg10"), mrr: mean("mrr") };
+    out[g] = { n: xs.length, r1: mean("r1"), r3: mean("r3"), r20: mean("r20"), r5: mean("r5"), rAll5: mean("rAll5"), r10: mean("r10"), rAll10: mean("rAll10"), ndcg10: mean("ndcg10"), mrr: mean("mrr") };
   }
   return out;
 }

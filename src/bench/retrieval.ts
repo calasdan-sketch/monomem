@@ -14,7 +14,8 @@ import { DATA_DIR, DB_PATH } from "../config.js";
 import { Store } from "../store.js";
 import { ensureKey } from "../crypto.js";
 import { LIMITS } from "../security.js";
-import { embed, embeddingsEnabled } from "../embeddings.js";
+import { embed, embeddingsConfig, embeddingsEnabled } from "../embeddings.js";
+import { renderRecallAtK } from "./retrieval-table.js";
 import { maybeEmbed, runRelevantSearch, runSearch } from "../search-service.js";
 import { PASSAGE_SETTING, syncPassages } from "../store/passages.js";
 import { aggregate, dedupe, percentile, scoreQuestion, type MetricRow, type QuestionScore } from "./retrieval-metrics.js";
@@ -210,7 +211,11 @@ export interface RetrievalReport {
   indexMs: { total: number; p50PerHaystack: number };
   keyword: ModeResult;
   relevant: ModeResult;
+  /** Embedding cosine only (no keyword part); present with --mode hybrid when an embedder answers. */
+  semantic?: ModeResult;
   hybrid: ModeResult | { skipped: string };
+  /** Embedding model the semantic and hybrid rows used. */
+  embedModel?: string;
   node: string;
   date: string;
 }
@@ -240,6 +245,8 @@ export async function runRetrieval(o: RetrievalOptions): Promise<RetrievalReport
 
   const kw: Array<{ type: string; score: QuestionScore }> = [];
   const hy: typeof kw = [];
+  const sem: typeof kw = [];
+  const semLat: number[] = [];
   const rel: typeof kw = [];
   const relLat: number[] = [];
   const kwLat: number[] = [];
@@ -296,6 +303,10 @@ export async function runRetrieval(o: RetrievalOptions): Promise<RetrievalReport
           const res = await runSearch(store, q.query, { mode: "hybrid", limit: TOP, asOf });
           hyLat.push(performance.now() - t);
           hy.push({ type: q.type, score: scoreQuestion(units(res.map((n) => n.id)), q.gold) });
+          t = performance.now();
+          const semRes = await runSearch(store, q.query, { mode: "semantic", limit: TOP, asOf });
+          semLat.push(performance.now() - t);
+          sem.push({ type: q.type, score: scoreQuestion(units(semRes.map((n) => n.id)), q.gold) });
         }
       }
     } finally {
@@ -318,6 +329,7 @@ export async function runRetrieval(o: RetrievalOptions): Promise<RetrievalReport
     indexMs: { total: indexTimes.reduce((a, b) => a + b, 0), p50PerHaystack: percentile(indexTimes, 50) },
     keyword: { metrics: aggregate(kw), latencyMs: lat(kwLat) },
     relevant: { metrics: aggregate(rel), latencyMs: lat(relLat) },
+    ...(useHybrid ? { semantic: { metrics: aggregate(sem), latencyMs: lat(semLat) }, embedModel: embeddingsConfig().model } : {}),
     hybrid: useHybrid ? { metrics: aggregate(hy), latencyMs: lat(hyLat) } : { skipped: hybridSkip || "not requested (--mode hybrid)" },
     node: process.version,
     date: new Date().toISOString(),
@@ -343,8 +355,10 @@ export function renderRetrieval(r: RetrievalReport): string {
   };
   table("keyword (runSearch mode=keyword / state_search: BM25, all-terms first, then any-keyword BM25 x keyword coverage)", r.keyword);
   table("relevant (runRelevantSearch / state_relevant: stop-words dropped, any keyword matches, BM25 x keyword coverage)", r.relevant);
+  if (r.semantic) table(`semantic (runSearch mode=semantic, embedding cosine only, model ${r.embedModel ?? "?"})`, r.semantic);
   if ("skipped" in r.hybrid) lines.push("", `hybrid: skipped, ${r.hybrid.skipped}`);
   else table("hybrid (runSearch mode=hybrid, BM25 + embeddings, 0.5/0.5 score blend)", r.hybrid);
+  lines.push("", renderRecallAtK(r));
   return lines.join("\n");
 }
 
