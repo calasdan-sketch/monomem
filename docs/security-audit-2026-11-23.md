@@ -157,4 +157,6 @@ Target: `dist/src/start.js`, REST and MCP-HTTP on random loopback ports, tokens:
 ## Test counts
 Before (`hardening/human-confirm-attacks` at `dfde37d`): 4,280 tests, 4,269 pass, 0 fail, 11 skipped.
 After the two fixes, first run: 4,306 tests, 4,294 pass, 1 fail (the configuration-table check, fixed by `6dfd766`), 11 skipped.
-After all commits: see the final line of this section, filled in from `D:\security-lab\out\final-test.txt`.
+After all commits (final full run): 4,306 tests, 4,295 pass, 0 fail, 11 skipped (26 new tests: 23 null-body, 3 pre-auth). One intermediate run failed the vocabulary check on the words "bearer token" in this very report; the wording was changed and the full suite re-run clean.
+
+Cisco `mcp-scanner` install note: `pip install cisco-ai-mcp-scanner` into `D:\security-lab\venv-cisco` pulled in a very large dependency set (litellm, huggingface-hub, tokenizers, tree-sitter grammars) and had not finished when the audit ended, so it was not run. Its local YARA analyzer is the only part that would have been in scope. Treat it as not run.
