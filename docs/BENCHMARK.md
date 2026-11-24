@@ -251,17 +251,94 @@ monomem bench --locomo      [--data file] [--limit N] [--mode keyword|hybrid] [-
   `evidence` dialog ids; `--granularity session` writes one note per session and scores sessions.
 - **Questions.** LongMemEval's 30 abstention questions (`_abs`) have no gold session and are left out: 470 of
   500 are scored. LoCoMo questions with no usable evidence id are left out: 1,982 of 1,986.
-- **Three searches are scored.** `keyword` is `runSearch(mode: "keyword")`, the path behind `memory_search` (formerly `state_search`) and
+- **Up to four searches are scored.** `keyword` is `runSearch(mode: "keyword")`, the path behind `memory_search` (formerly `state_search`) and
   `GET /search`: FTS5/BM25 with every word first, then (since OneMemory 2.0.0, before the rename) notes matching some of the words, always ranked
   below full matches. `relevant` is `runRelevantSearch` (`memory_search` with `mode: "relevant"`, the 1.5 `state_relevant` tool, and `POST /relevant`): stop words
   dropped, any keyword qualifies, one BM25 OR query scaled by the share of keywords each note contains (before 2026-11-04:
-  per-keyword BM25 rankings fused with RRF; the keyword fallback used the same). `--mode hybrid` also scores
+  per-keyword BM25 rankings fused with RRF; the keyword fallback used the same). `--mode hybrid` also scores `runSearch(mode: "semantic")` (embedding cosine only) and
   `runSearch(mode: "hybrid")` (BM25 + embeddings; since 2026-11-04 a 0.5 / 0.5 blend of min-max-scaled scores, before
   that RRF) when an embedding server answers; otherwise it is reported as skipped.
 - **Metrics.** `R@5`, `R@10`: any gold session (or turn) in the top k. `Rall@5`, `Rall@10`: every gold one in the top 5 / 10
   (strict; `R@k` is the generous any-hit variant). In `--json`: `rAll5`, `rAll10`.
   `nDCG@10` with binary relevance. `MRR` over the top 50. Search latency p50/p95 per query; indexing time per
   haystack (single process, SQLite in a temp folder).
+
+### What retrieval does Monomem use?
+
+- **Default: keyword.** `memory_search` uses SQLite FTS5 (BM25 ranking, title weighted over body). No model, no network, nothing to set up.
+  It finds words, not meaning: a query with no word in common with the note will not find it.
+- **Optional: semantic and hybrid.** With `MONOMEM_EMBEDDINGS=on` (or `auto`) and an OpenAI-compatible embedding server you run yourself
+  (default `http://localhost:11434/v1/embeddings`, model `nomic-embed-text`; see [search.md](./search.md)), `mode: "semantic"` ranks by cosine
+  similarity of the embeddings alone and `mode: "hybrid"` fuses both. Hybrid is the default mode when embeddings are on. If the embedding
+  server is down, every mode falls back to keyword results.
+- **How hybrid fuses.** Each side's scores are min-max scaled to 0..1 within the search and blended 0.5 keyword / 0.5 semantic; a note found
+  by only one side gets 0 from the other (`blendHybrid` in `src/search-service.ts`; it replaced equal-weight RRF on 2026-11-04).
+  `docs/search.md` still says hybrid uses Reciprocal Rank Fusion; that is out of date.
+- **There is no reranker and no LLM in the retrieval path.** `relevant` is a second keyword mode (stop words dropped, any keyword matches).
+- **What the two benchmarks measure.** `monomem bench` (above) is a behaviour benchmark: keyword search on made-up unique words, stale-hit
+  rate at 1, 5 and 10. It says nothing about retrieval quality. `monomem bench --longmemeval` / `--locomo` measure retrieval quality: is the
+  right session (or turn) among the top k. They do not measure whether an agent then answers correctly.
+- **Choice of k.** The report now prints any-hit recall at k = 1, 3, 5, 10 and 20 for every mode (keyword, relevant, semantic, hybrid), not
+  only k = 5. k = 5 stays in the headline because it is the usual cut-off other memory projects publish, so numbers can be compared; the
+  other k values are there so that one k cannot hide a weakness. `Rall@k` (every gold session in the top k) is stricter.
+
+### Results, 2026-11-23: every mode, every k (new report)
+
+One Windows PC (RTX 5080), Node v24.18.0, code at the commit that added the `semantic` row and R@1/3/20. Embeddings: `nomic-embed-text` via local
+Ollama (`MONOMEM_EMBEDDINGS=on`, `MONOMEM_EMBED_URL=http://localhost:11434/v1/embeddings`). Run date 2026-11-23 (local time). No dataset was
+sampled randomly: LoCoMo is all 10 conversations and all 1,982 scorable questions; LongMemEval-S is the **first 150 of the 470 scorable
+questions in the file's order** (`--limit 150`, no seed), because a full 470-question hybrid run did not finish in this session (it takes
+about 45 minutes by extrapolation, embedding every session; the one attempt ended after 300 haystacks with no output, cause not found, and a second one
+shared the GPU with other jobs). The keyword-only full 470 run is given too. All values are percent, any gold hit in the top k.
+
+| Dataset (questions) | mode | R@1 | R@3 | R@5 | R@10 | R@20 | Rall@5 | Rall@10 |
+|---|---|---|---|---|---|---|---|---|
+| LongMemEval-S session (first 150 of 470) | keyword | 81.3 | 94.7 | 96.0 | 98.7 | 100.0 | 79.3 | 92.0 |
+| | relevant | 81.3 | 94.7 | 96.0 | 98.7 | 100.0 | 79.3 | 92.0 |
+| | semantic | 72.7 | 90.0 | 91.3 | 94.0 | 98.0 | 80.7 | 88.0 |
+| | hybrid | 89.3 | 97.3 | 98.7 | 99.3 | 99.3 | 89.3 | 96.0 |
+| LongMemEval-S session (all 470), keyword only | keyword | 87.4 | 96.4 | 97.4 | 98.9 | 99.8 | 86.0 | n/r |
+| | relevant | 87.2 | 96.4 | 97.4 | 98.9 | 99.8 | 86.0 | n/r |
+| LoCoMo-10 session (1,982) | keyword | 69.5 | 85.9 | 91.0 | 96.1 | 99.0 | 82.5 | 89.1 |
+| | relevant | 69.9 | 86.0 | 91.2 | 96.1 | 99.0 | 82.6 | 89.0 |
+| | semantic | 35.2 | 56.1 | 66.1 | 82.1 | 95.6 | 56.2 | 73.4 |
+| | hybrid | 69.9 | 87.1 | 92.2 | 96.9 | 99.3 | 83.0 | 90.4 |
+| LoCoMo-10 turn (1,982) | keyword | 35.8 | 59.6 | 67.6 | 77.0 | 83.8 | 58.5 | 66.1 |
+| | relevant | 35.9 | 59.4 | 67.5 | 76.9 | 83.6 | 58.4 | 66.2 |
+| | semantic | 23.8 | 43.5 | 51.9 | 62.4 | 72.7 | 44.0 | 53.1 |
+| | hybrid | 38.7 | 66.3 | 75.9 | 84.5 | 89.1 | 64.9 | 73.4 |
+
+(`n/r`: not recorded in the table; the run's JSON has it.) Reading it plainly:
+
+- **Semantic alone is worse than keyword in all 15 any-hit cells (5 values of k, 3 runs)**, and by a lot on LoCoMo
+  (R@5 66.1 vs 91.0 by session, 51.9 vs 67.6 by turn). On LongMemEval-S (first 150) it is lower at every k, though its strict Rall@5 (80.7)
+  is 1.4 above keyword's 79.3. `nomic-embed-text` is a small general model; a different embedder could do better or worse. Not tested.
+- **Hybrid is not always better than keyword.** At k = 20 on the LongMemEval-S subset it is lower (99.3 vs 100.0, one question of 150).
+  Everywhere else in this table it is equal or higher. The gain is largest on LoCoMo by turn (R@5 +8.3) and on LongMemEval-S strict Rall@5
+  (+10.0, 150 questions, so about 15 questions; read it as a direction, not a precise number). On LoCoMo by session R@1 is nearly level (69.9 vs 69.5).
+- **Where keyword is already near the ceiling** (R@10 and above by session) there is little left for embeddings to add; the cost is
+  latency: search p50 about 25 ms hybrid against 2 to 6 ms keyword on this PC, plus embedding every note when it is written.
+- **The semantic row's latency is not representative**: the hybrid search ran first and cached the query embedding.
+- **Run-to-run difference from the older tables below**: LoCoMo-10 turn keyword R@5 67.6 here against 67.4 on 2026-11-15, and hybrid 75.9
+  against 75.9 on 2026-11-14 (hybrid by turn, chat-import layout); small drift from ties and later ranking changes, not investigated.
+
+Subset, scope and limits: LongMemEval-S hybrid/semantic cover 150 questions (the first in file order), not all 470, so its confidence
+interval is wide (about +/- 4 points at 80%, +/- 2 at 96%). One embedding model, one machine, one run each (no repeat). No reranker was
+tried. The 2026-11-14 to 2026-11-19 tables below were measured on other code versions and are kept as measured.
+
+Reproduce (any dataset not in `~/.cache/monomem-bench` is downloaded there once from the sources above):
+
+```
+npm run build
+export MONOMEM_EMBEDDINGS=on MONOMEM_EMBED_URL=http://localhost:11434/v1/embeddings MONOMEM_EMBED_MODEL=nomic-embed-text MONOMEM_EMBED_TIMEOUT_MS=300000
+node dist/src/cli.js bench --locomo --mode hybrid --granularity session --json
+node dist/src/cli.js bench --locomo --mode hybrid --granularity turn --json
+node dist/src/cli.js bench --longmemeval --mode hybrid --limit 150 --json
+node dist/src/cli.js bench --longmemeval --json            # keyword and relevant only, all 470
+```
+
+If the embedding server goes down in the middle of a run, search silently falls back to keyword and the hybrid and semantic rows are then
+wrong: check that stderr shows no "embeddings call failed" line (a first run in this session did, and was discarded).
 
 ### Results, 2026-11-14 (measured for 1.5.0)
 
