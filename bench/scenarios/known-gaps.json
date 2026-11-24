@@ -71,5 +71,10 @@
     "title": "Sparse zero-width marks and three variation selectors are stored",
     "summary": "Open (found 2026-11-23). A zero-width mark after every few letters, and a run of only three variation selectors, carry a few bits of data and are stored with no warning: the scanner flags 8 or more zero-width marks in a row and variation selectors after plain letters (3 or more), nothing sparser, because ordinary Persian and Indic text uses single joiners legitimately. A payload hidden this way is invisible text, not a readable instruction, so it only matters if a model decodes it.",
     "status": "open"
+  },
+  "GAP-ADAPTIVE-REWRITE": {
+    "title": "An LLM that rewords a hostile goal gets it stored in every field",
+    "summary": "Open (found 2026-11-23, F30 to F34). A local 7B model, given a hostile goal and told only whether the write gate stored the note, got a text that still carries the goal past the gate in 43 of 60 goal x field cells (all 60 passed the gate; the rest were too vague to count). With no feedback at all, 30 plain rewordings did it in 57 of 60. The gate looks for instruction-shaped text; plain claims ('payroll goes to 000-111'), polite requests, key=value tags and fact values carry the same meaning and match nothing. Only a model-based check, a field-aware rule or read-side labelling can close this class; the winners are in the attack set 'adaptive'.",
+    "status": "open"
   }
 }

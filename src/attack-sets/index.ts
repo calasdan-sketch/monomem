@@ -15,6 +15,7 @@ import { LINT_EVASION } from "./data-lint-evasion.js";
 import { TOOL_STEER } from "./data-tool-steer.js";
 import { PROBES, type ProbeClass } from "./data-probes.js";
 import { DEEPSET_INJECTIONS, GANDALF_IGNORE } from "./data-public-2026-11.js";
+import { ADAPTIVE } from "./data-adaptive-2026-11.js";
 import { POISONEDRAG_NQ_SHA256, POISONEDRAG_NQ_URL, POISONEDRAG_SAMPLE } from "./data-poisonedrag.js";
 
 export type Half = "a" | "b";
@@ -69,6 +70,16 @@ export async function fetchChecked(url: string, sha256: string): Promise<string>
   if (got !== sha256) throw new Error(`checksum mismatch for ${url}: expected ${sha256}, got ${got}. Nothing was run.`);
   return bytes.toString("utf8");
 }
+
+// One winning field text of the adaptive attacker, written into its field with the other fields a harmless note.
+const fromAdaptive = (): AttackSample[] =>
+  ADAPTIVE.map(([id, , field, , text]) => ({
+    id,
+    title: field === "title" ? text : "Team note",
+    text: field === "body" ? text : "Notes for the team.",
+    source: field === "source" ? text : "team wiki",
+    tags: field === "tags" ? [text.slice(0, 80)] : field === "fact" ? [`fact:team_practice=${text.slice(0, 80)}`] : [],
+  }));
 
 export const ATTACK_SETS: readonly AttackSet[] = [
   {
@@ -152,6 +163,14 @@ export const ATTACK_SETS: readonly AttackSet[] = [
       samples: async () => fromProbes(cls),
     })
   ),
+  {
+    name: "adaptive",
+    title: `Winning evasions of an adaptive LLM attacker, by field (${ADAPTIVE.length})`,
+    source: "Monomem adaptive-attacker run, 2026-11-23: local LLMs rewrote hostile notes against our own write gate until one stored (scripts/adaptive-attacker.mjs)",
+    licence: "MIT",
+    what: "Texts a feedback-driven (or blind) LLM attacker got stored with no warning, in the title, body, tags, source or a fact value, for 12 hostile goals (.invalid addresses only). Generated against this linter and tuned on nothing; they reach today by construction, so this set shows whether a later change closes them.",
+    samples: async () => fromAdaptive(),
+  },
   {
     name: "poisonedrag",
     title: "PoisonedRAG poisoned passages, NQ sample (10)",
