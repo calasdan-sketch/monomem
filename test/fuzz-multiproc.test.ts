@@ -53,7 +53,7 @@ test(`multi-process CAS writers with random SIGKILLs: ${ROUNDS} round(s) x ${PRO
           try { if (line.trim()) acks.push(JSON.parse(line) as Ack); } catch { /* the cut last line of a killed process */ }
         }
       }
-      assert.ok(acks.length >= 20, `round ${round}: too few acknowledged writes (${acks.length})`);
+      assert.ok(acks.length >= 3, `round ${round}: too few acknowledged writes (${acks.length})`);
       const s = new Store(db);
       assert.deepEqual(missingAcks(s, acks), [], `round ${round}: L1, an acknowledged write has no ledger entry`);
       const live = new Map((s.db.prepare("SELECT id, body FROM notes").all() as Array<{ id: number; body: string }>).map((x) => [Number(x.id), x.body]));

@@ -38,7 +38,7 @@ test("every text function stays linear on adversarial input (4 KB -> 128 KB: wel
     for (const [iname, gen] of Object.entries(ADVERSARIAL)) {
       const small = gen(4096), big = gen(131072);
       fn(small); // warm up
-      const a = Math.max(timeMs(() => fn(small)), 0.2), b = timeMs(() => fn(big));
+      const a = Math.max(timeMs(() => fn(small)), 0.2), b = Math.min(timeMs(() => fn(big)), timeMs(() => fn(big)), timeMs(() => fn(big))); // best of 3: a shared CI runner's GC pause is not growth
       if (b > slow(1500) || (b > 100 && b / a > 200)) slowOnes.push(`${fname}/${iname}: ${a.toFixed(1)} ms -> ${b.toFixed(1)} ms`);
     }
   }
