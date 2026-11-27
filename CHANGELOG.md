@@ -6,6 +6,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-11-26
+
 ### blame, ask, recall rate
 - New `monomem blame "<claim>"`: which notes match a claim, and for each who wrote it, when, from which source and session, through how many versions, whether a person confirmed it, whether it is held, replaced, in conflict or backed by other writers, and what changed it last. `--json`. REST `GET /blame?q=`.
 - New `monomem ask "<question>"`: a retrieval timeline (keyword search, grouped by topic, newest first, replaced notes marked), not a generated answer; no model. `--since`, `--writer`, `--limit`, `--json`. REST `GET /ask?q=`. See docs/blame-and-ask.md.

@@ -8,13 +8,13 @@
     "url": "https://github.com/calasdan-sketch/monomem",
     "source": "github"
   },
-  "version": "1.7.0",
+  "version": "1.8.0",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "monomem",
-      "version": "1.7.0",
+      "version": "1.8.0",
       "transport": {
         "type": "stdio"
       },
