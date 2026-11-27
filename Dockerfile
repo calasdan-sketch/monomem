@@ -1,7 +1,7 @@
 # The base image is pinned to an exact version AND its digest (checked against Docker Hub), so a rebuild
 # cannot silently pick up a different image. To update: pick a newer 24.x-alpine tag and its digest together.
 # Build stage: compile TypeScript -> dist/
-FROM node:24.22.2-alpine@sha256:a34ab6d7f6f4813f4d0c5469d74685604b962fbdbf5793a7bc7b4998ecb867c8 AS build
+FROM node:26.13.1-alpine@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5 AS build
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --ignore-scripts
@@ -10,7 +10,7 @@ COPY src ./src
 RUN npm run build
 
 # Runtime stage: prod deps only, no toolchain
-FROM node:24.22.2-alpine@sha256:a34ab6d7f6f4813f4d0c5469d74685604b962fbdbf5793a7bc7b4998ecb867c8
+FROM node:26.13.1-alpine@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5
 WORKDIR /app
 ENV NODE_ENV=production
 COPY package*.json ./
