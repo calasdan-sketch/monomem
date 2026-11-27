@@ -263,7 +263,12 @@ export function prepareDataDir(): void {
   if (process.env.MONOMEM_DB_PATH) return;
   // A client that sets a different MONOMEM_HOME than the one a previous run
   // used would otherwise start empty without a word.
-  const homeDefault = join(homedir(), ".monomem");
+  let homeDefault: string;
+  try {
+    homeDefault = join(homedir(), ".monomem");
+  } catch {
+    return; // no resolvable home folder (a container user with no passwd entry and no HOME): nothing to compare against
+  }
   if (
     resolve(DATA_DIR) !== resolve(homeDefault) &&
     !existsSync(join(DATA_DIR, "state.db")) &&
