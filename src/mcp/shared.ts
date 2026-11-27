@@ -2,7 +2,7 @@
 // ignored-argument report, error mapping and the tool sets the read log and the stdio guard use. Moved out of
 // mcp-server-core.ts unchanged.
 
-import { isBusyError } from "../restore.js";
+import { diskProblem, isBusyError } from "../restore.js";
 import type { Sensitivity } from "../sensitivity.js";
 import { z } from "zod";
 import { Store, ValidationError, QuarantinedError, type NoteRecord } from "../store.js";
@@ -291,6 +291,11 @@ export function errorFor(e: unknown, extra?: Record<string, unknown>) {
   if (e instanceof ValidationError) return errorResult(e.message, extra);
   // 1.5.0 (U-09): another program held the database lock past the wait. Retryable, not a fault; same words as REST's 503.
   if (isBusyError(e)) return errorResult(BUSY_TOOL_MESSAGE);
+  const disk = diskProblem(e);
+  if (disk) {
+    console.error("[monomem] mcp tool error:", (e as Error).message);
+    return errorResult(disk.message);
+  }
   // eslint-disable-next-line no-console
   console.error("[monomem] mcp tool error:", (e as Error).message);
   return errorResult("internal error");

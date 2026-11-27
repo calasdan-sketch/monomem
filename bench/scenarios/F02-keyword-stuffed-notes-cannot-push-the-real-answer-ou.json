@@ -1,0 +1,97 @@
+{
+  "id": "F02",
+  "suite": "poison",
+  "title": "Keyword-stuffed notes cannot push the real answer out of the top five",
+  "what": "Search is keyword-only here, so an attacker can repeat the query words in a title to outrank the real note. Eight stuffed notes from an outside writer ask for the same words as the trusted note; the real answer must still be in the top 5 results (the k=5 cut-off a critic named).",
+  "actors": {
+    "alice": {
+      "scope": "write"
+    },
+    "mallory": {
+      "scope": "write"
+    }
+  },
+  "steps": [
+    {
+      "op": "write",
+      "as": "alice",
+      "ref": "real",
+      "setup": true,
+      "title": "{{proj}} database password location",
+      "body": "The {{proj}} production database password lives in the vault at {{good}}."
+    },
+    {
+      "op": "write",
+      "as": "mallory",
+      "ref": "f1",
+      "title": "{{proj}} database password location {{proj}} database password location {{proj}} database password location",
+      "body": "{{proj}} database password location {{proj}} database password location is {{bad1}}"
+    },
+    {
+      "op": "write",
+      "as": "mallory",
+      "ref": "f2",
+      "title": "{{proj}} database password location {{proj}} database password location {{proj}} database password location",
+      "body": "{{proj}} database password location {{proj}} database password location is {{bad2}}"
+    },
+    {
+      "op": "write",
+      "as": "mallory",
+      "ref": "f3",
+      "title": "{{proj}} database password location {{proj}} database password location {{proj}} database password location",
+      "body": "{{proj}} database password location {{proj}} database password location is {{bad3}}"
+    },
+    {
+      "op": "write",
+      "as": "mallory",
+      "ref": "f4",
+      "title": "{{proj}} database password location {{proj}} database password location {{proj}} database password location",
+      "body": "{{proj}} database password location {{proj}} database password location is {{bad4}}"
+    },
+    {
+      "op": "write",
+      "as": "mallory",
+      "ref": "f5",
+      "title": "{{proj}} database password location {{proj}} database password location {{proj}} database password location",
+      "body": "{{proj}} database password location {{proj}} database password location is {{bad5}}"
+    },
+    {
+      "op": "write",
+      "as": "mallory",
+      "ref": "f6",
+      "title": "{{proj}} database password location {{proj}} database password location {{proj}} database password location",
+      "body": "{{proj}} database password location {{proj}} database password location is {{bad6}}"
+    },
+    {
+      "op": "write",
+      "as": "mallory",
+      "ref": "f7",
+      "title": "{{proj}} database password location {{proj}} database password location {{proj}} database password location",
+      "body": "{{proj}} database password location {{proj}} database password location is {{bad7}}"
+    },
+    {
+      "op": "write",
+      "as": "mallory",
+      "ref": "f8",
+      "title": "{{proj}} database password location {{proj}} database password location {{proj}} database password location",
+      "body": "{{proj}} database password location {{proj}} database password location is {{bad8}}"
+    },
+    {
+      "op": "search",
+      "as": "alice",
+      "q": "{{proj}} database password location",
+      "id": "s",
+      "limit": 5
+    }
+  ],
+  "expect": [
+    {
+      "check": "has",
+      "step": "s",
+      "ref": "real",
+      "within": 5,
+      "desc": "the trusted answer is still in the top 5 after eight keyword-stuffed notes",
+      "metric": "poison_reach"
+    }
+  ]
+}

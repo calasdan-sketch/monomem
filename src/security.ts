@@ -4,6 +4,7 @@
 // log. All dependency-free on purpose -- this code sits in front of a service
 // that can be exposed over a public tunnel, so less surface is safer.
 
+import { EXTRA_CONFUSABLES, bidiView, flippedView } from "./confusables-extra.js";
 import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
@@ -197,16 +198,68 @@ const CONFUSABLES: Record<string, string> = {
   ı: "i", ɡ: "g", ɑ: "a", ɩ: "i", ɪ: "i", ᴏ: "o", ᴇ: "e", ᴀ: "a", ʀ: "r", ɴ: "n", ᴛ: "t", ᴜ: "u", ᴅ: "d", ᴘ: "p", ʟ: "l",
   ᴍ: "m", ᴄ: "c", ʙ: "b", ᴋ: "k", ᴠ: "v", ᴡ: "w", ᴢ: "z", ɢ: "g", ʜ: "h", ս: "u", ո: "n", օ: "o", ց: "g",
 };
-const CONFUSABLE_RE = new RegExp(`[${Object.keys(CONFUSABLES).join("")}]`, "gu");
+const ALL_CONFUSABLES: Record<string, string> = { ...CONFUSABLES, ...EXTRA_CONFUSABLES };
+const CONFUSABLE_RE = new RegExp(`[${Object.keys(ALL_CONFUSABLES).join("")}]`, "gu");
+const CONFUSABLE_ONE = new RegExp(CONFUSABLE_RE.source, "u");
 
-export function normalizeForScan(text: string): string {
-  return text
+const SCRIPTS: Array<[string, RegExp]> = [["Latin", /\p{Script=Latin}/u], ["Cyrillic", /\p{Script=Cyrillic}/u], ["Greek", /\p{Script=Greek}/u], ["Armenian", /\p{Script=Armenian}/u]];
+const scriptsOf = (w: string): string[] => SCRIPTS.filter(([, re]) => re.test(w)).map(([s]) => s);
+/** A letter of `script` with no Latin look-alike is in `w`. */
+const hasNativeLetter = (w: string, script: string): boolean => (SCRIPTS.find(([s]) => s === script) as [string, RegExp])[1].test(w.replace(CONFUSABLE_RE, ""));
+
+/**
+ * Look-alike letters are folded to Latin only in a disguised word: one that mixes scripts ("іgnоrе": Cyrillic і о е among Latin), or
+ * one made only of one script's look-alikes ("ѕесо") in a text with no real words of that script. A word in a single script that also
+ * holds a letter with no Latin look-alike is real Cyrillic / Greek / Armenian and stays as written, and so do look-alike-only words
+ * ("не", "на") once the text has such real words (2026-11-26: folding every Cyrillic о/р/а turned "отправляй" into "otпpabляй" and
+ * "не" into "he", so the Russian rules never matched).
+ */
+function foldWord(w: string, nativeScripts: ReadonlySet<string>): string {
+  if (!CONFUSABLE_ONE.test(w)) return w;
+  const sc = scriptsOf(w);
+  if (sc.length === 1 && sc[0] !== "Latin" && (nativeScripts.has(sc[0]) || hasNativeLetter(w, sc[0]))) return w;
+  return w.replace(CONFUSABLE_RE, (c) => ALL_CONFUSABLES[c]);
+}
+
+/** Scripts (other than Latin) that have at least one single-script word holding a letter with no Latin look-alike. */
+function nativeScriptsOf(t: string): Set<string> {
+  const out = new Set<string>();
+  for (const m of t.matchAll(/[\p{L}\p{M}]+/gu)) {
+    const sc = scriptsOf(m[0]);
+    if (sc.length === 1 && sc[0] !== "Latin" && !out.has(sc[0]) && hasNativeLetter(m[0], sc[0])) out.add(sc[0]);
+  }
+  return out;
+}
+
+const NO_NATIVE: ReadonlySet<string> = new Set();
+
+function foldForScan(text: string): string {
+  const t = text
     .normalize("NFKC")
     // Unicode TAG chars render as nothing but encode ASCII: decode them so hidden text is scanned.
     .replace(/[\u{E0020}-\u{E007E}]/gu, (c) => String.fromCharCode(c.codePointAt(0)! - 0xe0000))
-    .replace(/[\p{Cf}\p{Default_Ignorable_Code_Point}]+/gu, "")
-    .replace(CONFUSABLE_RE, (c) => CONFUSABLES[c])
-    .replace(/\s+/g, (m) => (m.includes("\n") ? "\n" : " "));
+    .replace(/[\p{Cf}\p{Default_Ignorable_Code_Point}]+/gu, "");
+  let folded = t;
+  if (CONFUSABLE_ONE.test(t)) {
+    const native = nativeScriptsOf(t);
+    folded = t.replace(/[\p{L}\p{M}]+/gu, (w) => foldWord(w, native));
+    // r10 (review H2): one real Cyrillic word ("Привет") must not shield the look-alike-only words ("раѕѕԝоґԁѕ") around it.
+    // So the text is also read with every look-alike-only word folded, as one more line: real Russian keeps its letters in the
+    // first view (the intl rules), disguised English reads as English in the second (the English rules).
+    if (native.size) {
+      const all = t.replace(/[\p{L}\p{M}]+/gu, (w) => foldWord(w, NO_NATIVE));
+      if (all !== folded) folded = folded + "\n" + all;
+    }
+  }
+  return folded.replace(/\s+/g, (m) => (m.includes("\n") ? "\n" : " "));
+}
+
+/** The scan form of a text. Upside-down and bidi-reversed text also gets its readable view appended (on its own line), so the patterns see both. */
+export function normalizeForScan(text: string): string {
+  const nfkc = text.normalize("NFKC");
+  const main = foldForScan(nfkc);
+  const extra = [flippedView(nfkc), bidiView(nfkc)].filter(Boolean).map(foldForScan);
+  return extra.length ? [main, ...extra].join("\n") : main;
 }
 
 // ---- Secret scanner: refuse to store high-confidence credentials ------------

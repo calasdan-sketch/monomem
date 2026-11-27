@@ -5,6 +5,7 @@
 import type { z } from "zod";
 import { errorResult } from "./shared.js";
 import type { McpCtx } from "./context.js";
+import { guardInitialize } from "./rpc-errors.js";
 
 const INVALID_PARAMS = -32602;
 
@@ -71,6 +72,7 @@ type RawHandler = (req: unknown, extra: unknown) => Promise<unknown>;
  * sentence, and a tool's arguments are checked here first so a wrong type names its argument.
  */
 export function guardToolCalls(c: McpCtx): void {
+  guardInitialize(c); // a malformed initialize is -32602 too
   const low = c.server.server as unknown as { _requestHandlers?: Map<string, RawHandler> };
   const inner = low._requestHandlers?.get("tools/call");
   if (!inner || !low._requestHandlers) return; // no tools registered here (nothing to guard)

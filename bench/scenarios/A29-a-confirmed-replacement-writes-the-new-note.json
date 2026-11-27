@@ -25,7 +25,7 @@
     },
     {
       "op": "supersede_preview",
-      "as": "alice",
+      "as": "boss",
       "id": "pv",
       "old": [
         "old"
@@ -37,7 +37,7 @@
     },
     {
       "op": "supersede_confirm",
-      "as": "alice",
+      "as": "boss",
       "id": "cf",
       "from": "pv",
       "ref": "new"
@@ -75,7 +75,7 @@
       "check": "field",
       "step": "r",
       "path": "writer",
-      "equals": "alice",
+      "equals": "boss",
       "desc": "the new note is stamped with who confirmed"
     }
   ]

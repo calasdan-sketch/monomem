@@ -102,13 +102,13 @@ table{width:100%;border-collapse:collapse} td{padding:.5rem .6rem;border-bottom:
 .fix{margin-top:.3rem;color:#505b78} code{background:#eef1f8;padding:0 .3rem;border-radius:4px}
 .note{margin-top:1.2rem;color:#505b78;font-size:.85rem}
 @media (prefers-color-scheme:dark){body{background:#0c0f16;color:#e8ecf5}td{border-color:#232a3b}.meta,.fix,.note{color:#93a0bd}code{background:#1d2435}tr.pass .s{color:#35d0a5}tr.warn .s{color:#f5b84b}}
-</style></head><body>
+</style></head><body><main>
 <h1>Monomem safety report</h1>
 <div class="meta">Monomem ${esc(meta.version)} &middot; ${esc(meta.date)} &middot; Node ${esc(meta.node)} on ${esc(meta.platform)} &middot; ${warns === 0 ? "all checks passed" : `${warns} thing(s) to look at`}</div>
 <table>
 ${rows}
 </table>
 <p class="note">This report holds counts and yes/no settings only. It contains no note text, no keys, and no app, namespace or address names. It is a check-up of this one installation, not a certification or a guarantee, and the personal-data scan is pattern-based.</p>
-</body></html>
+</main></body></html>
 `;
 }

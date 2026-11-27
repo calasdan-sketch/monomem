@@ -480,6 +480,15 @@ function parseTimePhraseInner(phrase: string, opts: ParseOpts): TimeRange | null
       }
     }
   }
+  // "11 December, 2023", "4th October 2023" (day first; the year is required so "3 may releases" is not a date).
+  m = s.match(new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${MONTH_ALT})\\s*,?\\s*(\\d{4})\\b`));
+  if (m) {
+    const d = Number(m[1]), mo = MONTHS[m[2]] + 1, y = Number(m[3]);
+    if (validYMD(y, mo, d)) {
+      const day = { y, mo, d };
+      return dayRange(day, tz, tag(ymd(day), day));
+    }
+  }
   // Bare MM/DD -- same "most recent past occurrence" rule as above.
   // Tightened against false positives: "1/2 cup flour" is a recipe, not
   // January 2nd (measurement-unit lookahead), and the slash lookarounds keep

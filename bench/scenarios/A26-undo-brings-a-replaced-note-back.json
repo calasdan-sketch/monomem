@@ -32,7 +32,7 @@
     },
     {
       "op": "supersede_preview",
-      "as": "alice",
+      "as": "boss",
       "id": "pv",
       "old": [
         "old"
@@ -41,7 +41,7 @@
     },
     {
       "op": "supersede_confirm",
-      "as": "alice",
+      "as": "boss",
       "id": "cf",
       "from": "pv"
     },
@@ -53,7 +53,7 @@
     },
     {
       "op": "supersede_undo",
-      "as": "alice",
+      "as": "boss",
       "ref": "old"
     },
     {

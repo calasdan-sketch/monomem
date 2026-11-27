@@ -1,0 +1,2 @@
+{"type":"entity","name":"Atlas","entityType":"project","observations":["Uses pnpm","Deploys on Tuesday"]}
+{"type":"relation","from":"Atlas","to":"Dana","relationType":"owned_by"}

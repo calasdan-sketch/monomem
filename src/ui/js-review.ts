@@ -2,7 +2,7 @@
 export const REVIEW_JS = `
 // ---- Review: GET /ui/review is store.reviewList + flaggedList + codeChangedList, as monomem review prints them ----
 function reviewRow(x, why, buttons){
-  return "<article class='card'><div class='nhead'><h3 class='t-head'>"+esc(x.title)+"</h3></div>"+
+  return "<article class='card'><div class='nhead'><h2 class='t-head'>"+esc(x.title)+"</h2></div>"+
     "<div class='meta'>"+chip(x.writer || "")+" &middot; "+esc(x.namespace)+" &middot; #"+Number(x.id)+"</div>"+
     "<p class='t-callout' style='margin:8px 0 0'>"+why+"</p>"+acts(buttons)+"</article>";
 }
@@ -23,27 +23,27 @@ function loadReview(){
     var out = [];
     if(j.held_writes){ out.push("<div class='banner'><span>"+plural(j.held_writes, "write is", "writes are")+" held for your decision.</span><button"+actA("loadHeld")+">Open Held</button></div>"); }
     if(j.notes.length){
-      out.push("<h3 class='section t-title'>Waiting for you to confirm</h3>");
+      out.push("<h2 class='section t-title'>Waiting for you to confirm</h2>");
       out = out.concat(j.notes.map(function(r){
         return reviewRow(r, whyWords(r.why), "<button class='primary' aria-label='confirm note #"+Number(r.id)+"'"+actA("reviewConfirm",[Number(r.id)])+">Confirm: I checked it</button><button aria-label='archive note #"+Number(r.id)+"'"+actA("archiveNote",[Number(r.id)])+">Archive</button>");
       }));
     }
     if(j.flagged.length){
-      out.push("<h3 class='section t-title'>Flagged by an app</h3>");
+      out.push("<h2 class='section t-title'>Flagged by an app</h2>");
       out = out.concat(j.flagged.map(function(f){
         var why = (f.flags || []).map(function(x){ return chip(x.by)+" says: "+esc(x.reason); }).join("<br>");
         return reviewRow(f, why, "<button class='primary' aria-label='keep note #"+Number(f.id)+"'"+actA("reviewKeep",[Number(f.id)])+">Keep as it is</button><button aria-label='archive note #"+Number(f.id)+"'"+actA("archiveNote",[Number(f.id)])+">Archive</button>");
       }));
     }
     if(j.code_changed.length){
-      out.push("<h3 class='section t-title'>The code it describes changed</h3>");
+      out.push("<h2 class='section t-title'>The code it describes changed</h2>");
       out = out.concat(j.code_changed.map(function(c){
         var why = "Changed since it was written: " + (c.changed || []).map(function(x){ return "<code>"+esc(x.path)+"</code>"; }).join(", ");
         return reviewRow(c, why, "<button class='primary' aria-label='keep note #"+Number(c.id)+"'"+actA("reviewKeep",[Number(c.id)])+">Still true</button><button aria-label='archive note #"+Number(c.id)+"'"+actA("archiveNote",[Number(c.id)])+">Archive</button>");
       }));
     }
     if(cf.length){
-      out.push("<h3 class='section t-title'>Two answers to one fact</h3><div class='card'><p class='t-callout muted' style='margin:0'>Different apps saved different values. Nothing changes until you choose.</p>"+cf.map(function(g, gi){ return cfRow(g, gi); }).join("")+"</div>");
+      out.push("<h2 class='section t-title'>Two answers to one fact</h2><div class='card'><p class='t-callout muted' style='margin:0'>Different apps saved different values. Nothing changes until you choose.</p>"+cf.map(function(g, gi){ return cfRow(g, gi); }).join("")+"</div>");
     }
     $("list").innerHTML = out.join("") || empty("Nothing waits for you", "Notes from outside content, flagged notes and notes about changed code show up here.");
   }).catch(failList);
@@ -67,13 +67,14 @@ function loadHeld(){
     $("list").innerHTML = held.length ? held.map(function(q){
       var why = (q.reasons || []).map(function(r){ return "<span class='tag why'>"+esc(r.label)+(r.field && String(r.label).indexOf(r.field) < 0 ? " in "+esc(r.field) : "")+"</span>"; }).join("");
       var who = q.written_by ? byLine(q.written_by) : (q.source ? " &middot; says it is from "+esc(q.source) : "");
-      return "<article class='card'><span class='stamp'>HELD &middot; NOT IN MEMORY</span><h3 class='t-head'>"+esc(q.title || "(title unchanged)")+"</h3>"+
+      return "<article class='card'><span class='stamp'>HELD &middot; NOT IN MEMORY</span><h2 class='t-head'>"+esc(q.title || "(title unchanged)")+"</h2>"+
         "<div class='meta'>"+(q.op === "update" ? "change to #"+Number(q.target_id) : "new note")+" &middot; "+esc(q.namespace)+" &middot; "+esc(ago(q.created_at))+who+"</div>"+
         "<div class='chips'>"+(why || "<span class='tag why'>held by your approve-first rule</span>")+"</div>"+tagsHtml(q.tags)+
         (q.body ? "<div class='heldbody'>"+esc(q.body)+"</div>" : "")+
         "<div id='qctx"+Number(q.id)+"' class='meta'></div>"+
         acts("<button class='primary' aria-label='reject held write #"+Number(q.id)+"'"+actA("armHeld",[Number(q.id),"reject"])+">Reject</button>"+
-          "<button aria-label='approve held write #"+Number(q.id)+"'"+actA("armHeld",[Number(q.id),"approve"])+">Approve</button>")+"</article>";
+          "<button aria-label='approve held write #"+Number(q.id)+"'"+actA("armHeld",[Number(q.id),"approve"])+">Approve</button>"+
+          (IS_ADMIN && q.written_by ? "<button class='destructive' aria-label='Reject and distrust "+esc(shownWriter(q.written_by))+" (held write #"+Number(q.id)+")'"+actA("armHeldDistrust",[Number(q.id),q.written_by])+">Reject and distrust "+esc(shownWriter(q.written_by))+"</button>" : ""))+"</article>";
     }).join("") : empty("Nothing is held", "Writes that look like a secret or an injected instruction wait here for you.");
     held.forEach(function(q){ loadHeldContext(Number(q.id)); });
   }).catch(failList);
@@ -91,7 +92,9 @@ function loadHeldContext(id){
       (c.note ? "<div>" + esc(c.note) + "</div>" : "");
   }).catch(function(){ var box = $("qctx" + id); if(box){ box.textContent = "Could not load what was saved since."; } });
 }
-function refreshHeld(){ if(VIEW === "quality"){ loadQuality(); } else { loadHeld(); } }
+// The card the key was on is gone after a decision: put focus on the view heading so the next Tab starts at the list.
+function focusHead(){ try { $("viewh").focus(); } catch(e){} }
+function refreshHeld(){ focusHead(); if(VIEW === "quality"){ loadQuality(); } else { loadHeld(); } }
 function qHeld(id, action){
   api("/quarantine/" + id + "/" + action, { method:"POST" }).then(function(){
     refreshHeld(); loadNeeds(); toast(action === "approve" ? "Approved: it is in memory now." : action === "keep-history" ? "Kept as history." : "Rejected: it was discarded.");
@@ -116,14 +119,14 @@ function loadQuality(){
       else if(i.type === "pii"){ btn = "<button class='primary'"+actA("qPrivate",[a])+">Make #"+a+" private</button>"; }
       else if(i.type === "quarantined"){ btn = "<button class='primary'"+actA("loadHeld")+">Open Held</button>"; }
       else { btn = "<button"+actA("archiveNote",[a])+">Archive #"+a+"</button>"; }
-      return "<article class='card'><div class='chips' style='margin:0 0 8px'><span class='lbl'>"+esc(typeLabel(i.type))+"</span></div><h3 class='t-head'>"+esc(i.detail)+"</h3>"+
+      return "<article class='card'><div class='chips' style='margin:0 0 8px'><span class='lbl'>"+esc(typeLabel(i.type))+"</span></div><h2 class='t-head'>"+esc(i.detail)+"</h2>"+
         "<div class='meta'>"+esc(i.namespace)+"</div>"+acts(btn)+"</article>";
     }).join("");
     var cf = j.conflict_groups || [];
     CFG = cf; CFACT = {};
     var tot = Number(j.conflict_total) || cf.length;
     var head = j.conflict_capped ? "showing "+cf.length+" of at least "+tot : (cf.length < tot ? "showing "+cf.length+" of "+tot : String(cf.length));
-    var crow = cf.length ? "<div class='card'><h3 class='t-head'>Conflicts ("+head+")</h3><div class='meta'>Different apps, same key, different value. Nothing changes until you choose. Exact: the notes carry the same fact. Possible: guessed from the text.</div>"+cf.map(function(g, gi){ return cfRow(g, gi); }).join("")+"</div>" : "";
+    var crow = cf.length ? "<div class='card'><h2 class='t-head'>Conflicts ("+head+")</h2><div class='meta'>Different apps, same key, different value. Nothing changes until you choose. Exact: the notes carry the same fact. Possible: guessed from the text.</div>"+cf.map(function(g, gi){ return cfRow(g, gi); }).join("")+"</div>" : "";
     $("list").innerHTML = crow + rows || empty("Nothing to tidy", "Duplicates, older copies and private details will be listed here.");
   }).catch(failList);
 }
@@ -160,7 +163,7 @@ function cfRow(g, gi){
     }
   });
   var pins = all.filter(function(n){ return n.pinned; }).map(function(n){ return "#"+Number(n.id); });
-  return "<div class='cf'><h3 class='t-head'>"+esc(g.key)+" <span class='lbl'>"+esc(g.confidence)+"</span></h3>"+
+  return "<div class='cf'><h2 class='t-head'>"+esc(g.key)+" <span class='lbl'>"+esc(g.confidence)+"</span></h2>"+
     g.values.map(function(v){ return "<div class='cfval'><b>"+esc(v.value)+"</b>"+v.notes.map(cfNote).join("")+"</div>"; }).join("")+
     "<div class='meta'>Project: <b>"+esc(g.namespace)+"</b>"+(pins.length ? " &middot; "+pins.join(", ")+" pinned: apps cannot change it; you can" : "")+"</div>"+acts(btns.join(""))+
     (more.length ? "<details class='cfmore'><summary class='muted'>More</summary>"+acts(more.join(""))+"</details>" : "")+

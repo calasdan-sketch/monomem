@@ -10,7 +10,7 @@ import { assetsRoot } from "../self.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SupersedeError } from "../supersede.js";
-import { isBusyError } from "../restore.js";
+import { diskProblem, isBusyError } from "../restore.js";
 
 // The phone command page (docs/sign.html + docs/signer.js) is served from the
 // API's own origin so a phone browser can POST /notes without a cross-origin
@@ -107,7 +107,7 @@ export function requiredScope(method: string | undefined, path: string): Scope {
   // The read access log shows every agent's queries, and the flood pause is the operator's switch: admin, reads included.
   if (path === "/access" || path === "/flood" || path === "/flood/resume") return "admin";
   // What a note touched comes from the read log (who was handed it): admin, like /access.
-  if (/^\/notes\/\d+\/touched$/.test(path)) return "admin";
+  if (/^\/notes\/\d+\/(touched|readers)$/.test(path)) return "admin";
   // A note's earlier versions can hold text that was taken out on purpose: administrators only, reads included.
   if (/^\/notes\/\d+\/history(\/restore)?$/.test(path)) return "admin";
   // 1.4.0: any writer may confirm; who counts (and as what kind) is decided by Store.confirm, an admin token as `admin`.
@@ -130,7 +130,7 @@ export const PUT_READ_ONLY_FIELDS = [
   "imported_unverified", "attested_writer", "attested_by", "attested_writer_id", "merged_from_writers", "distrusted", "confidence_claimed_by",
   "status", "superseded_by", "superseded_at", "superseded_by_writer", "access_count", "last_accessed", "expires_at", "archived_at",
   "pinned", "session_id", "obs_type", "stale", "ageDays", "staleWarning", "unreadable", "encrypted", "neighbors", "history", "files", "score", "breakdown",
-  "grandfathered_at", "approved_at", "approved_by", "confirmed_at", "confirmed_by", "confirmed_kind", "confirmed_rev", "unconfirmed", "unconfirmed_label", "expired", "expired_label", "built_on_distrusted", "built_on_distrusted_label", "disputed", "disputed_label", "flagged", "flagged_label", "code_changed", "code_changed_label", "claims_failed", "claims_label", "restated_by", "restated_label", "echo_of", "echo_label",
+  "grandfathered_at", "approved_at", "approved_by", "confirmed_at", "confirmed_by", "confirmed_kind", "confirmed_rev", "unconfirmed", "unconfirmed_label", "expired", "expired_label", "built_on_distrusted", "built_on_distrusted_label", "disputed", "disputed_label", "flagged", "flagged_label", "code_changed", "code_changed_label", "claims_failed", "claims_label", "restated_by", "restated_label", "corroboration", "echo_of", "echo_label",
   "new_writer", "new_writer_label", "basis", "evidence", "evidence_label",
 ];
 /** A 400 message naming the unknown top-level fields of a note body, or null when there are none. */
@@ -171,6 +171,9 @@ export function sendError(res: ServerResponse, e: unknown, receipt?: WriteReceip
     console.error("[monomem] write gave up waiting for the database lock:", (e as Error).message);
     res.setHeader("Retry-After", "2");
     sendJson(res, 503, { error: "The database is busy (another program is writing to it); nothing was saved. Try again in a few seconds." });
+  } else if (diskProblem(e)) {
+    console.error("[monomem] write error:", (e as Error).message);
+    sendJson(res, 507, { error: diskProblem(e)!.message });
   } else {
     console.error("[monomem] write error:", (e as Error).message);
     sendJson(res, 500, { error: "internal error" });
@@ -182,7 +185,7 @@ export function sendError(res: ServerResponse, e: unknown, receipt?: WriteReceip
  * written by sendJson from the request's actor context. GET /export logs itself (it streams).
  */
 export const READ_ROUTES: Array<[string, RegExp]> = [
-  ["GET", /^\/(notes|search|index|timeline|sessions|changes|stats|tasks|handoffs|catch-up|quality|files\/timeline)$/],
+  ["GET", /^\/(notes|search|index|timeline|sessions|changes|stats|tasks|handoffs|catch-up|digest|quality|blame|ask|files\/timeline)$/],
   ["GET", /^\/(notes|tasks)\/\d+$/],
   ["GET", /^\/notes\/\d+\/history$/],
   ["GET", /^\/sessions\/[^/]+$/],
@@ -241,6 +244,8 @@ export function sendJson(
     // Note text must not sit in a browser or proxy cache, and a browser must not sniff a JSON body as HTML.
     "Cache-Control": "no-store",
     "X-Content-Type-Options": "nosniff",
+    // A page on another site cannot embed this response as a no-cors resource (CORS fetches are not affected).
+    "Cross-Origin-Resource-Policy": "same-origin",
   });
   res.end(body);
 }
@@ -300,6 +305,13 @@ export function flagParam(url: URL, name: string): boolean {
 /** Waiters are capped per namespace scope; a short stable key for it. */
 export function waitScopeKey(namespaces: string[] | undefined): string {
   return namespaces ? [...namespaces].sort().join(",") : "*";
+}
+
+/** JSON.parse for a request body: an empty body is {}, and a literal `null` is {} too (it would otherwise reach a handler as
+ * null and fail with a TypeError, a 500). Throws SyntaxError on invalid JSON, like JSON.parse. (Audit 2026-11-23.) */
+export function parseJsonBody(raw: string): any { // eslint-disable-line @typescript-eslint/no-explicit-any
+  const v: unknown = JSON.parse(raw || "{}");
+  return v === null ? {} : v;
 }
 
 export function intParam(url: URL, name: string, min: number): number | undefined {

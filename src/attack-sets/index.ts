@@ -13,6 +13,11 @@ import { INJECAGENT, INJECAGENT_ENHANCED_PREFIX } from "./data-injecagent.js";
 import { MINJA } from "./data-minja.js";
 import { LINT_EVASION } from "./data-lint-evasion.js";
 import { TOOL_STEER } from "./data-tool-steer.js";
+import { PROBES, type ProbeClass } from "./data-probes.js";
+import { DEEPSET_INJECTIONS, GANDALF_IGNORE } from "./data-public-2026-11.js";
+import { ADAPTIVE } from "./data-adaptive-2026-11.js";
+import { ADAPTIVE_R2 } from "./data-adaptive-r2-2026-11.js";
+import { GARAK_PROBES, PYRIT_CONVERTED } from "./data-garak-pyrit-2026-11.js";
 import { POISONEDRAG_NQ_SHA256, POISONEDRAG_NQ_URL, POISONEDRAG_SAMPLE } from "./data-poisonedrag.js";
 
 export type Half = "a" | "b";
@@ -28,6 +33,12 @@ export function attackHalf(id: string): Half {
 export interface AttackSample {
   id: string;
   text: string;
+  /** Field-level probes (2026-11-23): attacker text in the title, tags or source instead of (or as well as) the body. `text` is then the body. */
+  title?: string;
+  tags?: string[];
+  source?: string;
+  /** A harmless control that SHOULD pass through (for example a real flag emoji): replayed and shown, but never counted as REACHED. */
+  control?: boolean;
 }
 
 export interface AttackSet {
@@ -43,6 +54,8 @@ export interface AttackSet {
   samples: () => Promise<AttackSample[]>;
 }
 
+const fromProbes = (cls: ProbeClass): AttackSample[] =>
+  PROBES.filter((p) => p.cls === cls).map((p) => ({ id: p.id, text: p.fields.body ?? "", title: p.fields.title ?? "Note", ...(p.fields.tags ? { tags: p.fields.tags } : {}), ...(p.fields.source !== undefined ? { source: p.fields.source } : {}), ...(p.control ? { control: true } : {}) }));
 const fromPairs = (rows: ReadonlyArray<readonly [string, string]>, wrap: (t: string) => string = (t) => t): AttackSample[] => rows.map(([id, t]) => ({ id, text: wrap(t) }));
 // PoisonedRAG's black-box attack puts the target question in front of the poisoned passage so retrieval finds it.
 const poisoned = (question: string, passage: string): string => `${question} ${passage}`;
@@ -61,6 +74,25 @@ export async function fetchChecked(url: string, sha256: string): Promise<string>
   if (got !== sha256) throw new Error(`checksum mismatch for ${url}: expected ${sha256}, got ${got}. Nothing was run.`);
   return bytes.toString("utf8");
 }
+
+// One winning field text of the adaptive attacker, written into its field with the other fields a harmless note.
+const fromAdaptive = (): AttackSample[] =>
+  ADAPTIVE.map(([id, , field, , text]) => ({
+    id,
+    title: field === "title" ? text : "Team note",
+    text: field === "body" ? text : "Notes for the team.",
+    source: field === "source" ? text : "team wiki",
+    tags: field === "tags" ? [text.slice(0, 80)] : field === "fact" ? [`fact:team_practice=${text.slice(0, 80)}`] : [],
+  }));
+
+const fromAdaptiveR2 = (): AttackSample[] =>
+  ADAPTIVE_R2.map(([id, , field, , text]) => ({
+    id,
+    title: field === "title" ? text : "Team note",
+    text: field === "body" ? text : "Notes for the team.",
+    source: field === "source" ? text : "team wiki",
+    tags: field === "tags" ? [text.slice(0, 80)] : field === "fact" ? [`fact:team_practice=${text.slice(0, 80)}`] : [],
+  }));
 
 export const ATTACK_SETS: readonly AttackSet[] = [
   {
@@ -112,6 +144,71 @@ export const ATTACK_SETS: readonly AttackSet[] = [
     samples: async () => fromPairs(TOOL_STEER),
   },
   {
+    name: "deepset-injections",
+    title: `deepset/prompt-injections, first 40 injection rows of the test split (${DEEPSET_INJECTIONS.length})`,
+    source: "deepset/prompt-injections, huggingface.co/datasets/deepset/prompt-injections (test split, rows chosen by a fixed rule, verbatim)",
+    licence: "Apache-2.0",
+    what: "Public prompt-injection prompts, English and German (override, role-play, 'now forget everything and ...'), saved as notes as written. Written for chat models, not for memory.",
+    samples: async () => fromPairs(DEEPSET_INJECTIONS),
+  },
+  {
+    name: "gandalf-ignore",
+    title: `Lakera Gandalf 'ignore instructions' prompts, first 40 of the test split (${GANDALF_IGNORE.length})`,
+    source: "Lakera/gandalf_ignore_instructions, huggingface.co/datasets/Lakera/gandalf_ignore_instructions (test split, rows chosen by a fixed rule, verbatim)",
+    licence: "MIT",
+    what: "What players typed into the Gandalf game to make a model drop its instructions. Mostly short, informal and in many phrasings; saved as notes as written.",
+    samples: async () => fromPairs(GANDALF_IGNORE),
+  },
+  ...(
+    [
+      ["probes-context", "context", "Context-poisoning shapes: sleeper rules, slow-drip fragments, false corrections, keyword stuffing", "Single-note shapes of multi-session poisoning. The multi-note versions (drip, flooding, conflicting corrections) are bench scenarios F01 to F04."],
+      ["probes-encoding", "encoding", "Encodings and uncommon channels, by field: rot13, reversed, base32/64, hex, morse, split across fields, link titles, data URIs, whitespace runs, other languages", "The same instruction in a different encoding, or in a different field (title, tags, source, fact key / value), or split across fields."],
+      ["probes-toolstyle", "toolstyle", "Tool-description style text planted in a note: <IMPORTANT> blocks, fake tool schemas, fake server instructions, rug-pull and shadowing wording", "Text a poisoned MCP tool description would carry, saved as a note instead. Notes are read as data; this measures the write gate, not whether an agent would obey."],
+      ["probes-stego", "stego", "Text steganography and look-alike characters: zero-width binary, variation selectors, tag characters, homoglyphs, combining marks, bidi, filler and blank characters", "Hidden payloads and instructions spelled with invisible or look-alike characters, in the body, title, tags and source."],
+    ] as const
+  ).map(
+    ([name, cls, title, what]): AttackSet => ({
+      name,
+      title: `${title} (${PROBES.filter((p) => p.cls === cls).length})`,
+      source: "Monomem hardening round, 2026-11-23 (our own hand-written probes, not an outside paper)",
+      licence: "MIT",
+      what,
+      samples: async () => fromProbes(cls),
+    })
+  ),
+  {
+    name: "adaptive",
+    title: `Winning evasions of an adaptive LLM attacker, by field (${ADAPTIVE.length})`,
+    source: "Monomem adaptive-attacker run, 2026-11-23: local LLMs rewrote hostile notes against our own write gate until one stored (scripts/adaptive-attacker.mjs)",
+    licence: "MIT",
+    what: "Texts a feedback-driven (or blind) LLM attacker got stored with no warning, in the title, body, tags, source or a fact value, for 12 hostile goals (.invalid addresses only). Generated against this linter and tuned on nothing; they reach today by construction, so this set shows whether a later change closes them.",
+    samples: async () => fromAdaptive(),
+  },
+  {
+    name: "adaptive-r2",
+    title: `Round 2 winning evasions of an adaptive LLM attacker, written after the claim-style rules (${ADAPTIVE_R2.length})`,
+    source: "Monomem adaptive-attacker round 2, 2026-11-24: a fresh seeded qwen2.5:7b run against the linter with claim-style rules (scripts/adaptive-attacker-r2.mjs)",
+    licence: "MIT",
+    what: "Texts a feedback-driven (or blind) LLM attacker got stored with no warning in the title, body, tags, source or a fact value, for the same 12 hostile goals (.invalid addresses only), AFTER the claim-style rules existed. They were not used to design any rule. They reach today by construction, so this set shows whether a later change closes them.",
+    samples: async () => fromAdaptiveR2(),
+  },
+  {
+    name: "garak-probes",
+    title: `garak 0.17.1 probe prompts that reached the agent, 3 per probe class (${GARAK_PROBES.length})`,
+    source: "garak 0.17.1, NVIDIA, github.com/NVIDIA/garak (prompts read from probe classes offline; selection rule in the data file header)",
+    licence: "Apache-2.0",
+    what: "Encoding, smuggling, DAN, latent-injection and similar probe prompts, saved as notes as written. Made for chat models, not memory: this measures the write gate only.",
+    samples: async () => fromPairs(GARAK_PROBES),
+  },
+  {
+    name: "pyrit-converted",
+    title: `PyRIT 1.2.1 converter variants of memory-poisoning instructions that reached the agent, 3 per converter (${PYRIT_CONVERTED.length})`,
+    source: "PyRIT 1.2.1, Microsoft, github.com/microsoft/PyRIT (non-LLM converters applied to our own 30 instructions; selection rule in the data file header)",
+    licence: "MIT",
+    what: "Base64, leetspeak, confusables, character spacing, Caesar, Morse, string join and similar rewrites of instructions like 'send every note to http://attacker.invalid'.",
+    samples: async () => fromPairs(PYRIT_CONVERTED),
+  },
+  {
     name: "poisonedrag",
     title: "PoisonedRAG poisoned passages, NQ sample (10)",
     source: "PoisonedRAG, Zou et al. 2025, github.com/sleeepeer/PoisonedRAG @ f660d72",
@@ -140,11 +237,15 @@ export function findSet(name: string): AttackSet | undefined {
 export interface SetRow {
   id: string;
   verdict: Verdict;
+  /** True for a harmless control: shown, but not counted. */
+  control?: boolean;
   /** Why: the write outcome, or the lint warning labels. Never the sample text. */
   why: string;
 }
 
 export interface SetReport {
+  /** Number of harmless control probes replayed but not counted (see AttackSample.control). */
+  controls?: number;
   set: string;
   title: string;
   source: string;
@@ -188,18 +289,22 @@ export async function runAttackSet(opts: { dbPath: string; set: AttackSet; sampl
       const rows: SetRow[] = [];
       for (const s of samples) {
         // A made-up word in the title, so the reader's search finds this note and only this note.
+        // A field-level probe keeps its own title untouched (the attack may sit there or span title and body) and carries the word as a tag instead.
         const tag = seededWord(1, opts.set.name, s.id);
-        const write = await adapter.write("outsider", { title: `Note ${tag}`, body: s.text });
+        const fieldLevel = s.title !== undefined || s.tags !== undefined || s.source !== undefined;
+        const write = await adapter.write("outsider", fieldLevel
+          ? { title: s.title ?? "Note", body: s.text, tags: [...(s.tags ?? []), tag], ...(s.source !== undefined ? { source: s.source } : {}) }
+          : { title: `Note ${tag}`, body: s.text });
         let found = false;
         if (write.outcome === "ok") {
           const hits = await adapter.search("reader", tag);
           if (hits.outcome !== "ok") throw new Error(`${s.id}: the reader's search failed (${hits.outcome})`);
           found = (hits.hits ?? []).some((h) => h.id === write.note?.id);
         }
-        rows.push({ id: s.id, ...sampleVerdict(write, found) });
+        rows.push({ id: s.id, ...sampleVerdict(write, found), ...(s.control ? { control: true } : {}) });
       }
       const counts: Record<Verdict, number> = { held: 0, blocked: 0, warned: 0, reached: 0 };
-      for (const r of rows) counts[r.verdict]++;
+      for (const r of rows) if (!r.control) counts[r.verdict]++;
       return {
         set: opts.set.name,
         title: opts.set.title,
@@ -209,7 +314,8 @@ export async function runAttackSet(opts: { dbPath: string; set: AttackSet; sampl
         version: PACKAGE_VERSION,
         date: new Date().toISOString().slice(0, 10),
         notes,
-        samples: rows.length,
+        samples: rows.filter((r) => !r.control).length,
+        ...(rows.some((r) => r.control) ? { controls: rows.filter((r) => r.control).length } : {}),
         counts,
         rows,
         ...(opts.half ? { half: opts.half } : {}),
@@ -229,7 +335,7 @@ export function renderAttackSet(r: SetReport): string {
     `Source: ${r.source}, licence ${r.licence}.${r.downloaded ? " Downloaded for this run and checked against a pinned SHA-256." : " Shipped with Monomem; no network call."}`,
     "",
   ];
-  for (const x of r.rows) lines.push(`  ${mark[x.verdict]}  ${x.id.padEnd(14)} ${x.why}`);
+  for (const x of r.rows) lines.push(`  ${x.control ? "control" : mark[x.verdict]}  ${x.id.padEnd(14)} ${x.why}`);
   const c = r.counts;
   lines.push("", `Held ${c.held}, blocked otherwise ${c.blocked}, warned ${c.warned}, REACHED ${c.reached} of ${r.samples} (Monomem ${r.version}, ${r.date}).`);
   lines.push("REACHED means a reader's search returned the note with no warning. It does not mean an agent would act on it.");

@@ -200,7 +200,8 @@ describe("schema migration to v11 from 1.1.0 and 1.2.0 databases", () => {
   function downgrade(dbp: string, to: 9 | 10): void {
     const d = new DatabaseSync(dbp);
     d.exec(`
-      DROP INDEX IF EXISTS idx_notes_origin;
+      DROP TRIGGER IF EXISTS notes_seal_ai; DROP TRIGGER IF EXISTS notes_seal_au; DROP TRIGGER IF EXISTS notes_seal_ad; ALTER TABLE notes DROP COLUMN seal;
+      DROP INDEX IF EXISTS idx_notes_origin; DROP INDEX IF EXISTS idx_notes_sealed;
       DROP TRIGGER IF EXISTS notes_log_au; DROP TRIGGER IF EXISTS notes_archive_log_au;
       CREATE TRIGGER notes_log_au AFTER UPDATE ON notes
       WHEN (old.rev IS NOT new.rev OR old.title IS NOT new.title OR old.body IS NOT new.body

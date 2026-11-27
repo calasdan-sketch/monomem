@@ -129,9 +129,9 @@ describe("scenario files", () => {
   });
 
   test("ids are unique and carry the suite letter", () => {
-    const letter: Record<string, string> = { stale: "A", contradiction: "B", isolation: "C", provenance: "D", poison: "E" };
+    const letter: Record<string, string> = { stale: "A", contradiction: "B", isolation: "C", provenance: "D", poison: "EF" };
     assert.equal(new Set(all.map((s) => s.id)).size, all.length);
-    for (const s of all) assert.equal(s.id[0], letter[s.suite], `${s.id} is in suite ${s.suite}`);
+    for (const s of all) assert.ok(letter[s.suite].includes(s.id[0]), `${s.id} is in suite ${s.suite}`);
   });
 
   test("file names start with the scenario id", () => {
@@ -381,9 +381,11 @@ describe("against Monomem", () => {
     assert.equal(gaps["GAP-POISON-MDLINK"].fixed_in, "2.0.0");
     assert.equal(gaps["GAP-OBSOLETE-UNREPLACED"].status, "fixed");
     assert.equal(gaps["GAP-OBSOLETE-UNREPLACED"].fixed_in, "1.5.0");
-    assert.deepEqual(first.known_gaps.map((g) => g.id), []);
-    assert.equal(first.summary.known_gap, 0);
-    assert.deepEqual(first.scenarios.filter((s) => s.known_gap !== undefined).map((s) => s.id), []);
+    // The 2026-11-23 attack expansion (F scenarios) declares its own open gaps; none of the older ones is open.
+const OPEN = ["GAP-ADAPTIVE-REWRITE", "GAP-ADAPTIVE-REWRITE-R2", "GAP-PROBE-CONTEXT", "GAP-PROBE-ENCODING", "GAP-PROBE-GARAK-PYRIT", "GAP-PROBE-STEGO", "GAP-PROBE-TOOLSTYLE"];
+    assert.deepEqual(first.known_gaps.map((g) => g.id).sort(), OPEN);
+    assert.equal(first.summary.known_gap, first.scenarios.filter((x) => x.id.startsWith("F") && x.known_gap).length);
+    assert.deepEqual(first.scenarios.filter((s) => s.known_gap !== undefined && !s.id.startsWith("F")).map((s) => s.id), []);
     for (const id of ["A33", "A34", "A35", "A36", "A37", "A38"]) assert.equal(first.scenarios.find((s) => s.id === id)?.status, "pass", id);
     assert.equal(first.scenarios.find((s) => s.id === "E11")?.status, "pass");
   });

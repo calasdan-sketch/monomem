@@ -115,7 +115,19 @@ export function recallTokens(env: NodeJS.ProcessEnv = process.env): number {
 
 export { insideFolder };
 
+/** Git answers started early (prefetchGitSignals), taken once by gitSignals: the hook asks git while it opens the store. */
+const prefetched = new Map<string, Promise<ContextSignals>>();
+export function prefetchGitSignals(cwd: string): void {
+  if (!prefetched.has(cwd)) prefetched.set(cwd, askGit(cwd));
+}
 export async function gitSignals(cwd: string): Promise<ContextSignals> {
+  const early = prefetched.get(cwd);
+  prefetched.delete(cwd);
+  return early ?? askGit(cwd);
+}
+async function askGit(cwd: string): Promise<ContextSignals> {
+  // Outside any repository git answers "" three times; reading the .git files first saves the three process starts (about 70 ms on Windows).
+  if (!process.env.GIT_DIR && !process.env.GIT_WORK_TREE && gitHead(cwd) === null) return { branch: "", diffFiles: [] };
   const [b, d, r] = await Promise.all([
     gitRun(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]),
     gitRun(cwd, ["diff", "--no-ext-diff", "--name-only", "HEAD"]),
@@ -193,7 +205,7 @@ export function newNotesSince(store: Store, sessionId: string, opts: { namespace
   if (!since) return "";
   // ponytail: looks at the 200 most recently updated notes; "and N more" undercounts past that, memory_since has the rest.
   const fresh = store
-    .list({ namespace: opts.namespace, limit: 200, withoutTags: [NEVER_SHOW_TAG, CHAT_TAG], ...(opts.notWrittenBy ? { notWrittenBy: opts.notWrittenBy } : {}) })
+    .list({ namespace: opts.namespace, limit: 200, count: false, withoutTags: [NEVER_SHOW_TAG, CHAT_TAG], ...(opts.notWrittenBy ? { notWrittenBy: opts.notWrittenBy } : {}) })
     .notes.filter((n) => n.updated_at > since && n.session_id !== sessionId && n.written_by !== "capture" && !heldFromSessionStart(n, expiryEnforced(store))); // 1.4.0: not even the title of a held-back note
   if (!fresh.length) return "";
   const since_ = "memory_catch_up";

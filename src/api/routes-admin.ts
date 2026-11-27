@@ -15,7 +15,7 @@ import { noteRollbackPreview, noteRollbackConfirm } from "../rollback-note.js";
 import { noteTouched, touchedText } from "../blast-radius.js";
 import type { Caller } from "../supersede.js";
 import { heldEditDiff } from "../line-diff.js";
-import { cachedFor, sendError, sendJson, intParam } from "./shared.js";
+import { cachedFor, sendError, sendJson, intParam, parseJsonBody } from "./shared.js";
 import type { ApiCtx, ApiReq } from "./context.js";
 
 export async function adminRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
@@ -83,7 +83,7 @@ export async function adminRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
     }
     let body: { namespace?: unknown; on?: unknown; all?: unknown };
     try {
-      body = JSON.parse((await readBody(req)) || "{}") as { namespace?: unknown; on?: unknown; all?: unknown };
+      body = parseJsonBody(await readBody(req)) as { namespace?: unknown; on?: unknown; all?: unknown };
     } catch {
       sendJson(res, 400, { error: "invalid JSON body" });
       return true;
@@ -148,7 +148,7 @@ export async function adminRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
       } else {
         let body: { writer?: unknown };
         try {
-          body = JSON.parse((await readBody(req)) || "{}") as { writer?: unknown };
+          body = parseJsonBody(await readBody(req)) as { writer?: unknown };
         } catch {
           sendJson(res, 400, { error: "invalid JSON body" });
           return true;
@@ -176,7 +176,7 @@ export async function adminRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
     }
     let body: { id?: unknown; pinned?: unknown };
     try {
-      body = JSON.parse((await readBody(req)) || "{}") as { id?: unknown; pinned?: unknown };
+      body = parseJsonBody(await readBody(req)) as { id?: unknown; pinned?: unknown };
     } catch {
       sendJson(res, 400, { error: "invalid JSON body" });
       return true;
@@ -230,7 +230,7 @@ export async function adminRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
     const caller: Caller = { scope, ...(nsCtx.active ? { ownNamespace: nsCtx.ownNamespace } : {}) };
     let b: { writer?: unknown; since?: unknown; include_conflicts?: unknown; token?: unknown; note?: unknown; include_likely?: unknown };
     try {
-      b = JSON.parse((await readBody(req)) || "{}");
+      b = parseJsonBody(await readBody(req));
     } catch {
       sendJson(res, 400, { error: "invalid JSON body" });
       return true;
@@ -299,7 +299,7 @@ export async function adminRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
       } else if (qMatch[2] === "keep-history") {
         let b: { by?: unknown } = {};
         try {
-          b = JSON.parse((await readBody(req)) || "{}") as { by?: unknown };
+          b = parseJsonBody(await readBody(req)) as { by?: unknown };
         } catch {
           sendJson(res, 400, { error: "invalid JSON body" });
           return true;

@@ -17,13 +17,14 @@ import { Store, ValidationError, NoteUnreadableError } from "./store.js";
 import { distrustedOptInRefusal } from "./trust.js";
 import { originAllowed, hostAllowed, hostRefusal, clientKey, tokenKey, authenticateEntry, scopeAllows } from "./security.js";
 import { type TokenEntry, resolveToken, tokenId, sha256Hex } from "./config.js";
-import { PayloadTooLargeError, readBody, applyServerLimits, healthBody, serverProof } from "./http-common.js";
+import { PayloadTooLargeError, readPreAuthBody, applyServerLimits, healthBody, serverProof } from "./http-common.js";
 import { DASHBOARD_HTML, DASHBOARD_JS, FAVICON_PNG } from "./dashboard.js";
 import { type ServerNamespaceOpts, type NsCtx, NS_DISABLED, resolveRequestNamespace } from "./namespace.js";
 import { redeemLogin } from "./login-code.js";
+import { loginGuard } from "./api/login-guard.js";
 import { randomBytes } from "node:crypto";
 import { ORIGIN_DECLARED, ReadTaint, unconfirmedIdsIn } from "./taint.js";
-import { SIGN_PAGES, signAsset, DASHBOARD_SESSION_TTL_MS, requiredScope, isReadRoute, pendingReads, sendJson, flagParam } from "./api/shared.js";
+import { SIGN_PAGES, signAsset, DASHBOARD_SESSION_TTL_MS, requiredScope, isReadRoute, pendingReads, sendJson, flagParam, parseJsonBody } from "./api/shared.js";
 import { apiContext, type ApiReq } from "./api/context.js";
 import { accountRoutes } from "./api/routes-account.js";
 import { noteRoutes } from "./api/routes-notes.js";
@@ -31,10 +32,11 @@ import { adminRoutes } from "./api/routes-admin.js";
 import { readRoutes } from "./api/routes-read.js";
 import { sessionRoutes } from "./api/routes-sessions.js";
 import { taskRoutes } from "./api/routes-tasks.js";
+import { digestRoutes } from "./api/routes-digest.js";
 import { backupRoutes } from "./api/routes-backup.js";
 import { trustRoutes } from "./api/routes-trust.js";
 import { uiRoutes, uiAssetRoute, mintLocalSession } from "./api/routes-ui.js";
-import { DASHBOARD_CSP } from "./ui/csp.js";
+import { DASHBOARD_CSP, DASHBOARD_EXTRA_HEADERS } from "./ui/csp.js";
 export { DASHBOARD_SESSION_TTL_MS, unknownNoteFields } from "./api/shared.js";
 
 export function createApiServer(
@@ -125,6 +127,7 @@ export function createApiServer(
           // Self-contained page: no external loads, no framing. Scripts run only from /dashboard.js (no inline handlers:
           // buttons use data-do attributes and one dispatcher, src/ui/js-actions.ts). Styles may be inline.
           "Content-Security-Policy": DASHBOARD_CSP,
+          ...DASHBOARD_EXTRA_HEADERS,
         });
         res.end(DASHBOARD_HTML);
         return;
@@ -147,6 +150,7 @@ export function createApiServer(
         res.writeHead(200, {
           "Content-Type": "application/javascript; charset=utf-8",
           "X-Content-Type-Options": "nosniff",
+          ...DASHBOARD_EXTRA_HEADERS,
         });
         res.end(DASHBOARD_JS);
         return;
@@ -156,13 +160,20 @@ export function createApiServer(
         if (anonLimited()) return;
         let code: unknown;
         try {
-          code = (JSON.parse((await readBody(req)) || "{}") as { code?: unknown }).code;
-        } catch {
+          code = (parseJsonBody(await readPreAuthBody(req)) as { code?: unknown }).code;
+        } catch (e) {
+          if (e instanceof PayloadTooLargeError) {
+            sendJson(res, 413, { error: "payload too large" });
+            return;
+          }
           sendJson(res, 400, { error: "invalid JSON body" });
           return;
         }
         const redeemed = redeemLogin(code);
         if (!redeemed) {
+          // The right code always works (it is checked first): behind a tunnel everyone shares one key, and a stranger's wrong guesses must not lock the owner out.
+          if (loginGuard.blocked(ip)) return void sendJson(res, 429, { error: "too many wrong sign-in codes from this address; wait a minute" });
+          loginGuard.fail(ip);
           sendJson(res, 401, { error: "that sign-in link has expired or was already used. Run monomem open again." });
           return;
         }
@@ -313,6 +324,7 @@ export function createApiServer(
         },
       };
       if (await accountRoutes(c, r)) return;
+      if (await digestRoutes(c, r)) return;
       if (await noteRoutes(c, r)) return;
       if (await adminRoutes(c, r)) return;
       if (await readRoutes(c, r)) return;

@@ -24,7 +24,7 @@ table{border-collapse:collapse;width:100%} td,th{padding:.35rem .6rem;border-bot
 .ok{color:#0f7a5c;font-weight:700} .bad{color:#c4263a;font-weight:700} code{background:#eef1f8;padding:.1rem .3rem;border-radius:4px}
 footer{margin-top:1.5rem;color:#505b78;font-size:.85rem}
 @media (prefers-color-scheme:dark){body{background:#0c0f16;color:#e8ecf5}td,th{border-color:#232a3b}.meta,footer{color:#93a0bd}code{background:#1d2435}.ok{color:#35d0a5}.bad{color:#ff5d6c}}
-</style></head><body>
+</style></head><body><main>
 <h1>Monomem benchmark receipt</h1>
 <div class="meta">Monomem ${esc(r.version)} &middot; ${esc(meta.date)} &middot; Node ${esc(r.run.node)} on ${esc(r.run.platform)} &middot; adapter ${esc(r.adapter)} &middot; seed ${r.seed} &middot; ${r.run.elapsed_ms} ms</div>
 <p class="${r.ok ? "ok" : "bad"}">${r.ok ? "All scenarios passed." : "Some scenarios failed."} ${t.pass} passed, ${t.fail + t.gap_closed} failed, ${t.known_gap} known gaps, ${t.skipped} skipped (${t.scenarios} scenarios, ${t.checks} checks, ${t.checks_failed} checks failed).</p>
@@ -36,6 +36,6 @@ ${keys}
 <h2>Known gaps</h2><ul>${gaps || "<li>none</li>"}</ul>
 <h2>Reproduce</h2><p><code>${esc(cmd)}</code> &mdash; offline, no model, same result every run with the same seed.</p>
 <footer><b>What this does not measure.</b> ${r.limits.map(esc).join(" ")} It is not a search-quality or retrieval benchmark, and it says nothing about other products.</footer>
-</body></html>
+</main></body></html>
 `;
 }

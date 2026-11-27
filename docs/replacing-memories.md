@@ -50,6 +50,18 @@ shortened warning, or confirm without asking. The tool descriptions tell the age
 you. The command line is the strongest gate: it asks you, at your own keyboard, and cannot be answered by an agent.
 For notes you care about, replace from the command line.
 
+## Who confirms: a person, not an agent (on the hardening branch; planned for 1.8.0, not yet released)
+
+Before this change (1.7.0 and earlier) the preview handed the one-time code back to the same agent, and the tool text only *asked* the agent to show the warning to a person and wait. Nothing in the server enforced it, so an agent could preview and then confirm its own replacement. Now the server enforces it.
+
+- **An agent can still preview.** A preview changes nothing, so an agent can run it and show you the warning.
+- **An agent cannot confirm.** An MCP connection is never treated as a person, not even with an admin key, because the agent behind it is the one that would be approving its own replacement. An app with only a write key over REST is refused too. The refusal happens before the code is opened, so the code is not spent and nothing about it is revealed.
+- **A person confirms** with the `monomem supersede` command, or as an administrator in the dashboard or over REST with an admin key. Codes are bound to who made them, so the person runs their own preview: if the new text is not a note yet, the agent saves it first (`memory_save`), then you run `monomem supersede --old 12 --new-id 40`, read the same warning and type the number of notes to confirm.
+- **Undo is unchanged.** Bringing a note back only restores; it has its own existing rule (the person who replaced it, or an administrator).
+- **The operator can change the rule.** `MONOMEM_REPLACE_CONFIRM=agent` restores the 1.6 and 1.7 behaviour (any caller with a write key may confirm). Any other value means `person`.
+
+**Honest limit.** This stops an agent that reaches Monomem over MCP, and an app that has only a write key. It cannot stop an agent that can also run commands as you on your own computer: that agent can run the `monomem` command too. If you give an agent a shell, treat it as you.
+
 ## Nothing is deleted
 
 A confirmed replacement marks the old note **replaced** and links it to the note that replaced it

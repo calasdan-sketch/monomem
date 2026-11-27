@@ -22,7 +22,7 @@ import { promotionRefusal } from "./taint.js";
 import { DEFAULT_SENSITIVITY, sensitivityRank, strictestLabel } from "./sensitivity.js";
 import { PREVIEW_MAX_OLD, type SupersedeReplacementInput } from "./supersede-shared.js";
 import { lineDiff } from "./line-diff.js";
-import { blockedText, doneText, previewText, safe, type PreviewFlags, type PreviewNote } from "./supersede-text.js";
+import { blockedText, doneText, personConfirmText, previewText, safe, type PreviewFlags, type PreviewNote } from "./supersede-text.js";
 
 export { PREVIEW_MAX_OLD, type SupersedeReplacementInput } from "./supersede-shared.js";
 
@@ -33,6 +33,24 @@ const SNIPPET_PREVIEW = 600;
 export function supersedeTtlSeconds(): number {
   const n = Number((process.env.MONOMEM_SUPERSEDE_TTL_SECONDS ?? "").trim());
   return Number.isFinite(n) && n > 0 ? Math.min(Math.max(Math.floor(n), 1), 3600) : 600;
+}
+
+/**
+ * Who may CONFIRM a replacement (1.8.0). MONOMEM_REPLACE_CONFIRM: "person" (the default; anything unrecognised also means
+ * person) = only a person confirms; "agent" = any caller with a write key, as in 1.6 and 1.7.
+ */
+export function replaceConfirmMode(): "person" | "agent" {
+  return (process.env.MONOMEM_REPLACE_CONFIRM ?? "").trim().toLowerCase() === "agent" ? "agent" : "person";
+}
+
+/**
+ * A person, not an agent: the monomem CLI, or an admin-scope REST/dashboard caller. An MCP connection is NEVER a person, not
+ * even with an admin key (`hideArchived` marks every MCP caller), because the agent on the other end of it is the one
+ * that would be approving its own replacement. Honest limit: an agent that can also run shell commands as the machine
+ * owner can run the CLI; this closes the agent-over-MCP and app-with-a-write-key paths, not a compromised machine.
+ */
+function isPersonCaller(c: Caller): boolean {
+  return c.hideArchived !== true && scopeAllows(c.scope, "admin");
 }
 
 /** A refusal with an HTTP-ish status and, for a hard "not allowed", the plain-language reason. */
@@ -138,6 +156,8 @@ export interface SupersedePreview {
   expires_in_seconds: number;
   /** True when confirming must also say acknowledge_risk (an administrator, after a red flag). */
   requires_acknowledgement: boolean;
+  /** "person" = this caller cannot confirm; a person must (see personConfirmText). "caller" = this caller may confirm with the code. */
+  confirm_by: "person" | "caller";
   notes_to_retire: PreviewNote[];
   replacement: { kind: "new" | "existing"; id?: number; title: string; chars: number; tags: string[]; confidence?: number };
   flags: PreviewFlags;
@@ -248,7 +268,12 @@ export function supersedePreview(
 
   const diff = olds.length === 1 ? previewDiff(olds[0].body, content.body) : [];
   const notes = olds.map((o) => describeOld(store, o, annotateStaleness(o).stale));
-  const how = flags.needs_admin_ack ? howToConfirm.replace("{token}", token) + "\n(You must also say you accept the red flag above: acknowledge_risk.)" : howToConfirm.replace("{token}", token);
+  const personOnly = replaceConfirmMode() === "person" && !isPersonCaller(caller);
+  const how = personOnly
+    ? personConfirmText(ids, newId, false)
+    : flags.needs_admin_ack
+      ? howToConfirm.replace("{token}", token) + "\n(You must also say you accept the red flag above: acknowledge_risk.)"
+      : howToConfirm.replace("{token}", token);
   const warning = previewText({
     notes,
     replacement: { kind: replacementView.kind, id: replacementView.id, title: content.title, snippet: safe(content.body, SNIPPET_PREVIEW), chars: content.body.length, tags: content.tags, confidence: content.confidence ?? undefined },
@@ -264,6 +289,7 @@ export function supersedePreview(
     expires_at: new Date(expMs).toISOString(),
     expires_in_seconds: ttl,
     requires_acknowledgement: flags.needs_admin_ack,
+    confirm_by: personOnly ? "person" : "caller",
     notes_to_retire: notes,
     replacement: replacementView,
     flags,
@@ -298,6 +324,8 @@ export function supersedeConfirm(
   req: { token: unknown; new_note?: SupersedeReplacementInput | null; acknowledge_risk?: unknown }
 ): SupersedeResult {
   if (!scopeAllows(caller.scope, "write")) throw new SupersedeError("replacing a note needs a write or admin token", 403);
+  // 1.8.0: refused BEFORE the code is opened, so the code is not spent and nothing about it is revealed.
+  if (replaceConfirmMode() === "person" && !isPersonCaller(caller)) throw new SupersedeError(personConfirmText(null, null, true), 403);
   if (typeof req.token !== "string" || !req.token) throw new SupersedeError("a confirmation code from the preview is required", 400);
   // ONE message for a damaged code, a made-up code, and a real code made for somebody else (or for another tenant), and the caller is
   // checked BEFORE the expiry and the used-check, so a code that is not yours tells you nothing, not even whether it is still good.
@@ -459,7 +487,9 @@ export function noteHistory(store: Store, caller: Caller, id: number, opts: { in
     : all.filter((e) => !store.isDistrustedWith(rules, sid, { namespace: n.namespace, written_by: e.written_by || e.claimed_writer || "" }));
   return {
     note_id: id,
-    current: { version: n.rev, title: n.title, written_by: n.written_by, updated_at: n.updated_at },
+    // An admin may read the history of a note whose writer is distrusted (that is how they review it), but its current title and
+    // writer are what the by-id read hides without the opt-in, so they are blanked here too.
+    current: { version: n.rev, ...(opts.includeDistrusted || store.readVisible(id) ? { title: n.title, written_by: n.written_by } : { title: "", written_by: "" }), updated_at: n.updated_at },
     versions: visible,
     hidden_by_trust_policy: all.length - visible.length,
   };

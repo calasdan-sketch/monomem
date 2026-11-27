@@ -1,0 +1,10 @@
+import { mkdtempSync } from "node:fs"; import { join } from "node:path"; import { tmpdir } from "node:os";
+const root = process.argv[2]; const d = mkdtempSync(join(tmpdir(), "mm-imp-"));
+Object.assign(process.env, { MONOMEM_HOME: d, ONEMEMORY_HOME: d, MONOMEM_AUDIT_LOG: join(d, "a.log") });
+const T = async (n, f) => { const t = performance.now(); await f(); return `${n} ${(performance.now() - t).toFixed(0)}`; };
+const out = [];
+out.push(await T("sdk", () => import(`file:///${root}/node_modules/@modelcontextprotocol/sdk/dist/esm/server/mcp.js`)));
+out.push(await T("store", () => import(`file:///${root}/dist/src/store.js`)));
+out.push(await T("search-service", () => import(`file:///${root}/dist/src/search-service.js`)));
+out.push(await T("core", () => import(`file:///${root}/dist/src/mcp-server-core.js`)));
+console.log(root.split("/").pop(), out.join("  "));

@@ -3,7 +3,7 @@
 // the environment after each case.
 import { test, describe, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { resolveTokens, type TokenEntry } from "../src/config.js";
+import { resolveToken, resolveTokens, type TokenEntry } from "../src/config.js";
 
 // User-supplied tokens must be >= 32 chars.
 const L = (n: string): string => n.padEnd(32, "-");
@@ -91,5 +91,19 @@ describe("resolveTokens", () => {
     process.env.MONOMEM_TOKEN = "hunter22";
     delete process.env.MONOMEM_TOKENS;
     assert.throws(() => resolveTokens(), /MONOMEM_TOKEN is too short/);
+  });
+});
+
+describe("the .env.example placeholder key", () => {
+  test("is refused with a clear message instead of being accepted as the key", () => {
+    const keep = process.env.MONOMEM_TOKEN;
+    try {
+      process.env.MONOMEM_TOKEN = "change-me-to-a-long-random-string";
+      assert.throws(() => resolveToken(), /still the placeholder from \.env\.example/);
+      assert.throws(() => resolveTokens(), /still the placeholder/);
+    } finally {
+      if (keep === undefined) delete process.env.MONOMEM_TOKEN;
+      else process.env.MONOMEM_TOKEN = keep;
+    }
   });
 });

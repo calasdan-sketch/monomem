@@ -1,4 +1,4 @@
-// `monomem import --from claude-mem|mem0|basic-memory|mcp-memory|codex|notion`: bring another memory tool's notes into Monomem.
+// `monomem import --from claude-mem|mem0|basic-memory|mcp-memory|codex|notion|engram|agentmemory|ai-memory`: bring another memory tool's notes into Monomem.
 //
 //   * claude-mem   (github.com/thedotmack/claude-mem): its SQLite database, ~/.claude-mem/claude-mem.db by default
 //                  ($CLAUDE_MEM_DATA_DIR/claude-mem.db when set). Opened READ-ONLY. `observations` become rows of kind
@@ -34,8 +34,10 @@ import { LIMITS, printable } from "./security.js";
 import type { SetupEnv, SetupIO } from "./setup.js";
 import { codexHome, readCodexMemories } from "./importers/codex.js";
 import { readNotion } from "./importers/notion.js";
+import { newRivalStats, readAgentMemory, readAiMemory, readEngram } from "./importers/rivals.js";
+import { previewSample } from "./importers/preview.js";
 
-export const FOREIGN_SOURCES = ["claude-mem", "mem0", "basic-memory", "mcp-memory", "claude-code-chats", "codex", "notion"] as const;
+export const FOREIGN_SOURCES = ["claude-mem", "mem0", "basic-memory", "mcp-memory", "claude-code-chats", "codex", "notion", "engram", "agentmemory", "ai-memory"] as const;
 export type ForeignSource = (typeof FOREIGN_SOURCES)[number];
 
 const MAX_JSON_BYTES = 256 * 1024 * 1024;
@@ -93,6 +95,7 @@ export function defaultPath(from: ForeignSource, e: Pick<SetupEnv, "home" | "env
   if (from === "basic-memory") return join(e.home, "basic-memory");
   if (from === "claude-code-chats") return join(e.env.CLAUDE_CONFIG_DIR || join(e.home, ".claude"), "projects");
   if (from === "codex") return codexHome(e);
+  if (from === "engram") return join(e.env.ENGRAM_DATA_DIR?.trim() || join(e.home, ".engram"), "engram.db");
   if (from === "mcp-memory") {
     if (e.env.MEMORY_FILE_PATH) return resolve(e.env.MEMORY_FILE_PATH.replace(/^~(?=$|[\\/])/, e.home));
     const found = findMcpMemoryFiles(e);
@@ -342,6 +345,8 @@ export interface ForeignImportOptions {
   yes: boolean;
   namespace?: string;
   dbPath: string;
+  /** import --auto: show sample titles and what the linter may hold, then write only with `yes`. */
+  preview?: boolean;
 }
 
 interface Candidate {
@@ -383,7 +388,7 @@ export async function runForeignImport(e: Pick<SetupEnv, "home" | "env" | "cwd">
       );
       return 1;
     }
-    io.err(from === "notion" ? "Name the Notion export (the .zip, or the folder you unzipped it to): monomem import --from notion --path <export.zip>" : `Name the mem0 export file: monomem import --from mem0 --path <export.json>`);
+    io.err(from === "notion" ? "Name the Notion export (the .zip, or the folder you unzipped it to): monomem import --from notion --path <export.zip>" : `Name the ${from} export file: monomem import --from ${from} --path <file>`);
     return 1;
   }
   if (!existsSync(path)) {
@@ -395,9 +400,10 @@ export async function runForeignImport(e: Pick<SetupEnv, "home" | "env" | "cwd">
   const mcpStats: McpStats = { relations: 0, badLines: 0 };
   const chatStats: ChatStats = { sessions: 0, tooBig: 0, badLines: 0 };
   const zipStats = { skipped: 0 };
+  const rivalStats = newRivalStats();
   try {
     items =
-      from === "claude-mem" ? readClaudeMem(path) : from === "mem0" ? readMem0(path) : from === "mcp-memory" ? readMcpMemory(path, mcpStats) : from === "claude-code-chats" ? readClaudeCodeChats(path, chatStats, replyContextIsClean) : from === "codex" ? readCodexMemories(path, MAX_FILE_BYTES, zipStats) : from === "notion" ? readNotion(path, MAX_FILE_BYTES, zipStats) : readBasicMemory(path);
+      from === "claude-mem" ? readClaudeMem(path) : from === "mem0" ? readMem0(path) : from === "mcp-memory" ? readMcpMemory(path, mcpStats) : from === "claude-code-chats" ? readClaudeCodeChats(path, chatStats, replyContextIsClean) : from === "engram" ? readEngram(path, rivalStats) : from === "agentmemory" ? readAgentMemory(path, rivalStats) : from === "ai-memory" ? readAiMemory(path, rivalStats) : from === "codex" ? readCodexMemories(path, MAX_FILE_BYTES, zipStats) : from === "notion" ? readNotion(path, MAX_FILE_BYTES, zipStats) : readBasicMemory(path);
   } catch (err) {
     io.err(`Could not read ${path}: ${(err as Error).message}`);
     return 1;
@@ -439,7 +445,8 @@ export async function runForeignImport(e: Pick<SetupEnv, "home" | "env" | "cwd">
     if (heldSkipped) io.out(`  ${heldSkipped} item(s) were held by the memory linter on an earlier run and are not queued again (see \`monomem review held\`).`);
     if (zipStats.skipped && from === "codex") io.out(`  ${zipStats.skipped} Codex memory file(s) skipped: larger than ${MAX_FILE_BYTES / 1024 / 1024} MiB, or not a plain file.`);
     else if (zipStats.skipped) io.out(`  ${zipStats.skipped} Markdown file(s) skipped: larger than ${MAX_FILE_BYTES / 1024 / 1024} MiB, encrypted, or packed in a way this reader does not know.`);
-    if (opts.dryRun && from === "mcp-memory") previewMcp(io, todo, mcpStats);
+    if ((opts.dryRun || opts.preview) && from === "mcp-memory") previewMcp(io, todo, mcpStats);
+    else previewSample(io, todo, rivalStats, opts.dryRun || !!opts.preview);
     if (from === "claude-code-chats") {
       io.out(`  Read ${chatStats.sessions} conversation file(s).${chatStats.tooBig ? ` ${chatStats.tooBig} skipped: larger than 256 MB.` : ""}${chatStats.badLines ? ` ${chatStats.badLines} damaged line(s) skipped.` : ""}`);
       io.out("  These notes go into the \"chats\" namespace (unless --namespace) and are never shown at session start; search finds them.");

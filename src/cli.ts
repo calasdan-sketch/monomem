@@ -14,7 +14,6 @@ import { type Sensitivity, mayEmbed, DEFAULT_SENSITIVITY, SENSITIVITY_HELP, SENS
 //   monomem mcp       start the MCP server over stdio (for Claude Code/Cursor/...)
 //   monomem doctor    check Node, database, and token
 //   monomem init      print the config snippet to wire it into your agent
-//   monomem help      show help
 
 /** Every command main() accepts, for the unknown-command check and the "did you mean" hint. */
 const COMMANDS = [
@@ -24,7 +23,7 @@ const COMMANDS = [
   "encrypt", "meter", "receipts", "why", "never-show", "supersede", "history", "pin", "unpin", "rollback", "bench", "drill", "health", "audit", "verify-receipt",
   "add", "show", "ls", "forget", "edit", "connect", "open", "label", "scrub", "purge-deleted", "pii", "digest", "safety-report", "demo", "snippet", "confirm", "review", "taint", "config", "service", "stale", "project-rules", "update", "stop", "commit-trail", "backfill-marks",
   "help", "--help", "-h", "--version", "-v", "version",
-  "check", "activity", "tidy", "keys", "settings", "replace", "tasks", "oauth", "drift", "audit-memory", "prune", "handoff", "tools", "rescan",
+  "check", "activity", "tidy", "keys", "settings", "replace", "tasks", "oauth", "drift", "audit-memory", "prune", "handoff", "tools", "rescan", "lint-model", "verify-lossless", "integrity", "crash-check", "report", "blame", "ask",
 ];
 
 /** Plain edit distance; the command list is tiny, so the simple version is fine. */
@@ -76,7 +75,7 @@ function suggestCommand(cmd: string): string | undefined {
 async function reindex(): Promise<void> {
   const { DB_PATH } = await import("./config.js");
   const { Store } = await import("./store.js");
-  const { embeddingsEnabled, embeddingsConfig, noteEmbeddingText } = await import(
+  const { embeddingsEnabled, embeddingsConfig, noteEmbeddingText, vectorModelLabel } = await import(
     "./embeddings.js"
   );
   const { reindexEmbedder } = await import("./embed-retry.js"); // long first-call timeout and retries for a cold model
@@ -110,7 +109,7 @@ async function reindex(): Promise<void> {
     if (!mayEmbed(note)) continue; // private notes are not sent to the embeddings endpoint (MONOMEM_ALLOW_PRIVATE_REMOTE=1 allows it)
     const vec = await embed(noteEmbeddingText(note.title, note.body));
     if (vec) {
-      store.setVector(id, vec, cfg.model);
+      store.setVector(id, vec, vectorModelLabel(cfg));
       done += 1;
     } else {
       failed += 1;
@@ -1146,13 +1145,14 @@ async function importCmd(): Promise<void> {
   const { importMarkdown } = await import("./sync.js");
   const { flags, rest: importRest } = parseFlags(process.argv.slice(3), {
     values: ["dir", "file", "project", "namespace", "from", "path"],
-    bools: ["dry-run", "json", "allow-move", "dedupe", "no-dedupe", "require-attestation", "claude", "rules", "yes", "update", "include-index", "no-project"],
+    bools: ["dry-run", "json", "allow-move", "dedupe", "no-dedupe", "require-attestation", "claude", "rules", "yes", "update", "include-index", "no-project", "auto"],
   });
+  if (flags.auto === true) return void (process.exitCode = await (await import("./cli/import-auto.js")).runAutoImport((await import("./setup.js")).realEnv((await import("./config.js")).PACKAGE_VERSION, SELF_CLI), terminalIO(), { path: str(flags.path) || importRest[0], yes: flags.yes === true, namespace: str(flags.namespace), dbPath: DB_PATH }));
   if (str(flags.from)) {
     const { runForeignImport, FOREIGN_SOURCES } = await import("./foreign-import.js");
     const from = str(flags.from) as (typeof FOREIGN_SOURCES)[number];
     if (!FOREIGN_SOURCES.includes(from)) {
-      console.error(`Usage: monomem import --from ${FOREIGN_SOURCES.join("|")} [--path p] [--dry-run] [--yes] [--namespace ns]`);
+      console.error(`Unknown source '${from}'. Usage: monomem import --from ${FOREIGN_SOURCES.join("|")} [--path p] [--dry-run] [--yes] [--namespace ns]`);
       process.exit(1);
     }
     const { realEnv } = await import("./setup.js");
@@ -1793,9 +1793,8 @@ async function encryptCmd(): Promise<void> {
   const crypto = await import("./crypto.js");
   const { dirname } = await import("node:path");
   const { existsSync, renameSync, rmSync } = await import("node:fs");
-  // ONE key resolver: the same directory the Store itself looks in (beside
-  // the database), so MONOMEM_DB_PATH pointing elsewhere cannot split the
-  // key from the data.
+  // ONE key resolver: the directory the Store itself looks in (beside the database), so MONOMEM_DB_PATH
+  // pointing elsewhere cannot split the key from the data.
   const keyDir = dirname(DB_PATH);
   const [action] = process.argv.slice(3);
 
@@ -1803,7 +1802,8 @@ async function encryptCmd(): Promise<void> {
     console.error("Usage: monomem encrypt <enable|status [--surfaces] [--json]|disable>");
     process.exit(1);
   }
-
+  const refusal = (await import("./cli/encrypt-args.js")).unknownEncryptArgs(action, process.argv.slice(4));
+  if (refusal) return void (console.error(refusal), (process.exitCode = 1));
   if (action === "status") {
     const store = new Store(DB_PATH); // opening restores a key stranded by a crashed `disable`
     const enabled = crypto.encryptionEnabled(keyDir);
@@ -2013,12 +2013,12 @@ async function main(): Promise<void> {
   // `shown` keeps what the person typed, so `keys --help` is headed "monomem keys", not the old name it runs as.
   let shown = "";
   {
-    const { translateVerb, oldNameNoteOnce, TIDY_HELP } = await import("./cli/verbs.js");
+    const { translateVerb, oldNameNoteOnce, tidyHelpFor } = await import("./cli/verbs.js");
     const typed = process.argv.slice(2);
     shown = typed.filter((a) => a !== "--help" && a !== "-h").join(" ");
     const t = typed.length ? translateVerb(typed) : null;
     if (t?.[0] === "tidy") {
-      console.log(TIDY_HELP);
+      const h = tidyHelpFor(typed[1]); (h.code ? console.error : console.log)(h.text); process.exitCode = h.code;
       return;
     }
     if (t) process.argv = [...process.argv.slice(0, 2), ...t];
@@ -2074,8 +2074,7 @@ async function main(): Promise<void> {
   // Move 1.0.x state out of the package before anything opens the DB.
   // (`bench` runs on a throwaway store and must never touch the real data directory.)
   // A dry run of `import --claude` / `import --from` or `sync` must not create anything, not even the data folder.
-  const dry = process.argv.includes("--dry-run") && ((cmd === "import" && (process.argv.includes("--claude") || process.argv.includes("--from") || process.argv.includes("--rules"))) || cmd === "sync");
-  // The capture hooks (`hook`) never move or create data folders: they run on every tool call and must stay quick and quiet.
+  const dry = (process.argv.includes("--dry-run") || (process.argv.includes("--auto") && !process.argv.includes("--yes"))) && ((cmd === "import" && (process.argv.includes("--claude") || process.argv.includes("--auto") || process.argv.includes("--from") || process.argv.includes("--rules"))) || cmd === "sync");
   // doctor on a machine with no data folder (never set up, or after uninstall --purge) says so and creates nothing.
   if (cmd === "doctor" && (await (await import("./doctor/index.js")).notSetUp())) return;
   if (!dry && !["help", "--help", "-h", "init", "bench", "demo", "snippet", "setup", "uninstall", "hook", "update"].includes(cmd)) {
@@ -2101,7 +2100,7 @@ async function main(): Promise<void> {
       await (await import("./doctor/index.js")).doctor(SELF_CLI);
       break;
     case "init":
-      await (await import("./cli/connect.js")).init(SELF_CLI);
+      await (await import("./cli/init-repo.js")).initDispatch(SELF_CLI);
       break;
     case "setup":
       await (await import("./cli/connect.js")).setupCmd(SELF_CLI);
@@ -2174,7 +2173,8 @@ async function main(): Promise<void> {
     case "project-rules":
       await projectRulesCmd(process.argv.slice(3));
       break;
-    case "drift": case "audit-memory": case "prune": case "handoff": case "tools": case "rescan":
+    case "lint-model": await (await import("./cli/lint-model-cmd.js")).lintModelCmd(process.argv.slice(3)); break;
+    case "drift": case "audit-memory": case "prune": case "handoff": case "tools": case "rescan": case "verify-lossless": case "integrity":
       await (await import("./cli/round3.js")).round3Cmd(cmd, process.argv.slice(3));
       break;
     case "stale": {
@@ -2293,6 +2293,7 @@ async function main(): Promise<void> {
     case "commit-trail":
       await (await import("./cli/commit-trail.js")).commitTrailCmd(process.argv.slice(3));
       break;
+    case "blame": case "ask": await (await import("./cli/blame-cmd.js")).blameCmd(cmd, process.argv.slice(3)); break;
     case "why":
       await (await import("./why.js")).whyCmd(process.argv.slice(3));
       break;
@@ -2387,11 +2388,11 @@ async function main(): Promise<void> {
     case "scrub":
     case "pii":
     case "digest":
-    case "safety-report":
+    case "safety-report": case "report": case "crash-check":
     case "demo":
     case "snippet": {
       const m = await import("./phase-b-cli.js");
-      await { scrub: m.scrubCmd, "purge-deleted": m.scrubCmd, pii: m.piiCmd, digest: m.digestCmd, "safety-report": m.safetyReportCmd, demo: m.demoCmd, snippet: m.snippetCmd }[cmd]!();
+      await { scrub: m.scrubCmd, "purge-deleted": m.scrubCmd, pii: m.piiCmd, digest: m.digestCmd, "safety-report": m.safetyReportCmd, demo: m.demoCmd, snippet: m.snippetCmd, report: m.reportCmd, "crash-check": m.crashCmd }[cmd]!();
       break;
     }
     case "help":
@@ -2424,6 +2425,6 @@ main().catch(async (e) => {
       /* fall through to the plain message */
     }
   }
-  console.error(/^(error|usage):|\nFix: /i.test(msg) ? msg : errorLine(msg));
+  console.error(/^(error|usage):|\nFix: /i.test(msg) ? msg : errorLine(...(await import("./cli/fs-errors.js")).describeFsError(e, msg)));
   process.exit(1);
 });

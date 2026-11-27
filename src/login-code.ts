@@ -3,7 +3,7 @@
 // after 60 seconds or after its first use; the dashboard swaps it for the key over a normal request.
 // The code is kept hashed in <data dir>/login-code (mode 0600). Only one code is outstanding at a time.
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR } from "./config.js";
 import { atTerminal } from "./taint.js";
@@ -29,7 +29,7 @@ export function mintLoginCode(now = Date.now(), terminal = atTerminal()): string
   return code;
 }
 
-/** True once for a good, unexpired code; the code is spent either way. */
+/** True once for a good, unexpired code; a good code is spent by its use, a wrong guess spends nothing. */
 export function redeemLoginCode(code: unknown, now = Date.now()): boolean {
   return redeemLogin(code, now) !== null;
 }
@@ -43,9 +43,22 @@ export function redeemLogin(code: unknown, now = Date.now()): { terminal: boolea
   } catch {
     return null;
   }
-  rmSync(file(), { force: true }); // single use: spent whether or not it matches (a wrong guess burns it)
-  if (typeof rec.h !== "string" || typeof rec.exp !== "number" || now > rec.exp) return null;
+  // Single use, but only a MATCH (or an expired code) spends it: an unauthenticated POST /login with a wrong guess must not burn the
+  // real code (05-RT-4). Guessing is not a risk (128 random bits) and api/login-guard.ts limits wrong guesses per source.
+  if (typeof rec.h !== "string" || typeof rec.exp !== "number" || now > rec.exp) {
+    rmSync(file(), { force: true });
+    return null;
+  }
   const want = Buffer.from(rec.h, "hex");
   const got = hash(code);
-  return want.length === got.length && timingSafeEqual(want, got) ? { terminal: rec.t === true } : null;
+  if (want.length !== got.length || !timingSafeEqual(want, got)) return null;
+  // Spent atomically: only the request whose rename wins gets in, so two at once with the right code cannot both pass.
+  const spent = `${file()}.${process.pid}.${Date.now()}.spent`;
+  try {
+    renameSync(file(), spent);
+  } catch {
+    return null;
+  }
+  rmSync(spent, { force: true });
+  return { terminal: rec.t === true };
 }

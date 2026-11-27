@@ -11,7 +11,7 @@ import { waitForChanges, parseWait, WaitBusyError } from "../change-wait.js";
 import { memoryIndex, memoryTimeline, memoryGet, sessionList, sessionGet, fileTimeline, type ReadScope } from "../progressive.js";
 import { HOOK_EVENTS, type HookEvent, isOwnTool, recordEvent, cleanField } from "../capture.js";
 import { distillSession } from "../extract.js";
-import { sendError, sendJson, ackModeParam, feedWriterFilter, flagParam, waitScopeKey, intParam } from "./shared.js";
+import { sendError, sendJson, ackModeParam, feedWriterFilter, flagParam, waitScopeKey, intParam, parseJsonBody } from "./shared.js";
 import type { ApiCtx, ApiReq } from "./context.js";
 
 export async function sessionRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
@@ -45,7 +45,7 @@ export async function sessionRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
       } else if (path === "/get") {
         let body: { ids?: unknown };
         try {
-          body = JSON.parse((await readBody(req)) || "{}");
+          body = parseJsonBody(await readBody(req));
         } catch {
           sendJson(res, 400, { error: "invalid JSON body" });
           return true;
@@ -73,7 +73,7 @@ export async function sessionRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
   if (req.method === "POST" && path === "/capture") {
     let b: Record<string, unknown>;
     try {
-      b = JSON.parse((await readBody(req)) || "{}");
+      b = parseJsonBody(await readBody(req));
     } catch {
       sendJson(res, 400, { error: "invalid JSON body" });
       return true;
@@ -134,7 +134,7 @@ export async function sessionRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
     const raw = await readBody(req);
     let parsed: { threshold?: unknown; namespace?: unknown; confirm?: unknown };
     try {
-      parsed = JSON.parse(raw || "{}");
+      parsed = parseJsonBody(raw);
     } catch {
       sendJson(res, 400, { error: "invalid JSON body" });
       return true;

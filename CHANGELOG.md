@@ -6,6 +6,91 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-11-26
+
+### blame, ask, recall rate
+- New `monomem blame "<claim>"`: which notes match a claim, and for each who wrote it, when, from which source and session, through how many versions, whether a person confirmed it, whether it is held, replaced, in conflict or backed by other writers, and what changed it last. `--json`. REST `GET /blame?q=`.
+- New `monomem ask "<question>"`: a retrieval timeline (keyword search, grouped by topic, newest first, replaced notes marked), not a generated answer; no model. `--since`, `--writer`, `--limit`, `--json`. REST `GET /ask?q=`. See docs/blame-and-ask.md.
+- A recall line in `monomem activity --summary` (the digest) and `monomem check`: sessions that started, in how many session start showed notes, in how many an agent memory read was logged, with the window. See docs/access-log.md.
+
+### Seals, a ledger and a written definition of "lossless" (schema v23)
+- **Per-note seal (closes red-team finding RT-2).** Every note row now has `notes.seal`, an HMAC-SHA256 (key derived from `.attest-key`)
+  over its text and every provenance, approval and state column. An edit made outside Monomem (a hand-typed UPDATE, a sync tool, a bad
+  restore) leaves the row unsealed or mismatched; `monomem doctor`, `monomem audit verify --db` and the new `monomem verify-lossless`
+  name it, and the note is not shown to agents (its text is replaced by a notice). A later honest write never re-seals an edited row.
+  **Limit, stated plainly:** anything that can read `.attest-key` as you can seal a forged row; only a checkpoint or receipt kept
+  elsewhere shows that. See SECURITY.md and docs/lossless.md.
+- **Hash-chained, signed ledger** written in the same transaction as each note change, `UNIQUE(note, rev)`: two writers can no longer
+  both be acknowledged with one revision, enforced by the database (the F1 lost update). Doctor reconciles it against the notes
+  (forged inserts, rows deleted outside Monomem, edited or reverted rows, planted earlier versions).
+- **One compare-and-swap helper** (`casUpdate`, src/store/cas.ts) for every rev-bumping `UPDATE notes SET` (retro-taint, keep-as-history,
+  replace commit, undo of a replacement), with a lint test that fails on a bare statement; a test with two real OS processes writing one note.
+- **"Lossless" defined as six checked invariants** (L1-L6, docs/lossless.md) and a property test: random multi-process writes with one
+  writer killed with SIGKILL; every acknowledged write must be in the ledger and readable.
+- Upgrade v22 -> v23 is additive (a column, two tables, indexes, triggers), keeps the usual `.pre-v23-backup`, and seals existing notes in
+  short batches after open (resumable; `monomem integrity seal` finishes it now). `monomem integrity reseal --yes` accepts the notes as they are
+  (the way out after restoring without the key file). No setting turns the seal off.
+
+
+### Corroboration (2026-11-25)
+- Search tells the reader how many independent writers back a repeated fact (`corroboration` on each result: copies, independent sources, label). Copies from one writer, session or derived chain are one source; probation and unknown writers count little or nothing; the lift is capped at 10% and never passes a person-confirmed note.
+
+### Polish round (2026-11-24)
+- A write that ends "database is busy" while other writers keep committing is now retried with jittered pauses (up to 60 s extra), so 25 to 50 processes writing at once no longer get "nothing saved" refusals (50 writers x 6 notes on a slow disk: 0 of 300 refused; 9 of 150 refused at 25 writers before). A lock nobody commits through is still refused at once. A first open that hits "disk I/O error" after a hard kill, or "database is locked" while several processes create a new data folder, is retried and then explained in plain words.
+- Without `MONOMEM_CLIENT`, the stdio writer is `stdio:<client name>` from the MCP handshake, so each app has its own writer name and flood-guard budget.
+- `monomem setup` locks an existing Windows data folder to you and SYSTEM (best effort; `setup --undo` turns inheritance back on). Session-start hooks ask git while the store opens, and no longer resolve the time zone at start-up (about 15 ms).
+- `POST /login`: a wrong code no longer spends the real code, and wrong codes are limited to 8 a minute per source. The claim linter also reads small capitals, upside-down text, single look-alike letters and bidi-reversed words.
+- Docker image carries `bench/scenarios` (so `monomem check` is not Grade C); the `.env.example` placeholder key is refused at start-up. THIRD_PARTY_NOTICES.md lists the dependencies, Node.js, datasets and the Apache-2.0 text; README counts re-derived (171 scenarios, 151 pass, 20 known-gap scenarios in 7 open gap ids).
+
+
+### Wow features (2026-11-24)
+- `monomem demo --open`: a throwaway store (three keyed writers, a held poison write and edit, two plain false notes) served on a free loopback port and opened in the dashboard; marked as a demo store; deleted on Ctrl+C. Never touches your own store.
+- `monomem check --crash`: kill -9 self-test on a copy of your store; prints acknowledged writes against writes present. Narrow claim: this machine, these kills.
+- Dashboard: live refresh (3 s poll of the needs-you count and the change feed while the tab is visible, nothing while hidden), opt-in browser notification when a write is held (counts only, never the held text), Reject and distrust on the Held card, and a History view with a diff per version. The script policy is still script-src 'self'.
+- `monomem report`: one self-contained HTML trust report; every number is computed from a real bench run, an attack replay and the store.
+- `monomem history <id> --diff` and `GET /notes/<id>/history?diff=1`.
+- `monomem check --setup --fix` (and `--undo-fix`): safe fixes, each explained and undoable.
+
+
+### Search: synonyms, katakana, optional in-process model (2026-11-24)
+- Keyword search widens a word that no found note contains to a built-in English synonym table (`src/search-synonyms.ts`, `src/search-expand.ts`). Synonym queries 2/5 -> 5/5 on a 5-case probe; LongMemEval-S first 150 unchanged to four decimals.
+- Chinese/Japanese/Korean pair matching now keeps katakana with the long-vowel mark in one run (one more Japanese paraphrase found).
+- `MONOMEM_EMBEDDINGS=local`: optional small model in-process, never downloaded by Monomem (`scripts/install-local-embeddings.mjs`). Off by default; without the files search stays keyword.
+- `monomem check` has a Search line when meaning search (`on`, `auto`, `local`) is switched on.
+
+### Claim-style write rules (2026-11-24)
+- New write-time rules (`src/lint-claims.ts`) for plain-English poisoning claims, for writers that are not the owner: payment redirect, trust grant, approval bypass, concealment from the user, override of the user's instructions, sending notes or secrets to an outside address, label-style holds in tags, titles, sources and fact values, and a warning for "disable the memory linter". Field-aware and linear-time. Measured on held-out items split by sha256 (`bench/fixpass-split.json`): 18 of 133 attacks that reached before are now caught (adaptive 14 of 47, plain-English 2 of 4, probes 1 of 11, PyRIT 1 of 38, garak 0 of 33). Benign cost: 0 new holds in LongMemEval, LoCoMo, dev notes, the benign corpus and 308 new notes; 1 new warning; 3 repo-doc paragraphs that quote attack text are now held. Three families were dropped for not generalising (export before search, one tool for all operations, pipe to shell from an untrusted address). Benchmark: 166 scenarios, 150 pass, 16 known gaps (unchanged; F19 to F23 and F30 to F34 still fail because they expect every sample held).
+
+### Security
+- **Replacing a note now needs a person.** Before this, the replace preview handed its one-time code back to the same agent and only
+  the tool text asked the agent to show the warning to a person and wait, so an agent could preview and then confirm its own
+  replacement. Now the server refuses the confirm unless a person makes it: the `monomem supersede` command, or an administrator-scope
+  REST or dashboard caller. An MCP connection is never a person, even with an admin key, and an app that has only a write key is
+  refused too. The refusal comes before the code is opened, so the code is not spent. The preview still works for agents and says how
+  a person confirms. `MONOMEM_REPLACE_CONFIRM=agent` restores the 1.6 and 1.7 behaviour. **This changes behaviour:** an agent that used
+  to confirm replacements by itself is now told to ask the person. Limit: an agent that can also run shell commands as the machine
+  owner can run the CLI; this closes the MCP and write-key paths, not a compromised machine.
+- One new benchmark scenario: E23 (an agent cannot approve its own replacement of a trusted note; counts in `poison-reach-count`). The
+  control, that a person still can, is A29. 23 earlier scenarios (A05, A06, A10, A20 to A25, A27, A28, A30 to A32, A34, B24, C25 to C27, and
+  the confirm steps of A26, A29, B29, C24) now have an administrator, not a write-key app, confirm the replacement, because that is
+  who may confirm; what each one checks is unchanged. On its own the replace change took the benchmark from 137 to 138 scenarios (`poison-reach-count` 0 over 44 defended probes, was 42). `monomem check --attacks` replays 27 attacks
+  (was 26); its summary is held 8, blocked 13, warned 4, reached 2 (the two known misses).
+
+### Fixed (code review 2026-11-23)
+- A note of several MB made of one short repeating unit (for example `. ` or `01101000 `) made the decoders throw a stack-overflow error, which could crash an administrator import. The decoders now read at most the first 2 MB, every repeat in them has an upper bound, and `scanForInjection` fails closed: if a scanner still cannot finish, the note is held with the label "text too large or repetitive to scan" instead of throwing. The 4 MB case is covered by `test/lint-decode-big-repeat.test.ts` (checked by breaking the code on purpose).
+- The command line refuses `monomem supersede --confirm-token` when there is no terminal (a script or an agent's shell tool), under the default person rule, and no longer prints the scripted hint. `MONOMEM_REPLACE_CONFIRM=agent` keeps the old scripted flow. This is a speed bump, not a wall: a shell run as you can still open a terminal.
+- A request body that drips one byte at a time before sign-in is now cut by a total deadline (1.5 times the idle limit, 15 s by default), not only by the idle timer.
+- The attack-set replay shows a harmless control probe but no longer counts it as REACHED.
+
+### Attack expansion (2026-11-23)
+- **171 deterministic scenarios** (was 137): A 38, B 31, C 27, D 19, E 56 (E01 to E23, F01 to F23, F30 to F34 and F35 to F39). New scenarios F01 to F18 are hand-written context-poisoning, encoding, tool-description-style, steganography and replace-abuse probes. 150 pass and 21 are declared known gaps (eight open gap ids, listed in docs/BENCHMARK.md); the replace-abuse gap they found (F15, F16, F18) is fixed by the person-confirm change above. `poison-reach-count` 0 over 190 defended probes; those probes were built from attacks that were already held, so that zero is not independent evidence, and the known gaps are the misses.
+- F19 to F23 are the garak 0.17.1 and PyRIT 1.2.1 findings, all declared known gaps (`GAP-PROBE-GARAK-PYRIT`): 23 of 30 plain-English poisoning instructions and most readable obfuscations (leetspeak, look-alike letters, spaced letters) are stored and served with no warning. New attack sets `garak-probes` and `pyrit-converted` (75 samples each). Report: docs/ai-redteam-tools-2026-11-23.md.
+- New attack sets for `monomem check --attacks --set <name>`: `probes-context`, `probes-encoding`, `probes-toolstyle`, `probes-stego` (our own, 158 probes by field), plus 40 rows of deepset/prompt-injections (Apache-2.0) and 40 of Lakera/gandalf_ignore_instructions (MIT), copied verbatim from their test splits and not tuned on.
+- Adaptive attacker round 2 (docs/adaptive-attacker-round2-2026-11-24.md): attack set `adaptive-r2` (80 winners that still reach), scenarios F35 to F39 and open gap `GAP-ADAPTIVE-REWRITE-R2`. The first adaptive winners (`--set adaptive`) now reach 50 of 98 (were 98 of 98 before the claim rules).
+- Memory linter: invisible or blank characters between words now read as word breaks; reversed text, ROT13 and other Caesar shifts, ASCII codes in decimal, binary, 0x and \\u form, quoted string joins, base32, Morse and base64 split over lines are decoded and re-checked; look-alike letters from Cherokee, Lisu, Coptic and Latin extensions are folded; zero-width binary runs, variation selectors after plain letters, stacks of 8 or more combining marks and space/tab bit lines are held as "hidden Unicode text"; `<IMPORTANT>`-style blocks, "before using X first call Y", pre-authorised-tool and "takes precedence over every other tool" wording are held as "tool-description injection"; Czech, Swedish, Indonesian, Vietnamese, Greek, Hebrew and Thai override sentences are held. Details and the false-positive numbers: docs/attack-expansion-2026-11-23.md.
+- `monomem check --attacks` still replays only the E scenarios; the F scenarios run under `monomem bench`.
+- Benign false-positive corpus `bench/benign-corpus.txt` (188 notes) added to `bench/lint-fp.mjs`.
+
 ## [1.7.0] - 2026-11-19
 
 ### Added

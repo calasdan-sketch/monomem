@@ -26,6 +26,7 @@ import { registerSupersedeTools } from "./mcp/tools-supersede.js";
 import { registerSessionTools } from "./mcp/tools-sessions.js";
 import { registerV16Tools, filterToolList } from "./mcp/tools-v16.js";
 import { guardToolCalls } from "./mcp/call-guard.js";
+import { registerPromptsAndResources } from "./mcp/prompts-resources.js";
 export { PACKAGE_VERSION };
 export { LIST_BODY_CHARS, OPERATOR_ONLY_TOOLS, type ConnectionCtx } from "./mcp/shared.js";
 export { DEFAULT_TOOLS, LEGACY_DEFAULT_TOOLS, NEW_TOOLS, OLD_TOOL_ALIASES, enabledToolNames, toolProfile } from "./mcp/tool-names.js";
@@ -74,5 +75,6 @@ export function createMcpServer(
   registerV16Tools(c);
   filterToolList(c);
   guardToolCalls(c);
+  registerPromptsAndResources(c);
   return c.server;
 }

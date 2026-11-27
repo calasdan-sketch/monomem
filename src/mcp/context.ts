@@ -14,7 +14,7 @@ import { ADMIN_SCOPE_NEEDED, scopeAllows, UNTRUSTED_BANNER } from "../security.j
 import { runSearch, runRelevantSearch, roundRobin, type SearchOpts, type RelevantOpts } from "../search-service.js";
 import { type ServerNamespaceOpts, canRead, readableNamespaces } from "../namespace.js";
 import { withWhenBase, WriterFilterArgs, splitIgnored, ignoredRefusal, withFields, withIgnored, errorResult, ConnectionCtx, OPERATOR_ONLY_TOOLS, READ_TOOLS, ID_PROBE_TOOLS, CREATING_TOOLS, noteIdsIn, STDIO_ADMIN_HINT, stdioAdminToolsAllowed } from "./shared.js";
-import { toolProfile, newName, NEW_TOOLS, type ToolProfile } from "./tool-names.js";
+import { toolProfile, newName, NEW_TOOLS, withToolHints, type ToolProfile } from "./tool-names.js";
 import { SERVER_INSTRUCTIONS } from "./instructions.js";
 import { withComputer } from "../sync/marks.js";
 
@@ -58,9 +58,9 @@ export function mcpContext(store: Store, scope: Scope, opts: ServerNamespaceOpts
     if (localGuard && OPERATOR_ONLY_TOOLS.includes(name as string)) return undefined;
     // A raw shape is parsed loosely so an argument the tool does not have reaches here and is reported back
     // (ignored_arguments) instead of being dropped without a word. It is removed before the tool sees the call.
-    const c = cfg as { inputSchema?: unknown };
+    const c = withToolHints(name as string, cfg as { inputSchema?: unknown; annotations?: Record<string, unknown> });
     const shape = c.inputSchema && !(c.inputSchema instanceof z.ZodType) ? (c.inputSchema as z.ZodRawShape) : undefined;
-    const looseCfg = shape ? { ...c, inputSchema: z.looseObject(shape) } : cfg;
+    const looseCfg = shape ? { ...c, inputSchema: z.looseObject(shape) } : c;
     const cb = (...rawArgs: unknown[]): unknown => {
       const known = shape ? splitIgnored(rawArgs[0], shape) : { args: rawArgs[0], ignored: [] };
       const args = [known.args, ...rawArgs.slice(1)];

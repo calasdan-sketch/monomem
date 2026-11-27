@@ -62,7 +62,7 @@ describe("dashboard polish", () => {
     await settle();
     assert.equal(p.el("viewh").textContent, "Held");
     assert.ok(p.el("viewd").textContent.length > 20);
-    assert.match(DASHBOARD_HTML, /<h2 id="viewh"/);
+    assert.match(DASHBOARD_HTML, /<h1 id="viewh"/);
   });
   test("New note opens a sheet and keeps aria-expanded in step", () => {
     const p = page(() => ({}));

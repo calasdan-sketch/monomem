@@ -9,7 +9,7 @@ numbering (1.x and 2.x); Monomem restarted at 1.0.0 (see [CHANGELOG.md](./CHANGE
 A command or task that came from outside content (or was built on a distrusted note, or was flagged) cannot be approved,
 claimed or run by any app key, admin keys included, until a person confirms it at a terminal (`monomem confirm <id>`).
 
-To check your own setup, run `monomem check --attacks` (replays 26 known memory-poisoning attacks on a copy of your store; 2 of them are known
+To check your own setup, run `monomem check --attacks` (replays 27 known memory-poisoning attacks on a copy of your store; 2 of them are known
 misses) and `monomem check` (turns that and your security settings into one A to F grade, with the rule printed).
 How this maps to OWASP ASI06 (Memory & Context Poisoning), and results on published outside attack sets with every miss: [docs/security-scorecard.md](./docs/security-scorecard.md).
 
@@ -38,13 +38,7 @@ How this maps to OWASP ASI06 (Memory & Context Poisoning), and results on publis
   `icacls` (inheritance removed, only the current user granted). That is best effort: if `icacls` is missing or fails, one
   warning is printed and startup continues. It keeps other accounts on the PC out; it does not stop programs running as you.
   Files created before this change are not touched; `monomem check` reports a data folder open to other accounts.
-- **Dashboard Content-Security-Policy:** `default-src 'self'`, no framing, no external loads, but `script-src` still
-  includes `'unsafe-inline'`. Not because of inline `<script>` blocks (the page has none; it loads `/dashboard.js` from
-  the server itself) but because the dashboard builds about 85 inline event-handler attributes (`onclick='...'`) in its
-  HTML strings. A per-response nonce or hash does not cover handler attributes, so a nonce would change nothing. Removing
-  `'unsafe-inline'` means rewriting those handlers as delegated listeners; that is not done (checked 2026-11-18). The
-  dashboard's output escaping is the defence against script injection, with the policy as a backstop against loading
-  anything from another origin.
+- **Dashboard Content-Security-Policy:** `default-src 'self'`, `script-src 'self'` (no inline scripts, no `'unsafe-inline'` for scripts), no framing, no external loads, `form-action 'self'`. `style-src` still allows inline styles. The dashboard's output escaping is the first defence against script injection, with the policy as a backstop. (Checked against the served header, 2026-11-24; an earlier version of this note said scripts allowed inline.)
 - **Scoped tokens:** besides the primary (admin) token, you can define extra
   `read` / `write` / `admin` tokens via `MONOMEM_TOKENS` (a JSON array)
   or a `~/.monomem/tokens.json` file, so a leaked read-only token can't write, delete
@@ -131,8 +125,28 @@ How this maps to OWASP ASI06 (Memory & Context Poisoning), and results on publis
 
   An unsigned line after signing began (an older Monomem, a process that could not read the key, or a stripped
   signature) is a warning in `audit verify`; `--strict` fails on it. Keep a checkpoint off this machine.
+- **Note seals and the ledger (schema v23, 1.8.0).** Before v23 the note text and the writer labels in `state.db` were
+  **not signed or MACed at all**: any program that could write the file could change a note's text or `written_by` and
+  neither `doctor` nor `audit verify` noticed (red-team finding RT-2). From v23 every note row carries `notes.seal`, an
+  HMAC-SHA256 over every column that is not a read counter (text as a keyed digest, writer stamps, approval and confirm
+  stamps, archive state, sensitivity, pin, expiry ...). The seal key is derived (HKDF-SHA256) from `.attest-key`, so the MAC
+  key and the signing key are different keys. Three SQL triggers leave a row unsealed when anything other than Monomem
+  edits it; every Monomem write re-seals the row **inside the same transaction** and appends one entry to a hash-chained
+  `ledger` table (UNIQUE per note and revision, so two writers can never both be acknowledged with the same revision; each
+  entry is Ed25519-signed). A later honest write never blesses an edit made outside Monomem: the state a note had before the
+  write is verified first. `monomem check`, `monomem audit verify --db` and `monomem verify-lossless` name edited rows,
+  forged inserts, rows deleted outside Monomem, ledger edits, planted earlier versions and a missing or changed trigger.
+  A note that fails its seal is **not shown to agents** (its text is replaced by a notice; reads, search and exports).
+  **What this does not do:** it does **not** stop anything that can read `.attest-key` as you (an agent with a shell, a
+  program running as your user): that program derives the same key, can seal a forged row and rewrite the ledger. It
+  catches edits made by anything that cannot read the key (another user, a sync tool, a bad restore, an agent that only
+  edits the SQLite file, accidents). To see a key-holder's rewrite afterwards you need something kept elsewhere: a signed
+  checkpoint (`monomem audit checkpoint --out <file>`) or a write receipt an agent holds. Upgrading seals the existing
+  notes in short batches and records them as `adopt` ("sealed at upgrade; says nothing about earlier edits"). A restore
+  without the key file is reported as a key change (nothing is withheld for it); `monomem integrity reseal --yes` accepts
+  the notes as they are. No setting turns the seals, the ledger or detection off; the one switch, `MONOMEM_SEAL_WITHHOLD=off`, only stops a failed note being withheld from agents (it is for tests that edit rows by hand). See [docs/lossless.md](./docs/lossless.md).
 - **Supply chain:** committed lockfile + `npm ci`, Dependabot, `npm audit` in
-  CI, and MIT-licensed with only two production dependencies.
+  CI, and MIT-licensed with two direct production dependencies (94 packages in the lockfile, all installed by npm).
 
 ## Threat model (short)
 
@@ -336,7 +350,13 @@ prompt-injection / "memory poisoning"** channel. Layers:
   Cyrillic, Greek and small-capital forms are folded to Latin before matching), "ignore previous instructions" and "do not
   tell the user" in Spanish, French, German and Portuguese, a base64 or hex blob that decodes (one level) to text the patterns
   hold, and a standing instruction ("from now on / whenever / always ...") that also tells the agent to hide something from
-  the user, send data to an outside address, or run code fetched from one. **Still missed:** any other language; rot13,
+  the user, send data to an outside address, or run code fetched from one. Since 2026-11-26 a text with real Cyrillic / Greek / Armenian words
+  is scanned twice: once as written, with look-alikes folded only in words that mix scripts (so real Russian or Greek matches
+  the Russian or Greek rules), and once with every word made only of look-alikes folded too (so an English word disguised in
+  look-alikes still matches the English rules when a real Russian word is added to the note). A word in one script that holds a
+  letter with no Latin look-alike is never folded; and claim rules in Spanish, French, German, Portuguese, Chinese, Japanese, Russian
+  and Arabic match their word lists in any order within 160 characters. On our own 48 reworded attacks in those eight languages
+  that were written after these rules and not used to tune them, 11 are held (4 before); 37 still get through. **Still missed:** languages not listed; most rewordings in the listed ones; rot13,
   percent-encoding, double encoding and base64 split across lines; a persistent instruction that never says to hide or send
   anything ("always run tests before commit" is a normal rule and is stored); paraphrases beyond the word lists; and anything
   that needs understanding rather than patterns. Text written in invisible Unicode tag characters is decoded and scanned, and any such character
@@ -421,7 +441,7 @@ None of the controls above stops an agent that can run commands as you. These do
   the same place, so someone who could change the release could change both. To check a download by hand, run
   `gh attestation verify <file> --repo calasdan-sketch/monomem`: it shows whether this project's GitHub build made the
   file ([INSTALL.md](./INSTALL.md#download-no-nodejs-needed)). Monomem itself is not code-signed yet; the download's only
-  program is Node's official, signed `node`.
+  program is Node's official, signed `node`. Verification steps, the SBOM and what is not signed: [docs/verify.md](./docs/verify.md).
 - **Importing Claude Code's memory.** `monomem import --claude` stores each section of your `CLAUDE.md` files and Claude Code's auto memory as a note written by `import:claude` and tagged `claude-import`. Every imported note is held as outside content until you read it: `monomem review` lists them and `monomem confirm <id>` trusts one. Until then they stay out of session start and prompt recall. Read the `--dry-run` list first, especially for files another tool or person could have edited.
   Code's auto memory as an ordinary note, written by `import:claude` and tagged `claude-import`. Only sections the write
   check flags are held (`monomem review held`); the others are not held for you to confirm first, so read the

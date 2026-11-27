@@ -1,5 +1,22 @@
 # Search, recall and memory hygiene
 
+## Synonyms and other languages without a server
+
+Three things work with no setup, no download and no network:
+
+- **Synonym widening (English).** A word that none of the notes already found contains is also searched under a built-in table of
+  about 150 synonym groups and irregular verbs (car / automobile, fired / terminated, doctor / physician). A word the store already
+  holds is never widened, so an exact match is not pushed down. The table is hand-kept (`src/search-synonyms.ts`): a word it lacks
+  is not found.
+- **Chinese, Japanese and Korean** are matched by character pairs (`src/store/cjk-search.ts`). Very large stores (over 150,000 notes) skip the pair scan and keep keyword results only; each query reads at most 500 candidate notes.
+- **`monomem check`** has a Search line, shown when meaning search is switched on, that says which model is in use and whether it is installed.
+
+What they do not do: paraphrases with no shared or listed word, and an English question against a note in another language. For
+those use meaning search. Besides Ollama there is an in-process option: run `node scripts/install-local-embeddings.mjs` once (it
+installs `@huggingface/transformers` and downloads multilingual-e5-small, about 120 MB, into `<MONOMEM_HOME>/embed`; Monomem never
+does this itself), then `export MONOMEM_EMBEDDINGS=local` and `monomem tidy reindex`. No server, no network afterwards. Without the
+files it silently stays keyword. Measurements: docs/BENCHMARK.md, section "Synonyms and local model (2026-11-24)".
+
 ## Semantic search (optional)
 
 Keyword (FTS5) search is the default and needs nothing extra. Turn on
@@ -16,8 +33,10 @@ monomem tidy reindex   # backfill embeddings for existing notes
 Embeddings come from **your own** OpenAI-compatible endpoint (local Ollama,
 or any OpenAI-shaped `/v1/embeddings` API) — still zero native modules, still
 nothing sent to a third party you didn't configure. `memory_search` /
-`GET /search` then accept `mode=keyword | semantic | hybrid` (hybrid fuses
-both with Reciprocal Rank Fusion). If the endpoint is unavailable, search and
+`GET /search` then accept `mode=keyword | semantic | hybrid` (hybrid scales the
+keyword scores and the semantic scores to 0..1 inside each search and blends them 50/50; a note only one side finds gets 0 from the
+other. It replaced Reciprocal Rank Fusion on 2026-11-04, because a rank-only merge let a weak semantic list pull confident keyword
+hits down). If the endpoint is unavailable, search and
 writes silently fall back to keyword — an optional embedder can never fail a
 write or a query.
 
@@ -141,6 +160,15 @@ newer one), and the newer note is in the results you get. The older note is stil
 memory_replace." It never happens for a different writer (both notes show a dispute label instead), over a note a person
 confirmed (unless the newer one is confirmed too), behind unconfirmed outside content or a flagged, replaced or distrusted note, or when the
 older note is read clearly more than the newer one. Applies to search (also `mode: "relevant"` and `POST /relevant`) and session start.
+
+**Independent sources (corroboration).** When several near-identical notes (word overlap of at least 0.85, or linked by `derived_from`)
+come back, search counts how many *independent* writers said it and adds `corroboration: { copies, independent_sources, label }` to each of
+them, for example "3 copies are 1 source" or "confirmed by 2 other independent writers". Copies from one writer (including its merged or
+attested names), from one capture session, or built from each other count as one source. A writer on probation counts little (its age
+in days over 7), a writer Monomem has never seen counts half, and a note that is distrusted, unconfirmed, expired, an unverified import
+or from a new writer counts for nothing and is never lifted. The head of a corroborated group gains at most 4% per extra source and
+10% in all, never passes a person-confirmed note that was ahead of it, and no hit is removed. A flooder that invents many writer names
+gets at most the 10% cap, and only after those names have aged past probation. The field is only on results, not in the tool list.
 
 Thresholds (env vars, read live — no restart needed to retune):
 

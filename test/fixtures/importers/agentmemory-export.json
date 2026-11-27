@@ -1,0 +1,17 @@
+{
+  "version": "0.9.33",
+  "exportedAt": "2026-11-01T10:00:00Z",
+  "sessions": [{ "id": "sess-1", "project": "atlas", "startedAt": "2026-10-30T09:00:00Z" }],
+  "observations": {
+    "sess-1": [
+      { "id": "o1", "sessionId": "sess-1", "timestamp": "2026-10-30T09:05:00Z", "type": "file_edit", "title": "Edited router", "subtitle": "src/router.ts", "facts": ["added /health route"], "narrative": "Added a health route for the load balancer.", "concepts": ["routing"], "files": ["src/router.ts"], "importance": 5, "agentId": "claude-code", "imageRef": "../../etc/passwd", "imageData": "AAAA" }
+    ]
+  },
+  "memories": [
+    { "id": "m1", "createdAt": "2026-10-30T10:00:00Z", "updatedAt": "2026-10-30T10:00:00Z", "type": "preference", "title": "Prefers tabs", "content": "The user prefers tabs over spaces.", "concepts": ["style"], "files": [], "sessionIds": ["sess-1"], "strength": 0.9, "version": 2, "isLatest": true, "agentId": "cursor", "project": "atlas" },
+    { "id": "m0", "createdAt": "2026-10-29T10:00:00Z", "updatedAt": "2026-10-29T10:00:00Z", "type": "preference", "title": "Prefers tabs", "content": "Older wording.", "concepts": [], "files": [], "sessionIds": [], "strength": 0.5, "version": 1, "isLatest": false }
+  ],
+  "summaries": [
+    { "sessionId": "sess-1", "project": "atlas", "createdAt": "2026-10-30T11:00:00Z", "title": "Router session", "narrative": "Added the health route.", "keyDecisions": ["keep routes in one file"], "filesModified": ["src/router.ts"], "concepts": [], "observationCount": 1 }
+  ]
+}

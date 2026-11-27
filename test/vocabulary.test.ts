@@ -101,7 +101,7 @@ describe("one word per concept", () => {
   });
 
   test("user docs: README, INSTALL, SKILL and docs/*.md (prose; code spans are identifiers)", () => {
-    const pages = ["README.md", "INSTALL.md", "SKILL.md", ...readdirSync(join(PROJECT_ROOT, "docs")).filter((f) => f.endsWith(".md") && !["LAUNCH.md", "demo-script.md"].includes(f)).map((f) => `docs/${f}`)];
+    const pages = ["README.md", "INSTALL.md", "SKILL.md", ...readdirSync(join(PROJECT_ROOT, "docs")).filter((f) => f.endsWith(".md") && !["LAUNCH.md", "launch-checklist.md", "demo-script.md"].includes(f)).map((f) => `docs/${f}`)];
     const found = pages.flatMap((p) => hits(prose(readFileSync(join(PROJECT_ROOT, p), "utf8")), p));
     assert.deepEqual(found, []);
   });

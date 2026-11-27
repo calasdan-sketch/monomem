@@ -176,6 +176,32 @@ export function previewText(input: {
   return out.join("\n");
 }
 
+/**
+ * Replacing a note needs a person (1.8.0). The words an agent gets, in the preview (with the real note numbers) and in the
+ * refusal. `oldIds` / `newId` are known at preview time; the refusal may not know them, so it shows placeholders.
+ */
+export function personConfirmText(oldIds: readonly number[] | null, newId: number | null, refusal: boolean): string {
+  const old = oldIds && oldIds.length ? oldIds.join(",") : "<old note numbers>";
+  const neu = newId && newId > 0 ? String(newId) : "<the new note's number>";
+  const lines = [
+    refusal ? "A person has to confirm this replacement. An agent cannot approve it, even with a valid code." : "A person has to confirm this replacement, not an agent.",
+    "Show the person this warning in full. If the new text is not a note yet, save it first (memory_save).",
+    `Then ask the person to run this in a terminal: monomem supersede --old ${old} --new-id ${neu}`,
+    "They will see the same warning there and type the number of notes to confirm.",
+  ];
+  if (refusal) lines.push("(An operator who wants agents to confirm on their own can set MONOMEM_REPLACE_CONFIRM=agent.)");
+  return lines.join("\n");
+}
+
+/** The CLI refusal when a code is confirmed with no terminal (a script, or an agent's shell tool) under the person rule. */
+export function personTerminalText(): string {
+  return [
+    "Confirming a replacement needs a person at a terminal: type the command in a terminal window and answer the question there.",
+    "A script with no terminal is refused. (An operator who wants scripts to confirm can set MONOMEM_REPLACE_CONFIRM=agent.)",
+    "Note: this is a speed bump, not a wall. An agent that can open a terminal as you can still do it, so do not give an agent a shell you would not trust with your notes.",
+  ].join("\n");
+}
+
 /** What a confirmed replacement did, in plain words. */
 export function doneText(retired: Array<{ id: number; title: string }>, replacementId: number, created: boolean): string {
   const lines = [

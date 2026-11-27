@@ -28,6 +28,7 @@ import { type TokenEntry, tokenId } from "./config.js";
 import { type ServerNamespaceOpts, resolveRequestNamespace } from "./namespace.js";
 import { PayloadTooLargeError, readBody, normalizeTokens, exitOnListenError, applyServerLimits, healthBody } from "./http-common.js";
 import { handleOAuth, oauthChallenge } from "./oauth/routes.js";
+import { parseErrorBody } from "./mcp/rpc-errors.js";
 
 // Small JSON writer that never writes to an already-finished response.
 function sendJson(res: ServerResponse, status: number, payload: unknown): void {
@@ -120,7 +121,7 @@ export function createMcpHttpServer(
           try {
             parsedBody = JSON.parse(raw);
           } catch {
-            sendJson(res, 400, { error: "invalid JSON body" });
+            sendJson(res, 400, parseErrorBody());
             return;
           }
         }

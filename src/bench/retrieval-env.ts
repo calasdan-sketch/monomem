@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 for (const k of Object.keys(process.env)) {
-  if (k.startsWith("MONOMEM_") && !k.startsWith("MONOMEM_EMBED")) delete process.env[k];
+  if (k.startsWith("MONOMEM_") && !k.startsWith("MONOMEM_EMBED") && !k.startsWith("MONOMEM_LOCAL_EMBED")) delete process.env[k];
 }
 export const BENCH_HOME = mkdtempSync(join(tmpdir(), "monomem-retrieval-"));
 process.env.MONOMEM_HOME = BENCH_HOME;

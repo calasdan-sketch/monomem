@@ -3,11 +3,14 @@
 // Each returns true when it answered the request, false to let the next one try.
 
 import { NoteInput, NotePatch, NoteRecord, StaleWriteError, ValidationError, validateForgetAfter, coerceNumeric } from "../store.js";
+import { conflictsField } from "../store/conflict-links.js";
 import { RECEIPT_CHECK } from "../store/write-receipt.js";
 import { checkFilesInput } from "../code-anchor.js";
 import { readBody } from "../http-common.js";
 import { maybeEmbed } from "../search-service.js";
+import { scheduleModelCheck } from "../lint-model-run.js";
 import { annotateStaleness } from "../staleness.js";
+import { historyWithDiffs } from "../history-diff.js";
 import { supersedePreview, supersedeConfirm, supersedeUndo, noteHistory, restoreVersion, purgeNoteHistory, type Caller } from "../supersede.js";
 import { withFacts, factFeedback } from "../facts.js";
 import { assertPlainWriteTags, assertReviewedTag } from "../reserved-tags.js";
@@ -16,7 +19,7 @@ import { currentWriter } from "../actor.js";
 import { UNTRUSTED_BANNER } from "../security.js";
 import { ReadTaint, unconfirmedIdsIn } from "../taint.js";
 import type { LintFinding } from "../lint.js";
-import { POST_NOTE_FIELDS, PUT_NOTE_FIELDS, PUT_READ_ONLY_FIELDS, unknownNoteFields, sendError, sendJson, flagParam } from "./shared.js";
+import { POST_NOTE_FIELDS, PUT_NOTE_FIELDS, PUT_READ_ONLY_FIELDS, unknownNoteFields, sendError, sendJson, flagParam, parseJsonBody } from "./shared.js";
 import type { ApiCtx, ApiReq } from "./context.js";
 
 export async function noteRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
@@ -27,7 +30,7 @@ export async function noteRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
     const raw = await readBody(req);
     let parsed: NoteInput;
     try {
-      parsed = JSON.parse(raw || "{}");
+      parsed = parseJsonBody(raw);
     } catch {
       sendJson(res, 400, { error: "invalid JSON body" });
       return true;
@@ -86,8 +89,9 @@ export async function noteRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
       }
       const note = once.note;
       await maybeEmbed(store, note);
+      scheduleModelCheck(store, note);
       const sim = store.similarNote(note.id);
-      sendJson(res, 201, { note, ...(receipt ? { receipt, receipt_check: RECEIPT_CHECK } : {}), ...(sim ? { similar_note: { id: sim.id, title: sim.title, hint: `looks similar to #${sim.id} - consider updating it (PUT /notes/${sim.id}) if this is the same thing` } } : {}), ...(warnings.length ? { warnings } : {}), ...(facts === undefined ? {} : factFeedback(store, note)) });
+      sendJson(res, 201, { note, ...conflictsField(store, note.id), ...(receipt ? { receipt, receipt_check: RECEIPT_CHECK } : {}), ...(sim ? { similar_note: { id: sim.id, title: sim.title, hint: `looks similar to #${sim.id} - consider updating it (PUT /notes/${sim.id}) if this is the same thing` } } : {}), ...(warnings.length ? { warnings } : {}), ...(facts === undefined ? {} : factFeedback(store, note)) });
     } catch (e) {
       sendError(res, e, store.refusedWriteReceipt(e));
     }
@@ -148,7 +152,7 @@ export async function noteRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
     const raw = await readBody(req);
     let parsed: NotePatch;
     try {
-      parsed = JSON.parse(raw || "{}");
+      parsed = parseJsonBody(raw);
     } catch {
       sendJson(res, 400, { error: "invalid JSON body" });
       return true;
@@ -204,6 +208,7 @@ export async function noteRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
       // r2-improvement #3, as MCP state_write: replacing another writer's text without if_rev is said out loud.
       const overwrite = !unchanged && ifRev === undefined ? overwriteNotice(check.target, note as NoteRecord, currentWriter()) : null;
       if (!unchanged) await maybeEmbed(store, note);
+      if (!unchanged) scheduleModelCheck(store, note);
       sendJson(res, 200, { note, ...(unchanged ? { unchanged: true } : {}), ...(overwrite ?? {}), ...(receipt ? { receipt, receipt_check: RECEIPT_CHECK } : {}), ...(warnings.length ? { warnings } : {}), ...(putFacts === undefined ? {} : factFeedback(store, note)) });
     } catch (e) {
       const receipt = store.refusedWriteReceipt(e, id);
@@ -223,7 +228,7 @@ export async function noteRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
     const id = Number(confirmMatch[1]);
     let body: { source?: unknown };
     try {
-      body = JSON.parse((await readBody(req)) || "{}") as { source?: unknown };
+      body = parseJsonBody(await readBody(req)) as { source?: unknown };
     } catch {
       sendJson(res, 400, { error: "invalid JSON body" });
       return true;
@@ -260,7 +265,7 @@ export async function noteRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
     const id = Number(flagMatch[1]);
     let body: { reason?: unknown };
     try {
-      body = JSON.parse((await readBody(req)) || "{}") as { reason?: unknown };
+      body = parseJsonBody(await readBody(req)) as { reason?: unknown };
     } catch {
       sendJson(res, 400, { error: "invalid JSON body" });
       return true;
@@ -383,7 +388,7 @@ export async function noteRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
     const raw = await readBody(req);
     let b: Record<string, unknown>;
     try {
-      const v = JSON.parse(raw || "{}") as unknown;
+      const v = parseJsonBody(raw) as unknown;
       if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error("not an object");
       b = v as Record<string, unknown>;
     } catch {
@@ -420,12 +425,12 @@ export async function noteRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
     const caller: Caller = { scope, ...(nsCtx.active ? { ownNamespace: nsCtx.ownNamespace } : {}) };
     try {
       if (req.method === "GET" && !histMatch[2]) {
-        sendJson(res, 200, noteHistory(store, caller, hid, { includeDistrusted: flagParam(url, "include_distrusted") }));
+        sendJson(res, 200, (flagParam(url, "diff") ? historyWithDiffs : noteHistory)(store, caller, hid, { includeDistrusted: flagParam(url, "include_distrusted") }));
       } else if (req.method === "POST" && histMatch[2]) {
         const raw = await readBody(req);
         let b: { version?: unknown; if_rev?: unknown };
         try {
-          b = JSON.parse(raw || "{}");
+          b = parseJsonBody(raw);
         } catch {
           sendJson(res, 400, { error: "invalid JSON body" });
           return true;

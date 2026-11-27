@@ -221,7 +221,7 @@ export async function setupCmd(cliPath: string): Promise<void> {
   const { runSetup, realEnv, DEFAULT_OPTIONS } = await import("../setup.js");
   const { flags } = parseFlags(process.argv.slice(3), {
     values: ["only", "db", "command"],
-    bools: ["dry-run", "yes", "undo", "hook", "no-hook", "capture", "no-capture", "project", "no-test-note", "no-doctor", "force-empty", "terse", "no-embeddings", "path", "no-path", "action-guard"],
+    bools: ["dry-run", "yes", "undo", "hook", "no-hook", "capture", "no-capture", "project", "no-test-note", "no-doctor", "force-empty", "terse", "no-embeddings", "path", "no-path", "action-guard", "verify", "verify-only"],
   });
   const command = str(flags.command) ?? "auto";
   if (!["auto", "node", "npx"].includes(command)) {
@@ -242,6 +242,8 @@ export async function setupCmd(cliPath: string): Promise<void> {
   }
   const { PACKAGE_VERSION } = await import("../config.js");
   const e = realEnv(PACKAGE_VERSION, cliPath);
+  // --verify: after setup, prove each written entry works (setup/verify.ts). --verify-only: just the proof, no setup.
+  if (flags["verify-only"] === true) return void (process.exitCode = await (await import("../setup/verify.js")).runVerify(e, terminalIO(), str(flags.only)?.split(",").map((x) => x.trim()).filter(Boolean)));
   // Per-project scope is the default for a brand-new install only. Decide BEFORE setup runs: setup writes a test note.
   const freshInstall = flags["dry-run"] !== true && flags.undo !== true && str(flags.db) === undefined && (await isFreshInstall());
   // The marker goes in first, so setup's own test note lands in the same scoped space the apps will read from.
@@ -288,6 +290,7 @@ export async function setupCmd(cliPath: string): Promise<void> {
       }
     }
   }
+  if (flags.verify === true && !process.exitCode && !flags["dry-run"] && !flags.undo) process.exitCode = await (await import("../setup/verify.js")).runVerify(e, terminalIO(), str(flags.only)?.split(",").map((x) => x.trim()).filter(Boolean));
 }
 
 /** True when there is no store yet, or it holds no notes. */

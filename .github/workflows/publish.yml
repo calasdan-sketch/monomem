@@ -36,9 +36,10 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+# Least privilege: read-only here. Each job asks for what it needs (publish: the OIDC token for npm trusted
+# publishing and --provenance; bundle: release upload and attestations, below).
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   # Literally the CI workflow, called -- not a second copy of its matrix.
@@ -73,6 +74,9 @@ jobs:
   publish:
     needs: [verify, bundle]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing + the npm provenance statement
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -95,6 +99,8 @@ jobs:
       # differs, so the publish job is the one pinned.
       - run: npm install -g npm@11
       - run: npm ci --ignore-scripts
+      # Every installed dependency must carry a valid registry signature (and provenance where the maintainer published one).
+      - run: npm audit signatures
       - run: npm run build
       - run: npm test
       - name: Tag must match package.json version

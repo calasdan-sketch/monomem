@@ -15,6 +15,7 @@ import { actionGuardCheck } from "./action-guard.js";
 import { serverCheck } from "./server.js";
 import { toolPinCheck } from "./tools.js";
 import { rescanCheck } from "./rescan.js";
+import { integrityCheck } from "./integrity.js";
 
 /** The checks, in the order their lines are printed. Later checks read facts earlier ones put on `d`. */
 export const CHECKS: ReadonlyArray<(d: Doctor) => Promise<void>> = [
@@ -25,6 +26,7 @@ export const CHECKS: ReadonlyArray<(d: Doctor) => Promise<void>> = [
   keyFilesCheck,
   preUpgradeCopiesCheck,
   attestKeyCheck,
+  integrityCheck,
   distrustCheck,
   tokenCheck,
   tokensFileCheck,
@@ -55,6 +57,7 @@ export async function notSetUp(): Promise<boolean> {
 
 /** `cliPath`: the path of cli.js (app entries and hooks are checked against it). */
 export async function doctor(cliPath: string): Promise<void> {
+  if (process.argv.includes("--fix") || process.argv.includes("--undo-fix")) return void (process.exitCode = await (await import("./fix.js")).fixMain(process.argv.slice(3)));
   const { BIND_HOST, API_PORT, MCP_HTTP_PORT, resolveToken, takeNewKeyNotice, TOKEN_FILE } = await import("../config.js");
   const { existsSync } = await import("node:fs");
   await import("node:path");

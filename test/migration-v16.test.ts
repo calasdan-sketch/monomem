@@ -50,10 +50,10 @@ for (const encrypted of [false, true]) {
         assert.equal(Store.peekSchemaVersion(path), 15);
         assert.ok(!cols(path, "notes").includes("kind"));
         const s = quietly(() => new Store(path));
-        assert.equal(SCHEMA_VERSION, 22);
-        assert.equal(Store.peekSchemaVersion(path), 22);
-        assert.ok(existsSync(path + ".pre-v22-backup"));
-        assert.equal(Store.peekSchemaVersion(path + ".pre-v22-backup"), 15);
+        assert.equal(SCHEMA_VERSION, 23);
+        assert.equal(Store.peekSchemaVersion(path), 23);
+        assert.ok(existsSync(path + ".pre-v23-backup"));
+        assert.equal(Store.peekSchemaVersion(path + ".pre-v23-backup"), 15);
         for (const c of ["kind", "session_id", "obs_type"]) assert.ok(cols(path, "notes").includes(c), c);
         assert.ok(cols(path, "capture_events").includes("output_enc"));
         assert.ok(cols(path, "sessions").includes("distilled_seq"));

@@ -1,5 +1,8 @@
 // `monomem check --attacks --set <name>`: published outside attack sets replayed on a COPY of the store, every miss shown.
 import "./setup-env.js"; // throwaway MONOMEM_HOME before src loads
+// The drill replays the poisoning attacks under the SHIPPED defaults, where only a person confirms a replacement (E23).
+// setup-env opts the rest of the suite into the older agent mode, which would show E23 as reaching the agent.
+delete process.env.MONOMEM_REPLACE_CONFIRM;
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -32,9 +35,13 @@ function makeStore(n: number): { dir: string; db: string } {
 
 describe("outside attack sets", () => {
   test("the shipped sets: sizes, unique ids, licence, and only poisonedrag-nq downloads", async () => {
-    const sizes: Record<string, number> = { injecagent: 62, "injecagent-enhanced": 62, agentdojo: 27, minja: 6, poisonedrag: 10, "lint-evasion": 61, "tool-steer": 21 };
+    const sizes: Record<string, number> = { injecagent: 62, "injecagent-enhanced": 62, agentdojo: 27, minja: 6, poisonedrag: 10, "lint-evasion": 61, "tool-steer": 21,
+      // 2026-11-23 attack expansion: our own probes (by class), and two public sets copied under their own licences
+      "probes-context": 15, "probes-encoding": 67, "probes-toolstyle": 23, "probes-stego": 53, "deepset-injections": 40, "gandalf-ignore": 40, adaptive: 98, "adaptive-r2": 80,
+      "garak-probes": 75, "pyrit-converted": 75 };
+    const licences: Record<string, string> = { "deepset-injections": "Apache-2.0", "garak-probes": "Apache-2.0" };
     for (const s of ATTACK_SETS) {
-      assert.equal(s.licence, "MIT", s.name);
+      assert.equal(s.licence, licences[s.name] ?? "MIT", s.name);
       if (s.download) {
         assert.equal(s.name, "poisonedrag-nq");
         assert.match(s.download.url, /^https:\/\/raw\.githubusercontent\.com\/sleeepeer\/PoisonedRAG\/[0-9a-f]{40}\//, "pinned to a commit");

@@ -162,7 +162,7 @@ export async function commitTrailCmd(args: string[]): Promise<void> {
   }
   if (sub === "on") {
     if (!place.ok) {
-      console.error(errorLine(place.reason, `the hook line: ${selfCommand(["commit-trail", "hook"]).command} ... commit-trail hook "$1" "$2"`));
+      console.error(errorLine(place.reason, /hooksPath/.test(place.reason) ? `the hook line: ${selfCommand(["commit-trail", "hook"]).command} ... commit-trail hook "$1" "$2"` : "run it inside a git repository (cd into your project first)"));
       process.exit(1);
     }
     const facts = (await import("../self.js")).selfFacts();

@@ -1,0 +1,19 @@
+# Monomem
+
+> Shared memory for AI coding agents. One local SQLite file that Claude Code, Cursor, Codex, Gemini CLI and other MCP apps all read and write. Every note records which app wrote it, writes that match known attack patterns wait for a person, and one command undoes what one writer wrote. Self-hosted, MIT, no cloud account, no model in the write path. Beta, not independently security-reviewed.
+
+Install: `npx monomem setup` (Node 22.16 or newer), or a no-Node download from the GitHub releases page. MCP server command: `npx -y monomem mcp` (stdio). Try it on a throwaway store: `npx monomem demo --open`.
+
+## Docs
+- [README](https://github.com/calasdan-sketch/monomem/blob/main/README.md): what it does, what it does not do, how to verify a download
+- [Install](https://github.com/calasdan-sketch/monomem/blob/main/INSTALL.md): download, npx, Docker
+- [Tools and commands](https://github.com/calasdan-sketch/monomem/blob/main/docs/tools.md): the seven MCP tools and the CLI
+- [Security and threat model](https://github.com/calasdan-sketch/monomem/blob/main/SECURITY.md): controls and known gaps
+- [Security scorecard](https://github.com/calasdan-sketch/monomem/blob/main/docs/security-scorecard.md): results on published attack sets, with every miss
+- [Benchmarks](https://github.com/calasdan-sketch/monomem/blob/main/docs/BENCHMARK.md): self-measured, reproducible from the repo
+- [Comparison](https://github.com/calasdan-sketch/monomem/blob/main/docs/comparison.md)
+- [Configuration](https://github.com/calasdan-sketch/monomem/blob/main/docs/configuration.md): environment variables
+
+## Optional
+- [Changelog](https://github.com/calasdan-sketch/monomem/blob/main/CHANGELOG.md)
+- [Contributing](https://github.com/calasdan-sketch/monomem/blob/main/CONTRIBUTING.md)

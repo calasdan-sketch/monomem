@@ -14,11 +14,13 @@ import { auditFailureCount, auditPath as defaultAuditPath, printable, verifyAudi
 import { Store } from "./store.js";
 import { describeDbFailure } from "./db-problem.js";
 import { embeddingsConfig } from "./embeddings.js";
+import { searchStatusText } from "./search-status.js";
 import { acceptLegacyHeartbeats } from "./liveness.js";
 import { scanPii } from "./pii.js";
 import { qualityReport } from "./quality.js";
 import { backupFailure, backupsDir, dailyBackupsOn } from "./backup-schedule.js";
 import { backupAgeDays } from "./digest.js";
+import { recallRate, renderRecallRate } from "./recall-rate.js";
 import { syncProblem } from "./sync/device.js";
 import { bridgeLine, heldImports } from "./claude-refresh.js";
 
@@ -294,6 +296,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
 
   let notes = 0, held = 0, distrust = 0, marked = 0, claudeHeld = 0, dbOk = false;
   let meterText = "meter unavailable";
+  let recallText = "";
   let piiNotes = 0, privateNotes = 0, labelledNotes = 0;
   let hygiene = "";
   let confirmLines: string[] = [];
@@ -348,6 +351,10 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
             const m = meterStats(s);
             meterText = `${plural(notes, "note")}, database ${(m.db_bytes / 1048576).toFixed(1)} MB; the meter counts ~${m.totals.saved_tokens} tokens saved over ${plural(m.totals.sessions, "session")} (estimate, ~4 characters a token)`;
           });
+          step("recall", "Recall rate", () => {
+            const rr = recallRate(s, { sinceIso: new Date(Date.now() - 7 * 86_400_000).toISOString() });
+            if (rr.started > 0) recallText = renderRecallRate(rr); // no captured sessions: no line (the digest says so)
+          });
           // F4 silent L5: passage pooling switched on but not used on an encrypted store; said, never a grade step.
           if (s.getMeta("passage_pooling") === "on" && s.sealsWrites()) {
             add("passage-pooling", "Passage pooling", "info", "switched on but not used: this store is encrypted, so search ranks whole notes only (an on-disk passage index would hold the words of sealed bodies)");
@@ -365,6 +372,19 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
             audit = auditCheck(o.auditPath, s.captureDb(), notes, o.readOnly);
           } catch (e) {
             audit = { status: "warn", text: `could not read the audit log: ${(e as Error).message}` };
+          }
+          try {
+            const cfg = embeddingsConfig();
+            if (cfg.enabled) {
+              const { vectorMismatch, vectorMismatchText } = await import("./store/vector-audit.js");
+              const { vectorModelLabel } = await import("./embeddings.js");
+              const { LOCAL_MODEL, localModelName } = await import("./embeddings-local.js");
+              const dim = cfg.local && localModelName() === LOCAL_MODEL ? 384 : undefined;
+              const text = vectorMismatchText(vectorMismatch(s.captureDb(), vectorModelLabel(cfg), dim));
+              if (text) add("vectors", "Meaning vectors", "warn", text);
+            }
+          } catch {
+            /* an older database without vectors: nothing to compare */
           }
           dbOk = true;
         }
@@ -403,6 +423,7 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
   const sec = await securityFindings(o.dataDir ?? DATA_DIR, o.bindHost ?? BIND_HOST);
   if (sec.length) for (const f of sec) add(`security:${f.id}`, f.label, f.status, `${f.short} (monomem check --setup has the detail)`);
   else add("security", "Security settings", "ok", "no weakening settings found (lint, stdio admin tools, bind address, cloud-sync folder, remote embeddings, browser origins, file permissions, proxy trust, legacy runners)");
+  if (embeddingsConfig().enabled) add("search", "Search", "info", searchStatusText()); // only when meaning search is switched on: a default store keeps its line count
 
   // Per-project scope: which project this folder's notes go to (an unreadable MONOMEM_AUTO_SCOPE is a warning: it is ignored).
   if (!o.readOnly) try { // (not in the server's own health action: its folder says nothing about yours)
@@ -496,11 +517,12 @@ export async function runHealth(o: HealthOpts = {}): Promise<HealthReport> {
     const claudeLine = await bridgeLine(o.setupEnv ?? { home: dirname(dirname(settingsPath)), env: o.settingsPath ? {} : process.env, cwd: process.cwd() }, dbPath, claudeHeld).catch(() => null);
     if (claudeLine) add("claude-memory", "Claude Code memory", "info", claudeLine);
     add("distrust", "Distrusted writers", "info",`${plural(distrust, "distrust rule")}${distrust ? " (their notes are hidden from agents)" : ""}`);
-    if (confirmLines.length) add("confirm", "Confirm rules", "info", confirmLines.length <= 2 ? confirmLines.join("; ").slice(0, 160) : `${confirmLines.slice(0, 2).join("; ").slice(0, 140)}; and ${confirmLines.length - 2} more`);
+    if (confirmLines.length) add("confirm", "Confirm rules", "info", confirmLines.length <= 2 ? confirmLines.join("; ") : `${confirmLines.slice(0, 2).join("; ")}; and ${confirmLines.length - 2} more`);
     if (backlog) add("confirm-backlog", "Unconfirmed backlog", "warn", `${backlog}: review them with monomem review (the grade is capped at B until they are dealt with)`);
     if (o.quick) add("redacted", "Note scan", "info", "skipped (--quick): redaction markers, personal-data suggestions and sensitivity labels were not counted; run monomem check for the full scan");
     else add("redacted", "Redacted notes", "info", `notes with a [REDACTED:...] marker (secret redaction replaced a credential): ${marked}`);
     add("memory", "Memory size", "ok", meterText);
+    if (recallText) add("recall", "Recall rate", "info", recallText);
     add("hygiene", "Memory hygiene", "info", hygiene);
     const failed = backupFailure(dbPath);
     if (failed) add("backup", "Backups", "warn", `the automatic daily backup failed on ${failed.at.slice(0, 16).replace("T", " ")}: ${printable(failed.error, 200)}. Free some disk space or fix the folder ${backupsDir(dbPath)}, or run monomem backup by hand`);

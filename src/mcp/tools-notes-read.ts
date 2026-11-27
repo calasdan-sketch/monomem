@@ -9,7 +9,7 @@ import { listWithDisputes } from "../facts.js";
 import { audit } from "../security.js";
 import { runSearch, runSearchExplained, semanticNotice, parseMode, runRelevantSearch, roundRobin, SEARCH_MODES, type ExplainedHit } from "../search-service.js";
 import { parseTimePhrase } from "../time-parse.js";
-import { TIME_ZONE } from "../config.js";
+import { timeZone } from "../config.js";
 import { withWhenBase, textResult, zInt, READ_MAX_CHARS, MULTI_READ_MAX, CUT_NOTE, untrustedResultCut, untrustedResult, INCLUDE_DISTRUSTED_SHAPE, WRITER_FILTER_SHAPE, SUPERSEDED_SHAPE, supersededArg, writerFilterArgs, errorResult, errorFor } from "./shared.js";
 import type { McpCtx } from "./context.js";
 
@@ -175,7 +175,7 @@ export function registerNotesReadTools(c: McpCtx): void {
         if (denied) return errorResult(denied);
         // A time phrase the parser doesn't recognize is ignored, never an
         // error: the query still runs, just unscoped.
-        const timePhrase = when ? parseTimePhrase(when, { timeZone: TIME_ZONE }) : null;
+        const timePhrase = when ? parseTimePhrase(when, { timeZone: timeZone() }) : null;
         // Same validation as REST GET /search: a bad limit or an unrecognized
         // time phrase is a clear error, not a silently different query.
         if (limit !== undefined && limit < 1) return errorResult("limit must be an integer >= 1");
@@ -454,6 +454,7 @@ export function registerNotesReadTools(c: McpCtx): void {
         const before = store.read(id); // gate-ok: admin forget: existence + archived check only, nothing returned
         if (!before) return errorResult(`no note with id ${id}`);
         if (before.archived_at) return errorResult(before.superseded_by == null ? archivedMessage(id, "already ") : `note ${id} is already archived`);
+        if (!store.readVisible(id)) return errorResult(`no note with id ${id}`); // a distrusted writer's note reads as missing here too
         store.archive(id);
         audit({ op: "note.archive", id, namespace: before.namespace, label: conn.label, kind: "note", detail: "state_delete" });
         return textResult({

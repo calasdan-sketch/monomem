@@ -600,7 +600,7 @@ describe("A5: sign-out and a rejected key", async () => {
   const { DASHBOARD_JS } = await import("../src/dashboard.js");
   test("logout exists and a 401 sends the person back to the sign-in with a plain sentence", () => {
     assert.match(DASHBOARD_JS, /function logout\(why\)/);
-    assert.match(DASHBOARD_JS, /That key was not accepted/);
+    assert.match(DASHBOARD_JS, /Your session ended \(the key was not accepted/);
   });
 });
 

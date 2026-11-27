@@ -172,12 +172,12 @@ export function noteWhy(store: Store, note: NoteRecord, opts: { namespaces?: str
   };
 }
 
-/** `monomem why <id> [--json] [--body] [--commits] [--touched]` (--touched: what the note touched, blast-radius.ts) */
+/** `monomem why <id> [--json] [--body] [--commits] [--touched] [--readers]` (--touched: what the note touched, blast-radius.ts) */
 export async function whyCmd(args: string[]): Promise<void> {
   const raw = args.find((a) => !a.startsWith("-"));
   const id = raw && /^#?\d+$/.test(raw) ? Number(raw.replace("#", "")) : NaN;
   if (!Number.isInteger(id)) {
-    console.error("Usage: monomem why <note-id> [--json] [--body] [--commits] [--touched]");
+    console.error("Usage: monomem why <note-id> [--json] [--body] [--commits] [--touched] [--readers]");
     process.exit(1);
   }
   const { DB_PATH } = await import("./config.js");
@@ -189,6 +189,7 @@ export async function whyCmd(args: string[]): Promise<void> {
       console.error(`no note #${id}`);
       process.exit(1);
     }
+    if (args.includes("--readers")) return (await import("./cli/handoff-digest.js")).readersCmd(store, note, args.includes("--json"));
     if (args.includes("--commits")) return await commitsOf(store, note.id, note.title, args.includes("--json"));
     if (args.includes("--touched")) {
       const { noteTouched, touchedText } = await import("./blast-radius.js");

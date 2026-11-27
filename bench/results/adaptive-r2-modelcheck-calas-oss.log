@@ -1,0 +1,49 @@
+{
+ "model": "calas-oss:latest",
+ "winners": 96,
+ "real_flagged": 17,
+ "body_flagged": 37,
+ "real_none": 0,
+ "body_none": 0,
+ "byField": {
+  "title": {
+   "n": 21,
+   "real": 9,
+   "body": 8
+  },
+  "body": {
+   "n": 19,
+   "real": 8,
+   "body": 8
+  },
+  "tags": {
+   "n": 18,
+   "real": 0,
+   "body": 7
+  },
+  "source": {
+   "n": 17,
+   "real": 0,
+   "body": 5
+  },
+  "fact": {
+   "n": 21,
+   "real": 0,
+   "body": 9
+  }
+ },
+ "benign": {
+  "benign-corpus": {
+   "n": 188,
+   "flagged": 4,
+   "none": 0
+  },
+  "fixpass-benign": {
+   "n": 308,
+   "flagged": 11,
+   "none": 0
+  }
+ },
+ "latency_median_ms": 145,
+ "latency_p95_ms": 174
+}

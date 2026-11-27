@@ -8,12 +8,14 @@ import { join, relative } from "node:path";
 const ALLOWED = new Map([
   ["src/embeddings.ts", 1],
   ["src/llm.ts", 1],
+  ["src/lint-model.ts", 1], // optional local-model second opinion on a note (loopback only unless MONOMEM_LINT_MODEL_ALLOW_REMOTE=1)
   ["src/hook.ts", 1],
   ["src/runner-sign.ts", 1],
   ["src/ui/js-core.ts", 2], // browser-side fetches to the server that served the page (the API calls, and the one-time sign-in code)
   ["src/cli.ts", 1], // `monomem backup restore`: is my own server up? (127.0.0.1 only)
   ["src/embeddings-offer.ts", 1], // `monomem setup`: does a local Ollama have nomic-embed-text? (127.0.0.1:11434 only)
   ["src/cli/connect.ts", 1], // `monomem open`: is my own server up? (127.0.0.1 only)
+  ["src/cli/demo-open.ts", 1], // `monomem demo --open`: seeds and probes its OWN throwaway server (127.0.0.1, a free port)
   ["src/doctor/server.ts", 2], // `monomem doctor`: the local server's version, and its /status body-index line (127.0.0.1 only)
   ["src/local-server.ts", 1], // session start proves a local server holds this store's main key (GET /proof, loopback only)
   ["src/recall.ts", 1], // the recall hook asks that proven local server for body matches (POST /relevant)

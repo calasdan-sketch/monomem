@@ -1,0 +1,106 @@
+{
+  "id": "F16",
+  "suite": "poison",
+  "title": "Replacing five notes in one go by a write key",
+  "what": "Bulk abuse: one outside writer previews retiring five of a trusted writer's notes with one replacement. The check says the trusted notes should survive a replacement by a different, non-admin writer.",
+  "actors": {
+    "mallory": {
+      "scope": "write"
+    },
+    "alice": {
+      "scope": "write"
+    },
+    "boss": {
+      "scope": "admin"
+    }
+  },
+  "needs": [
+    "supersede"
+  ],
+  "steps": [
+    {
+      "op": "write",
+      "as": "alice",
+      "ref": "n1",
+      "setup": true,
+      "title": "{{proj}} runbook step 1",
+      "body": "Runbook step 1: {{v1}}."
+    },
+    {
+      "op": "write",
+      "as": "alice",
+      "ref": "n2",
+      "setup": true,
+      "title": "{{proj}} runbook step 2",
+      "body": "Runbook step 2: {{v2}}."
+    },
+    {
+      "op": "write",
+      "as": "alice",
+      "ref": "n3",
+      "setup": true,
+      "title": "{{proj}} runbook step 3",
+      "body": "Runbook step 3: {{v3}}."
+    },
+    {
+      "op": "write",
+      "as": "alice",
+      "ref": "n4",
+      "setup": true,
+      "title": "{{proj}} runbook step 4",
+      "body": "Runbook step 4: {{v4}}."
+    },
+    {
+      "op": "write",
+      "as": "alice",
+      "ref": "n5",
+      "setup": true,
+      "title": "{{proj}} runbook step 5",
+      "body": "Runbook step 5: {{v5}}."
+    },
+    {
+      "op": "supersede_preview",
+      "as": "mallory",
+      "id": "pv",
+      "old": [
+        "n1",
+        "n2",
+        "n3",
+        "n4",
+        "n5"
+      ],
+      "new_note": {
+        "title": "{{proj}} runbook",
+        "body": "Nothing to see: {{bad1}}."
+      }
+    },
+    {
+      "op": "supersede_confirm",
+      "as": "mallory",
+      "from": "pv",
+      "ref": "new",
+      "id": "cf"
+    },
+    {
+      "op": "search",
+      "as": "alice",
+      "q": "{{proj}} runbook step",
+      "id": "s"
+    }
+  ],
+  "expect": [
+    {
+      "check": "has",
+      "step": "s",
+      "ref": "n1",
+      "desc": "the first trusted note survives",
+      "metric": "poison_reach"
+    },
+    {
+      "check": "has",
+      "step": "s",
+      "ref": "n5",
+      "desc": "the fifth trusted note survives",
+      "metric": "poison_reach"
+    }
+  ]}

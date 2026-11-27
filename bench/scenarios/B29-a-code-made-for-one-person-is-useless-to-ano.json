@@ -12,6 +12,9 @@
     },
     "boss": {
       "scope": "admin"
+    },
+    "boss2": {
+      "scope": "admin"
     }
   },
   "needs": [
@@ -34,7 +37,7 @@
     },
     {
       "op": "supersede_preview",
-      "as": "alice",
+      "as": "boss",
       "id": "pv",
       "old": [
         "old"
@@ -43,7 +46,7 @@
     },
     {
       "op": "supersede_confirm",
-      "as": "mallory",
+      "as": "boss2",
       "id": "steal",
       "from": "pv"
     },

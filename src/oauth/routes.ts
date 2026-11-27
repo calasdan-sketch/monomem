@@ -12,7 +12,7 @@
 // Secrets (codes, keys, refresh tokens, pairing codes) are never logged; only their sha256 is stored.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomBytes, createHash, timingSafeEqual } from "node:crypto";
-import { readBody, PayloadTooLargeError } from "../http-common.js";
+import { readPreAuthBody, PayloadTooLargeError } from "../http-common.js";
 import { RateLimiter, AuthTarpit, audit } from "../security.js";
 import { oauthAllow, oauthClientKey } from "./rate.js";
 import { isLoopback, type TokenEntry } from "../config.js";
@@ -235,7 +235,7 @@ function sweep(s: OAuthState, tokens: TokenEntry[]): OAuthState {
 }
 
 async function form(req: IncomingMessage): Promise<URLSearchParams> {
-  return new URLSearchParams(await readBody(req, 16_384));
+  return new URLSearchParams(await readPreAuthBody(req, 16_384));
 }
 
 /**
@@ -275,7 +275,7 @@ async function register(req: IncomingMessage, res: ServerResponse, tokens: Token
   if (!oauthAllow(limits.register, limits.gRegister, req)) return oauthError(res, 429, "too_many_requests");
   let body: Record<string, unknown>;
   try {
-    body = JSON.parse(await readBody(req, 16_384)) as Record<string, unknown>;
+    body = JSON.parse(await readPreAuthBody(req, 16_384)) as Record<string, unknown>;
     if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("not an object");
   } catch {
     return oauthError(res, 400, "invalid_client_metadata", "body must be a JSON object");

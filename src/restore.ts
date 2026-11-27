@@ -66,6 +66,22 @@ export function isBusyError(e: unknown): boolean {
 }
 
 /**
+ * A write that failed because the disk is full (SQLITE_FULL 13, ENOSPC) or the database is read-only (SQLITE_READONLY 8).
+ * Plain wording for the agent and the person; the earlier notes are untouched (the failed write rolled back).
+ */
+export function diskProblem(e: unknown): { kind: "full" | "readonly"; message: string } | null {
+  const code = Number((e as { errcode?: unknown })?.errcode) & 0xff;
+  const m = String((e as Error)?.message ?? e);
+  if (code === 13 || /database or disk is full|ENOSPC|no space left/i.test(m)) {
+    return { kind: "full", message: "The disk is full, so nothing was saved. Notes already saved are safe. Free some space (or move the data folder to a bigger drive) and try again." };
+  }
+  if (code === 8 || /readonly database|attempt to write a readonly/i.test(m)) {
+    return { kind: "readonly", message: "The database or its folder is read-only, so nothing was saved. Notes already saved are safe. Make the data folder writable for this user and try again." };
+  }
+  return null;
+}
+
+/**
  * True when another process has the live database open, even idly (a server that is not writing still has it open).
  * Judged by the lock alone: an exclusive lock cannot be taken while any other connection holds the file. A damaged
  * file is NOT busy (it fails with another error), so restore can still replace it.

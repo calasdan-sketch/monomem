@@ -251,6 +251,9 @@ describe("re-scan after an upgrade", () => {
     const env = { ...process.env, NO_COLOR: "1", MONOMEM_HOME: dir, MONOMEM_DB_PATH: join(dir, "state.db"), MONOMEM_AUTO_SCOPE: "" };
     const run = (a: string[]) => spawnSync(process.execPath, [join(PROJECT_ROOT, "dist", "src", "cli.js"), ...a], { encoding: "utf8", env, cwd: dir });
     assert.equal(run(["add", "a plain note about the build"]).status, 0);
+    // A store created by this version is already marked as scanned by it (no warn on a first run); blank the marker to stand in for a store from an older version.
+    assert.doesNotMatch(run(["check", "--setup", "--verbose"]).stdout, /last checked by an older memory linter/);
+    writeFileSync(join(dir, "lint-scan.json"), "");
     const first = run(["check", "--setup", "--verbose"]).stdout;
     assert.match(first, /last checked by an older memory linter/);
     assert.match(first, /monomem check --rescan/);

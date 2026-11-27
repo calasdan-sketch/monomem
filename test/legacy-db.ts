@@ -62,12 +62,24 @@ const V14_DELETE_TRIGGER = `
 `;
 
 /** Rewrite the database file at `path` (closed by the caller) as it looked at `version`. */
-export function downgradeTo(path: string, version: 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21): void {
+export function downgradeTo(path: string, version: 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22): void {
   const raw = new DatabaseSync(path);
   try {
+    // v23 additions (1.8.0): the seal column, its triggers and the ledger, removed for every older shape. Dropping the
+    // triggers first matters: they name notes columns that older shapes drop.
+    raw.exec(`
+      DROP TRIGGER IF EXISTS notes_seal_ai; DROP TRIGGER IF EXISTS notes_seal_au; DROP TRIGGER IF EXISTS notes_seal_ad;
+      DROP TABLE IF EXISTS seal_dirty; DROP TABLE IF EXISTS ledger;
+      DELETE FROM _meta WHERE key IN ('seal_backfill_done', 'seal_backfill_id', 'seal_key_id', 'reseal_cursor');
+    `);
+    if ((raw.prepare("PRAGMA table_info(notes)").all() as Array<{ name: string }>).some((c) => c.name === "seal")) raw.exec("ALTER TABLE notes DROP COLUMN seal");
+    if (version === 22) {
+      raw.exec("PRAGMA user_version = 22");
+      return;
+    }
     // v22 additions (1.5.0 round 2), removed for every older shape; the v21 delete trigger and edge index come back.
     raw.exec(`
-      DROP TABLE IF EXISTS note_flags; DROP TABLE IF EXISTS note_client_keys; DROP TABLE IF EXISTS writer_events; DROP TABLE IF EXISTS code_anchors; DROP INDEX IF EXISTS idx_notes_live_kind; DROP INDEX IF EXISTS idx_notes_obs; DROP INDEX IF EXISTS idx_notes_tag_task; DROP INDEX IF EXISTS idx_notes_tag_convention; DROP INDEX IF EXISTS idx_notes_kind_summary; DROP INDEX IF EXISTS idx_notes_pinned; DROP INDEX IF EXISTS idx_notes_facts;
+      DROP TABLE IF EXISTS note_flags; DROP TABLE IF EXISTS note_client_keys; DROP TABLE IF EXISTS writer_events; DROP TABLE IF EXISTS code_anchors; DROP INDEX IF EXISTS idx_notes_live_kind; DROP INDEX IF EXISTS idx_notes_obs; DROP INDEX IF EXISTS idx_notes_tag_task; DROP INDEX IF EXISTS idx_notes_tag_convention; DROP INDEX IF EXISTS idx_notes_kind_summary; DROP INDEX IF EXISTS idx_notes_pinned; DROP INDEX IF EXISTS idx_notes_facts; DROP INDEX IF EXISTS idx_notes_sealed;
       CREATE INDEX IF NOT EXISTS idx_note_edges_note_id ON note_edges(note_id);
       DROP TRIGGER IF EXISTS notes_links_ad;
       CREATE TRIGGER notes_links_ad AFTER DELETE ON notes BEGIN

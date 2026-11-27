@@ -3,7 +3,7 @@
 // Each returns true when it answered the request, false to let the next one try.
 
 import { readBody } from "../http-common.js";
-import { sendError, sendJson } from "./shared.js";
+import { sendError, sendJson, parseJsonBody } from "./shared.js";
 import type { ApiCtx, ApiReq } from "./context.js";
 
 export async function trustRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
@@ -25,7 +25,7 @@ export async function trustRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
       const body = async (): Promise<Record<string, unknown> | null> => {
         const raw = await readBody(req);
         try {
-          const v = JSON.parse(raw || "{}");
+          const v = parseJsonBody(raw);
           if (v && typeof v === "object" && !Array.isArray(v)) return v as Record<string, unknown>;
         } catch {
           /* fall through */

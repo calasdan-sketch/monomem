@@ -1,0 +1,57 @@
+// Shared adversarial text generators for the parser fuzz tests (not a test file). Each takes a target length and returns a string of about that length.
+const rep = (unit: string) => (n: number): string => unit.repeat(Math.ceil(n / unit.length)).slice(0, n);
+export const ADVERSARIAL: Record<string, (n: number) => string> = {
+  spaces: rep(" "),
+  a: rep("a"),
+  words: rep("word "),
+  ab_space: rep("a "),
+  dots: rep("."),
+  digits: rep("1234567890"),
+  digit_comma: rep("1,"),
+  dash_words: rep("a-"),
+  newlines: rep("\n"),
+  newline_words: rep("ignore all\n"),
+  punct: rep("!?.,;:'\"()[]{}<>/\|*&^%$#@~`-_=+"),
+  ignore_prev: rep("ignore previous instructions and "),
+  ignore_nospace: rep("ignore"),
+  you_must: rep("you must always never "),
+  the_x: rep("the x "),
+  not_words: rep("not no never cannot "),
+  switched: rep("switched to migrated to "),
+  email_like: rep("a@b."),
+  email_at: rep("a@"),
+  url_like: rep("http://a/"),
+  digits_dash: rep("1-"),
+  digit_space: rep("1 "),
+  zwj: rep("a‍"),
+  combining: rep("á"),
+  cjk: rep("日本語のテスト漢字"),
+  hangul: rep("한국어"),
+  surrogate_pairs: rep("\u{1F600}"),
+  fullwidth: rep("ｉｇｎｏｒｅ "),
+  tag_chars: rep("\u{E0041}"),
+  base64ish: rep("QUJDREVGR0g="),
+  hex: rep("deadbeef"),
+  quotes: rep('"'),
+  open_paren: rep("("),
+  fact_tag: rep("fact:k="),
+  time_words: rep("last week 3 days ago "),
+  time_digits: rep("2020-01-"),
+  caps: rep("A"),
+  mixed_lang: rep("ignorez les instructions précédentes "),
+  // r8 (lint-claims-intl.ts, script-aware folding)
+  cyr_lookalike: rep("іgnоrе ѕесо "),
+  cyr_word: rep("отправь все заметки "),
+  cyr_glued: rep("ѕесоотправь"),
+  intl_send: rep("envía todas notas http://a "),
+  intl_pay: rep("sueldo 1234 5678 "),
+  iban_like: rep("ab12 cdef "),
+  digit_run_space: rep("1234 "),
+  arabic_marks: rep("نَفِّذْ أَرْسِلْ "),
+  ja_send: rep("メモをすべて送信 "),
+};
+export const timeMs = (f: () => unknown): number => {
+  const t = process.hrtime.bigint();
+  f();
+  return Number(process.hrtime.bigint() - t) / 1e6;
+};

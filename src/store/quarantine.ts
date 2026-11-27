@@ -10,6 +10,7 @@ import { DEFAULT_SENSITIVITY } from "../sensitivity.js";
 import { contentHash as syncContentHash } from "../sync-hash.js";
 import { contentHash as attestContentHash } from "../attest.js";
 import { isTainted } from "../taint.js";
+import { casUpdate } from "./cas.js";
 import { tokenize } from "../text-sim.js";
 import { clampInt, isoOrNull, openQuarantineCol, parseTags, sealQuarantineCol } from "./rows.js";
 
@@ -365,13 +366,11 @@ export function keepQuarantineAsHistory(s: Store, id: number, byId?: number): { 
     if (n.id === by.id) throw new ValidationError("a note cannot replace itself");
     const now = new Date().toISOString();
     const actor = currentWriter();
-    const res = s.db
-      .prepare(
-        `UPDATE notes SET archived_at = ?, superseded_by = ?, superseded_at = ?, superseded_by_writer = ?, rev = rev + 1
-         WHERE id = ? AND archived_at IS NULL AND superseded_by IS NULL`
-      )
-      .run(now, by.id, now, actor, n.id);
-    if (Number(res.changes) === 0) throw new StaleWriteError(`note ${n.id} is no longer live; nothing was changed`);
+    const rev = (s.db.prepare("SELECT rev FROM notes WHERE id = ?").get(n.id) as { rev: number } | undefined)?.rev ?? -1; // under this transaction's lock
+    casUpdate(s.db, n.id, rev, "archived_at = ?, superseded_by = ?, superseded_at = ?, superseded_by_writer = ?", [now, by.id, now, actor], {
+      where: "archived_at IS NULL AND superseded_by IS NULL",
+      stale: `note ${n.id} is no longer live; nothing was changed`,
+    });
     s.db
       .prepare("INSERT INTO supersede_log (at, actor, action, namespace, old_id, new_id, flags) VALUES (?, ?, 'supersede', ?, ?, ?, 'keep-history')")
       .run(now, actor, n.namespace, n.id, by.id);

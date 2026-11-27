@@ -55,6 +55,19 @@ Claude Code will ask again for the 1.6 tools, because they have new names: `mcp_
 `mcp__monomem__memory_replace` and `mcp__monomem__memory_catch_up` by default. Add those names (or `mcp__monomem` for all
 of Monomem's tools) to the same list.
 
+## Monomem 1.8.0 (database schema v22 to v23: note seals and the ledger)
+
+- **What changes.** One column (`notes.seal`), two tables (`ledger`, `seal_dirty`), two indexes and three triggers are added; nothing existing is
+  rewritten at the upgrade. A verified copy is made first, at `<database>.pre-v23-backup`, like every upgrade.
+- **The notes are sealed after the upgrade, in short batches** (about a quarter of a second at open, the rest in the background of a running server
+  or at the next opens), so a very large store does not wait. `monomem check` shows how far it is; `monomem integrity seal` finishes it now. Until
+  it is finished a note without a seal is served as before. The seal records the notes as they are at that moment (`adopt` in the ledger); it says
+  nothing about earlier edits.
+- **One way only.** Older versions refuse a v23 database. To go back: stop every app that uses Monomem, `monomem restore <database>.pre-v23-backup --yes`,
+  install the older version. Anything written after the upgrade is not in that copy.
+- **A restore without `.attest-key`** makes a new key; the seals were made under the old one. `monomem check` says so (nothing is hidden for it).
+  Put the old key file back, or accept the notes as they are: `monomem integrity reseal --yes`.
+
 ## Monomem 1.4.0 and 1.5.0 (database schema v19 to v22)
 
 Applies to Monomem 1.3.x (and to a development build that already made the store v20 or v21). A fresh install needs none of this.
@@ -68,18 +81,18 @@ Applies to Monomem 1.3.x (and to a development build that already made the store
   who approved a held write and when, the latest confirm), two on held writes (their forget date and confidence), one on capture
   sessions, and two new tables (confirms, and "derived from" links between notes), and, from 1.5.0, when a note's title or body last changed (the re-confirmation clock starts there, not at any edit) and the folder of the local process that wrote it, plus three small tables (agents' "this looks wrong" flags, the retry keys that stop a repeated write from saving a note twice, and the per-writer counts `monomem trust` shows) and two index changes. No note text is rewritten. Every note that exists
   at the upgrade is marked with the upgrade time, so nothing that showed before the upgrade is hidden after it.
-- **A verified backup is made first**, at `<database>.pre-v22-backup`. The upgrade does not run if that copy cannot be made.
+- **A verified backup is made first**, at `<database>.pre-v23-backup`. The upgrade does not run if that copy cannot be made.
   Remove it when you are happy: `monomem backup --prune-premigration`. `monomem check --setup` warns once a copy is more than 14 days old.
 - **Your app keys are hashed on the first start of 1.5.0 (automatic).** Each plain-text key in `tokens.json` is replaced by its
   one-way hash; the rewrite is atomic, `tokens.json.bak` (which held the plain text) is deleted, and starting again changes nothing.
   Your apps keep working: they still send the key in their own config. The main key in `.token` stays in plain text (the CLI
   and the dashboard sign-in need it). **Going back is the catch:** Monomem 1.4.x and older cannot read a hashed entry, so after
   a downgrade those apps are refused until you run `monomem connect <app>` again to make each a new key. (Restoring the
-  `.pre-v22-backup` database does not bring back the old `tokens.json`.) `monomem keys harden` hashes by hand; `monomem check --setup`
+  `.pre-v23-backup` database does not bring back the old `tokens.json`.) `monomem keys harden` hashes by hand; `monomem check --setup`
   warns if a key is still in plain text.
 - **One way only.** Monomem 1.3.x and older refuse a v22 database instead of opening it. If several machines share one database,
   upgrade all of them.
-- **To go back to 1.3.x:** close every app that uses Monomem and stop the server, then `monomem restore <database>.pre-v22-backup --yes`
+- **To go back to 1.3.x:** close every app that uses Monomem and stop the server, then `monomem restore <database>.pre-v23-backup --yes`
   and install the older version (`npm i -g monomem@1.3.5`). Anything written after the upgrade is not in the backup; the copy-aside keeps it.
 - Afterwards run `monomem check --setup`, then `monomem check`. What is new: [CHANGELOG.md](../CHANGELOG.md).
 
@@ -191,7 +204,7 @@ leftover `.partial` files.
 ## Rolling back (older versions: OneMemory 1.4.x and the v19 upgrade)
 
 > **On Monomem 1.4.0 or 1.5.0?** This section is not for you. Follow "To go back to 1.3.x" in
-> [Monomem 1.4.0 and 1.5.0](#monomem-140-and-150-database-schema-v19-to-v22) (it restores `<database>.pre-v22-backup`).
+> [Monomem 1.4.0 and 1.5.0](#monomem-140-and-150-database-schema-v19-to-v22) (it restores `<database>.pre-v23-backup`).
 
 To roll back an older upgrade:
 

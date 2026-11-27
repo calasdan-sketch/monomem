@@ -58,7 +58,7 @@ describe("the harness is hermetic", () => {
     // (a throwaway data directory, and the full tool surface so the suite can
     // exercise the operator tools a plain install no longer registers; the flood guard off for bulk tests). Any
     // other MONOMEM_* variable means the developer's shell leaked in.
-    const deliberate = new Set(["MONOMEM_HOME", "MONOMEM_TOOLS", "MONOMEM_FLOOD_WRITES_PER_HOUR", "MONOMEM_SCAN_CACHE_SECONDS", "MONOMEM_NO_SERVER_PROBE", "MONOMEM_RECALL_TIMEOUT_MS", "MONOMEM_GIT_TIMEOUT_MS", "MONOMEM_TEST_TIME_SCALE"]); // GIT_TIMEOUT: a loaded Windows run spawns git slower than the 400 ms cap; // NO_SERVER_PROBE: doctor never probes a real server from a test; RECALL_TIMEOUT: a loaded CI runner must not trip the 5 s session-start cap; TEST_TIME_SCALE: CI widens wall-clock bounds (read by test/setup-env.ts only, never by src)
+    const deliberate = new Set(["MONOMEM_REPLACE_CONFIRM", "MONOMEM_HOME", "MONOMEM_TOOLS", "MONOMEM_FLOOD_WRITES_PER_HOUR", "MONOMEM_SCAN_CACHE_SECONDS", "MONOMEM_NO_SERVER_PROBE", "MONOMEM_RECALL_TIMEOUT_MS", "MONOMEM_GIT_TIMEOUT_MS", "MONOMEM_TEST_TIME_SCALE", "MONOMEM_SEAL_WITHHOLD", "MONOMEM_IMPORT_LOCK_MS"]); // IMPORT_LOCK_MS: the suite keeps import batches at their fixed note count (setup-env.ts) // SEAL_WITHHOLD: the suite edits note rows by hand and must still read them (setup-env.ts) // GIT_TIMEOUT: a loaded Windows run spawns git slower than the 400 ms cap; // NO_SERVER_PROBE: doctor never probes a real server from a test; RECALL_TIMEOUT: a loaded CI runner must not trip the 5 s session-start cap; TEST_TIME_SCALE: CI widens wall-clock bounds (read by test/setup-env.ts only, never by src)
     const left = Object.keys(process.env).filter((k) => k.startsWith("MONOMEM_") && !deliberate.has(k));
     assert.deepEqual(left, []);
     assert.equal(process.env.MONOMEM_TOOLS, "legacy-1.5,all", "the suite runs against the full tool surface");
@@ -727,7 +727,7 @@ describe("8: backups and upgrades", () => {
       s.close();
       downgradeTo(p, 13);
       // an older copy with fewer notes (an earlier upgrade of this database, before it was rolled back and used)
-      const old = p + ".pre-v22-backup";
+      const old = p + ".pre-v23-backup";
       copyFileSync(p, old);
       const db = new DatabaseSync(old);
       db.exec("DELETE FROM notes WHERE id > 1");
@@ -736,7 +736,7 @@ describe("8: backups and upgrades", () => {
       s2.close();
       const copies = Store.preMigrationBackups(p).map((c) => c.path.slice(dir.length + 1)).sort();
       assert.equal(copies.length, 2, copies.join(", "));
-      assert.ok(copies.some((c) => /^state\.db\.pre-v22-backup-\d{8}-\d{6}$/.test(c)), copies.join(", "));
+      assert.ok(copies.some((c) => /^state\.db\.pre-v23-backup-\d{8}-\d{6}$/.test(c)), copies.join(", "));
       assert.equal(Store.verifyBackupFile(old).ok && (Store.verifyBackupFile(old) as any).notes, 3, "the fresh copy holds the live state");
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -750,8 +750,8 @@ describe("8: backups and upgrades", () => {
       const s = new Store(p);
       as("alice", () => s.create({ title: "n", body: "b" }));
       s.close();
-      const stale = [p + ".pre-v22-backup.123abc.partial", p + ".pre-v22-backup.123abc.partial-journal"];
-      const fresh = p + ".pre-v22-backup.999fff.partial";
+      const stale = [p + ".pre-v23-backup.123abc.partial", p + ".pre-v23-backup.123abc.partial-journal"];
+      const fresh = p + ".pre-v23-backup.999fff.partial";
       for (const f of [...stale, fresh]) writeFileSync(f, "x");
       const old = new Date(Date.now() - 3600_000);
       for (const f of stale) utimesSync(f, old, old);
@@ -870,7 +870,7 @@ describe("docs and CI stay in step with the code", () => {
     };
     walk("src");
     // The folders the large files were split into (Phase 0) hold code that used to sit in src/ itself.
-    for (const d of ["src/mcp", "src/api", "src/doctor", "src/cli"]) walk(d);
+    for (const d of ["src/mcp", "src/api", "src/doctor", "src/cli", "src/store"]) walk(d);
     const doc = read("docs", "configuration.md");
     const rows = [...doc.matchAll(/^\|\s*`(MONOMEM_[A-Z0-9_]+)`/gm)].map((m) => m[1]);
     const dupes = rows.filter((r, i) => rows.indexOf(r) !== i);
@@ -902,7 +902,7 @@ describe("docs and CI stay in step with the code", () => {
 
   test("docs/upgrading.md exists and is linked from the README and the CHANGELOG", () => {
     const up = read("docs", "upgrading.md");
-    for (const must of ["Older upgrade notes (OneMemory)", "Monomem 1.2.0", "pre-v18-backup", "pre-v22-backup", "1.3.4", "roll back", "imported_unverified", "MONOMEM_ATTEST_MIN_VERSION", "EXPERIMENTAL"]) assert.ok(up.includes(must) || up.toLowerCase().includes(must.toLowerCase()), `upgrading.md lacks ${must}`);
+    for (const must of ["Older upgrade notes (OneMemory)", "Monomem 1.2.0", "pre-v18-backup", "pre-v23-backup", "1.3.4", "roll back", "imported_unverified", "MONOMEM_ATTEST_MIN_VERSION", "EXPERIMENTAL"]) assert.ok(up.includes(must) || up.toLowerCase().includes(must.toLowerCase()), `upgrading.md lacks ${must}`);
     assert.match(read("README.md"), /docs\/upgrading\.md/);
     assert.match(read("CHANGELOG.md"), /docs\/upgrading\.md/);
   });

@@ -17,7 +17,7 @@ test("recall, nDCG and MRR on a hand-checked ranking", () => {
   // DCG = 1/log2(3); IDCG = 1 + 1/log2(3)
   close(ndcg(ranked, gold, 10), 1 / Math.log2(3) / (1 + 1 / Math.log2(3)));
   close(ndcg(["g1", "g2"], gold, 10), 1);
-  assert.deepEqual(scoreQuestion([], gold), { r5: 0, rAll5: 0, r10: 0, rAll10: 0, ndcg10: 0, mrr: 0 });
+  assert.deepEqual(scoreQuestion([], gold), { r1: 0, r3: 0, r20: 0, r5: 0, rAll5: 0, r10: 0, rAll10: 0, ndcg10: 0, mrr: 0 });
 });
 
 test("Rall@5 (C-03): every gold id must be in the top 5, any-hit R@5 is not enough", () => {

@@ -36,7 +36,7 @@ export const OLD_COMMANDS: Readonly<Record<string, string>> = {
   taint: "settings outside-window",
 };
 
-const CHECK_FLAGS: Record<string, string> = { "--setup": "doctor", "--attacks": "drill", "--usage": "meter", "--report": "safety-report", "--rescan": "rescan" };
+const CHECK_FLAGS: Record<string, string> = { "--setup": "doctor", "--attacks": "drill", "--usage": "meter", "--report": "safety-report", "--rescan": "rescan", "--model": "lint-model", "--crash": "crash-check" };
 const REVIEW_PARTS: Record<string, string[]> = {
   held: ["quarantine"],
   duplicates: ["quality"],
@@ -66,6 +66,13 @@ export const TIDY_HELP = [
   "  scrub [--yes]               Remove the text of long-deleted notes from the database file (was: scrub)",
   "  marks [--yes]               Stamp ended sessions that read outside content before the mark existed (dry run without --yes)",
 ].join("\n");
+
+/** What `monomem tidy [job]` prints: the job list, and a non-zero exit when a job name was typed that does not exist. */
+export function tidyHelpFor(job?: string): { text: string; code: number } {
+  if (!job || job.startsWith("-")) return { text: TIDY_HELP, code: 0 };
+  return { text: `Unknown tidy job '${job}'.
+${TIDY_HELP}`, code: 1 };
+}
 
 /**
  * The command line with a 1.6 word turned into the command that does the work (argv without node and the script).

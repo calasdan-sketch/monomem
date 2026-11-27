@@ -11,12 +11,18 @@ npx monomem setup --dry-run     # shows exactly what it would change; writes not
 npx monomem setup               # does it, after you type y; backs up every file; --undo reverses it
 ```
 
+**The first `npx` run downloads about 94 packages and can take minutes on a slow or busy network, and it prints nothing while it does** (npm shows no progress for it, and Monomem cannot add one). If that is a problem for you, use the [zip download](#download-no-nodejs-needed) instead: one file, no package downloads. Later runs use npm's cache and start in about a second.
+
 It finds Claude Code, Claude Desktop, Cursor, Codex CLI, Gemini CLI, Muse, VS Code, Zed, Windsurf, Devin, Kiro, Cline CLI, GitHub Copilot CLI, Antigravity, Qwen Code, OpenCode and Kilo Code ([where each keeps its settings](./docs/apps.md)), adds only the Monomem entry, and can move an old `claude-bridge` entry across keeping your data.
 Details and troubleshooting: [docs/live-claude-code.md](./docs/live-claude-code.md). The manual steps for each app follow.
 
 To give one app its own key and a limit on what it can see, use `monomem connect <app> --max internal` instead; see
 [Give an app limited access](./docs/give-an-app-limited-access.md). Apps wired by hand below (the usual `monomem mcp` way)
 run on your computer with no limit, so use `connect` for any app that should not see `private` notes.
+
+## Docker
+
+Docker works where the download does not (Windows on ARM, Linux on ARM, Alpine). Steps are in [docs/backups.md](docs/backups.md#docker): clone the repository, copy `.env.example` to `.env`, set `MONOMEM_TOKEN` to a long random value (`openssl rand -hex 32`), then `docker compose up -d`.
 
 ## Upgrading
 
@@ -126,10 +132,14 @@ changes nothing.
    - Linux: `sha256sum -c SHA256SUMS --ignore-missing`
 3. The checksum only proves the file matches the release. To check that this project's GitHub build made it, use the
    GitHub CLI: `gh attestation verify monomem-<version>-<target>.zip --repo calasdan-sketch/monomem` (or the `.tar.gz`).
+4. npm users: `npm audit signatures` checks the package's provenance. Every release also carries an SBOM. All of it, with the
+   exact commands for each system and what is not signed: [docs/verify.md](./docs/verify.md).
 
 ---
 
 ## Doing it by hand
+
+> **Windows:** an app that starts the server without a shell cannot run the bare `monomem` command in the snippets below (error `ENOENT`). Run `monomem setup`, which writes the full path for you, or use `"command": "cmd", "args": ["/c", "monomem", "mcp"]` (adjust the args to match the snippet).
 
 > **Before the by-hand steps** (Node.js 22.16+ or 24 LTS):
 > ```bash

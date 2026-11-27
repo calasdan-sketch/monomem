@@ -10,7 +10,7 @@ function actC(n, a){ return " data-chg='"+n+"'" + (a === undefined ? "" : " data
 function actArgs(el){ try { var j = JSON.parse(el.getAttribute("data-args") || "[]"); return j instanceof Array ? j : []; } catch(e){ return []; } }
 var ACTS = {
   // views and sheets
-  load: function(){ load(); }, loadReview: function(){ loadReview(); }, loadHeld: function(){ loadHeld(); },
+  load: function(){ load(); }, moreNotes: function(){ moreNotes(); }, loadReview: function(){ loadReview(); }, loadHeld: function(){ loadHeld(); },
   loadChanges: function(){ loadChanges(); }, loadSessions: function(){ loadSessions(); },
   loadSession: function(el){ loadSession(el.getAttribute("data-sid")); },
   loadAudit: function(){ loadAudit(); }, applyFilter: function(){ applyFilter(); },

@@ -1,4 +1,4 @@
-# Switching to Monomem from claude-mem, mem0, basic-memory, Codex, Notion or the official MCP memory server
+# Switching to Monomem from Engram, agentmemory, ai-memory, claude-mem, mem0, basic-memory, Codex, Notion or the official MCP memory server
 
 `monomem import --from <tool>` copies another memory tool's notes into Monomem. It works the same way as
 `import --claude`:
@@ -30,6 +30,39 @@ search and your other apps still see them.
 The dashboard's Welcome screen does the same: under **Bring in memories** it lists what it found on this computer
 (Claude Code's own memory, claude-mem, basic-memory, the MCP memory server, Codex memories) and asks before each one.
 A Notion export or a mem0 file needs a path, so those two are done from the terminal.
+
+## One line: `import --auto`
+
+```sh
+monomem import --auto <file-or-folder>          # shows what it found and would bring in; writes nothing
+monomem import --auto <file-or-folder> --yes    # writes
+```
+
+It reads the file to find out what it is (the name does not matter): an Engram database or export, an agentmemory export, an
+ai-memory export, a mem0 export, the MCP memory server's `memory.jsonl`, a claude-mem database, or a folder of Codex memories,
+basic-memory notes or a Notion export. If it cannot tell, it says so and lists the formats; then name the tool with `--from`.
+The summary shows the counts, the first sample titles, the duplicates and left-out rows, and which new notes the memory linter may
+hold. It writes only with `--yes`, and a dry run does not even create the Monomem data folder. Everything else on this page applies:
+notes come in unconfirmed, written by `import:<tool>`, linted like any write, and never trusted until you confirm them.
+The name the other tool gave as writer (an agent id) is kept only as a `claimed-writer:` tag. It is a claim, not an identity.
+
+## From Engram, agentmemory or ai-memory
+
+```sh
+monomem import --from engram --dry-run                         # reads ~/.engram/engram.db ($ENGRAM_DATA_DIR/engram.db)
+monomem import --from engram --path export.json                # or the JSON from `engram export`
+monomem import --from agentmemory --path export.json           # GET /agentmemory/export
+monomem import --from ai-memory --path export.json             # ai-memory export > export.json
+```
+
+- **Engram** (Gentleman-Programming/engram): observations become notes (type, scope and topic key kept as tags, project as the group).
+  Deleted rows, rows another row replaced, and prompts are left out. The database is opened read only.
+- **agentmemory** (rohitg00/agentmemory): memories (latest version only), observations and session summaries. Images and file paths are not read.
+- **ai-memory** (alphaonedev/ai-memory-mcp): memories with their namespace, tags and tier. Expired rows are left out. Its export does not
+  carry the signed and governance records, so nothing from it counts as verified. Read its SQLite file by exporting first.
+- Limits: a file over 256 MiB is refused; NUL and other control characters are removed; a second copy (same id, or same title and text) is skipped.
+- Mappings were written from each project's source (the export structures and table definitions), checked against small hand-made
+  files in `test/fixtures/importers/`, not against a large real store of each tool. If a real export fails, `--dry-run` says why.
 
 ## Claude Code's own memory (`import --claude`)
 

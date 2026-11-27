@@ -263,7 +263,12 @@ export function prepareDataDir(): void {
   if (process.env.MONOMEM_DB_PATH) return;
   // A client that sets a different MONOMEM_HOME than the one a previous run
   // used would otherwise start empty without a word.
-  const homeDefault = join(homedir(), ".monomem");
+  let homeDefault: string;
+  try {
+    homeDefault = join(homedir(), ".monomem");
+  } catch {
+    return; // no resolvable home folder (a container user with no passwd entry and no HOME): nothing to compare against
+  }
   if (
     resolve(DATA_DIR) !== resolve(homeDefault) &&
     !existsSync(join(DATA_DIR, "state.db")) &&
@@ -317,6 +322,7 @@ export function takeNewKeyNotice(): boolean {
 export function resolveToken(): string {
   if (process.env.MONOMEM_TOKEN && process.env.MONOMEM_TOKEN.trim()) {
     const t = process.env.MONOMEM_TOKEN.trim();
+    if (/^change-?me/i.test(t)) throw new Error("monomem: MONOMEM_TOKEN is still the placeholder from .env.example. Set a real random key (for example: openssl rand -hex 32, or monomem keys new) and start again.");
     if (t.length < MIN_TOKEN_LENGTH) {
       throw new Error(
         `monomem: MONOMEM_TOKEN is too short (${t.length} chars); use at least ${MIN_TOKEN_LENGTH}. ` +
@@ -649,7 +655,7 @@ export function resolveTokens(): TokenEntry[] {
   try {
     add(resolveToken(), "admin", "primary", true);
   } catch (e) {
-    if (/MONOMEM_TOKEN is too short/.test((e as Error).message)) throw e;
+    if (/MONOMEM_TOKEN is too short|MONOMEM_TOKEN is still the placeholder/.test((e as Error).message)) throw e;
     /* no primary token available (e.g. doctor on a fresh box) */
   }
 
@@ -857,7 +863,9 @@ export function assertSafeExposure(): void {
  * timezone is used. Invalid names log to stderr and fall back to "UTC"
  * (never throw at import time).
  */
-export const TIME_ZONE = resolveTimeZone(process.env.MONOMEM_TIMEZONE);
+// Lazy: resolving the system zone through Intl costs ~15 ms, and hooks never search by time phrase.
+let timeZoneCache: string | undefined;
+export const timeZone = (): string => (timeZoneCache ??= resolveTimeZone(process.env.MONOMEM_TIMEZONE));
 
 /**
  * Staleness detection (time-aware memory): notes older than these thresholds

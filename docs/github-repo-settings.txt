@@ -1,0 +1,34 @@
+GitHub repo settings for calasdan-sketch/monomem (apply by hand: Settings > General, and the gear next to About).
+
+Description (under 350 characters, matches package.json):
+Shared memory for AI coding agents: a writer on every note, injection-linted writes, undo. One local SQLite file, MCP server, self-hosted, MIT. Beta.
+
+Website:
+https://github.com/calasdan-sketch/monomem#readme
+(or https://calasautomations.com/devtools/monomem/ if that page is live)
+
+Topics (max 20):
+mcp
+mcp-server
+model-context-protocol
+ai-agents
+agent-memory
+claude-code
+cursor
+codex
+gemini-cli
+sqlite
+fts5
+local-first
+self-hosted
+typescript
+provenance
+prompt-injection
+llm-memory
+developer-tools
+
+Other settings that move scores:
+- Turn on Discussions (the API shows has_discussions false).
+- Turn on private vulnerability reporting (Settings > Code security) so the Security tab shows a policy path.
+- Branch protection on main with required review (OpenSSF Scorecard Branch-Protection, Code-Review).
+- Each release: write release notes (Glama needs a release; Scorecard Signed-Releases already handled).

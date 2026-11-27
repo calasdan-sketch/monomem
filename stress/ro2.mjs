@@ -1,0 +1,10 @@
+import { freshEnv, run, url } from "./lib.mjs";
+import { execSync } from "node:child_process";
+const D = process.env.DIST || new URL("../dist2", import.meta.url).pathname.slice(1);
+const t = freshEnv();
+const Q = `await import("${url(D, "src/quiet-sqlite.js")}");const {Store}=await import("${url(D, "src/store.js")}");const {errorFor}=await import("${url(D, "src/mcp/shared.js")}");`;
+await run(`${Q}const s=new Store(process.argv[1],{bodyIndex:"off"});s.create({title:"a",body:"b"});s.close()`, [t.db], t.env);
+execSync(`attrib +R "${t.db}"`);
+const r = await run(`${Q}try{const s=new Store(process.argv[1],{bodyIndex:"off"});try{s.create({title:"x",body:"y"});console.log("WROTE")}catch(e){console.log("WRITE-ERR",e.message,"=>",errorFor(e).content[0].text)}}catch(e){console.log("OPEN-ERR",e.message.slice(0,300))}`, [t.db], t.env);
+console.log(r.out, r.err.slice(0, 300));
+execSync(`attrib -R "${t.db}"`);

