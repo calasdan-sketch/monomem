@@ -94,8 +94,20 @@ test("31-H4: the budget covers the waits themselves: a crowd that never stops is
     const end = Date.now() + 9000; let first = true;
     while (Date.now() < end) { d.exec("BEGIN IMMEDIATE; INSERT INTO x VALUES (1)"); if (first) { first = false; console.log("held"); } Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60); d.exec("COMMIT"); }`, file], { stdio: ["ignore", "pipe", "inherit"] });
   await new Promise((r) => holder.stdout.once("data", r));
-  const t0 = performance.now();
-  assert.throws(() => beginImmediate(b, 1500), /locked|busy/i);
+  // The holder releases and retakes the lock between commits; on a busy runner the waiter can land in that gap and get the lock. That is
+  // the crowd working as designed, not a failure, so release and try again (a few times) until a refusal is seen.
+  let t0 = performance.now(), refused = false;
+  for (let k = 0; k < 6 && !refused; k++) {
+    t0 = performance.now();
+    try {
+      beginImmediate(b, 1500);
+      b.exec("ROLLBACK");
+    } catch (e) {
+      assert.match(String(e), /locked|busy/i);
+      refused = true;
+    }
+  }
+  assert.ok(refused, "a crowd that never stops is refused");
   const took = performance.now() - t0;
   holder.kill("SIGKILL");
   await new Promise((r) => holder.once("close", r));
