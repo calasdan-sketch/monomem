@@ -17,7 +17,7 @@ Written 2026-11-25 for the maintainer. Nothing here has been released, posted, s
 
 1. **Run the full test suite alone on a quiet PC** (`npm test`, nothing else running) and write the real totals in the release notes. The audit could not finish a clean run on a loaded machine; do not quote a test count publicly until you have one.
 2. **Re-run `monomem bench`, `monomem check --attacks` and `monomem check --crash` on the release build** and compare to the numbers below. If one differs, fix the text, not the number.
-3. **Re-record the demo GIF** on the release. The GIF in the README says it was recorded on 1.5.0 and the screens have changed. `scripts/record-demo.mjs` builds the rig.
+3. **Demo GIF re-recorded on 1.8.0 (2026-11-27)** with `npm run demo-gif`; the architecture diagram, PNG and GIF were redrawn the same day (seal and signed ledger added).
 4. **Click "Undo what it did" on the `web-clipper` writer in `demo --open` by hand once.** The build agent did not click it through in a browser.
 5. **Check the `demo --open` folder is deleted** after Ctrl+C and after closing the terminal on Windows (a hard-closed terminal may leave a `monomem-demo-open-*` folder in `%TEMP%`).
 6. **Look at the cold-start lock** (about 4% of instances in MAMB when up to eight processes start at once on an empty folder). A new user with two apps starting at login may meet it. A fix is not in this patch.

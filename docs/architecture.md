@@ -15,7 +15,7 @@ flowchart LR
     IN(["MCP · REST"])
     GATE{"Write check<br/>secrets refused<br/>known attacks held"}
     HELD[["Held queue<br/>waits for your OK"]]
-    DB[("One SQLite file<br/>each note keeps<br/>who wrote it, its history<br/>and its privacy label")]
+    DB[("One SQLite file<br/>each note keeps<br/>who wrote it, its history,<br/>a seal and a signed ledger")]
     OUT(["Reads<br/>private notes hidden<br/>from limited apps<br/>distrusted writers left out"])
     IN --> GATE
     GATE -- "clean" --> DB
@@ -24,7 +24,7 @@ flowchart LR
     DB --> OUT
   end
 
-  YOU(["You: dashboard and CLI<br/>approve · distrust · roll back · check"])
+  YOU(["You: dashboard and CLI<br/>approve · distrust · roll back · blame"])
 
   AG -- "save" --> IN
   OUT -- "recall" --> AG2

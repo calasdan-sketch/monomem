@@ -37,7 +37,7 @@ writeFileSync(join(tmp, "tokens.json"), JSON.stringify([
   { token: T.admin, scope: "admin", label: "admin" },
 ]));
 const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(MONOMEM_|ONEMEMORY_|CLAUDE_BRIDGE_)/.test(k)));
-Object.assign(env, { MONOMEM_HOME: tmp, MONOMEM_DB_PATH: join(tmp, "state.db"), MONOMEM_TOKEN: T.admin, MONOMEM_PORT: String(PORT), MONOMEM_BIND: "127.0.0.1" });
+Object.assign(env, { MONOMEM_HOME: tmp, MONOMEM_DB_PATH: join(tmp, "state.db"), MONOMEM_TOKEN: T.admin, MONOMEM_PORT: String(PORT), MONOMEM_BIND: "127.0.0.1", MONOMEM_DEMO: "1" }); // MONOMEM_DEMO=1 is what `monomem demo --open` sets: it skips the first-run Welcome screen that would cover the tabs
 const server = spawn(process.execPath, ["dist/src/index.js"], { env, stdio: ["ignore", "ignore", "pipe"] });
 let serverLog = "";
 server.stderr.on("data", (d) => (serverLog += d));
@@ -135,7 +135,7 @@ try {
     const t0 = Date.now();
     await page.goto(BASE + "/");
     await page.click("#tab_held");
-    await page.waitForSelector(".card.held");
+    await page.waitForSelector("article.card:has(.stamp)");
     const ready = (Date.now() - t0) / 1000; // video seconds at which the Held view is on screen
     await script(page);
     const video = page.video();
@@ -145,10 +145,10 @@ try {
   const clipA = await record("a", async () => { await sleep(2400); });
   const clipB = await record("b", async (page) => {
     await sleep(900);
-    await page.click(".card.held button:has-text('Reject')");   // arms: "Confirm reject?"
+    await page.click("article.card:has(.stamp) button:has-text('Reject')");   // arms: "Confirm reject?"
     await sleep(1300);
-    await page.click(".card.held button:has-text('Confirm')");   // second click runs it
-    await page.waitForSelector(".card.held", { state: "detached" });
+    await page.click("article.card:has(.stamp) button:has-text('Confirm')");   // second click runs it
+    await page.waitForSelector("article.card:has(.stamp)", { state: "detached" });
     await sleep(1700);
   });
   await browser.close();
