@@ -35,7 +35,7 @@ const L_SECRET = 53 + 38 + 34;
 
 const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="670" viewBox="0 0 1200 670" role="img" aria-labelledby="t d">
 <title id="t">How Monomem works</title>
-<desc id="d">Your AI agents (Claude Code, Codex, Cursor, Copilot, Gemini CLI, Zed) save through MCP or REST. A write check refuses secrets, and writes that match a known attack pattern are held for your review; only your approval stores them. Everything else goes into one SQLite file where each note keeps its writer, its history and its privacy label. Reads show pinned notes first at session start, hide private notes from limited apps, leave out distrusted writers, and show new notes' titles on your next message, so every agent's next session recalls what the others saved.</desc>
+<desc id="d">Your AI agents (Claude Code, Codex, Cursor, Copilot, Gemini CLI, Zed) save through MCP or REST. A write check refuses secrets, and writes that match a known attack pattern are held for your review; only your approval stores them. Everything else goes into one SQLite file where each note keeps its writer, its history, its privacy label and a seal, and every change goes into a signed ledger. Reads show pinned notes first at session start, hide private notes from limited apps, leave out distrusted writers, and show new notes' titles on your next message, so every agent's next session recalls what the others saved.</desc>
 <style>
   svg{--bg:#F1F6F9;--panel:#FFFFFF;--ink:#12212C;--muted:#4A5D6B;--rule:#D9E3EA;--navy:#0B2E45;--ocean:#155F87;--gold:#F0C171;--goldt:#8A5A12;--held:#A23B2E;--heldbg:#FBEDEA;--dbbg:#E6F0F6;--onnavy:#FFFFFF}
   @media (prefers-color-scheme: dark){svg{--bg:#0B1A26;--panel:#102434;--ink:#EEF4F8;--muted:#A9BCCA;--rule:#2A4559;--navy:#0B2E45;--ocean:#4FA3D1;--goldt:#F0C171;--held:#E58A7E;--heldbg:#2E1C1E;--dbbg:#13304A}}
@@ -111,8 +111,8 @@ ${txt(525, 472, "waits for your OK", "m", "middle")}
 <ellipse cx="755" cy="235" rx="90" ry="14" fill="var(--dbbg)" stroke="var(--ocean)" stroke-width="2"/>
 ${txt(755, 278, "One SQLite file", "serif h", "middle")}
 ${txt(755, 302, "each note keeps its", "m", "middle")}
-${txt(755, 320, "writer · history", "s", "middle")}
-${txt(755, 338, "privacy label", "s", "middle")}
+${txt(755, 320, "writer · history · seal", "s", "middle")}
+${txt(755, 338, "label · signed ledger", "s", "middle")}
 
 <!-- reads -->
 <rect class="box" x="905" y="175" width="250" height="230" rx="14"/>
@@ -123,7 +123,7 @@ ${[["Pinned notes first", "at session start"], ["Private notes hidden", "from li
 <!-- you -->
 <rect x="400" y="575" width="250" height="66" rx="14" fill="var(--panel)" stroke="var(--gold)" stroke-width="2"/>
 ${txt(525, 602, "You: dashboard and CLI", "serif h", "middle")}
-${txt(525, 625, "approve · reject · distrust · roll back", "m", "middle")}
+${txt(525, 625, "approve · distrust · roll back · blame", "m", "middle")}
 <rect class="anim" x="395" y="570" width="260" height="76" rx="17" fill="none" stroke="var(--gold)" stroke-width="3" opacity="0">${showBetween(9.4, 10.6)}</rect>
 
 <!-- moving dots (on top; they jump across boxes) -->

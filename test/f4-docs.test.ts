@@ -137,8 +137,13 @@ describe("upgrading.md, trust.md, scorecard", () => {
     assert.match(row, /1,637/);
     assert.match(row, /\b13\b/);
   });
-  test("README's demo recording is labelled as older than the redesign, or gone", () => {
-    const r = read("README.md");
-    assert.ok(!r.includes("monomem-demo.gif") || /before the (dashboard )?redesign|older (recording|screenshot)/i.test(r));
-  });
+  test("README's demo recording says which version it was recorded on, and that is the current one (or is labelled older)", () => {
+  const r = read("README.md");
+  if (!r.includes("monomem-demo.gif")) return;
+  const rec = /Recorded on (\d+\.\d+\.\d+)/.exec(r);
+  const current = (JSON.parse(read("package.json")) as { version: string }).version;
+  assert.ok(rec, "the caption must say 'Recorded on x.y.z'");
+  // The GIF is re-recorded by a release (npm run demo-gif); until then the caption must say it is older, so it cannot claim a newer version.
+  assert.ok(rec[1] === current || /older (recording|screenshot)|before (the )?(dashboard )?redesign/i.test(r), `GIF recorded on ${rec[1]}, package is ${current}: re-record it or label it older`);
+});
 });

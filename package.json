@@ -2,7 +2,7 @@
   "name": "monomem",
   "version": "1.8.0",
   "mcpName": "io.github.calasdan-sketch/monomem",
-  "description": "Shared memory for AI coding agents. A writer on every note (stamped by the server for token callers; a config label for local stdio apps), injection-linted writes, undo for replacements and edits. Self-hosted, MIT.",
+  "description": "Shared memory for AI coding agents. A writer on every note, injection-linted writes held for your approval, person-only approval of replacements, sealed notes with a signed change ledger, and undo. Self-hosted, MIT.",
   "license": "MIT",
   "author": "Calas Automations Inc.",
   "repository": {

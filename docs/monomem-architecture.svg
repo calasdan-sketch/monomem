@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="670" viewBox="0 0 1200 670" role="img" aria-labelledby="t d">
 <title id="t">How Monomem works</title>
-<desc id="d">Your AI agents (Claude Code, Codex, Cursor, Copilot, Gemini CLI, Zed) save through MCP or REST. A write check refuses secrets, and writes that match a known attack pattern are held for your review; only your approval stores them. Everything else goes into one SQLite file where each note keeps its writer, its history and its privacy label. Reads show pinned notes first at session start, hide private notes from limited apps, leave out distrusted writers, and show new notes' titles on your next message, so every agent's next session recalls what the others saved.</desc>
+<desc id="d">Your AI agents (Claude Code, Codex, Cursor, Copilot, Gemini CLI, Zed) save through MCP or REST. A write check refuses secrets, and writes that match a known attack pattern are held for your review; only your approval stores them. Everything else goes into one SQLite file where each note keeps its writer, its history, its privacy label and a seal, and every change goes into a signed ledger. Reads show pinned notes first at session start, hide private notes from limited apps, leave out distrusted writers, and show new notes' titles on your next message, so every agent's next session recalls what the others saved.</desc>
 <style>
   svg{--bg:#F1F6F9;--panel:#FFFFFF;--ink:#12212C;--muted:#4A5D6B;--rule:#D9E3EA;--navy:#0B2E45;--ocean:#155F87;--gold:#F0C171;--goldt:#8A5A12;--held:#A23B2E;--heldbg:#FBEDEA;--dbbg:#E6F0F6;--onnavy:#FFFFFF}
   @media (prefers-color-scheme: dark){svg{--bg:#0B1A26;--panel:#102434;--ink:#EEF4F8;--muted:#A9BCCA;--rule:#2A4559;--navy:#0B2E45;--ocean:#4FA3D1;--goldt:#F0C171;--held:#E58A7E;--heldbg:#2E1C1E;--dbbg:#13304A}}
@@ -81,8 +81,8 @@
 <ellipse cx="755" cy="235" rx="90" ry="14" fill="var(--dbbg)" stroke="var(--ocean)" stroke-width="2"/>
 <text x="755" y="278" class="serif h" text-anchor="middle">One SQLite file</text>
 <text x="755" y="302" class="m" text-anchor="middle">each note keeps its</text>
-<text x="755" y="320" class="s" text-anchor="middle">writer · history</text>
-<text x="755" y="338" class="s" text-anchor="middle">privacy label</text>
+<text x="755" y="320" class="s" text-anchor="middle">writer · history · seal</text>
+<text x="755" y="338" class="s" text-anchor="middle">label · signed ledger</text>
 
 <!-- reads -->
 <rect class="box" x="905" y="175" width="250" height="230" rx="14"/>
@@ -95,7 +95,7 @@
 <!-- you -->
 <rect x="400" y="575" width="250" height="66" rx="14" fill="var(--panel)" stroke="var(--gold)" stroke-width="2"/>
 <text x="525" y="602" class="serif h" text-anchor="middle">You: dashboard and CLI</text>
-<text x="525" y="625" class="m" text-anchor="middle">approve · reject · distrust · roll back</text>
+<text x="525" y="625" class="m" text-anchor="middle">approve · distrust · roll back · blame</text>
 <rect class="anim" x="395" y="570" width="260" height="76" rx="17" fill="none" stroke="var(--gold)" stroke-width="3" opacity="0"><animate attributeName="opacity" dur="12s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.7833;0.8833" values="0;1;0"/></rect>
 
 <!-- moving dots (on top; they jump across boxes) -->

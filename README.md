@@ -63,7 +63,7 @@ More: [install it with your agent](./docs/install-with-your-agent.md) · [what i
 
 ![A write that matches a known attack pattern is held, a second agent's search never sees it, and the dashboard rejects it](https://raw.githubusercontent.com/calasdan-sketch/monomem/main/docs/monomem-demo.gif)
 
-*Recorded on 1.5.0; the screens have changed since. Recorded 2026-11-05, before the dashboard redesign, from a real run against a throwaway store ([transcript](https://github.com/calasdan-sketch/monomem/blob/main/docs/brand/demo-transcript.txt)): a write containing an injected instruction is held and never reaches the other agent's search, then rejected from the real dashboard. The two terminal panes are drawn from the real REST responses; the dashboard is a screen recording. Nothing sped up.*
+*Recorded on 1.8.0 on 2026-11-27, from a real run against a throwaway store ([transcript](https://github.com/calasdan-sketch/monomem/blob/main/docs/brand/demo-transcript.txt)): a write containing an injected instruction is held and never reaches the other agent's search, then rejected from the real dashboard. The two terminal panes are drawn from the real REST responses; the dashboard is a screen recording. Nothing sped up.*
 
 Useful commands: `monomem digest` (same as `monomem activity --summary`; add `--verbose` for the outside-read ranges) says in plain words what changed; `monomem bench --longmemeval --data <file> --per-question out.ndjson` writes one line per question so two systems can be compared question by question; `monomem tidy marks` is a dry run until you add `--yes`.
 
@@ -81,7 +81,7 @@ After setup, restart your apps. Then, in one of them, say **"Save to Monomem: my
 
 `CLAUDE.md` and `AGENTS.md` are good for rules you write yourself, and Monomem leaves them alone. But each app reads its own file in its own way, a line in them does not say which assistant added it, and nothing checks what an agent writes there. Monomem is for what your agents learn while they work: every note says who wrote it, keeps its earlier versions, can be replaced or archived and brought back, and a write that looks like a planted instruction waits for you. Already have notes in Claude Code? `monomem import --claude --dry-run` shows what it would bring in. Coming from Engram, agentmemory, ai-memory, claude-mem, mem0, basic-memory or the official MCP memory server: `monomem import --auto <file>` ([docs/switching.md](./docs/switching.md)).
 
-![How Monomem works: your agents save through MCP or REST; a write check refuses secrets and holds writes that match known attacks until you approve them; one SQLite file keeps each note's writer, history and privacy label; reads hide private notes from limited apps and leave out distrusted writers.](https://raw.githubusercontent.com/calasdan-sketch/monomem/main/docs/monomem-architecture.png)
+![How Monomem works: your agents save through MCP or REST; a write check refuses secrets and holds writes that match known attacks until you approve them; one SQLite file keeps each note's writer, history, privacy label and seal, with a signed change ledger; reads hide private notes from limited apps and leave out distrusted writers.](https://raw.githubusercontent.com/calasdan-sketch/monomem/main/docs/monomem-architecture.png)
 
 *Diagram source: [docs/monomem-architecture.mmd](https://github.com/calasdan-sketch/monomem/blob/main/docs/monomem-architecture.mmd) (Mermaid). More detail: [docs/architecture.md](./docs/architecture.md).*
 
