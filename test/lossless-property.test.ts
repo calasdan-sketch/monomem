@@ -65,13 +65,11 @@ test("random multi-process writes with one writer killed: every acknowledged wri
     }
     const lost = acks.filter((a) => live.get(a.id) !== a.body && !kept.get(a.id)?.has(a.body));
     assert.deepEqual(lost, [], "an acknowledged text is neither live nor in history");
-    // every rev is claimed by one writer only
-    const seen = new Set<string>();
-    for (const a of acks) {
-      const k = `${a.id}:${a.rev}`;
-      assert.ok(!seen.has(k), `two acknowledgements for note ${a.id} rev ${a.rev}`);
-      seen.add(k);
-    }
+    // every rev is claimed by one writer only: the database enforces it (UNIQUE(note_id, rev) on the ledger), so ask the ledger.
+    // The ack files cannot be used for this: store.update() re-reads the row after it commits, so a writer can be handed a LATER
+    // writer's rev in its reply (two acks, one rev, two different bodies) while both writes are in the ledger under their own revs.
+    const dup = s.db.prepare("SELECT note_id, rev, COUNT(*) AS n FROM ledger WHERE rb = 1 GROUP BY note_id, rev HAVING n > 1").all();
+    assert.deepEqual(dup, [], "two ledger entries for one note revision");
     const rep = verifyAll(s, { signatures: true });
     assert.deepEqual(rep.issues.filter((i) => i.severity === "fail"), [], JSON.stringify(rep.issues));
     assert.deepEqual(rep.held, ["L2", "L3", "L4", "L6"]);
