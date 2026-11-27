@@ -41,6 +41,8 @@ Pick by what you want to do. Everything here is also linked from the main [READM
 | what changed while I was away | [change-feed.md](./change-feed.md) |
 | which git commits used a note, and how notes stay on their branch | [commits-and-branches.md](./commits-and-branches.md) |
 | what is measured, and what is not | [BENCHMARK.md](./BENCHMARK.md) |
+| the multi-agent test set (30 tasks) and its failures | [mamb.md](./mamb.md) |
+| what "lossless" means here and how it is checked | [lossless.md](./lossless.md) |
 | whether to switch on passage pooling (off by default) | [BENCHMARK.md](./BENCHMARK.md#passage-pooling-opt-in-measured-2026-11-17) |
 | what it costs in tokens and disk | [footprint.md](./footprint.md) |
 | what it does not protect against | [SECURITY.md](../SECURITY.md) |

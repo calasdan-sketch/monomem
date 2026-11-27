@@ -1,0 +1,10 @@
+import { mkdtempSync, cpSync } from "node:fs"; import { join } from "node:path"; import { tmpdir } from "node:os";
+const root = process.argv[2], src = process.argv[3]; const d = mkdtempSync(join(tmpdir(), "mm-sv-")); cpSync(src, d, { recursive: true });
+Object.assign(process.env, { MONOMEM_HOME: d, ONEMEMORY_HOME: d, MONOMEM_AUDIT_LOG: join(d, "a.log") });
+const { Store } = await import(`file:///${root}/dist/src/store.js`); const store = new Store(join(d, "state.db")); const db = store.db;
+const T = (n, f) => { const a = []; for (let i = 0; i < 9; i++) { const t = performance.now(); f(); a.push(performance.now() - t); } a.sort((x, y) => x - y); console.log(n.padEnd(30), a[4].toFixed(2)); };
+const S = "SELECT COUNT(*) AS c, COALESCE(SUM(note_id),0) AS s, COALESCE(MAX(updated_at),'') AS m FROM note_vectors";
+T("sig no index", () => db.prepare(S).get());
+let t = performance.now(); db.exec("CREATE INDEX IF NOT EXISTS idx_note_vectors_updated ON note_vectors(updated_at)"); console.log("create index ms", (performance.now() - t).toFixed(0));
+T("sig with index", () => db.prepare(S).get());
+console.log(db.prepare("EXPLAIN QUERY PLAN " + S).all().map(r=>r.detail));

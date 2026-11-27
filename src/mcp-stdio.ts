@@ -5,6 +5,7 @@
 // Points at the same SQLite file the HTTP API uses (MONOMEM_DB_PATH
 // or the default <data dir>/state.db, see config.ts) so state written here is immediately
 // visible to the API and vice versa.
+import { retryWhileLocked } from "./retry-locked.js";
 import "./quiet-sqlite.js"; // first: hide the node:sqlite ExperimentalWarning
 import "./legacy-env.js"; // second: read the old CLAUDE_BRIDGE_* variables as MONOMEM_*
 import { fileURLToPath } from "node:url";
@@ -15,18 +16,19 @@ import { DATA_DIR, DB_PATH, prepareDataDir } from "./config.js";
 import { startStdioDailyBackup } from "./backup-schedule.js";
 import { resolveStartupNamespace } from "./namespace.js";
 import { setProcessWriter, stdioWriter } from "./actor.js";
+import { adoptClientWriter } from "./mcp/client-writer.js";
 import { audit, printable } from "./security.js";
 import { parseSensitivity, SENSITIVITY_HELP } from "./sensitivity.js";
 
 prepareDataDir();
 // No token on stdio: writes are stamped with the marker "stdio", or "stdio:<app>" when the launch config sets
 // MONOMEM_CLIENT (setup does, per app). The app name is self-declared by that config, not authenticated.
-const stdio = stdioWriter();
+const stdio: { writer: "stdio" | `stdio:${string}`; warning?: string } = stdioWriter();
 if (stdio.warning) process.stderr.write(`[monomem] ${stdio.warning}\n`);
 setProcessWriter(stdio.writer);
 let store: Store;
 try {
-  store = new Store(DB_PATH);
+  store = retryWhileLocked(() => new Store(DB_PATH));
 } catch (e) {
   // A person reads this in an app's log: one plain line, not a stack trace.
   process.stderr.write(`[monomem] cannot open the database: ${((e as Error).message ?? String(e)).replace(/\s+/g, " ")}\n`);
@@ -59,9 +61,10 @@ const transport = new StdioServerTransport();
 /** How long to wait for the app to say which folder it has open (MCP roots) before keeping the launch folder. */
 const ROOTS_WAIT_MS = 30_000;
 // The client's own name from the initialize handshake goes to the audit log, labelled as a claim: any program can
-// send any clientInfo. It is never used for written_by or for any access decision.
+// send any clientInfo. Without MONOMEM_CLIENT it names the writer (stdio:<app>, a claim like MONOMEM_CLIENT); it is no access decision.
 server.server.oninitialized = (): void => {
   const c = server.server.getClientVersion();
+  stdio.writer = adoptClientWriter(c?.name, stdio.writer); // no MONOMEM_CLIENT: stdio:<app> from the handshake, so apps get their own flood budget
   audit({ op: "mcp.connect", label: stdio.writer, kind: "connection", detail: `claimed clientInfo: ${printable(c?.name, 60)} ${printable(c?.version, 30)}` });
   // C18: an app that launches this server outside the project (Cursor's global config, Claude Desktop, Codex) can still say
   // which workspace it has open (MCP roots). A single file:// root becomes the folder later writes record (notes.writer_cwd),

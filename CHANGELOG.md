@@ -6,6 +6,56 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### blame, ask, recall rate
+- New `monomem blame "<claim>"`: which notes match a claim, and for each who wrote it, when, from which source and session, through how many versions, whether a person confirmed it, whether it is held, replaced, in conflict or backed by other writers, and what changed it last. `--json`. REST `GET /blame?q=`.
+- New `monomem ask "<question>"`: a retrieval timeline (keyword search, grouped by topic, newest first, replaced notes marked), not a generated answer; no model. `--since`, `--writer`, `--limit`, `--json`. REST `GET /ask?q=`. See docs/blame-and-ask.md.
+- A recall line in `monomem activity --summary` (the digest) and `monomem check`: sessions that started, in how many session start showed notes, in how many an agent memory read was logged, with the window. See docs/access-log.md.
+
+### Seals, a ledger and a written definition of "lossless" (schema v23)
+- **Per-note seal (closes red-team finding RT-2).** Every note row now has `notes.seal`, an HMAC-SHA256 (key derived from `.attest-key`)
+  over its text and every provenance, approval and state column. An edit made outside Monomem (a hand-typed UPDATE, a sync tool, a bad
+  restore) leaves the row unsealed or mismatched; `monomem doctor`, `monomem audit verify --db` and the new `monomem verify-lossless`
+  name it, and the note is not shown to agents (its text is replaced by a notice). A later honest write never re-seals an edited row.
+  **Limit, stated plainly:** anything that can read `.attest-key` as you can seal a forged row; only a checkpoint or receipt kept
+  elsewhere shows that. See SECURITY.md and docs/lossless.md.
+- **Hash-chained, signed ledger** written in the same transaction as each note change, `UNIQUE(note, rev)`: two writers can no longer
+  both be acknowledged with one revision, enforced by the database (the F1 lost update). Doctor reconciles it against the notes
+  (forged inserts, rows deleted outside Monomem, edited or reverted rows, planted earlier versions).
+- **One compare-and-swap helper** (`casUpdate`, src/store/cas.ts) for every rev-bumping `UPDATE notes SET` (retro-taint, keep-as-history,
+  replace commit, undo of a replacement), with a lint test that fails on a bare statement; a test with two real OS processes writing one note.
+- **"Lossless" defined as six checked invariants** (L1-L6, docs/lossless.md) and a property test: random multi-process writes with one
+  writer killed with SIGKILL; every acknowledged write must be in the ledger and readable.
+- Upgrade v22 -> v23 is additive (a column, two tables, indexes, triggers), keeps the usual `.pre-v23-backup`, and seals existing notes in
+  short batches after open (resumable; `monomem integrity seal` finishes it now). `monomem integrity reseal --yes` accepts the notes as they are
+  (the way out after restoring without the key file). No setting turns the seal off.
+
+
+### Corroboration (2026-11-25)
+- Search tells the reader how many independent writers back a repeated fact (`corroboration` on each result: copies, independent sources, label). Copies from one writer, session or derived chain are one source; probation and unknown writers count little or nothing; the lift is capped at 10% and never passes a person-confirmed note.
+
+### Polish round (2026-11-24)
+- A write that ends "database is busy" while other writers keep committing is now retried with jittered pauses (up to 60 s extra), so 25 to 50 processes writing at once no longer get "nothing saved" refusals (50 writers x 6 notes on a slow disk: 0 of 300 refused; 9 of 150 refused at 25 writers before). A lock nobody commits through is still refused at once. A first open that hits "disk I/O error" after a hard kill, or "database is locked" while several processes create a new data folder, is retried and then explained in plain words.
+- Without `MONOMEM_CLIENT`, the stdio writer is `stdio:<client name>` from the MCP handshake, so each app has its own writer name and flood-guard budget.
+- `monomem setup` locks an existing Windows data folder to you and SYSTEM (best effort; `setup --undo` turns inheritance back on). Session-start hooks ask git while the store opens, and no longer resolve the time zone at start-up (about 15 ms).
+- `POST /login`: a wrong code no longer spends the real code, and wrong codes are limited to 8 a minute per source. The claim linter also reads small capitals, upside-down text, single look-alike letters and bidi-reversed words.
+- Docker image carries `bench/scenarios` (so `monomem check` is not Grade C); the `.env.example` placeholder key is refused at start-up. THIRD_PARTY_NOTICES.md lists the dependencies, Node.js, datasets and the Apache-2.0 text; README counts re-derived (171 scenarios, 151 pass, 20 known-gap scenarios in 7 open gap ids).
+
+
+### Wow features (2026-11-24)
+- `monomem demo --open`: a throwaway store (three keyed writers, a held poison write and edit, two plain false notes) served on a free loopback port and opened in the dashboard; marked as a demo store; deleted on Ctrl+C. Never touches your own store.
+- `monomem check --crash`: kill -9 self-test on a copy of your store; prints acknowledged writes against writes present. Narrow claim: this machine, these kills.
+- Dashboard: live refresh (3 s poll of the needs-you count and the change feed while the tab is visible, nothing while hidden), opt-in browser notification when a write is held (counts only, never the held text), Reject and distrust on the Held card, and a History view with a diff per version. The script policy is still script-src 'self'.
+- `monomem report`: one self-contained HTML trust report; every number is computed from a real bench run, an attack replay and the store.
+- `monomem history <id> --diff` and `GET /notes/<id>/history?diff=1`.
+- `monomem check --setup --fix` (and `--undo-fix`): safe fixes, each explained and undoable.
+
+
+### Search: synonyms, katakana, optional in-process model (2026-11-24)
+- Keyword search widens a word that no found note contains to a built-in English synonym table (`src/search-synonyms.ts`, `src/search-expand.ts`). Synonym queries 2/5 -> 5/5 on a 5-case probe; LongMemEval-S first 150 unchanged to four decimals.
+- Chinese/Japanese/Korean pair matching now keeps katakana with the long-vowel mark in one run (one more Japanese paraphrase found).
+- `MONOMEM_EMBEDDINGS=local`: optional small model in-process, never downloaded by Monomem (`scripts/install-local-embeddings.mjs`). Off by default; without the files search stays keyword.
+- `monomem check` has a Search line when meaning search (`on`, `auto`, `local`) is switched on.
+
 ### Claim-style write rules (2026-11-24)
 - New write-time rules (`src/lint-claims.ts`) for plain-English poisoning claims, for writers that are not the owner: payment redirect, trust grant, approval bypass, concealment from the user, override of the user's instructions, sending notes or secrets to an outside address, label-style holds in tags, titles, sources and fact values, and a warning for "disable the memory linter". Field-aware and linear-time. Measured on held-out items split by sha256 (`bench/fixpass-split.json`): 18 of 133 attacks that reached before are now caught (adaptive 14 of 47, plain-English 2 of 4, probes 1 of 11, PyRIT 1 of 38, garak 0 of 33). Benign cost: 0 new holds in LongMemEval, LoCoMo, dev notes, the benign corpus and 308 new notes; 1 new warning; 3 repo-doc paragraphs that quote attack text are now held. Three families were dropped for not generalising (export before search, one tool for all operations, pipe to shell from an untrusted address). Benchmark: 166 scenarios, 150 pass, 16 known gaps (unchanged; F19 to F23 and F30 to F34 still fail because they expect every sample held).
 

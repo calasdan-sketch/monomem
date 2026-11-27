@@ -10,6 +10,7 @@ import { MAX_DERIVED_FROM, ORIGIN_DECLARED, ORIGIN_PREFIX, ORIGIN_VIA_MEMORY, is
 import { SESSION_IDLE_MS, parseTags, tagsToStorage } from "./rows.js";
 import { cosineOfFreq, termFreq, tokenize } from "../text-sim.js";
 import { recordBranch } from "../git-trail.js";
+import { casUpdate } from "./cas.js";
 
 /**
  * The `obs.origin:*` tags a write gets: `outside: true` (declared), the connection's own (ActorRef.taint: a reads_outside
@@ -195,9 +196,13 @@ export function retroTaint(s: Store, cwd: string, atIso: string, tool: string): 
   s.transaction(() => {
     // 1.5.0 (R1-15): rev and updated_at move so the change feed, sync and embeddings see the new stamp, and a writer holding the
     // old rev gets the normal stale-write answer. content_at stays (expiry unaffected); a confirm that was current carries over.
-    const up = s.db.prepare("UPDATE notes SET tags = ?, grandfathered_at = NULL, rev = rev + 1, updated_at = ?, confirmed_rev = CASE WHEN confirmed_rev = rev THEN rev + 1 ELSE confirmed_rev END WHERE id = ?");
     const now = new Date().toISOString();
-    for (const r of marks) up.run(tagsToStorage([...parseTags(r.tags), tag]), now, r.id);
+    const cur = s.db.prepare("SELECT rev, tags FROM notes WHERE id = ?");
+    for (const r of marks) {
+      const row = cur.get(r.id) as { rev: number; tags: string } | undefined; // re-read under the lock: the row may have moved since the scan
+      if (!row || parseTags(row.tags).includes(tag)) continue;
+      casUpdate(s.db, r.id, row.rev, "tags = ?, grandfathered_at = NULL, updated_at = ?, confirmed_rev = CASE WHEN confirmed_rev = rev THEN rev + 1 ELSE confirmed_rev END", [tagsToStorage([...parseTags(row.tags), tag]), now]);
+    }
   });
   s.audit({ op: "retro-taint", detail: `${marks.length} note(s) marked ${tag}` });
   return marks.length;

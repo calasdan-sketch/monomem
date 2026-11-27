@@ -323,6 +323,8 @@ export async function runHook(eventArg: string, stdinText: string, opts: HookOpt
       : event === "subagent-stop"
         ? async (store: import("./store.js").Store): Promise<void> => subagentStopNote(store, payload, env)
         : undefined;
+  // session-start asks git now, in parallel with opening the store (git is ~80 ms of the start-up; 06-F7).
+  if (event === "session-start" && typeof payload.cwd === "string" && payload.cwd) void import("./context-inject.js").then((m) => m.prefetchGitSignals(payload.cwd as string)).catch(() => {});
   try {
     await captureHook(event, payload, opts, after);
   } catch (e) {

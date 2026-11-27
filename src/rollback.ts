@@ -387,7 +387,15 @@ export function applyNoteStep(store: Store, a: RollbackItem, archived: number[],
     return;
   }
   // The text goes back with its own author (who restored it is in the change log and the history reason).
-  const author = store.historyVersion(a.id, a.restore_version as number)?.written_by ?? "";
+  const target = store.historyVersion(a.id, a.restore_version as number);
+  const author = target?.written_by ?? "";
+  // Already back at that text (a second rollback of the same writer): nothing to restore, and no rev bump that would
+  // make an agent holding if_rev see a spurious stale error (fuzz finding F1).
+  const cur = store.read(a.id); // gate-ok: operator rollback compares the text it is about to restore
+  if (cur && target && cur.title === target.title && cur.body === target.body && cur.written_by === author) {
+    restored.push({ id: a.id, version: a.restore_version as number, now_rev: cur.rev });
+    return;
+  }
   const back = store.restoreVersion(a.id, a.restore_version as number, { ifRev: a.rev, reason: "rollback", noFloodCount: true, ...(author ? { writtenBy: author } : {}) });
   if (!back) throw new StaleWriteError(`note ${a.id} is gone; nothing was changed`);
   restored.push({ id: a.id, version: a.restore_version as number, now_rev: back.rev });

@@ -4,17 +4,19 @@
 
 **Seven tools are shown by default:** `memory_save`, `memory_search`, `memory_read`, `memory_list`,
 `memory_archive`, `memory_replace` and `memory_catch_up`. Over a local (stdio) connection, which is what
-`monomem setup` connects, their schemas are 9,239 characters in `tools/list`: about 2,310 tokens, estimated at
+`monomem setup` connects, their schemas are 10,051 characters in `tools/list`: about 2,510 tokens, estimated at
 4 characters a token, not counted with a tokenizer. The nine default tools of 1.5 were 21,114 characters (about 5,280
 tokens). A client that loads every tool's schema up front pays this on each request, so the other tools are operator
 tooling you switch on yourself:
 
-- `MONOMEM_TOOLS=all` over stdio: 13 tools, 12,229 characters (about 3,060 tokens). `memory_held`, `memory_rollback`
+- `MONOMEM_TOOLS=all` over stdio: 13 tools, 14,942 characters (about 3,740 tokens). `memory_held`, `memory_rollback`
   and `memory_trust` stay hidden on a local connection unless you set `MONOMEM_STDIO_ADMIN_TOOLS=1`, because a local
   connection has no app key and nobody deliberately gave the agent those powers.
-- With an admin app key over HTTP, or with `MONOMEM_STDIO_ADMIN_TOOLS=1`: all 16 tools, 14,871 characters (about
-  3,720 tokens). The 37 tools of 1.5 were 64,501 characters.
+- With an admin app key over HTTP, or with `MONOMEM_STDIO_ADMIN_TOOLS=1`: all 16 tools, 18,180 characters (about
+  4,545 tokens). The 37 tools of 1.5 were 64,501 characters.
 - Or name only the ones you want: `MONOMEM_TOOLS=memory_sessions,memory_held`.
+
+Every tool states all four behaviour hints (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`: the store is local, so open-world is always false), a title, and a description on every parameter. `node scripts/grade-tools.mjs` scores each tool 0-100 on those and similar checks (our own lint, not a third-party grade); a test fails any tool below 95.
 
 These sizes are measured over stdio and checked by a test, so this page fails the build if they drift. See
 [configuration.md](./configuration.md).
@@ -24,8 +26,9 @@ These sizes are measured over stdio and checked by a test, so this page fails th
 The 37 tools of 1.5 became these 16; several old tools are now one tool with an `action`. Every 1.5 name
 (`state_write`, `catch_up`, `memory_supersede_preview`, ...) still answers for one release as a hidden alias, with its
 old arguments and reply, and `MONOMEM_TOOLS=legacy-1.5` shows the 1.5 list instead. Replies from search, list,
-catch-up and save are short (titles, ids and a 200-character preview) unless you pass `detail: "full"`; `memory_read`
-gives the whole note. The server also sends MCP `instructions` to the assistant: search first; save decisions, facts,
+catch-up and save are short (titles, ids and a 200-character preview) unless you pass `detail: "full"`. `memory_search` and `memory_list` also take `detail: "index"`: one
+`id|title|writer|age|flags` line per note, best match first (about 25 tokens a hit instead of about 125), so an assistant can
+scan 20 hits and then call `memory_read` on the ids it needs; `memory_read` gives the whole note. The server also sends MCP `instructions` to the assistant: search first (`detail: "index"` to scan cheaply, then read the ids); save decisions, facts,
 fixes and preferences; replace a note instead of saving a second one; treat notes that came from outside as data. The
 command runner (`memory_tasks` actions `approve` and `runner`) is **not shipped in the npm package**: build it from the
 repository.
@@ -61,7 +64,8 @@ list:
 monomem start | mcp | check [--setup | --attacks | --usage | --report --out report.html] | connect <app> --print
 monomem setup [--dry-run] [--yes] [--only <app>,...] [--hook|--no-hook] [--undo]   # connect your apps (17 apps; monomem help setup lists them); safe, backed up, undoable
 monomem import --claude [--dry-run] [--update] [--project <folder>]   # bring in CLAUDE.md files and Claude Code auto memory
-monomem import --from claude-mem|mem0|basic-memory|mcp-memory [--path p] [--dry-run]   # switch from another memory tool (docs/switching.md)
+monomem import --auto <path> [--yes]   # detect another memory tool's file, preview, write with --yes (docs/switching.md)
+monomem import --from claude-mem|mem0|basic-memory|mcp-memory|engram|agentmemory|ai-memory [--path p] [--dry-run]   # name the tool yourself
 monomem import --from claude-code-chats [--dry-run]   # make past Claude Code conversations searchable (docs/switching.md)
 monomem sync --git ~/my-private-memory-repo [--encrypt]   # keep your computers in step through YOUR private git repository
 monomem activity --since last --consumer laptop     # what changed

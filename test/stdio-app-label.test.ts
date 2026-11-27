@@ -127,7 +127,7 @@ describe("the stdio writer marker", () => {
     assert.equal(actorStore.run({ label: "STDIO:x", authed: true }, () => currentWriter()), "token:STDIO:x");
   });
 
-  test("the real stdio server stamps stdio:<app> from MONOMEM_CLIENT, and plain stdio without it", async () => {
+  test("the real stdio server stamps stdio:<app> from MONOMEM_CLIENT, and stdio:<client name> from the handshake without it", async () => {
     const s = sandbox();
     const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");
     const write = async (env: Record<string, string>): Promise<void> => {
@@ -146,7 +146,7 @@ describe("the stdio writer marker", () => {
     const store = new Store(s.db);
     try {
       const by = Object.fromEntries(store.list({ limit: 10 }).notes.map((n) => [n.title, n.written_by]));
-      assert.deepEqual(by, { "from cursor": "stdio:cursor", "from none": "stdio", "from not valid!": "stdio" });
+      assert.deepEqual(by, { "from cursor": "stdio:cursor", "from none": "stdio:t", "from not valid!": "stdio" });
     } finally {
       store.close();
     }

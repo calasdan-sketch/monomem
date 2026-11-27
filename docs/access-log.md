@@ -55,6 +55,14 @@ Over REST: `GET /access?since=24h&writer=<label>&limit=100` returns `{ entries, 
 that is **not pinned to a namespace** (the log is store-wide: one writer's queries can cross namespaces). Reading the
 log is not itself logged.
 
+### Recall rate
+
+`monomem activity --summary` and `monomem check` print one line: of the sessions the capture hooks saw start in the window, in how many the
+session start showed notes (the receipts name the session), and in how many an agent memory read was logged. Both numbers come with their
+denominator and the window. The window is cut to the days the access log keeps. Limits, said in the line with `--verbose`: a session capture did not
+see is not counted; the access log has no session id, so a read is matched to a session by time (two sessions open at once share it); a read
+is a memory tool call, not proof the agent used the answer. The owner's shell and the session-start hooks are not counted as agent reads. No note text is read.
+
 ### Retention
 
 `MONOMEM_ACCESS_LOG_DAYS` (default `30`) days, pruned by the hourly expiry sweep that the server and the stdio MCP

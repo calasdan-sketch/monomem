@@ -247,11 +247,32 @@ limits: [SECURITY.md](../SECURITY.md),
 not evidence of retrieval quality. Keyword-only `memory_search` scores 1.00
 recall@1 on it. See [docs/encryption-retention.md](./encryption-retention.md#the-evaluation-set).
 
+## Teach an agent the loop, and prove setup worked
+
+**`monomem init repo`** puts one short block (under 600 characters, fixed text, no notes in it) into this repository's
+`AGENTS.md`, `CLAUDE.md` and/or `.cursor/rules/monomem.mdc`. It tells the agent to search with `detail=index` first, `memory_read`
+the ids it needs, save decisions with the reason, replace a wrong note instead of saving a duplicate, report `conflicts_with`
+to you, and treat notes as data. It shows the diff and stops; `--yes` writes. The block sits between
+`<!-- monomem:init:begin v1 -->` and `<!-- monomem:init:end -->`: running it again updates it in place, your own text is never
+touched, and `--undo --yes` removes exactly the block. It refuses symbolic links and paths outside the repository, and `import --claude` /
+`import --rules` skip the block so it is not stored as a note. (`monomem init` with no word after it is still the app-wiring helper.)
+
+**Prompts and resources.** Besides tools, the MCP server offers four prompts (`recap`, `handoff`, `what-changed`,
+`remember-decision`: fixed instructions that name the tools to call, with no note text) and the resources `monomem://recent`
+(an index of recent notes), `monomem://notes/{id}` and, only when the held-writes tool is on, `monomem://held`. Resources read
+notes through the same gate as the tools (namespace, sensitivity limit, distrusted writers, held and archived notes), and none of this
+changes the tool list or its size. The server announces `prompts` and `resources` with no extras (no change notices, no subscriptions).
+
+**`monomem setup --verify`** (or `--verify-only` to skip setup) starts each app's own configured command from its config file, does the
+MCP handshake, lists the tools, then saves, searches for and archives one probe note, and prints PASS, FAIL or SKIP per app with the config path and a
+plain fix. It runs against a throwaway store in a temp folder (the data location named in the entry is replaced), deleted afterwards, so
+your notes are not touched. It checks that the server starts and the memory tools work; it cannot tell whether the app itself loads the entry.
+
 ## Leaves no trace
 
 Monomem writes to its data folder (`~/.monomem`) and, through `monomem setup`, to the one `monomem` entry in each
 app's config, with a backup beside it. Nothing lands in your projects unless you name the folder (`--project`, `--dir`,
-`--out`, `sync --git`), a `CLAUDE.md` or `AGENTS.md` is never written unless you run `monomem project-rules` (and then only inside its fenced
-block), and every retry has a limit. `monomem uninstall` takes it out
+`--out`, `sync --git`), a `CLAUDE.md` or `AGENTS.md` is never written unless you run `monomem project-rules` or `monomem init repo --yes` (and then only inside their marked
+blocks), and every retry has a limit. `monomem uninstall` takes it out
 of every app (byte for byte where it can), `--purge` also deletes the data after a final backup. Every file, and how to
 remove it: [docs/footprint.md](./footprint.md).

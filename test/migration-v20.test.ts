@@ -37,7 +37,7 @@ function quietOpen(path: string): Store {
 
 describe("schema v20", () => {
   test("a fresh store has every v20 column and table", () => {
-    assert.equal(SCHEMA_VERSION, 22);
+    assert.equal(SCHEMA_VERSION, 23);
     const dir = mkdtempSync(join(tmpdir(), "om-v20-"));
     try {
       const path = join(dir, "state.db");
@@ -76,8 +76,8 @@ describe("schema v20", () => {
       const t0 = Date.now();
       const s = quietOpen(path);
       try {
-        assert.equal(Store.peekSchemaVersion(path), 22);
-        assert.equal(Store.peekSchemaVersion(path + ".pre-v22-backup"), 19);
+        assert.equal(Store.peekSchemaVersion(path), 23);
+        assert.equal(Store.peekSchemaVersion(path + ".pre-v23-backup"), 19);
         const after = await snapshot(s);
         assert.deepEqual(after, before);
         const all = s.list({ namespace: "work", limit: 500, kinds: ["note", "summary"] }).notes;

@@ -11,10 +11,14 @@
 
 import { mayEmbed } from "./sensitivity.js";
 import { Store, NoteRecord, clampInt, queryTooLong, ValidationError } from "./store.js";
-import { embed, embedQuery, embeddingsEnabled, embeddingsConfig, noteEmbeddingText } from "./embeddings.js";
+import { synonymHits } from "./search-expand.js";
+import { embed, embedQuery, embeddingsEnabled, embeddingsConfig, noteEmbeddingText, vectorModelLabel } from "./embeddings.js";
 import { filterByTimeRange, parseTimePhrase, type TimeRange } from "./time-parse.js";
-import { TIME_ZONE } from "./config.js";
+import { timeZone } from "./config.js";
 import { extractKeywords, searchStem } from "./keywords.js";
+import { applyConflicts } from "./search-conflicts.js";
+import { corroborate, withCorroboration } from "./search-corroboration.js";
+import { dampenCrowdingWriters, dampenNearDuplicates, POOL_FACTOR, POOL_MIN } from "./search-diversity.js";
 import { UNCONFIRMED_FACTOR, heldFromSessionStart } from "./taint.js";
 import { factClash } from "./facts.js";
 import { passageHits, passagePoolingOn } from "./store/passages.js";
@@ -40,7 +44,7 @@ export async function maybeEmbed(store: Store, note: NoteRecord): Promise<void> 
   try {
     const cfg = embeddingsConfig();
     const vec = await embed(noteEmbeddingText(note.title, note.body), cfg);
-    if (vec) store.setVector(note.id, vec, cfg.model);
+    if (vec) store.setVector(note.id, vec, vectorModelLabel(cfg));
   } catch {
     /* swallow: the write succeeded; the embedding is best-effort */
   }
@@ -73,10 +77,31 @@ export function rrfMerge(lists: number[][], k = 60): number[] {
 /** A date phrase inside the query ("in June", "last weekend", "on May 3, 2023") as a window, or null. */
 export function queryTimeWindow(query: string, asOf?: Date): TimeRange | null {
   if (!query.trim()) return null;
-  const w = parseTimePhrase(query, { timeZone: TIME_ZONE, ...(asOf ? { now: asOf } : {}) });
+  const w = parseTimePhrase(query, { timeZone: timeZone(), ...(asOf ? { now: asOf } : {}) });
   // Day-sized windows and wider only: a clock time ("error at 10:30") names when something happened, not when
   // the note about it was written.
   return w && w.end.getTime() - w.start.getTime() >= 20 * 3_600_000 ? w : null;
+}
+
+/** Relative date phrases (r8): "10 days ago", "a couple of days ago", "last Saturday", "past two weeks", "yesterday". */
+const NUM = String.raw`(?:\d{1,3}|a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|(?:a\s+)?(?:couple|few)(?:\s+of)?)`;
+const UNIT = "(?:days?|weeks?|months?|years?)";
+const RELATIVE_PHRASE = new RegExp(
+  String.raw`\b(?:${NUM}\s+${UNIT}\s+ago|(?:last|past|previous)\s+(?:${NUM}\s+)?(?:${UNIT}|weekends?|(?:mon|tues|wednes|thurs|fri|satur|sun)day)|yesterday|today|tonight)\b`,
+  "gi"
+);
+
+/**
+ * The query without its relative date phrase, when the query has a date window (queryTimeWindow): "what kitchen appliance
+ * did I buy 10 days ago" searches "what kitchen appliance did I buy" and lets the window do the dating. In chat history
+ * "days ago" and "last" are everywhere, so searching them pulled unrelated notes up. Absolute dates ("July 12, 2022") stay:
+ * a note often names the date itself. Unchanged when there is no window, nothing would be left to search, or a date is left.
+ */
+export function topicQuery(query: string, asOf?: Date): string {
+  if (!queryTimeWindow(query, asOf)) return query;
+  const topic = query.replace(RELATIVE_PHRASE, " ").replace(/\s+([?.!,])/g, "$1").replace(/\s{2,}/g, " ").trim();
+  // A date left over ("last weekend before April 10, 2023") is the window: the relative words then say which part of it.
+  return extractKeywords(topic).length > 0 && !queryTimeWindow(topic, asOf) ? topic : query;
 }
 
 const DAY_MS = 86_400_000;
@@ -105,7 +130,11 @@ export function boostTimeWindow(
   return hits
     .map((h) => {
       const t = Date.parse(h.note.created_at);
-      return t >= lo && t < hi ? { note: h.note, score: h.score * factor } : h;
+      if (!(t >= lo && t < hi)) return h;
+      // Inside the window: the full factor. In the slack after it: half the boost, fading to nothing at the slack's end, so a note
+      // inside the asked window beats a newer one just outside it (report 03 T1) while a late teller still gets some credit.
+      const k = t < win.end.getTime() || slackDays <= 0 ? 1 : 0.5 * (1 - (t - win.end.getTime()) / (slackDays * DAY_MS));
+      return { note: h.note, score: h.score * (1 + (factor - 1) * k) };
     })
     .sort((a, b) => b.score - a.score);
 }
@@ -449,8 +478,10 @@ function finalizeResults(
   staleCfg: StalenessConfig,
   spread = false
 ): NoteRecord[] {
-  const ranked = rankHits(store, hits, staleCfg, limit);
-  const notes = (spread ? capPerSession(ranked) : ranked).slice(0, limit);
+  // Corroboration (search-corroboration.ts): independent writers saying the same thing lift the head a little; label only otherwise.
+  const { hits: lifted, info } = corroborate(store, hits, dampenNearDuplicates(dampenCrowdingWriters(hits)));
+  const ranked = rankHits(store, lifted, staleCfg, limit);
+  const notes = withCorroboration((spread ? capPerSession(ranked) : ranked).slice(0, limit), info);
   bumpAccess(store, notes);
   return notes;
 }
@@ -694,7 +725,7 @@ async function runSearchInner(
   const asked = clampInt(opts.limit, 20, 1, 200);
   const aggregate = AGGREGATE_QUERY.test(query);
   const limit = aggregate ? Math.min(asked * 2, 200) : asked; // widen: the answer is spread over several sessions
-  const fetchK = aggregate ? Math.min(limit * 2, 200) : limit; // spare candidates so the per-session cap has others to pull forward
+  const fetchK = Math.min(aggregate ? limit * 2 : Math.max(limit * POOL_FACTOR, POOL_MIN), 200); // spare candidates so the per-session cap has others to pull forward
   const mode: SearchMode = opts.mode ?? parseMode(undefined);
   const range = opts.timeRange;
   const writerOpts = {
@@ -723,24 +754,37 @@ async function runSearchInner(
   // Keyword hits with their FTS5 bm25 rank as the base score (higher =
   // better match). Identical documents score identically, so the access
   // boost breaks ties toward the note actually read most often.
+  // A date phrase that became a window is not also searched for as words (topicQuery, r8). The embedding still gets the
+  // whole query: stripping it there lost 1-2 LongMemEval-S questions at R@5 (the model uses "last Tuesday" as context).
+  const topic = range === undefined ? topicQuery(query, opts.asOf) : query;
   const keyword = (fetchLimit: number): Array<{ note: NoteRecord; score: number }> =>
-    keywordPooled(store, query, fetchLimit, { namespace: opts.namespace, ...rangeOpts });
+    keywordPooled(store, topic, fetchLimit, { namespace: opts.namespace, ...rangeOpts });
 
   /** Boost, stale-penalize, truncate to the result limit, bump access. */
+  const linked = (h: Array<{ note: NoteRecord; score: number }>): Array<{ note: NoteRecord; score: number }> =>
+    applyConflicts(store, h, range === undefined && Object.keys(writerOpts).length === 0 && !opts.includeSuperseded && !opts.includeDistrusted);
   const win = range === undefined ? queryTimeWindow(query, opts.asOf) : null;
   const finalize = (
     hits: Array<{ note: NoteRecord; score: number }>
-  ): NoteRecord[] => finalizeResults(store, win ? boostTimeWindow(hits, win) : hits, limit, staleCfg, aggregate);
+  ): NoteRecord[] => finalizeResults(store, win ? boostTimeWindow(linked(hits), win) : linked(hits), limit, staleCfg, aggregate);
 
   if (mode === "keyword" || !embeddingsEnabled()) return finalize(keyword(win ? clampInt(limit * 3, 60, 1, 200) : fetchK));
 
-  const qv = await embedQuery(query);
+  // Round 8: the embedding is a network call to another process. Start it, then run the (synchronous) keyword search while
+  // that process works, instead of after. setImmediate lets the request leave before the keyword query blocks the loop.
+  const poolLimit = clampInt(limit * 5, 100, 1, 200);
+  const qvPending = embedQuery(query);
+  let earlyKeyword: Array<{ note: NoteRecord; score: number }> | null = null;
+  if (mode === "hybrid") {
+    await new Promise<void>((r) => setImmediate(r));
+    earlyKeyword = keyword(poolLimit);
+  }
+  const qv = await qvPending;
   if (!qv) return finalize(keyword(win ? clampInt(limit * 3, 60, 1, 200) : fetchK)); // endpoint down / not embeddable -> graceful fallback
 
   // Oversample (limit*5, capped at the 200 max) so the hybrid blend has a rich
   // candidate pool on both sides; the window is pushed into the vector SQL,
   // so the semantic ranking is already computed within the time range.
-  const poolLimit = clampInt(limit * 5, 100, 1, 200);
   const semHits = store.semanticSearch(qv, {
     namespace: opts.namespace,
     limit: poolLimit,
@@ -762,7 +806,7 @@ async function runSearchInner(
   }
 
   // hybrid: fuse the two rankings, then resolve ids back to records.
-  let hits = blendHybrid(keyword(poolLimit), semHits);
+  let hits = blendHybrid(earlyKeyword ?? keyword(poolLimit), semHits);
   if (range !== undefined) {
     const inRange = new Set(filterByTimeRange(hits.map((h) => h.note), range).map((n) => n.id));
     hits = hits.filter((h) => inRange.has(h.note.id));
@@ -787,7 +831,7 @@ async function runSearchExplainedInner(
 ): Promise<ExplainedHit[]> {
   const aggregate = AGGREGATE_QUERY.test(query);
   const limit = aggregate ? Math.min(clampInt(opts.limit, 20, 1, 200) * 2, 200) : clampInt(opts.limit, 20, 1, 200);
-  const fetchK = aggregate ? Math.min(limit * 2, 200) : limit;
+  const fetchK = Math.min(aggregate ? limit * 2 : Math.max(limit * POOL_FACTOR, POOL_MIN), 200);
   const mode: SearchMode = opts.mode ?? parseMode(undefined);
   const range = opts.timeRange;
   const writerOpts = {
@@ -815,12 +859,17 @@ async function runSearchExplainedInner(
     }));
   }
 
+  // A date phrase that became a window is not also searched for as words (topicQuery, r8). The embedding still gets the
+  // whole query: stripping it there lost 1-2 LongMemEval-S questions at R@5 (the model uses "last Tuesday" as context).
+  const topic = range === undefined ? topicQuery(query, opts.asOf) : query;
   const keyword = (fetchLimit: number): Array<{ note: NoteRecord; score: number }> =>
-    keywordPooled(store, query, fetchLimit, { namespace: opts.namespace, ...rangeOpts });
+    keywordPooled(store, topic, fetchLimit, { namespace: opts.namespace, ...rangeOpts });
 
+  const linked = (h: Array<{ note: NoteRecord; score: number }>): Array<{ note: NoteRecord; score: number }> =>
+    applyConflicts(store, h, range === undefined && Object.keys(writerOpts).length === 0 && !opts.includeSuperseded && !opts.includeDistrusted);
   const win = range === undefined ? queryTimeWindow(query, opts.asOf) : null;
   const finalize = (hits: Array<{ note: NoteRecord; score: number }>): ExplainedHit[] =>
-    finalizeExplained(store, win ? boostTimeWindow(hits, win) : hits, limit, staleCfg, aggregate);
+    finalizeExplained(store, win ? boostTimeWindow(linked(hits), win) : linked(hits), limit, staleCfg, aggregate);
 
   if (mode === "keyword" || !embeddingsEnabled()) return finalize(keyword(win ? clampInt(limit * 3, 60, 1, 200) : fetchK));
 
@@ -987,16 +1036,18 @@ export function keywordWithFallback(
   const keywords = extractKeywords(query);
   // One keyword is enough: "when did we go camping" has stop words the all-words search also requires.
   if (strict.length >= limit || keywords.length === 0) return strict;
-  // The query is just that one word: the any-keyword search would repeat the all-words one.
-  if (keywords.length === 1 && query.trim().toLowerCase() === keywords[0]) return strict;
+  // The query is just that one word: the any-keyword search would repeat the all-words one (synonyms still apply).
+  const single = keywords.length === 1 && query.trim().toLowerCase() === keywords[0];
   const seen = new Set(strict.map((h) => h.note.id));
-  const loose = anyKeywordHits(store, keywords, limit + strict.length, opts)
-    .filter((h) => !seen.has(h.note.id))
-    .slice(0, limit - strict.length);
+  const room = limit - strict.length;
+  const partial = single ? [] : anyKeywordHits(store, keywords, limit + strict.length, opts).filter((h) => !seen.has(h.note.id));
+  const widened = synonymHits(store, keywords, [...strict, ...partial], room, opts);
+  const loose = [...partial, ...widened].sort((a, b) => b.score - a.score).slice(0, room);
+  if (loose.length === 0) return strict;
   // bm25 scores of the partial matches sit under half the weakest all-terms
   // score so finalize's small boosts cannot lift a partial match above a full one.
   const floor = strict.length ? Math.min(...strict.map((h) => h.score)) : 1;
-  const top = loose.length && loose[0].score > 0 ? loose[0].score : 1; // never divide by 0
+  const top = loose[0].score > 0 ? loose[0].score : 1; // never divide by 0
   return [...strict, ...loose.map((h) => ({ note: h.note, score: (floor * 0.5 * h.score) / top }))];
 }
 
@@ -1032,7 +1083,7 @@ function keywordPooled(
 
 const WORD_CHAR = /[\p{L}\p{N}]/u;
 /** Lower-case and drop accents, as FTS5's unicode61 tokenizer does ("resume" matches "Résumé"). */
-const fold = (s: string): string => s.normalize("NFD").replace(/\p{M}+/gu, "").toLowerCase();
+const fold = (s: string): string => (/^[\x00-\x7f]*$/.test(s) ? s.toLowerCase() : s.normalize("NFD").replace(/\p{M}+/gu, "").toLowerCase());
 
 /**
  * Share of the keywords a note contains, each matched as a prefix at a word

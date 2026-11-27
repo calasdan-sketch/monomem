@@ -1,0 +1,14 @@
+import { mkdtempSync, cpSync } from "node:fs"; import { join } from "node:path"; import { tmpdir } from "node:os";
+const root = process.argv[2], src = process.argv[3]; const d = mkdtempSync(join(tmpdir(), "mm-s1-")); cpSync(src, d, { recursive: true });
+Object.assign(process.env, { MONOMEM_HOME: d, ONEMEMORY_HOME: d, MONOMEM_AUDIT_LOG: join(d, "a.log"), MONOMEM_VECTOR_CACHE_MB: "1024" });
+const { Store } = await import(`file:///${root}/dist/src/store.js`); const { vectorNorm } = await import(`file:///${root}/dist/src/store/vector-cache.js`);
+const store = new Store(join(d, "state.db")); const db = store.db;
+const q = new Float32Array(768).map(() => Math.random() - .5);
+store.semanticSearch(q, { limit: 100 });
+const cache = store.vectorCacheFor(768);
+const T = (n, f) => { const a = []; let r; for (let i = 0; i < 5; i++) { const t = performance.now(); r = f(); a.push(performance.now() - t); } a.sort((x, y) => x - y); console.log(n.padEnd(20), a[2].toFixed(1)); return r; };
+const ids = T("sql ids", () => db.prepare("SELECT notes.id AS note_id FROM notes WHERE notes.archived_at IS NULL ORDER BY notes.id").all());
+const qn = vectorNorm(q);
+const sc = T("score loop", () => { const s = []; for (const r of ids) { const x = cache.score(r.note_id, q, qn); if (x !== null && x > 0) s.push({ id: r.note_id, score: x }); } return s; });
+T("sort", () => [...sc].sort((a, b) => b.score - a.score));
+T("whole", () => store.semanticSearch(q, { limit: 100 }));

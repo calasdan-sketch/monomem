@@ -20,17 +20,17 @@ function loadChanges(){
     var byW = {};
     (j.changes || []).forEach(function(e){ var w = e.written_by; if(!w){ return; } var v = byW[w] || (byW[w] = { created: 0, updated: 0, deleted: 0 }); v[e.kind] = (v[e.kind] || 0) + 1; });
     var apps = Object.keys(byW).sort();
-    var byApp = apps.length ? "<h3 class='section t-title'>By app</h3><div class='card'><div class='group' style='background:transparent;padding:0'>" + apps.map(function(k){
+    var byApp = apps.length ? "<h2 class='section t-title'>By app</h2><div class='card'><div class='group' style='background:transparent;padding:0'>" + apps.map(function(k){
       var v = byW[k];
       return "<div class='item'><div>"+chip(k)+" <span class='muted t-foot'>"+v.created+" added, "+v.updated+" changed, "+v.deleted+" removed</span></div>"+
         (IS_ADMIN ? "<button data-w='"+esc(k)+"'"+actA("rollbackPreview")+">Undo what it did&hellip;</button>" : "")+"</div>";
     }).join("") + "</div></div>" : "";
     var rows = (j.changes || []).slice().reverse().map(function(e){
       var verb = e.kind === "created" ? "Added" : (e.kind === "updated" ? "Changed" : "Removed");
-      return "<article class='card'><h3 class='t-head'>"+(e.title ? esc(e.title) : "<span class='muted'>(a note you can no longer see)</span>")+"</h3><div class='meta'>"+verb+byLine(e.written_by)+" &middot; "+esc(e.namespace)+" &middot; "+esc(ago(e.at))+(e.distrusted ? " &middot; <span class='lbl danger'>Distrusted writer</span>" : "")+"</div></article>";
+      return "<article class='card'><h2 class='t-head'>"+(e.title ? esc(e.title) : "<span class='muted'>(a note you can no longer see)</span>")+"</h2><div class='meta'>"+verb+byLine(e.written_by)+" &middot; "+esc(e.namespace)+" &middot; "+esc(ago(e.at))+(e.distrusted ? " &middot; <span class='lbl danger'>Distrusted writer</span>" : "")+"</div></article>";
     }).join("");
     $("list").innerHTML = picker + byApp + tasksHtml(rs[1].tasks || []) + handoffHtml((rs[2].handoffs || [])[0]) +
-      "<h3 class='section t-title'>What changed</h3>" + (rows || empty("Nothing changed", "Nothing changed in the last " + winText + ".")) +
+      "<h2 class='section t-title'>What changed</h2>" + (rows || empty("Nothing changed", "Nothing changed in the last " + winText + ".")) +
       "<div class='acts'><button class='plain'"+actA("loadSessions")+">App sessions &rsaquo;</button></div>";
   }).catch(function(e){ incRefused(e); failList(e); });
 }
@@ -38,14 +38,14 @@ var TASK_WORDS = { open:"To do", claimed:"In progress", blocked:"Blocked", done:
 function tasksHtml(ts){
   var open = ts.filter(function(t){ return t.status !== "done" && t.status !== "cancelled"; });
   if(!open.length){ return ""; }
-  return "<h3 class='section t-title'>Tasks</h3><div class='card'><div class='group' style='background:transparent;padding:0'>" + open.map(function(t){
+  return "<h2 class='section t-title'>Tasks</h2><div class='card'><div class='group' style='background:transparent;padding:0'>" + open.map(function(t){
     return "<div class='item'><div><b>"+esc(t.title)+"</b><div class='meta'>"+esc(TASK_WORDS[t.status] || t.status)+(t.owner ? " &middot; "+chip(t.owner) : "")+(t.next_step ? " &middot; next: "+esc(t.next_step) : "")+"</div></div><span class='muted t-foot'>#"+Number(t.id)+"</span></div>";
   }).join("") + "</div></div>";
 }
 function handoffHtml(h){
   if(!h){ return ""; }
   var list = function(title, xs){ return xs && xs.length ? "<p class='t-foot muted' style='margin:8px 0 0'>"+title+"</p><ul class='t-callout' style='margin:4px 0 0'>"+xs.map(function(x){ return "<li>"+esc(x)+"</li>"; }).join("")+"</ul>" : ""; };
-  return "<h3 class='section t-title'>Last handoff</h3><article class='card'><div class='body'>"+esc(h.summary)+"</div>"+
+  return "<h2 class='section t-title'>Last handoff</h2><article class='card'><div class='body'>"+esc(h.summary)+"</div>"+
     "<div class='meta'>"+byLine(h.written_by).replace(/^ &middot; /, "")+" &middot; "+esc(ago(h.at))+"</div>"+
     (h.next_step ? "<p class='t-callout' style='margin:8px 0 0'><b>Next:</b> "+esc(h.next_step)+"</p>" : "")+list("Still open", h.pending)+list("Decided", h.decisions)+"</article>";
 }
@@ -65,7 +65,7 @@ function loadSessions(){
     var ss = j.sessions || [];
     $("count").textContent = plural(ss.length, "session", "sessions");
     $("list").innerHTML = ss.length ? ss.map(function(s){
-      return "<article class='card'><h3 class='t-head'>"+esc(s.summary || "(no summary yet)")+"</h3>"+
+      return "<article class='card'><h2 class='t-head'>"+esc(s.summary || "(no summary yet)")+"</h2>"+
         "<div class='meta'>"+when(s.started_at)+(s.ended_at ? " to "+when(s.ended_at) : " &middot; still open")+" &middot; "+esc(s.namespace)+" &middot; "+plural(s.prompt_count||0, "prompt", "prompts")+"</div>"+
         "<div class='meta'>"+(s.model ? "Model the app reported: "+esc(s.model) : "The app did not report its model")+"</div>"+
         acts("<button data-sid='"+esc(s.id)+"'"+actA("loadSession")+">Timeline</button>")+"</article>";
@@ -83,7 +83,7 @@ function loadSession(id){
     items.sort(function(a,b){ return a.at < b.at ? -1 : a.at > b.at ? 1 : 0; });
     var sum = j.summary;
     $("count").textContent = plural(items.length, "timeline entry", "timeline entries");
-    $("list").innerHTML = (sum ? "<article class='card'><h3 class='t-head'>"+esc(sum.title)+"</h3><div class='body'>"+esc(sum.body)+"</div></article>" : "")+
+    $("list").innerHTML = (sum ? "<article class='card'><h2 class='t-head'>"+esc(sum.title)+"</h2><div class='body'>"+esc(sum.body)+"</div></article>" : "")+
       (items.length ? items.map(function(it){ return "<article class='card'><div class='meta' style='margin:0 0 4px'>"+when(it.at)+"</div>"+it.html+"</article>"; }).join("") : empty("Nothing recorded", "Nothing was recorded in this session yet."));
   }).catch(function(e){ incRefused(e); failList(e); });
 }
@@ -107,7 +107,7 @@ function loadMeter(){
       stat(num(t.saved_tokens), "tokens saved, an estimate: the full text of the notes shown, minus the tokens injected")+
       (Number(t.llm_tokens) ? stat(num(t.llm_tokens), "tokens used by your local summary model") : "")+
       stat((Number(m.db_bytes||0)/1048576).toFixed(1)+" MB", "your notes on disk")+"</div></article>"+
-      (rows ? "<h3 class='section t-title'>Recent sessions</h3><article class='card'><table class='apps'><tr><th scope='col'>When</th><th scope='col'>Project</th><th scope='col' class='n'>Added</th><th scope='col' class='n'>Saved</th></tr>"+rows+"</table></article>"
+      (rows ? "<h2 class='section t-title'>Recent sessions</h2><article class='card'><table class='apps'><tr><th scope='col'>When</th><th scope='col'>Project</th><th scope='col' class='n'>Added</th><th scope='col' class='n'>Saved</th></tr>"+rows+"</table></article>"
         : empty("Nothing measured yet", "The numbers start with the next session an app opens."));
   }).catch(failList);
 }
@@ -126,7 +126,7 @@ function loadApps(){
     $("list").innerHTML =
       "<article class='card'><table class='apps'><tr><th>App</th><th>May</th><th>Project</th><th>Sees</th><th>Last used</th><th><span class='sr'>Remove</span></th></tr>"+rows+"</table>"+
       "<p class='meta'>Removing an app cuts it off at once.</p></article>"+
-      "<h3 class='section t-title'>Add an app</h3><article class='card'>"+
+      "<h2 class='section t-title'>Add an app</h2><article class='card'>"+
       "<label class='field'><span>Name</span><input id='ap_label' placeholder='For example: cursor'></label>"+
       "<label class='field'><span>It may</span><select id='ap_scope'><option value='write'>Read and write</option><option value='read'>Only read</option></select></label>"+
       "<label class='field'><span>It sees</span><select id='ap_max'><option value='internal'>Public and normal notes</option><option value='public'>Only public notes</option><option value='private'>Private notes too (still limited)</option><option value='none'>NO LIMIT (everything)</option></select></label>"+

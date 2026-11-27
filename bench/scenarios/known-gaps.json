@@ -49,8 +49,8 @@
   },
   "GAP-PROBE-FLOOD": {
     "title": "Keyword-stuffed notes can push the trusted answer out of the top five",
-    "summary": "Open (found 2026-11-23, F02). Search here ranks by keywords, and a title weighs five times a body. Eight notes from an outside writer that repeat the query words in their titles outrank the trusted note, which then does not appear in the first five results. The older six-note flood (E14) is survived; a stuffed one is not. Nothing at write time marks the stuffed notes, and they are real, unflagged notes by an ordinary writer. The reader still sees each note's writer and the untrusted-data banner; distrusting the writer (B04) removes them.",
-    "status": "open"
+    "summary": "Fixed on the hardening branch (1.8.0). Found 2026-11-23 (F02). Fixed by: a writer's results after its first three are damped (a repeat of its own title from the first repeat), and the search looks at 50 or more candidates, so stuffed notes cannot fill the pool. Original finding: Search here ranks by keywords, and a title weighs five times a body. Eight notes from an outside writer that repeat the query words in their titles outrank the trusted note, which then does not appear in the first five results. The older six-note flood (E14) is survived; a stuffed one is not. Nothing at write time marks the stuffed notes, and they are real, unflagged notes by an ordinary writer. The reader still sees each note's writer and the untrusted-data banner; distrusting the writer (B04) removes them.",
+    "status": "fixed", "fixed_in": "1.8.0"
   },
   "GAP-PROBE-CONTEXT": {
     "title": "Context-poisoning notes that carry no command words are stored and served",

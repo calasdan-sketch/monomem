@@ -35,3 +35,24 @@ test("a clock time alone is not used as a date window", () => {
   assert.equal(queryTimeWindow("error at 10:30", asOf), null);
   assert.ok(queryTimeWindow("what did we decide today", asOf));
 });
+
+// r8: once a date phrase became a window, its words ("10 days ago", "last Saturday") are not also searched for: in chat
+// history "days ago" is everywhere and pulled unrelated notes up.
+test("the date phrase's words are not searched for once they became a window", async () => {
+  const { topicQuery } = await import("../src/search-service.js");
+  assert.equal(topicQuery("What kitchen appliance did I buy 10 days ago?"), "What kitchen appliance did I buy?");
+  assert.equal(topicQuery("Who did I go with to the music event last Saturday?"), "Who did I go with to the music event?");
+  assert.equal(topicQuery("deploy region"), "deploy region", "no window: unchanged");
+  assert.equal(topicQuery("what did I do yesterday"), "what did I do yesterday", "nothing left but stop words: unchanged");
+  const store = new Store(":memory:");
+  const smoker = store.create({ title: "Smoker", body: "Bought a new kitchen appliance, a smoker.", created_at: "2023-07-22T12:00:00Z" });
+  for (let i = 0; i < 6; i++) store.create({ title: `Chat ${i}`, body: `A few days ago, 10 days ago, days ago I said hi. Kitchen talk ${i}.`, created_at: "2023-05-01T12:00:00Z" });
+  const hits = await runSearch(store, "What kitchen appliance did I buy 10 days ago?", { mode: "keyword", limit: 5, asOf });
+  assert.equal(hits[0]?.id, smoker.id);
+});
+
+test("a relative phrase next to an absolute date is kept (the date is the window)", async () => {
+  const { topicQuery } = await import("../src/search-service.js");
+  const q = "What did Maria do last weekend before April 10, 2023?";
+  assert.equal(topicQuery(q, asOf), q);
+});

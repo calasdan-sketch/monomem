@@ -40,11 +40,13 @@ export const PAGE_HTML = `<!doctype html>
 <main>
   <div class="viewhead">
     <button id="back" class="plain back" hidden data-do="goBack">&lsaquo; Back</button>
-    <h2 id="viewh" class="t-large">Notes</h2>
+    <h1 id="viewh" class="t-large" tabindex="-1">Notes</h1>
     <p id="viewd" class="t-callout muted"></p>
   </div>
+  <div id="demobar" class="banner" role="status" hidden></div>
   <div id="needs" class="banner" role="status" hidden></div>
   <div id="runner" class="banner" role="status" hidden></div>
+  <div id="livebar" class="banner" role="status" hidden></div>
   <details id="filters" class="filters">
     <summary>Filters</summary>
     <div class="row" role="group" aria-label="Filters">
@@ -61,9 +63,9 @@ export const PAGE_HTML = `<!doctype html>
 <footer class="foot">Monomem by Calas Automations &middot; Press <kbd>?</kbd> for keyboard shortcuts</footer>
 </div>
 
-<div id="welcome" class="welcome" hidden></div>
+<div id="welcome" class="welcome" role="main" hidden></div>
 
-<div id="gate" class="gate" hidden>
+<div id="gate" class="gate" role="main" hidden>
   <div class="gcard">
     <div class="ghead"><img src="/icon.svg" alt="" width="64" height="64"><h1>Monomem</h1><p>by Calas Automations</p></div>
     <div class="gbody">
@@ -133,6 +135,7 @@ export const PAGE_HTML = `<!doctype html>
 </dialog>
 
 <div id="toast" role="status" aria-live="polite"></div>
+<div id="announce" class="sr" role="status" aria-live="polite" aria-atomic="true"></div>
 <script src="/dashboard.js"></script>
 </body>
 </html>`;

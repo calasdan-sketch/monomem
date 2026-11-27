@@ -122,3 +122,33 @@ export function newName(name: string): string {
 export function enabledToolNames(env: NodeJS.ProcessEnv = process.env): Set<string> | null {
   return toolProfile(env).visible;
 }
+
+/**
+ * Behaviour hints clients read to decide whether to ask before a call. A tool with none is treated as destructive and open-world,
+ * which is wrong for Monomem (local store, history kept), so every tool states all four hints. A tool file's own hints win.
+ * Per tool: [readOnly, destructive, idempotent]. Idempotent = the same call twice leaves the same state. openWorld is false everywhere.
+ */
+const HINTS: Record<string, [boolean, boolean, boolean]> = {
+  memory_save: [false, false, false], // a new note each call (an edit by id repeats cleanly)
+  memory_search: [true, false, true],
+  memory_read: [true, false, true],
+  memory_list: [true, false, true],
+  memory_archive: [false, true, true],
+  memory_replace: [false, true, false], // a code works once
+  memory_catch_up: [false, false, false], // moves this app's last-looked mark
+  memory_review: [false, false, true],
+  memory_history: [false, true, true], // restore and purge
+  memory_rollback: [false, true, false],
+  memory_tidy: [false, true, false],
+  memory_held: [false, true, false],
+  memory_usage: [true, false, true],
+  memory_sessions: [false, false, false],
+  memory_tasks: [false, false, false],
+  memory_trust: [false, false, true],
+};
+export function withToolHints<T extends { annotations?: Record<string, unknown> }>(name: string, cfg: T): T & { annotations: Record<string, unknown> } {
+  const h = HINTS[newName(name)];
+  const base: Record<string, unknown> = { openWorldHint: false };
+  if (h) Object.assign(base, { readOnlyHint: h[0], destructiveHint: h[1], idempotentHint: h[2] });
+  return { ...cfg, annotations: { ...base, ...(cfg.annotations ?? {}) } };
+}

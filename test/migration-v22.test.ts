@@ -25,7 +25,7 @@ function quietOpen(path: string): Store {
 
 describe("schema v22", () => {
   test("a fresh store has the v22 tables and indexes, and not the redundant edge index", () => {
-    assert.equal(SCHEMA_VERSION, 22);
+    assert.equal(SCHEMA_VERSION, 23);
     const s = new Store(":memory:");
     const db = s.captureDb() as unknown as DatabaseSync;
     assert.ok(names(db, "table").includes("note_flags"));
@@ -66,8 +66,8 @@ describe("schema v22", () => {
       assert.equal(Store.peekSchemaVersion(path), 21);
       const s = quietOpen(path);
       try {
-        assert.equal(Store.peekSchemaVersion(path), 22);
-        assert.equal(Store.peekSchemaVersion(path + ".pre-v22-backup"), 21);
+        assert.equal(Store.peekSchemaVersion(path), 23);
+        assert.equal(Store.peekSchemaVersion(path + ".pre-v23-backup"), 21);
         assert.deepEqual(s.list({ namespace: "work", limit: 10 }).notes.map((n) => n.id).sort(), [a.id, b.id].sort());
         assert.ok(names(s.captureDb() as unknown as DatabaseSync, "table").includes("note_flags"));
         assert.ok(names(s.captureDb() as unknown as DatabaseSync, "table").includes("code_anchors"));
@@ -75,7 +75,7 @@ describe("schema v22", () => {
         s.close();
       }
       quietOpen(path).close();
-      assert.equal(Store.peekSchemaVersion(path), 22);
+      assert.equal(Store.peekSchemaVersion(path), 23);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

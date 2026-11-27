@@ -1,0 +1,13 @@
+import { mkdtempSync, cpSync } from "node:fs"; import { join } from "node:path"; import { tmpdir } from "node:os";
+const root = process.argv[2], src = process.argv[3]; const d = mkdtempSync(join(tmpdir(), "mm-sv-")); cpSync(src, d, { recursive: true });
+Object.assign(process.env, { MONOMEM_HOME: d, ONEMEMORY_HOME: d, MONOMEM_AUDIT_LOG: join(d, "a.log") });
+const { Store } = await import(`file:///${root}/dist/src/store.js`); const store = new Store(join(d, "state.db")); const db = store.db;
+const T = (n, f) => { const a = []; for (let i = 0; i < 15; i++) { const t = performance.now(); f(); a.push(performance.now() - t); } a.sort((x, y) => x - y); console.log(n.padEnd(40), a[7].toFixed(2)); };
+const J = "FROM note_vectors v JOIN notes ON notes.id = v.note_id WHERE notes.archived_at IS NULL";
+T("join+order all()", () => db.prepare(`SELECT v.note_id AS note_id ${J} ORDER BY v.note_id`).all());
+T("join no order all()", () => db.prepare(`SELECT v.note_id AS note_id ${J}`).all());
+const s = db.prepare(`SELECT v.note_id AS note_id ${J}`); s.setReturnArrays?.(true);
+T("join no order arrays", () => s.all());
+T("plain ids all()", () => db.prepare("SELECT note_id FROM note_vectors").all());
+T("notes ids all()", () => db.prepare("SELECT id FROM notes WHERE archived_at IS NULL").all());
+console.log(db.prepare(`EXPLAIN QUERY PLAN SELECT v.note_id ${J} ORDER BY v.note_id`).all().map(r=>r.detail));

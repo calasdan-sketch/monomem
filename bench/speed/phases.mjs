@@ -1,0 +1,14 @@
+import { mkdtempSync } from "node:fs"; import { join } from "node:path"; import { tmpdir } from "node:os";
+const root = process.argv[2]; const d = mkdtempSync(join(tmpdir(), "mm-ph-"));
+Object.assign(process.env, { MONOMEM_HOME: d, ONEMEMORY_HOME: d, MONOMEM_AUDIT_LOG: join(d, "a.log") });
+const T = async (n, f) => { const t = performance.now(); const r = await f(); console.log(n.padEnd(24), (performance.now() - t).toFixed(0)); return r; };
+const U = (p) => `file:///${root}/dist/src/${p}`;
+await T("quiet-sqlite", () => import(U("quiet-sqlite.js")));
+await T("sdk stdio", () => import("@modelcontextprotocol/sdk/server/stdio.js").catch(() => import(`file:///${root}/node_modules/@modelcontextprotocol/sdk/dist/esm/server/stdio.js`)));
+const { Store } = await T("store.js", () => import(U("store.js")));
+const core = await T("mcp-server-core.js", () => import(U("mcp-server-core.js")));
+await T("others", async () => { for (const m of ["backup-schedule", "namespace", "actor", "mcp/client-writer", "security", "sensitivity"]) await import(U(m + ".js")); });
+const cfg = await import(U("config.js")); cfg.prepareDataDir();
+const store = await T("new Store (fresh)", () => new Store(cfg.DB_PATH));
+await T("sweep", () => core.stdioSweep(store));
+await T("createMcpServer", () => core.createMcpServer(store, "admin", undefined, { local: true, cwd: process.cwd() }));

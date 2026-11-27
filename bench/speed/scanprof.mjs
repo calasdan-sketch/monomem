@@ -1,0 +1,18 @@
+import { mkdtempSync, rmSync } from "node:fs"; import { join } from "node:path"; import { tmpdir } from "node:os";
+const root = process.argv[2], N = +process.argv[3], DIM = 768;
+const d = mkdtempSync(join(tmpdir(), "mm-speed-"));
+Object.assign(process.env, { MONOMEM_HOME: d, ONEMEMORY_HOME: d, MONOMEM_AUDIT_LOG: join(d, "a.log") });
+const { Store } = await import(`file:///${root}/dist/src/store.js`);
+const store = new Store(join(d, "state.db"));
+store.transaction(() => { for (let i = 0; i < N; i++) { const n = store.create({ title: "t" + i, body: "b " + i }, { skipEdges: true, lint: "none" }); const v = new Float32Array(DIM).map(() => Math.random() - .5); store.setVector(n.id, v, "b"); } });
+const q = new Float32Array(DIM).map(() => Math.random() - .5);
+const db = store.db;
+const T = (n, f) => { const a = []; for (let i = 0; i < 7; i++) { const t = performance.now(); f(); a.push(performance.now() - t); } a.sort((x, y) => x - y); console.log(n, a[3].toFixed(1)); };
+T("sql-only", () => db.prepare("SELECT v.note_id, v.dim, v.model, v.vec FROM note_vectors v JOIN notes ON notes.id=v.note_id WHERE notes.archived_at IS NULL").all());
+const rows = db.prepare("SELECT v.note_id, v.dim, v.vec FROM note_vectors v").all();
+T("sql-nojoin", () => db.prepare("SELECT v.note_id, v.dim, v.vec FROM note_vectors v").all());
+T("full semanticSearch", () => store.semanticSearch(q, { limit: 100 }));
+const { cosineSim } = await import(`file:///${root}/dist/src/store.js`);
+T("copy+cos", () => { for (const r of rows) { const c = new Uint8Array(r.vec.length); c.set(r.vec); cosineSim(q, new Float32Array(c.buffer)); } });
+T("cos on aligned view", () => { for (const r of rows) cosineSim(q, new Float32Array(r.vec.buffer, r.vec.byteOffset, DIM)); });
+store.close(); rmSync(d, { recursive: true, force: true });

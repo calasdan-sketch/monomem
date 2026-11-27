@@ -30,3 +30,17 @@ export async function localEmbeddingsAvailable(env: NodeJS.ProcessEnv, fetchFn?:
     return false;
   }
 }
+
+/** The honest cost of the opt-in local model (measured on the bench machine; the numbers are in docs/search.md). */
+export const LOCAL_EMBEDDINGS_COST = "130 MB download once, about +40 ms per write, about +13 ms per search";
+
+/**
+ * What `monomem setup` prints about meaning search: the Ollama line when one was found, otherwise (nothing configured) the
+ * one-command opt-in with its cost. Pure text, no network and no download: setup never installs it for you.
+ */
+export function embeddingsSetupLine(found: boolean | undefined, env: NodeJS.ProcessEnv, remote: boolean): string {
+  if (remote) return "";
+  if (found) return embeddingsOfferLine;
+  if (env.MONOMEM_EMBEDDINGS?.trim() || env.MONOMEM_EMBED_URL?.trim()) return "";
+  return `Search matches words only. For meaning search (other languages, paraphrases) with no server, opt in yourself: in the Monomem source folder run  node scripts/install-local-embeddings.mjs  (${LOCAL_EMBEDDINGS_COST}), then set MONOMEM_EMBEDDINGS=local and run  monomem reindex.  Setup never downloads it for you.`;
+}

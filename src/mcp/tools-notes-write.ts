@@ -15,6 +15,7 @@ import { maybeEmbed } from "../search-service.js";
 import { scheduleModelCheck } from "../lint-model-run.js";
 import { canRead } from "../namespace.js";
 import { RECEIPT_CHECK } from "../store/write-receipt.js";
+import { conflictsField } from "../store/conflict-links.js";
 import { checkEvidenceInput } from "../store/evidence.js";
 import { zInt, zTags, zFacts, noBody, untrustedResult, untrustedError, quarantinedResult, withConflicts, withWarnings, errorResult, errorFor } from "./shared.js";
 import type { McpCtx } from "./context.js";
@@ -211,7 +212,7 @@ export function registerNotesWriteTools(c: McpCtx): void {
         await maybeEmbed(store, created);
         scheduleModelCheck(store, created);
         const sim = store.similarNote(created.id);
-        return untrustedResult(withConflicts(withWarnings({ note: noBody(created), ...receipt, ...(titleGenerated ? { title_generated: `No title was given, so it was made from the body's first line. To change it: memory_save id=${created.id} title="..."` } : {}), ...(sim ? { similar_note: { id: sim.id, title: sim.title, hint: `looks similar to #${sim.id} - consider updating it (memory_save with id=${sim.id}) if this is the same thing` } } : {}) }, warnings), store, created, facts));
+        return untrustedResult(withConflicts(withWarnings({ note: noBody(created), ...receipt, ...(titleGenerated ? { title_generated: `No title was given, so it was made from the body's first line. To change it: memory_save id=${created.id} title="..."` } : {}), ...conflictsField(store, created.id), ...(sim ? { similar_note: { id: sim.id, title: sim.title, hint: `looks similar to #${sim.id} - consider updating it (memory_save with id=${sim.id}) if this is the same thing` } } : {}) }, warnings), store, created, facts));
       } catch (e) {
         const receipt = withReceipt(store.refusedWriteReceipt(e, id));
         if (e instanceof QuarantinedError) return quarantinedResult(e, receipt);

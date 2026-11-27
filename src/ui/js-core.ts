@@ -65,10 +65,12 @@ function tagsInner(list){ return (list||[]).filter(function(t){ return !HIDDEN_T
 function chipsRow(inner){ return inner ? "<div class='chips'>"+inner+"</div>" : ""; }
 function tagsHtml(list){ return chipsRow(tagsInner(list)); }
 function acts(html){ return "<div class='acts'>"+html+"</div>"; }
-function empty(title, text, btn){ return "<div class='empty'><h3 class='t-head'>"+title+"</h3>"+(text ? "<p class='muted'>"+text+"</p>" : "")+(btn || "")+"</div>"; }
+function empty(title, text, btn){ return "<div class='empty'><h2 class='t-head'>"+title+"</h2>"+(text ? "<p class='muted'>"+text+"</p>" : "")+(btn || "")+"</div>"; }
 
 // Messages go to the status line, never a pop-up.
 function say(text, isErr){ var m = $("msg"); m.className = "msg" + (isErr ? " err" : ""); m.textContent = text || ""; }
+// A permanent live region: banners that are shown from hidden are not announced reliably, so say it here too.
+function announce(text){ var a = $("announce"); if(a){ a.textContent = ""; setTimeout(function(){ a.textContent = text; }, 50); } }
 function fail(e){ say(e && e.message ? e.message : String(e), true); }
 function failList(e){ $("list").innerHTML = "<p class='err'>"+esc(e && e.message ? e.message : String(e))+"</p>"; }
 
@@ -118,8 +120,12 @@ function toast(text, undoFn){
   var t = $("toast"); clearTimeout(TOAST_T);
   UNDO = undoFn || null;
   t.innerHTML = "<span>"+esc(text)+"</span>" + (undoFn ? "<button"+actA("undoLast")+">Undo</button>" : "");
-  TOAST_T = setTimeout(function(){ t.innerHTML = ""; }, undoFn ? 8000 : 4000);
+  TOAST_MS = undoFn ? 8000 : 4000; toastTimer();
 }
+// The toast waits while the pointer or keyboard focus is on it (WCAG 2.2.1), so Undo can be reached by Tab.
+var TOAST_MS = 0, TOAST_HELD = false;
+function toastTimer(){ clearTimeout(TOAST_T); if(TOAST_HELD){ return; } var t = $("toast"); TOAST_T = setTimeout(function(){ t.innerHTML = ""; }, TOAST_MS); }
+function toastHold(on){ TOAST_HELD = on; if(!on && $("toast").innerHTML){ TOAST_MS = 4000; } toastTimer(); }
 function undoLast(){ var f = UNDO; UNDO = null; $("toast").innerHTML = ""; if(f){ f(); } else { toast("Nothing to undo."); } }
 
 // ---- the key and the server ----
@@ -131,7 +137,7 @@ function api(path, opts){
   if(lsess()){ opts.headers["X-Monomem-Local"] = lsess(); }
   if(opts.body){ opts.headers["Content-Type"] = "application/json"; }
   return fetch(path, opts).then(function(r){
-    if(r.status === 401){ logout("That key was not accepted. Open Monomem again from " + whereEntry() + ", or run  monomem open  on this computer."); throw new Error("not signed in"); }
+    if(r.status === 401){ logout("Your session ended (the key was not accepted, or Monomem was restarted). Open Monomem again from " + whereEntry() + ", or run  monomem open  on this computer."); throw new Error("not signed in"); }
     return r.json().then(function(j){ if(!r.ok){ var e = new Error(j.error || r.status); e.body = j; throw e; } return j; });
   });
 }
@@ -241,7 +247,7 @@ var PAL = [];
 function palFilter(){
   var q = String($("pal_q").value || "").toLowerCase().trim();
   PAL = COMMANDS.filter(function(c){ return !q || c[0].toLowerCase().indexOf(q) >= 0; });
-  $("pal_list").innerHTML = PAL.map(function(c, i){ return "<li><button role='option' aria-selected='"+(i === 0)+"'"+actA("palRun",[i])+">"+esc(c[0])+"</button></li>"; }).join("") || "<li class='muted' style='padding:8px'>No command matches.</li>";
+  $("pal_list").innerHTML = PAL.map(function(c, i){ return "<li role='none'><button role='option' aria-selected='"+(i === 0)+"'"+actA("palRun",[i])+">"+esc(c[0])+"</button></li>"; }).join("") || "<li role='none' class='muted' style='padding:8px'>No command matches.</li>";
 }
 function palRun(i){ var c = PAL[i]; closeSheet("palette"); if(c){ c[1](); } }
 function openPalette(){ if($("app").hidden){ return; } $("pal_q").value = ""; palFilter(); openSheet("palette"); try { $("pal_q").focus(); } catch(e){} }
@@ -277,6 +283,7 @@ try { window.addEventListener("hashchange", function(){ if(/(?:^#|&)(?:code|toke
     if(c){ LOGIN_CODE = c[1]; history.replaceState(null, "", location.pathname + location.search); }
   } catch(e){}
 })();
+try { var tt = $("toast"); tt.addEventListener("mouseenter", function(){ toastHold(true); }); tt.addEventListener("mouseleave", function(){ toastHold(false); }); tt.addEventListener("focusin", function(){ toastHold(true); }); tt.addEventListener("focusout", function(){ toastHold(false); }); } catch(e){}
 try { document.addEventListener("keydown", onKey); document.addEventListener("click", menuClickAway); } catch(e){}
 try { $("gate_where").textContent = whereEntry(); } catch(e){}
 try { $("pal_q").addEventListener("input", palFilter); $("pal_q").addEventListener("keydown", function(e){ if(e.key === "Enter"){ e.preventDefault(); palRun(0); } }); } catch(e){}

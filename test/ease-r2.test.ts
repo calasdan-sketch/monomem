@@ -389,7 +389,7 @@ describe("U-17 doctor warns about pre-upgrade copies older than 14 days", () => 
     withDir((dir) => {
       assert.equal(run(dir, ["add", "x"]).status, 0);
       const old = join(dir, "t.db.pre-v20-backup");
-      const fresh = join(dir, "t.db.pre-v22-backup");
+      const fresh = join(dir, "t.db.pre-v23-backup");
       writeFileSync(old, Buffer.alloc(2_100_000));
       writeFileSync(fresh, Buffer.alloc(10));
       const past = new Date(Date.now() - 20 * 86_400_000);
@@ -397,6 +397,6 @@ describe("U-17 doctor warns about pre-upgrade copies older than 14 days", () => 
       const out = run(dir, ["doctor"]).stdout;
       assert.match(out, /\[warn\] .*pre-upgrade copy .*t\.db\.pre-v20-backup \(2\.1 MB, 20 days old\)/);
       assert.match(out, /monomem backup --prune-premigration/);
-      assert.match(out, /\[info\] pre-upgrade copy .*t\.db\.pre-v22-backup/);
+      assert.match(out, /\[info\] pre-upgrade copy .*t\.db\.pre-v23-backup/);
     }));
 });

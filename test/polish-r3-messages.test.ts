@@ -41,7 +41,7 @@ test("the 'newer than this build' message gives the same rollback steps as docs/
   const doc = readFileSync(join(PROJECT_ROOT, "docs", "upgrading.md"), "utf8");
   assert.match(src, /close every app that uses Monomem and stop the server/);
   assert.match(src, /monomem restore \$\{this\.dbPath\}\.pre-v\$\{found\}-backup --yes/);
-  assert.match(doc, /close every app that uses Monomem and stop the server, then `monomem restore <database>\.pre-v22-backup --yes`/);
+  assert.match(doc, /close every app that uses Monomem and stop the server, then `monomem restore <database>\.pre-v23-backup --yes`/);
 });
 
 test("the time legend says why times are local, what the offset means, and the order", () => {

@@ -124,6 +124,7 @@ const EXPECTED_SITES: Record<string, string[]> = {
     "operator rollback side effects (admin), confined to the caller's namespaces by the query",
     "operator rollback side effects (admin), confined to the caller's namespaces by the query",
     "operator rollback side effects, the planned task re-read under the write lock",
+    "operator rollback compares the text it is about to restore",
     "operator rollback, only the writer name is used",
   ],
   "tasks.ts": [
@@ -151,7 +152,7 @@ export function rawSites(text: string): Array<[number, string]> {
 const INTERNAL_OPT_IN: Record<string, number> = {
   "api.ts": 1,
   // 1 + 2 (1.5.0 U-02): search counts how many matches the distrust list hid (the type and the call); only the count is printed.
-  "cli.ts": 3,
+  "cli.ts": 4, // + 1 (blame-cmd.ts): `monomem blame`/`ask` from the operator terminal (the local shell owner) sees every note like `show`; the REST routes use the caller scope instead.
   // 1.5.0 U-15: tidiness counts notes in any state, so an empty store loses no points for a missing backup; a count only.
   "digest.ts": 1,
   // show/edit: the local shell is the owner, as in label; + 1 (1.5.0 U-02): ls counts the notes the distrust list hid.
@@ -195,9 +196,16 @@ const SQL_ALLOWED: Record<string, string[]> = {
   // still-in-force replacements); every note it names is re-read through visibleTo (Store.read for the CLI, readVisible + the
   // caller's namespaces otherwise), so nothing outside the gate is returned.
   "blast-radius.ts": ["note_history", "note_links", "notes"],
+  // blame.ts (read-only): a COUNT of held edits aimed at a note that blame already returned through the visibility gate; run only
+  // for an admin caller (showHeld). The count is a number: no held text, writer or id is printed.
+  "blame.ts": ["quarantine"],
   // rollback-note.ts (admin-only rollback by note): the note's own open flags by id, cleared in the confirm transaction; a flag
   // raised at this computer is left for the CLI (r3 S1), as in rollback.ts.
   "rollback-note.ts": ["note_flags"],
+  // trust-report.ts (`monomem report`): COUNTS only (notes per writer, notes, held writes) on a READ-ONLY connection; no note text, title or tag is selected.
+  "trust-report.ts": ["notes", "quarantine"],
+  // cli/crashtest.ts (`check --crash`): the note ids of a throwaway COPY of the store, to see which acknowledged writes survived a kill. Ids only; the real store is only read (VACUUM INTO).
+  "cli.ts": ["notes"],
   // why.ts is a local shell command (the operator owns the database file): held-write and confirmation history for one id.
   "why.ts": ["confirmations", "quarantine"],
 };

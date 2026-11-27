@@ -6,7 +6,8 @@ folder (`setup --project`, `export --dir`, `export --out`, `backup --out`, `sync
 that repository. It never writes a `CLAUDE.md` or
 `AGENTS.md` unless you run `monomem project-rules` (1.5.0) in that repository at a terminal and type yes; then it writes
 only between its own `<!-- monomem:begin v1 -->` and `<!-- monomem:end -->` lines (delete those lines and what is between
-them to remove it). It runs no background service you did not start (`monomem service install` adds one; see below), and every queue it keeps has a size or retry limit. A running server makes one backup a day inside the data folder (`backups/`, below).
+them to remove it). `monomem init repo --yes` does the same with a fixed short text (the memory loop, no notes) between
+`<!-- monomem:init:begin v1 -->` and `<!-- monomem:init:end -->`; `monomem init repo --undo --yes` removes exactly that block. It runs no background service you did not start (`monomem service install` adds one; see below), and every queue it keeps has a size or retry limit. A running server makes one backup a day inside the data folder (`backups/`, below).
 
 To take it all out: `monomem uninstall` (configs) or `monomem uninstall --purge` (configs and data, after a final
 backup). Both show the plan first and change nothing until you type `y`; `--dry-run` only shows it.
@@ -115,7 +116,7 @@ leaves it running. On Windows the task is found by its `monomem-task.xml` in the
 
 | Call | Off until | Goes to |
 |---|---|---|
-| Embeddings (`src/embeddings.ts`) | `MONOMEM_EMBEDDINGS=on` or `auto` | `MONOMEM_EMBED_URL` (default `localhost:11434`); a non-local host prints a warning once |
+| Embeddings (`src/embeddings.ts`, `src/embeddings-local.ts`) | `MONOMEM_EMBEDDINGS=on`, `auto` or `local` (`local` makes no network call; it loads files from `MONOMEM_LOCAL_EMBED_DIR` that you installed yourself) | `MONOMEM_EMBED_URL` (default `localhost:11434`); a non-local host prints a warning once |
 | Second opinion on a note from a local model (`src/lint-model.ts`) | `MONOMEM_LINT_MODEL=on` with `MONOMEM_LINT_MODEL_URL` and `MONOMEM_LINT_MODEL_NAME` | a loopback address only, unless `MONOMEM_LINT_MODEL_ALLOW_REMOTE=1`; redirects refused; never in the write itself |
 | Session summary by a local model (`src/llm.ts`) | `MONOMEM_LLM_URL` and `MONOMEM_LLM_MODEL` | a loopback address only, unless `MONOMEM_LLM_ALLOW_REMOTE=1`; redirects refused |
 | Capture hook posting to a server (`src/hook.ts`) | `MONOMEM_HOOK_URL` and `MONOMEM_HOOK_TOKEN` | your own Monomem server |
@@ -123,6 +124,7 @@ leaves it running. On Windows the task is found by its `monomem-task.xml` in the
 | Dashboard page (`src/ui/js-core.ts`, served by `src/dashboard.ts`) | opening the dashboard | the Monomem server that served the page (API calls, and the one-time sign-in code that `monomem open` hands over). Its Settings "Check for updates" and "Update now" buttons run `monomem update` only when pressed |
 | `monomem stop` (`src/cli/stop.ts`) | running the command | `http://127.0.0.1:<port>/health` on the port `monomem open` recorded, to be sure it is still your server before stopping it |
 | Dashboard Update (`src/ui/js-settings.ts`, `src/update.ts`) | pressing "Update now" | the server that served the page (`/health`), and after the swap `http://127.0.0.1:<api port>/health`, to see the new version is up |
+| `monomem demo --open` (`src/cli/demo-open.ts`) | running the command | its own throwaway server on `127.0.0.1` and a free port, to seed it and wait until it is up; the folder and the server are removed when you press Ctrl+C |
 | `monomem open` (`src/cli/connect.ts`) | running the command | `http://127.0.0.1:<api port>/health`, to see whether your own server is up |
 | `monomem backup restore` (`src/cli.ts`) | running the command | `http://127.0.0.1:<api port>/health`, only to print a hint when something answers there (whether the database is in use is judged by its lock) |
 | `monomem setup` (`src/embeddings-offer.ts`) | running the command (not `--no-embeddings`, `--undo`, or with `MONOMEM_EMBEDDINGS` / `MONOMEM_EMBED_URL` already set) | `http://127.0.0.1:11434/api/tags`, to see whether a local Ollama has `nomic-embed-text`; if so, new app entries get `MONOMEM_EMBEDDINGS=auto` (0.8 s timeout) |

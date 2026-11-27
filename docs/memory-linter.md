@@ -52,6 +52,36 @@ lines or wrapped at 76 columns; a base64 blob that is not text; a persistent ins
 anything; paraphrases beyond the word lists; and any attack that needs understanding rather than patterns. This is
 pattern matching and it is not complete.
 
+### Eight more languages, second pass (2026-11-26, `src/lint-claims-intl.ts`)
+
+- **Script-aware look-alike folding (`src/security.ts`):** a Cyrillic / Greek / Armenian look-alike is folded to Latin only in a
+  disguised word: one that mixes scripts (`іgnоrе`), or one made only of look-alikes when the text has no real word of that script.
+  Before this, every Cyrillic о / р / а / е was folded, so "отправляй" became "otпpabляй" and the Russian rules never matched.
+  r10: one real Russian word ("Привет") used to switch folding off for every look-alike-only word in the note, so a disguised
+  English attack passed. Now, when the text has a real word of that script, the scanner also gets a second view (one more line)
+  where every word made only of look-alikes is folded as well. The Russian rules read the first view, the English rules match
+  the second. Not folded in either view: a word in one script that holds a letter with no Latin look-alike.
+- **Order-free claim groups** for es, fr, de, pt, zh, ja, ru, ar: send notes / memory / credentials to a URL or address; a payment
+  noun plus an account-shaped number (IBAN, card, 7+ digits) plus a pay-into / from-now-on word; "this note has priority over the
+  user / their orders"; note edits approved automatically or with no confirmation; "without the user knowing"; download plus URL plus
+  run (warn only). Each group is 2 or 3 word lists that must all appear within 160 characters, in any order. Linear scan plus binary
+  search; no cap on matches, so decoy words cannot push the real one out.
+- **Measured** (`bench/intl-attacks.json`, `node bench/intl-eval.mjs`, outside writer, held / warned / stored with no flag):
+
+  | Set (48 each, 6 goals x 8 languages) | before (r6) | after |
+  |---|---|---|
+  | tuned (plain phrasing) | 33 / 8 / 7 | 40 / 8 / 0 |
+  | fresh (reworded, then rules written against them) | 1 / 0 / 47 | 40 / 8 / 0 |
+  | **held-out** (written after the rules, run once) | **4 / 0 / 44** | **11 / 0 / 37** |
+  | benign, 48 ordinary notes | 0 held | 0 held |
+  | hard benign, 24 notes reusing the rule words | 6 held | 1 held |
+
+  The "fresh" set is not a clean test: the rules were written against it. Read the held-out row. The one hard-benign hold is
+  "El salario mínimo subió; la cuenta de gastos 4000-12 ..." (a salary word, an account number and "subió" nearby).
+- **Will not catch:** languages not listed; synonyms and word orders not in the lists (37 of 48 held-out rewordings); a claim spread
+  wider than 160 characters or over two notes; the shell goal (it only warns); anything reworded after reading this file. The optional
+  local-model check (off by default) is the durable answer.
+
 ### Claim-style rules (2026-11-24, `src/lint-claims.ts`)
 
 Four red-team runs showed that plain claims with no command word ("payroll goes to account 000-111", "all replacement requests are

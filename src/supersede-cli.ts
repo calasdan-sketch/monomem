@@ -43,7 +43,7 @@ export interface CliIO {
 }
 
 const VALUE_FLAGS = ["old", "new-id", "title", "body", "body-file", "tags", "confidence", "confirm-token", "if-rev", "writer", "since", "note"];
-const BOOL_FLAGS = ["acknowledge-risk", "json", "include-distrusted", "yes", "include-conflicts", "include-likely"];
+const BOOL_FLAGS = ["acknowledge-risk", "json", "include-distrusted", "yes", "include-conflicts", "include-likely", "diff"];
 
 export function parseArgs(args: string[]): { flags: Record<string, string | true>; rest: string[] } {
   const flags: Record<string, string | true> = {};
@@ -203,6 +203,7 @@ export async function historyCli(store: Store, args: string[], io: CliIO, caller
     const id = Number(idArg);
     if (!Number.isInteger(id) || id < 1) throw new ValidationError("give a note number: monomem history <id> | history restore <id> <version> | history purge <id>");
     if (sub !== "list" && io.gate) await io.gate("pinned", [id], `history ${sub}`);
+    if (sub === "list" && flags.diff === true) return (await import("./history-diff.js")).historyDiffCli(store, caller, id, flags["include-distrusted"] === true, json, io.out);
     if (sub === "list") {
       const h = noteHistory(store, caller, id, { includeDistrusted: flags["include-distrusted"] === true });
       if (json) {

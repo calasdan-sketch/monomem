@@ -53,6 +53,7 @@ function describe(r: Partial<WriteReceipt>): string {
 /** `audit verify [--expect <hash>] [--checkpoint <file>] [--all-signatures] [--strict]` */
 export async function auditVerifyCmd(args: string[]): Promise<void> {
   const usage = "Usage: monomem audit verify [--expect <head-hash>] [--checkpoint <file>] [--all-signatures] [--strict]   |   monomem audit checkpoint [--out <file>]   |   monomem audit --since 24h [--op create|update|delete] [--label <key>] [--limit n] [--json]";
+  if (args.includes("--db")) return (await import("./cli/integrity-cmd.js")).verifyDbCmd(args); // seals + ledger of the notes (store/integrity.ts)
   let expect: string | undefined;
   let checkpoint: Partial<WriteReceipt> | undefined;
   let allSignatures = false;

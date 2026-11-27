@@ -22,7 +22,7 @@ import { createRequire } from "node:module";
 import { applyOps, getMember, getPath, JsonEditError, opsAreApplied, parseDoc, parseJsonc, type Op } from "./jsonc-edit.js";
 import { applyTomlOps, findTable, hasServer, tomlOpsApplied } from "./toml-table.js";
 import { applyLegacyEnv, homeDataDir } from "./legacy-env.js";
-import { EMBEDDINGS_OFFER_ENV, embeddingsOfferLine } from "./embeddings-offer.js";
+import { EMBEDDINGS_OFFER_ENV, embeddingsSetupLine } from "./embeddings-offer.js";
 import { privateDir } from "./private-dir.js";
 import { addToPath, installDir, pathPlan, removeFromPath, samePath, windowsUserPath, type PathEntry } from "./install.js";
 import { subagentMemoryOn } from "./prompt/switches.js";
@@ -1774,6 +1774,8 @@ export async function undoLast(e: SetupEnv, io: SetupIO): Promise<number> {
   }
   const s = all[idx];
   io.out(`Undoing the setup from ${s.at}:`);
+  const unlock = (await import("./setup/lock-data-folder.js")).restoreDataFolderLock(e, dataHome(e));
+  if (unlock) io.out(`  ${unlock}`);
   if (undoSession(e, io, s) === 0) {
     s.undone = true;
     saveHistory(e, all);
@@ -1904,7 +1906,7 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
   }
   if (legacyHome) io.out(`Your notes are in ${opts.home} (the folder from when Monomem was called OneMemory; there is no ~/.monomem store), so each app entry and hook setup writes gets MONOMEM_HOME=${opts.home} and keeps using them.\n`);
   else if (opts.home) io.out(`MONOMEM_HOME is set (${opts.home}), so each app entry setup writes gets MONOMEM_HOME too and uses that data folder.\n`);
-  if (opts.embeddings && !opts.httpEntry) io.out(embeddingsOfferLine + "\n");
+  if (!opts.terse) { const l = embeddingsSetupLine(opts.embeddings, e.env, !!opts.httpEntry); if (l) io.out(l + "\n"); }
   if (opts.only) {
     const bad = opts.only.filter((x) => !(CLIENT_IDS as readonly string[]).includes(x));
     if (bad.length) {
@@ -2277,6 +2279,11 @@ export async function runSetup(e: SetupEnv, io: SetupIO, opts: SetupOptions): Pr
     }
   }
 
+  if (!opts.dryRun) {
+    const lock = (await import("./setup/lock-data-folder.js")).lockDataFolder(e, dataHome(e));
+    if (lock) io.out(lock);
+  }
+
   // 3. Doctor.
   if (!opts.noDoctor) {
     io.out("\nmonomem check --setup:");
@@ -2429,4 +2436,4 @@ export function listBackups(file: string): string[] {
   }
 }
 
-export { getMember };
+export { getMember, findServers, serversKey, safeParseEntry, readTomlEntry };

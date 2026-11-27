@@ -15,6 +15,9 @@
   "homepage": "https://github.com/calasdan-sketch/monomem#readme",
   "keywords": [
     "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "agent-memory",
     "memory",
     "ai-agents",
     "claude",
@@ -47,6 +50,7 @@
     "cli": "node dist/src/cli.js",
     "test": "npm run build && node --test --import ./dist/test/setup-env.js \"dist/test/*.test.js\"",
     "version": "node scripts/sync-plugin-version.mjs",
+    "sbom": "node scripts/make-sbom.mjs",
     "prepublishOnly": "npm run build",
     "demo-gif": "node scripts/record-demo.mjs",
     "runner": "node dist/src/runner-start.js",
@@ -73,7 +77,12 @@
     "docs/*.md",
     "bench/scenarios/*.json",
     "!docs/RUNNER.md",
-    "!docs/LAUNCH.md"
+    "!docs/LAUNCH.md",
+    "!docs/launch-checklist.md",
+    "!docs/adaptive-attacker-2026-11-23.md",
+    "!docs/adaptive-attacker-round2-2026-11-24.md",
+    "!docs/ai-redteam-tools-2026-11-23.md",
+    "!docs/security-audit-2026-11-23.md"
   ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

@@ -375,3 +375,13 @@ describe("parseTimePhrase: relative weeks, months and weekdays (C21)", () => {
     assert.equal(parseTimePhrase("the past is past", { now: NOW, timeZone: TZ }), null);
   });
 });
+
+describe("parseTimePhrase: day-first dates (r8)", () => {
+  test('"11 December, 2025" and "4th October 2025" are that day', () => {
+    assert.equal(iso(parse("what did they discuss on 11 December, 2025").start), "2025-12-11T06:00:00.000Z"); // CST
+    assert.equal(iso(parse("the weekend before 4th October 2025").start), "2025-10-04T05:00:00.000Z"); // CDT
+  });
+  test("a bare number before a month name is not a day without a year", () => {
+    assert.equal(parseTimePhrase("we shipped 3 may releases", { now: NOW, timeZone: TZ }), null);
+  });
+});

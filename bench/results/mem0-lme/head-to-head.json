@@ -1,0 +1,65 @@
+[
+ {
+  "metric": "any@1",
+  "monomem": 411,
+  "mem0": 411,
+  "n": 470,
+  "only_monomem": 24,
+  "only_mem0": 24,
+  "p": 1.0
+ },
+ {
+  "metric": "any@3",
+  "monomem": 453,
+  "mem0": 452,
+  "n": 470,
+  "only_monomem": 6,
+  "only_mem0": 5,
+  "p": 1.0
+ },
+ {
+  "metric": "any@5",
+  "monomem": 458,
+  "mem0": 459,
+  "n": 470,
+  "only_monomem": 3,
+  "only_mem0": 4,
+  "p": 1.0
+ },
+ {
+  "metric": "all@5",
+  "monomem": 404,
+  "mem0": 409,
+  "n": 470,
+  "only_monomem": 13,
+  "only_mem0": 18,
+  "p": 0.473
+ },
+ {
+  "metric": "any@10",
+  "monomem": 465,
+  "mem0": 466,
+  "n": 470,
+  "only_monomem": 2,
+  "only_mem0": 3,
+  "p": 1.0
+ },
+ {
+  "metric": "all@10",
+  "monomem": 433,
+  "mem0": 446,
+  "n": 470,
+  "only_monomem": 6,
+  "only_mem0": 19,
+  "p": 0.015
+ },
+ {
+  "metric": "any@20",
+  "monomem": 469,
+  "mem0": 468,
+  "n": 470,
+  "only_monomem": 1,
+  "only_mem0": 0,
+  "p": 1.0
+ }
+]

@@ -487,7 +487,9 @@ export function noteHistory(store: Store, caller: Caller, id: number, opts: { in
     : all.filter((e) => !store.isDistrustedWith(rules, sid, { namespace: n.namespace, written_by: e.written_by || e.claimed_writer || "" }));
   return {
     note_id: id,
-    current: { version: n.rev, title: n.title, written_by: n.written_by, updated_at: n.updated_at },
+    // An admin may read the history of a note whose writer is distrusted (that is how they review it), but its current title and
+    // writer are what the by-id read hides without the opt-in, so they are blanked here too.
+    current: { version: n.rev, ...(opts.includeDistrusted || store.readVisible(id) ? { title: n.title, written_by: n.written_by } : { title: "", written_by: "" }), updated_at: n.updated_at },
     versions: visible,
     hidden_by_trust_policy: all.length - visible.length,
   };

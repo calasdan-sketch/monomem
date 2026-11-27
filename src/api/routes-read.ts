@@ -6,7 +6,7 @@ import { ServerResponse } from "node:http";
 import { currentCeiling } from "../actor.js";
 import { NoteRecord, clampInt } from "../store.js";
 import { auditFailureCount } from "../security.js";
-import { TIME_ZONE } from "../config.js";
+import { timeZone } from "../config.js";
 import { readBody } from "../http-common.js";
 import { runSearch, runSearchExplained, semanticNotice, parseMode, runRelevantSearch, roundRobin, type ExplainedHit } from "../search-service.js";
 import { parseTimePhrase } from "../time-parse.js";
@@ -120,7 +120,7 @@ export async function readRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
     const explain = (explainRaw === "1" || explainRaw === "true") && currentCeiling() === undefined;
     // Like the MCP tool, an unrecognized time phrase is ignored rather
     // than an error -- the query still runs unscoped.
-    const timePhrase = whenRaw ? parseTimePhrase(whenRaw, { timeZone: TIME_ZONE }) : null;
+    const timePhrase = whenRaw ? parseTimePhrase(whenRaw, { timeZone: timeZone() }) : null;
     if (whenRaw && whenRaw.trim() && !timePhrase) {
       sendJson(res, 400, { error: `unrecognized time phrase "${whenRaw}" (try "yesterday", "last week", "in March")` });
       return true;

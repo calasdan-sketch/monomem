@@ -30,6 +30,7 @@ async function openStore() {
 const BAD_NS = "This folder's namespace could not be worked out (see the message above). Name one with --ns.";
 
 export async function round3Cmd(cmd: string, args: string[]): Promise<void> {
+  if (cmd === "verify-lossless" || cmd === "integrity") return (await import("./integrity-cmd.js")).integrityCmd(cmd, args);
   if (cmd === "drift") return drift(args);
   if (cmd === "audit-memory") return auditMemoryCmd(args);
   if (cmd === "prune") return prune(args);
@@ -162,10 +163,10 @@ async function rescan(args: string[]): Promise<void> {
 }
 
 async function handoff(args: string[]): Promise<void> {
-  const { flags, rest } = parseFlags(args, { values: ["namespace", "max-tokens"], bools: ["all-projects"] });
+  const { flags, rest } = parseFlags(args, { values: ["namespace", "max-tokens", "since", "as"], bools: ["all-projects", "digest", "json"] });
   const maxTokens = flags["max-tokens"] === undefined ? 1500 : Number(flags["max-tokens"]);
   if (rest.length || !Number.isFinite(maxTokens) || maxTokens < 1) {
-    console.error("Usage: monomem handoff [--ns <namespace>] [--all-projects] [--max-tokens N]");
+    console.error("Usage: monomem handoff [--ns <namespace>] [--all-projects] [--max-tokens N] | --digest [--since 24h] [--as <writer>] [--json]");
     process.exit(1);
   }
   const p = await projectNs(typeof flags.namespace === "string" ? flags.namespace : undefined);
@@ -184,6 +185,7 @@ async function handoff(args: string[]): Promise<void> {
   const { basename } = await import("node:path");
   const store = await openStore();
   try {
+    if (flags.digest) return (await import("./handoff-digest.js")).digestCmd(store, flags, p.ns);
     const root = (await gitRoot(process.cwd())) || process.cwd();
     const r = buildHandoff(store, { namespace: p.ns, maxTokens, project: basename(root), allProjects: Boolean(flags["all-projects"]) });
     process.stdout.write(r.text);

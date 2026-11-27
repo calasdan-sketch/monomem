@@ -9,12 +9,12 @@ function start(){
     var isAdmin = w.scope === "admin" && !w.namespace && !w.max_sensitivity;
     if(isAdmin && !IS_ADMIN){ IS_ADMIN = true; if(VIEW === "list"){ load(); } }
     if(!isAdmin){ say("Signed in as " + (w.label || "unnamed") + ": " + String(w.can_see || "").replace(/[.\\s]+$/, "") + "."); return; }
-    loadNeeds();
+    loadNeeds(); liveStart();
     api("/ui/state").then(function(s){
-      STATE = s;
+      STATE = s; demoBanner(s);
       var h = ""; try { h = location.hash || ""; } catch(e){}
       if(!s.welcome_done || h === "#welcome"){ showWelcome(0); }
-      else if(h === "#new"){ toggleNew(); } else if(h === "#review"){ loadReview(); }
+      else if(h === "#new"){ toggleNew(); } else if(h === "#review"){ loadReview(); } else if(h === "#held"){ loadHeld(); }
     }).catch(function(){});
   }).catch(function(){ /* the notes call reports any problem */ });
 }
@@ -93,13 +93,13 @@ function noteMenu(n){
   var l = LVL_OPT[n.sensitivity] ? n.sensitivity : "internal";
   items.push("<hr><div class='cap'>Who can see this</div>" + ["public","internal","private"].map(function(o){
     return "<button role='menuitemradio' aria-checked='"+(o === l)+"'"+actA("setLabel",[id,o])+">"+LVL_OPT[o]+"</button>"; }).join(""));
-  if(IS_ADMIN){ items.push("<hr><button role='menuitem'"+actA("touchedNote",[id])+">What did this touch?</button>"); }
+  if(IS_ADMIN){ items.push("<hr><button role='menuitem'"+actA("touchedNote",[id])+">What did this touch?</button><button role='menuitem'"+actA("noteHistory",[id])+">History</button>"); }
   if(IS_ADMIN){ items.push("<button role='menuitem' aria-label='archive note #"+id+"'"+actA("archiveNote",[id])+">Archive</button>"); }
   return "<details class='menu'><summary aria-label='More for note #"+id+"' title='More'>&middot;&middot;&middot;</summary><div class='pop' role='menu'>"+items.join("")+"</div></details>";
 }
 function noteCard(n, extra){
   var labels = cardLabels(n);
-  return "<article class='card' id='note"+Number(n.id)+"'><div class='nhead'><h3 class='t-head'>"+esc(n.title)+"</h3>"+noteMenu(n)+"</div>"+
+  return "<article class='card' id='note"+Number(n.id)+"'><div class='nhead'><h2 class='t-head'>"+esc(n.title)+"</h2>"+noteMenu(n)+"</div>"+
     "<div class='meta'>"+chip(n.written_by || "")+" &middot; "+esc(n.namespace)+" &middot; "+esc(ago(n.updated_at))+" &middot; #"+Number(n.id)+"</div>"+
     chipsRow(labels.slice(0, 2).map(lbl).join("") + tagsInner(n.tags))+
     (n.body ? "<div class='body clamp'>"+esc(n.body)+"</div>" : "")+(extra || "")+"</article>";
@@ -118,7 +118,17 @@ function render(notes){
       : empty("No notes yet", "In any connected app, type: Save to Monomem: we deploy with pnpm", "<div class='acts' style='justify-content:center'><button class='primary'"+actA("toggleNew")+">Add a note</button></div>");
     return;
   }
-  list.innerHTML = notes.map(function(n){ return noteCard(n); }).join("");
+  NOTES_ALL = notes; NOTES_SHOWN = 0; moreNotes(true);
+}
+// 5,000 notes as cards at once freezes a tab: show them 100 at a time. Focus stays where it was on "Show more".
+var NOTES_ALL = [], NOTES_SHOWN = 0, PAGE_N = 100;
+function moreNotes(first){
+  var end = Math.min(NOTES_ALL.length, NOTES_SHOWN + PAGE_N);
+  NOTES_SHOWN = end;
+  var more = end < NOTES_ALL.length ? "<div id='morenotes' class='acts' style='justify-content:center'><button id='morebtn'"+actA("moreNotes")+">Show "+Math.min(PAGE_N, NOTES_ALL.length - end)+" more ("+(NOTES_ALL.length - end)+" not shown yet)</button></div>" : "";
+  $("list").innerHTML = NOTES_ALL.slice(0, end).map(function(n){ return noteCard(n); }).join("") + more;
+  $("count").textContent = (more ? "Showing " + end + " of " + NOTES_ALL.length + " notes" : plural(NOTES_ALL.length, "note", "notes")) + (($("lvlf").value || "") ? " (" + $("lvlf").value + ")" : "");
+  if(!first){ try { var mb = $("morebtn"); if(mb){ mb.focus(); } } catch(e){} }
 }
 
 // ---- note actions (each says what happened; reversible ones offer Undo) ----
@@ -248,7 +258,7 @@ function loadArchived(){
     var ns = j.notes || [];
     $("count").textContent = plural(ns.length, "archived note", "archived notes");
     $("list").innerHTML = ns.length ? ns.map(function(n){
-      return "<article class='card'><h3 class='t-head'>"+esc(n.title)+"</h3><div class='meta'>"+chip(n.written_by || "")+" &middot; "+esc(n.namespace)+" &middot; archived "+esc(ago(n.archived_at || n.updated_at))+"</div>"+
+      return "<article class='card'><h2 class='t-head'>"+esc(n.title)+"</h2><div class='meta'>"+chip(n.written_by || "")+" &middot; "+esc(n.namespace)+" &middot; archived "+esc(ago(n.archived_at || n.updated_at))+"</div>"+
         (n.body ? "<div class='body clamp'>"+esc(n.body)+"</div>" : "")+
         acts("<button class='primary'"+actA("restoreNote",[Number(n.id)])+">Restore</button><button class='destructive' aria-label='delete note #"+Number(n.id)+" for good' data-confirm='Delete for good?'"+actA("armDel",[Number(n.id)])+">Delete for good</button>")+"</article>";
     }).join("") : empty("Nothing archived", "Notes you archive wait here, and you can bring them back.");

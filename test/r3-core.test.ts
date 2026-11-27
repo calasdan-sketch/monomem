@@ -65,7 +65,7 @@ describe("1: change-feed cursor + marker integrity", () => {
       const keys = (db.prepare("SELECT key FROM _meta").all() as Array<{ key: string }>).map((r) => r.key);
       db.close();
       for (const k of keys) {
-        assert.ok(["store_uuid", "feed_key", "edge_threshold", "labels_clean_v1", "attest_key_id", "archive_log_since"].includes(k) || k.startsWith("changes_seen:"), k);
+        assert.ok(["store_uuid", "feed_key", "edge_threshold", "labels_clean_v1", "attest_key_id", "archive_log_since", "seal_backfill_done", "seal_backfill_id", "seal_key_id", "reseal_cursor"].includes(k) || k.startsWith("changes_seen:"), k);
       }
       const s2 = new Store(path);
       assert.equal(s2.storeId(), uuid);

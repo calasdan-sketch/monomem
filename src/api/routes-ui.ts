@@ -140,7 +140,8 @@ export async function uiRoutes(c: ApiCtx, r: ApiReq): Promise<boolean> {
   // GET /ui/state -> what the page needs to choose Welcome or Notes. No secrets.
   if (req.method === "GET" && path === "/ui/state") {
     const s = readUiSettings();
-    sendJson(res, 200, { version: PACKAGE_VERSION, welcome_done: s.welcome_done, settings: s, local, person: hasPerson(c, req), backup: readBackupStatus(dirname(DB_PATH)) });
+    const demo = process.env.MONOMEM_DEMO === "1"; // `monomem demo --open`: a throwaway store
+    sendJson(res, 200, { version: PACKAGE_VERSION, demo, welcome_done: s.welcome_done || demo, settings: s, local, person: hasPerson(c, req), backup: readBackupStatus(dirname(DB_PATH)) });
     return true;
   }
   // GET /ui/needs-you -> { count, items }: held, unconfirmed, conflicts, failed backup.

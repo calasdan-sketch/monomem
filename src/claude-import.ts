@@ -22,6 +22,7 @@ import { LIMITS } from "./security.js";
 import type { SetupEnv, SetupIO } from "./setup.js";
 import { claudeDir } from "./setup.js";
 import { IMPORT_TAG, fileHash, readBridgeState, vanishedFiles, writeBridgeState, type BridgeState, type FileState } from "./claude-refresh.js";
+import { stripInitBlock } from "./init-block.js";
 
 export { IMPORT_TAG };
 export const IMPORT_WRITER = "import:claude";
@@ -209,7 +210,7 @@ export function stripHtmlComments(s: string): string {
 }
 
 export function splitSections(markdown: string, fallbackTitle: string): { sections: Section[]; imports: number } {
-  const lines = markdown.replace(/^﻿/, "").replace(/\r\n?/g, "\n").split("\n");
+  const lines = stripInitBlock(markdown).replace(/^﻿/, "").replace(/\r\n?/g, "\n").split("\n");
   const raw: Array<{ level: number; heading: string; h1: string; lines: string[] }> = [];
   let cur = { level: 0, heading: fallbackTitle, h1: "", lines: [] as string[] };
   let fence: string | null = null;

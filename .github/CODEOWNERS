@@ -1,0 +1,9 @@
+# Every change needs a review from the owner. Pair this with branch protection ("Require review from Code Owners").
+# The release and supply-chain files get their own line so a future second maintainer can be added to the rest only.
+*                       @calasdan-sketch
+/.github/               @calasdan-sketch
+/scripts/build-bundle.mjs @calasdan-sketch
+/scripts/make-sbom.mjs  @calasdan-sketch
+/package.json           @calasdan-sketch
+/package-lock.json      @calasdan-sketch
+/SECURITY.md            @calasdan-sketch

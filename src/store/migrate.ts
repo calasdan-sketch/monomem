@@ -7,6 +7,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { DEFAULT_SENSITIVITY } from "../sensitivity.js";
+import { installSealSchema } from "./ledger.js";
 import { CHANGE_LOG_RETENTION_DAYS, FTS_PREFIX_OPT, SQL_NOW, DEFAULT_NAMESPACE } from "./schema-constants.js";
 
 /** The Store internals the migration steps use. */
@@ -722,5 +723,10 @@ export function migrate(self: MigrateCtx, v: number): void {
           DELETE FROM code_anchors WHERE note_id = old.id;
         END;
       `);
+    }    if (v < 23) {
+      // v23 (1.8.0): per-note seal + hash-chained ledger. Additive: one column, two tables, indexes, three triggers; no row is
+      // rewritten here (the seals are made in short batches after open, see store/ledger.ts backfillBatch), so a 100k-note
+      // upgrade does not hold the write lock for the whole job. The pre-migration backup is made by Store.init as for every step.
+      installSealSchema(self.db);
     }
   }

@@ -140,16 +140,19 @@ describe("README first screen and the docs it points at", () => {
 
   test("the comparison is dated, sourced, and never says a flat No", () => {
     const c = read("docs/comparison.md");
+    assert.match(c, /2026-11-25/);
     assert.match(c, /2026-11-16/);
     for (const name of ["Vestige", "claude-mem", "mem0", "agentmemory", "basic-memory", "Copilot Memory", "Codex", "Cursor", "Engram", "Notion"]) assert.ok(c.includes(name), name);
     assert.doesNotMatch(c, /\|\s*No\s*\|/);
     assert.match(c, /not documented/);
-    assert.doesNotMatch(c, /recall@5|R@5|LongMemEval/i, "no retrieval-score rows");
+    assert.match(c, /frozen build[^.]*before the 2026-11-25 fixes/i, "measured rows are labelled as a frozen build");
+    assert.match(c, /not verified/);
+    assert.ok(c.indexOf("## Where Monomem is behind") < c.indexOf("## Where Monomem leads"), "rivals ahead come first");
   });
 
   test("SECURITY.md names the current attack count and command names", () => {
     const sec = read("SECURITY.md");
-    assert.match(sec, /26 known/);
+    assert.match(sec, /27 known/);
     assert.doesNotMatch(sec.replace(/\(formerly[^)]*\)|old name[^.]*\./gi, ""), /monomem (drill|doctor|health|quarantine)\b/);
   });
 
@@ -160,7 +163,9 @@ describe("README first screen and the docs it points at", () => {
     assert.doesNotMatch(read("README.md") + b, /if\s+at-rest encryption is on, a copy of the `\.key` file/);
   });
 
-  test("LAUNCH.md is not shipped", () => {
-    assert.ok((JSON.parse(read("package.json")) as { files: string[] }).files.includes("!docs/LAUNCH.md"));
+  test("LAUNCH.md and launch-checklist.md are not shipped", () => {
+    const files = (JSON.parse(read("package.json")) as { files: string[] }).files;
+    assert.ok(files.includes("!docs/LAUNCH.md"));
+    assert.ok(files.includes("!docs/launch-checklist.md"));
   });
 });

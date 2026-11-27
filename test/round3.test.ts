@@ -270,7 +270,7 @@ describe("R3-4/5: apps, the tokens file, and signing in", () => {
       assert.equal(redeemLoginCode(c2, 1000 + 61_000), false, "expired after 60 seconds");
       const c3 = mintLoginCode();
       assert.equal(redeemLoginCode("0".repeat(32)), false);
-      assert.equal(redeemLoginCode(c3), false, "a wrong guess spends the code");
+      assert.equal(redeemLoginCode(c3), true, "a wrong guess does not spend the real code");
       // the endpoint
       const a = await boot([{ token: ADMIN, scope: "admin", label: "primary" }]);
       const good = mintLoginCode();

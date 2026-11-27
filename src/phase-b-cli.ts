@@ -142,9 +142,21 @@ export async function auditCmd(): Promise<void> {
 }
 
 export async function demoCmd(): Promise<void> {
-  const { v } = args({ slow: { type: "boolean" }, out: { type: "string" } });
+  const { v } = args({ slow: { type: "boolean" }, out: { type: "string" }, open: { type: "boolean" }, "no-browser": { type: "boolean" } });
+  if (v.open === true) {
+    process.exitCode = await (await import("./cli/demo-open.js")).demoOpenMain({ noBrowser: v["no-browser"] === true });
+    return;
+  }
   const { runDemo } = await import("./demo.js");
   process.exitCode = await runDemo({ pauseMs: v.slow === true ? 7000 : 0, receiptOut: s(v.out) ? resolve(s(v.out)!) : undefined });
+}
+
+export async function reportCmd(): Promise<void> {
+  process.exitCode = await (await import("./cli/trust-report.js")).reportMain(process.argv.slice(3));
+}
+
+export async function crashCmd(): Promise<void> {
+  process.exitCode = await (await import("./cli/crashtest.js")).crashCheckMain(process.argv.slice(3));
 }
 
 export async function snippetCmd(): Promise<void> {

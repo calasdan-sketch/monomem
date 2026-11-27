@@ -96,6 +96,10 @@ export function readChatSession(path: string, stats?: ChatStats): ChatMessage[] 
       if (stats) stats.badLines++; // a damaged line (a crash mid-write): skip it
       continue;
     }
+    if (r === null || typeof r !== "object" || Array.isArray(r)) {
+      if (stats) stats.badLines++; // valid JSON that is not a record (null, 5, "x", [..]): the same as a damaged line
+      continue;
+    }
     if ((r.type !== "user" && r.type !== "assistant") || r.isMeta || r.isSidechain) continue;
     const text = textOf((r.message as Rec | undefined)?.content);
     if (!text) continue;

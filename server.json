@@ -1,6 +1,8 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.calasdan-sketch/monomem",
+  "title": "Monomem",
+  "websiteUrl": "https://github.com/calasdan-sketch/monomem#readme",
   "description": "Local shared memory for AI coding agents: SQLite notes with writer provenance, undo, search.",
   "repository": {
     "url": "https://github.com/calasdan-sketch/monomem",

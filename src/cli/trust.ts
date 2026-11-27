@@ -294,7 +294,7 @@ export async function tokenCmd(): Promise<void> {
   const { envTokenLabels } = await import("../token-file.js");
   const { flags, rest } = parseFlags(process.argv.slice(3), { values: ["label", "scope", "namespace", "max"], bools: ["admin", "json", "no-limit"] });
   const action = rest[0];
-  const usageLine = "Usage: monomem keys add <name> [--scope read|write|admin] [--namespace ns] [--max public|internal|private | --no-limit] | keys list | keys remove <name> | keys harden";
+  const usageLine = "Usage: monomem keys add <name> (or --label <name>) [--scope read|write|admin] [--namespace ns] [--max public|internal|private | --no-limit] | keys list | keys remove <name> | keys harden";
   try {
     if (action === "new") {
       console.log(t.newTokenValue());
@@ -302,6 +302,7 @@ export async function tokenCmd(): Promise<void> {
       const label = str(flags.label) ?? rest[1];
       if (!label) throw new t.TokenAdminError(usageLine);
       const scope = str(flags.scope);
+      if (scope !== undefined && !["read", "write", "admin"].includes(scope)) throw new t.TokenAdminError(`--scope must be read, write or admin (not "${scope}")`);
       const asAdmin = scope === "admin" || flags.admin === true;
       const noLimit = flags["no-limit"] === true;
       await requireOperator(`keys add (${scope ?? "write"} app key "${label}"${noLimit ? ", with NO sensitivity limit" : ""})`);

@@ -38,7 +38,12 @@ import { isStale, stalenessConfig, annotateStaleness } from "./staleness.js";
 // only node: builtins, never store.ts.
 import { BodyIndex, type BodyIndexInfo } from "./store/body-index.js";
 import { ensureCaptureColumns, migrate as migrateSchema } from "./store/migrate.js";
-import { beginImmediate } from "./store/write-lock.js";
+import { beginImmediate, nextRevUnderLock, openDatabase, sealedRowsExist } from "./store/write-lock.js";
+import { casUpdate } from "./store/cas.js";
+import { importLockMs, importPause, sliceTimer } from "./store/import-pacing.js";
+import { SealState, guardRecord } from "./store/seal.js";
+import { backfillAtOpen, flushSeals, rekeyAfterRotation, snapshotForeign } from "./store/ledger.js";
+import { cjkTopUp, hasCjk } from "./store/cjk-search.js";
 import { CHANGE_LOG_RETENTION_DAYS, FTS_PREFIX_OPT, SQL_NOW, DEFAULT_NAMESPACE } from "./store/schema-constants.js";
 import { expandIdentifiers } from "./query-expand.js";
 export { CHANGE_LOG_RETENTION_DAYS, DEFAULT_NAMESPACE } from "./store/schema-constants.js";
@@ -115,12 +120,14 @@ import * as quarantineOps from "./store/quarantine.js";
 import * as confirmOps from "./store/confirm.js";
 import * as taintOps from "./store/taint.js";
 import * as receiptOps from "./store/write-receipt.js";
+import { VectorCacheHolder, vectorNorm, vectorView } from "./store/vector-cache.js";
 import * as surfaceOps from "./store/surfaces.js";
 import * as clientKeyOps from "./store/client-keys.js";
 import * as flagOps from "./store/flags.js";
 import * as codeAnchorOps from "./store/code-anchors.js";
 import * as claimOps from "./claims.js";
 import * as probationOps from "./store/probation.js";
+import * as conflictLinkOps from "./store/conflict-links.js";
 import * as evidenceOps from "./store/evidence.js";
 import type { CodeChange, CodeChangedItem } from "./store/code-anchors.js";
 export type { CodeChange, CodeChangedItem };
@@ -599,7 +606,7 @@ export interface QuarantineContext {
 }
 
 /** Current schema version (PRAGMA user_version). See Store.migrate. */
-export const SCHEMA_VERSION = 22;
+export const SCHEMA_VERSION = 23;
 
 /**
  * Notes fetched per page by exportBatch(), which both streaming export
@@ -1588,6 +1595,7 @@ export class Store {
   /** @internal */ db: DatabaseSync;
   private readonly dbPath: string;
   /** Per-namespace edge-scoring index (see NsEdgeIndex). */
+  private vecCache = new VectorCacheHolder(() => this.db);
   /** @internal */ edgeIndexes = new Map<string, NsEdgeIndex>();
   /** Namespaces whose index is being built in the background, with the notes written meanwhile (linked when it is ready). */
   private edgeBuilds = new Map<string, Set<number>>();
@@ -1608,6 +1616,7 @@ export class Store {
   private keyChecked = "";
   /** Directory the key file resolves against (single resolver: beside the DB). */
   private readonly keyDir: string;
+  /** @internal */ readonly seal = new SealState(() => this.keyDir, () => this.dbPath === ":memory:", () => this.signing(), (k) => this.getMeta(k), () => this.db);
   /** This database's server_id (the `store_uuid` in _meta); filled in by the constructor. */
   /** @internal */ serverIdValue = "";
   /** The attestation signing key, loaded (or created) on first use. */
@@ -1667,7 +1676,7 @@ export class Store {
       }
     }
     try {
-      this.db = new DatabaseSync(dbPath);
+      this.db = openDatabase(dbPath);
     } catch (e) {
       throw new Error(Store.explainOpenError(e, dbPath));
     }
@@ -1699,6 +1708,7 @@ export class Store {
       this.upgradeV1Envelopes();
       this.ensureFtsPrefixIndex();
       this.enableFtsSecureDelete();
+      if (!this.noMigrate) backfillAtOpen(this);
     } catch (e) {
       // A constructor that throws never hands the caller a Store to close();
       // release the file handle here (Windows cannot delete an open database).
@@ -2480,7 +2490,7 @@ export class Store {
       /** Sync of another machine's file: held under approve-first even though the CLI runs it, like an agent's write. */
       holdForApproval?: boolean;
       /** Sync of another machine's file: its (origin, id), linked to the note when a held create is approved. */
-      syncIdentity?: { origin: string; id: number };
+      syncIdentity?: { origin: string; id: number }; /** r8: also record the sync link (origin, id) -> this note in the same transaction, so a kill cannot leave a note without its link (a re-import then made a duplicate). */ syncLink?: { origin: string; id: number };
       /** R2-04: the checked client_key (createOnce passes it); recorded for this writer in the same transaction. */
       clientKey?: string;
       /** R2-03: files the note is about, as the request named them (checkFilesInput); anchored in the writer's git repository. */
@@ -2641,15 +2651,14 @@ export class Store {
         this.db.prepare("UPDATE notes SET body = ?, body_enc = ? WHERE id = ?").run(sealed.body, sealed.bodyEnc, id);
       }
       if (opts.clientKey !== undefined) clientKeyOps.recordClientKey(this, id, writer, opts.clientKey, now);
+      if (opts.syncLink) this.syncLink(opts.syncLink.origin, opts.syncLink.id, id);
       this.addLinks(id, derived, writer, now);
       codeAnchorOps.setAnchors(this, id, anchors, now);
       claimOps.setClaims(this, id, claims, now);
       evidenceOps.setEvidence(this, id, startRev, opts.evidence, now);
       this.stampCliTerminal(id, writer);
-      // An archived (restored-as-forgotten) note stays out of the edge graph.
       if (!archivedAt) this.noteWritten(namespace, id, { rev: startRev, title: input.title, body });
-      // Link the new note into the similarity graph (same namespace only).
-      // skipEdges lets a caller that pre-scored the edges apply them itself.
+      // Link the new note into the similarity graph (same namespace only); skipEdges: the caller pre-scored the edges.
       if (!opts.skipEdges && !archivedAt) {
         this.recomputeEdgesFor(id, namespace, input.title, body, this.getEdgeThreshold());
       }
@@ -2667,6 +2676,7 @@ export class Store {
     if (!nested) this.announceChange();
     const created = this.read(id)!;
     this.audit({ op: "create", id, namespace, bytes: body.length }, receiptOps.receiptContent(created));
+    conflictLinkOps.afterCreate(this, created);
     return created;
   }
 
@@ -2923,7 +2933,7 @@ export class Store {
       r.access_count += p.n;
       if (!r.last_accessed || p.at > r.last_accessed) r.last_accessed = p.at;
     }
-    return evidenceOps.annotateEvidence(this, row, probationOps.annotateProbation(this, row, claimOps.annotateClaims(this, row, codeAnchorOps.annotateCodeChanged(this, row, flagOps.annotateFlags(this, row, this.annotateConfirmRules(row, annotateRetention(row, r)))))));
+    return guardRecord(this.seal, row as never, evidenceOps.annotateEvidence(this, row, probationOps.annotateProbation(this, row, claimOps.annotateClaims(this, row, codeAnchorOps.annotateCodeChanged(this, row, flagOps.annotateFlags(this, row, this.annotateConfirmRules(row, annotateRetention(row, r))))))));
   }
 
   /**
@@ -3039,7 +3049,7 @@ export class Store {
 
   private hasEncryptedRows(): boolean {
     try {
-      return !!this.db.prepare("SELECT 1 FROM notes WHERE body_enc IS NOT NULL LIMIT 1").get();
+      return sealedRowsExist(this.db);
     } catch {
       return false; // fresh DB / pre-v10 schema: no such column or table yet
     }
@@ -3399,7 +3409,7 @@ export class Store {
     const tags = patch.tags !== undefined ? tagsToStorage(patch.tags) : tagsToStorage(existing.tags);
     const source = patch.source !== undefined ? patch.source.replace(/[\u{E0000}-\u{E007F}]/gu, "").slice(0, 200) : existing.source;
     const confidenceSet = patch.confidence !== undefined;
-    const rev = existing.rev + 1;
+    let { rev, baseRev } = { rev: existing.rev + 1, baseRev: existing.rev }; // re-derived under the lock below (src/store/write-lock.ts)
     // written_by = who last changed the CONTENT (title or body), server-stamped.
     // A metadata-only write (tags: task claim / lease / approve, archive, a
     // source edit) leaves it alone; who made that change is in change_log.actor.
@@ -3467,8 +3477,8 @@ export class Store {
     if (nested) this.db.exec("SAVEPOINT monomem_update");
     else this.beginWrite();
     try {
-      // Sealed under the write lock so the key state cannot change between
-      // the check and the write (see writeKey), bound to this id+namespace.
+      ({ rev, baseRev } = nextRevUnderLock(this.db, id, { rev, baseRev }));
+      // Sealed under the write lock so the key state cannot change before the write (see writeKey), bound to this id+namespace.
       const sealed = this.sealBody(body, noteAad(id, namespace));
       // Taint is monotonic: when a content edit hands the note to a NEW writer,
       // everyone who touched it before (its previous writer, a verified
@@ -3536,7 +3546,7 @@ export class Store {
           confidenceSet ? 1 : 0, confidenceSet && typeof patch.confidence === "number" ? writerNow(opts) : "",
           newLabel ? 1 : 0, newLabel ?? "",
           contentChanged ? 1 : 0, writtenAt,
-          contentChanged || newTaint ? 1 : 0, existing.rev, rev,
+          contentChanged || newTaint ? 1 : 0, baseRev, rev,
           id, want, want, existing.sensitivity ?? DEFAULT_SENSITIVITY
         );
 
@@ -3556,14 +3566,10 @@ export class Store {
       this.addLinks(id, derived, writerNow(opts), now);
       if (restamp) this.stampCliTerminal(id, writer);
 
-      // Invalidate the embedding: the note's text just changed, so the stored
-      // vector is now stale. Drop it rather than keep a vector that no longer
-      // matches the content -- the note falls back to keyword search, and the
-      // write path (maybeEmbed) or `reindex` recomputes it. Without this, a
-      // failed re-embed would leave a permanently wrong vector that semantic
-      // search would happily return.
+      // Invalidate the embedding: the text changed, so the stored vector is stale. Dropped, not kept wrong: the note falls back
+      // to keyword search until maybeEmbed or `reindex` recomputes it.
       touched.forEach((ns) => this.noteWritten(ns, id, ns === namespace ? { rev, title, body } : null));
-      this.db.prepare("DELETE FROM note_vectors WHERE note_id = ?").run(id);
+      this.db.prepare("DELETE FROM note_vectors WHERE note_id = ?").run(id); this.vecCache.invalidate();
       // Rebuild this note's similarity edges against its (possibly new)
       // namespace: the text changed, so old edges may be wrong, and a
       // namespace change strands edges against the old namespace's notes.
@@ -3638,10 +3644,10 @@ export class Store {
     const now = new Date().toISOString();
     this.beginWrite();
     try {
-      const upd = this.db.prepare("UPDATE notes SET archived_at = NULL, superseded_by = NULL, superseded_at = NULL, superseded_by_writer = '', rev = rev + 1 WHERE id = ? AND superseded_by = ?");
       const log = this.db.prepare("INSERT INTO supersede_log (at, actor, action, namespace, old_id, new_id, flags) VALUES (?, ?, 'undo', ?, ?, ?, 'replacement-deleted')");
       for (const r of rows) {
-        upd.run(r.id, deletedId);
+        const cur = this.db.prepare("SELECT rev FROM notes WHERE id = ? AND superseded_by = ?").get(r.id, deletedId) as { rev: number } | undefined;
+        if (cur) casUpdate(this.db, r.id, cur.rev, "archived_at = NULL, superseded_by = NULL, superseded_at = NULL, superseded_by_writer = ''", [], { where: "superseded_by = ?", whereParams: [deletedId], soft: true });
         log.run(now, currentWriter(), r.namespace, r.id, deletedId);
       }
       this.commitTx();
@@ -3670,13 +3676,13 @@ export class Store {
     // A namespace-pinned caller may only retire its own notes.
     if (namespaces && namespaces.length === 0) return 0;
     const nsSql = namespaces ? ` AND namespace IN (${namespaces.map(() => "?").join(",")})` : "";
-    const rows = this.db
+    const rows = this.writeTx(() => this.db // writeTx: the seal and ledger entry ride in the same transaction
       .prepare(
         `UPDATE notes SET archived_at = ?
          WHERE expires_at IS NOT NULL AND expires_at <= ? AND archived_at IS NULL AND pinned = 0${nsSql}${this.ceilingSql()}
          RETURNING id, namespace, written_by`
       )
-      .all(iso, iso, ...(namespaces ?? [])) as Array<{ id: number; namespace: string; written_by: string | null }>;
+      .all(iso, iso, ...(namespaces ?? [])) as Array<{ id: number; namespace: string; written_by: string | null }>);
     const n = rows.length;
     if (n > 0) {
       this.edgeIndexes.clear(); // archived notes leave the similarity index
@@ -3699,8 +3705,9 @@ export class Store {
    */
   private dropArchivedVectors(): void {
     this.db
-      .prepare("DELETE FROM note_vectors WHERE note_id IN (SELECT id FROM notes WHERE archived_at IS NOT NULL AND superseded_by IS NULL)")
+      .prepare(`DELETE FROM note_vectors WHERE note_id IN (SELECT id FROM notes${this.hasIndex("idx_notes_archived") ? " INDEXED BY idx_notes_archived" : ""} WHERE archived_at IS NOT NULL AND superseded_by IS NULL)`)
       .run();
+    this.vecCache.invalidate();
   }
 
   /**
@@ -4159,19 +4166,16 @@ export class Store {
       if (input.newRev !== undefined && target.rev !== input.newRev) throw new StaleWriteError("the replacing note was edited after the preview; nothing was changed");
       // 1.4.0: the replacement takes the old notes' place, so outside content no person confirmed cannot be it.
       this.requireHumanConfirm(input.newId, "use it as a replacement");
-      const upd = this.db.prepare(
-        `UPDATE notes SET archived_at = ?, superseded_by = ?, superseded_at = ?, superseded_by_writer = ?, rev = rev + 1
-         WHERE id = ? AND rev = ? AND archived_at IS NULL AND superseded_by IS NULL AND namespace = ?`
-      );
       const log = this.db.prepare("INSERT INTO supersede_log (at, actor, action, namespace, old_id, new_id, flags) VALUES (?, ?, 'supersede', ?, ?, ?, ?)");
       input.oldIds.forEach((oid, i) => {
         if (oid === input.newId) throw new ValidationError("a note cannot replace itself");
         this.refuseAgentOnPinned(oid, "replacing it");
         const before = this.read(oid);
-        const res = upd.run(now, input.newId, now, input.actor, oid, input.oldRevs[i], target.namespace);
-        if (Number(res.changes) === 0) {
-          throw new StaleWriteError(`note ${oid} changed (or was retired, moved or removed) after the preview; nothing was changed`);
-        }
+        casUpdate(this.db, oid, input.oldRevs[i], "archived_at = ?, superseded_by = ?, superseded_at = ?, superseded_by_writer = ?", [now, input.newId, now, input.actor], {
+          where: "archived_at IS NULL AND superseded_by IS NULL AND namespace = ?",
+          whereParams: [target.namespace],
+          stale: `note ${oid} changed (or was retired, moved or removed) after the preview; nothing was changed`,
+        });
         // R2-08: replaced by someone else through the two-step supersede (admin keys and the terminal only); a flag on the
         // version it replaced is upheld.
         if (before && before.written_by !== currentWriter()) {
@@ -4208,16 +4212,14 @@ export class Store {
     const nested = this.db.isTransaction;
     if (!nested) this.beginWrite();
     try {
-      const row = this.db.prepare("SELECT namespace, superseded_by FROM notes WHERE id = ? AND superseded_by IS NOT NULL").get(id) as
-        | { namespace: string; superseded_by: number }
+      const row = this.db.prepare("SELECT namespace, superseded_by, rev FROM notes WHERE id = ? AND superseded_by IS NOT NULL").get(id) as
+        | { namespace: string; superseded_by: number; rev: number }
         | undefined;
       if (!row || this.idHidden(id)) {
         if (!nested) this.rollbackTx();
         return null;
       }
-      this.db
-        .prepare("UPDATE notes SET archived_at = NULL, superseded_by = NULL, superseded_at = NULL, superseded_by_writer = '', rev = rev + 1 WHERE id = ?")
-        .run(id);
+      casUpdate(this.db, id, row.rev, "archived_at = NULL, superseded_by = NULL, superseded_at = NULL, superseded_by_writer = ''", []);
       this.db
         .prepare("INSERT INTO supersede_log (at, actor, action, namespace, old_id, new_id, flags) VALUES (?, ?, 'undo', ?, ?, ?, '')")
         .run(now, actor, row.namespace, id, row.superseded_by);
@@ -4252,16 +4254,16 @@ export class Store {
    */
   similarNote(id: number, min = 0.6): { id: number; title: string; score: number } | null {
     const ceil = this.ceilingSql("n.sensitivity");
-    const row = this.db
+    const rows = this.db
       .prepare(
         `SELECT n.id AS id, n.title AS title, e.score AS score FROM note_edges e JOIN notes n ON n.id = e.neighbor_id
          WHERE e.note_id = ? AND e.score >= ? AND n.archived_at IS NULL AND n.superseded_by IS NULL AND n.kind = 'note'${ceil}
-         ORDER BY e.score DESC, n.id ASC LIMIT 1`
+         ORDER BY e.score DESC, n.id ASC LIMIT 20`
       )
-      .get(id, min) as { id: number; title: string; score: number } | undefined;
-    if (!row) return null;
-    const visible = this.readVisible(Number(row.id)); // hides distrusted writers and sealed titles the same way every read does
-    return visible ? { id: Number(row.id), title: visible.title, score: Math.round(Number(row.score) * 100) / 100 } : null;
+      .all(id, min) as Array<{ id: number; title: string; score: number }>;
+    // readVisible hides distrusted writers and sealed titles like every read; a hidden best match must not shadow a visible one.
+    for (const row of rows) { const v = this.readVisible(Number(row.id)); if (v) return { id: Number(row.id), title: v.title, score: Math.round(Number(row.score) * 100) / 100 }; }
+    return null;
   }
 
   /** Ids of this note's close neighbours in the similarity graph (same namespace by construction). */
@@ -4344,7 +4346,7 @@ export class Store {
         .run(iso, id);
       // The embedding is a lossy copy of the text (and never encrypted): a forgotten note keeps none.
       // A restore recomputes it on the REST path, or `monomem reindex` does; until then keyword search finds it.
-      this.db.prepare("DELETE FROM note_vectors WHERE note_id = ?").run(id);
+      this.db.prepare("DELETE FROM note_vectors WHERE note_id = ?").run(id); this.vecCache.invalidate();
     });
     this.edgeIndexes.clear();
     this.announceChange();
@@ -4660,7 +4662,7 @@ export class Store {
     const result = this.writeTx(() => this.db.prepare("DELETE FROM notes WHERE id = ? AND (? IS NULL OR rev = ?)").run(id, rev, rev));
     const ok = Number(result.changes) > 0;
     if (ok) {
-      this.noteWritten(row.namespace, id, null);
+      this.noteWritten(row.namespace, id, null); this.vecCache.invalidate(); // the cascade removed its vector: free the copy (r10 L5)
       if (!this.db.isTransaction) this.announceChange();
       this.audit({ op: "delete", id });
     }
@@ -4697,6 +4699,7 @@ export class Store {
    */
   /** @internal */ beginWrite(): void {
     beginImmediate(this.db);
+    snapshotForeign(this); // seal_dirty rows already there are not this transaction's (store/ledger.ts)
     const uv = Number((this.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
     if (uv > SCHEMA_VERSION) {
       this.db.exec("ROLLBACK");
@@ -4916,7 +4919,6 @@ export class Store {
     const matchQuery = buildMatchQuery(query, opts.anyTerm);
     if (!matchQuery) return []; // query was all punctuation/stopwords
     const range = this.rangeFor(opts, opts.namespace ? [opts.namespace] : undefined);
-    // C-06: the same two queries; only the table differs (the in-memory body index while encryption is on).
     const fts = this.bodyIndex.table();
 
     try {
@@ -4946,8 +4948,8 @@ export class Store {
           NoteRow & { score: number }
         >;
       }
-      // bm25 is negative (lower = better), so its negation is a positive higher-is-better score. Columns are weighted
-      // (FTS_WEIGHTS): a match in the title counts most, then tags, then the body; ties go to the newest note.
+      // -bm25 = positive, higher-is-better score; columns weighted by FTS_WEIGHTS (title, then tags, then body); ties go to the newest.
+      if (hasCjk(query)) rows = cjkTopUp(this.db, rows, query, limit, { namespace: opts.namespace, live: liveSql(opts.includeSuperseded), rangeSql: range.sql, rangeParams: range.params });
       return rows.map((row) => ({ note: this.rec(row), score: row.score ?? 0 }));
     } catch (e) {
       // A malformed FTS expression should never 500 the caller. Anything else (a damaged file: SQLITE_CORRUPT,
@@ -5000,7 +5002,7 @@ export class Store {
 
   /** Live notes in the whole store, reused while nothing changed (same key as unconfirmedRows): a search must not add a scan. */
   private liveTotalCache: { key: string; n: number } | null = null;
-  private liveNoteTotal(): number {
+  /** @internal */ liveNoteTotal(): number {
     const t = (this.db.prepare("SELECT total_changes() AS t").get() as { t: number }).t - this.bookkeepingChanges;
     const key = `${t}:${this.dataVersion()}`;
     if (this.liveTotalCache?.key === key) return this.liveTotalCache.n;
@@ -5146,7 +5148,7 @@ export class Store {
     notes: ImportNote[],
     opts: {
       report?: ImportReport;
-      deferEdges?: boolean;
+      deferEdges?: boolean; /** test hook: how long one batch may hold the write lock */ lockMs?: number;
       /**
        * Idempotent restore: skip a note when the store already holds one with
        * the same namespace + title + created_at + body (re-running an import
@@ -5204,10 +5206,14 @@ export class Store {
     // partial-restore-on-hard-failure behavior as the old per-note path).
     // We yield to the event loop BETWEEN batches (never inside one), so a
     // big restore can't stall concurrent API/MCP traffic.
-    for (let start = 0; start < notes.length; start += IMPORT_INSERT_BATCH) {
-      const batch = notes.slice(start, start + IMPORT_INSERT_BATCH);
+    for (let start = 0, used = 0; start < notes.length; start += used) {
+      const batch = notes.slice(start, start + IMPORT_INSERT_BATCH); used = batch.length;
+      const callerOwnsTx = this.db.isTransaction; // r8: time-sliced batches (store/import-pacing.ts); checked before this batch opens its own
       const insertBatch = (): void => {
-        for (const note of batch) {
+        const slice = sliceTimer(callerOwnsTx ? Infinity : (opts.lockMs ?? importLockMs())); // counted from the lock, not before
+        for (let bi = 0; bi < batch.length; bi++) {
+          if (bi > 0 && slice()) { used = bi; break; }
+          const note = batch[bi];
           if (!note || typeof note !== "object") continue;
           if (note.title !== undefined && note.title !== null && typeof note.title !== "string") {
             opts.report?.rejected.push({ title: String(typeof note.title).slice(0, 40), error: "title must be text" });
@@ -5328,12 +5334,7 @@ export class Store {
       };
       if (this.db.isTransaction) insertBatch();
       else this.transaction(insertBatch);
-      if (start + IMPORT_INSERT_BATCH < notes.length) {
-        // Measured (2026-11, Windows, WAL): a write from another process during a 10,000-note import finished in ~0.5 s
-        // with this setImmediate gap, so a longer pause (tried: 110 ms, +2.5 s per 10,000 notes) bought nothing.
-        // test/expert-round2.test.ts keeps that check.
-        await new Promise<void>((r) => setImmediate(r));
-      }
+      if (start + used < notes.length) await importPause(callerOwnsTx, this.dbPath === ":memory:");
     }
     // Similarity-graph linking is O(n^2): every imported note is scored
     // against the whole namespace. On a bulk restore that is 88-97% of the
@@ -5501,6 +5502,7 @@ export class Store {
 
   /** Store or replace a note's embedding. Best-effort: caller guards errors. */
   setVector(noteId: number, vec: Float32Array, model = ""): void {
+    const updatedAt = new Date().toISOString();
     this.db
       .prepare(
         `INSERT INTO note_vectors (note_id, dim, model, vec, updated_at)
@@ -5509,7 +5511,8 @@ export class Store {
            dim = excluded.dim, model = excluded.model,
            vec = excluded.vec, updated_at = excluded.updated_at`
       )
-      .run(noteId, vec.length, model, vecToBlob(vec), new Date().toISOString());
+      .run(noteId, vec.length, model, vecToBlob(vec), updatedAt);
+    this.vecCache.upsert(noteId, vec);
   }
 
   /** How many notes have an embedding stored. */
@@ -5551,29 +5554,24 @@ export class Store {
     const limit = clampInt(opts.limit, 20, 1, 200);
     const range = this.rangeFor(opts, opts.namespace ? [opts.namespace] : undefined);
 
-    const rows = (
-      opts.namespace
-        ? this.db
-            .prepare(
-              `SELECT v.note_id, v.dim, v.model, v.vec FROM note_vectors v
-               JOIN notes ON notes.id = v.note_id
-               WHERE notes.namespace = ? AND ${liveSql(opts.includeSuperseded)}${range.sql}`
-            )
-            .all(opts.namespace, ...range.params)
-        : this.db
-            .prepare(
-              `SELECT v.note_id, v.dim, v.model, v.vec FROM note_vectors v
-               JOIN notes ON notes.id = v.note_id
-               WHERE ${liveSql(opts.includeSuperseded)}${range.sql}`
-            )
-            .all(...range.params)
-    ) as unknown as VectorRow[];
-
+    const where = `${opts.namespace ? "notes.namespace = ? AND " : ""}${liveSql(opts.includeSuperseded)}${range.sql}`;
+    const params = opts.namespace ? [opts.namespace, ...range.params] : range.params;
     const scored: { id: number; score: number }[] = [];
-    for (const r of rows) {
-      if (r.dim !== queryVec.length) continue;
-      const score = cosineSim(queryVec, blobToVec(r.vec));
-      if (score > 0) scored.push({ id: r.note_id, score });
+    const cache = this.vecCache.get(queryVec.length);
+    if (cache) {
+      const ids = `SELECT notes.id AS note_id FROM notes WHERE ${where} ORDER BY notes.id`;
+      const qNorm = vectorNorm(queryVec);
+      for (const r of this.db.prepare(ids).all(...params) as unknown as { note_id: number }[]) {
+        const score = cache.score(r.note_id, queryVec, qNorm);
+        if (score !== null && score > 0) scored.push({ id: r.note_id, score });
+      }
+    } else {
+      // Cache off or too big: read the rows from SQLite, scoring each BLOB in place (iterate() was slower than all()).
+      for (const r of this.db.prepare(`SELECT v.note_id, v.dim, v.vec FROM note_vectors v JOIN notes ON notes.id = v.note_id WHERE ${where}`).all(...params) as unknown as VectorRow[]) {
+        if (r.dim !== queryVec.length) continue;
+        const score = cosineSim(queryVec, vectorView(r.vec, r.dim));
+        if (score > 0) scored.push({ id: r.note_id, score });
+      }
     }
     scored.sort((a, b) => b.score - a.score);
 
@@ -7078,7 +7076,7 @@ export class Store {
    * The key file is re-checked (one stat) on every use, so a `trust rotate` run from the CLI takes effect
    * in an already-running server at its next export instead of only after a restart.
    */
-  private signing(): SigningKey {
+  /** @internal */ signing(): SigningKey {
     if (this.dbPath === ":memory:") return (this.signingKey ??= ephemeralKey());
     const stamp = keyFileStamp(this.keyDir);
     if (this.signingKey && stamp !== "" && stamp === this.signingStamp) return this.signingKey;
@@ -7214,6 +7212,7 @@ export class Store {
     }
     this.signingKey = null; // the next use re-reads the file and its stamp
     this.signingStamp = "";
+    if (old) rekeyAfterRotation(this, old);
     try {
       this.transaction(() => {
         this.logTrust("key-rotate", "*", `${old?.keyId ?? "-"} -> ${k.keyId}`);
@@ -7754,6 +7753,7 @@ export class Store {
 
   /** COMMIT (or a savepoint RELEASE), then write the audit lines it held, once the outermost transaction has ended. */
   /** @internal */ commitTx(sql = "COMMIT"): void {
+    if (sql === "COMMIT") flushSeals(this); // seals + ledger entries ride in this transaction
     this.db.exec(sql);
     if (!this.db.isTransaction) this.flushAudit();
   }

@@ -790,14 +790,14 @@ export async function importMarkdown(
           ...captureFieldsOf(fm),
           ...foreignOpts,
           ...syncIdentity,
+          ...(hasIdentity && origin !== self ? { syncLink: { origin: origin!, id: originId! } } : {}), // r8: linked inside create's transaction
         }
       );
       store.restoreCaptureLinks(n, fm.files);
-      if (hasIdentity && origin !== self) store.syncLink(origin!, originId!, n.id);
       // A hand-written file, or one restoring a note deleted here (which
       // got a new id), gets the note's identity written back, so the next
-      // import updates this note instead of creating it again.
-      else safeWrite(dir, file, renderNoteFile(n, { origin: self, id: n.id }, { files: store.noteFiles([n.id]).get(n.id) }));
+      // import updates this note instead of creating it again. A note from another origin was linked above, atomically with it.
+      if (!(hasIdentity && origin !== self)) safeWrite(dir, file, renderNoteFile(n, { origin: self, id: n.id }, { files: store.noteFiles([n.id]).get(n.id) }));
       return n;
     };
 

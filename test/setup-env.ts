@@ -9,7 +9,7 @@ import { join } from "node:path";
 // MONOMEM_TEST_TIME_SCALE is the one variable kept: it is read only by the tests (see slow() below), never by src, and
 // it must survive here so that the test runner passes it on to every test file's process.
 for (const k of Object.keys(process.env)) {
-  if (k === "MONOMEM_TEST_TIME_SCALE") continue;
+  if (k === "MONOMEM_TEST_TIME_SCALE" || k.startsWith("MONOMEM_FUZZ_")) continue; // read only by the opt-in fuzz sweeps (test/fuzz-*.test.ts)
   if (k.startsWith("MONOMEM_") || k.startsWith("ONEMEMORY_") || k.startsWith("CLAUDE_BRIDGE_")) delete process.env[k];
 }
 // Replacing a note: the SHIPPED default is that only a person confirms (MONOMEM_REPLACE_CONFIRM=person, 1.8.0). Most of the
@@ -38,6 +38,9 @@ process.env.MONOMEM_TOOLS = "legacy-1.5,all";
 // Bulk tests write thousands of notes as one agent label in seconds; the flood guard would pause them.
 // test/access-log-flood.test.ts owns the flood-guard assertions and sets this variable itself.
 process.env.MONOMEM_FLOOD_WRITES_PER_HOUR = "0";
+// Many tests edit note rows by hand (back-dating updated_at ...). That must not hide the note from the test that reads it, so the suite
+// shows text of rows that fail their seal (doctor and verify-lossless still report them). test/seal-ledger.test.ts turns this back on.
+process.env.MONOMEM_SEAL_WITHHOLD = "off";
 // doctor asks the server on MONOMEM_PORT (default 8790) for its version: never a real one on this machine.
 // test/health-version.test.ts owns those assertions, points MONOMEM_PORT at its own fake and clears this.
 process.env.MONOMEM_NO_SERVER_PROBE = "1";
@@ -45,6 +48,8 @@ process.env.MONOMEM_NO_SERVER_PROBE = "1";
 process.env.MONOMEM_RECALL_TIMEOUT_MS = "30000";
 // git-trail asks git quick questions with a 400 ms cap; a loaded Windows run spawned git slower than that and the merged-branch test flaked.
 process.env.MONOMEM_GIT_TIMEOUT_MS = "5000";
+// importNotes ends a batch after 250 ms of holding the write lock; the suite wants batches of the fixed note count (a slow runner cut them early).
+process.env.MONOMEM_IMPORT_LOCK_MS = "600000";
 process.env.MONOMEM_SCAN_CACHE_SECONDS = "0"; // the dashboard scans are cached for a minute in real use; tests want fresh answers
 process.on("exit", () => {
   try {

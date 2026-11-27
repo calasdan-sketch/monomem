@@ -93,6 +93,5 @@
       "desc": "the trusted answer is still in the top 5 after eight keyword-stuffed notes",
       "metric": "poison_reach"
     }
-  ],
-  "known_gap": "GAP-PROBE-FLOOD"
+  ]
 }

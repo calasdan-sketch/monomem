@@ -17,6 +17,8 @@ COPY package*.json ./
 RUN npm ci --omit=dev --ignore-scripts
 COPY --from=build /app/dist ./dist
 COPY SKILL.md INSTALL.md INFRA.md SECURITY.md README.md LICENSE ./
+# `monomem check` replays the attack scenarios from here; without them the check reports Grade C in the image.
+COPY bench/scenarios ./bench/scenarios
 
 # Notes live on a mounted volume so they survive container restarts.
 ENV MONOMEM_HOME=/data

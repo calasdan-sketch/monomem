@@ -17,6 +17,8 @@
 // then), and the timeout is AUTO_TIMEOUT_MS unless MONOMEM_EMBED_TIMEOUT_MS
 // is set, so a machine without the backend never waits on it.
 
+import { localEmbed, localModelName } from "./embeddings-local.js";
+
 const AUTO_RETRY_MS = 60_000;
 const AUTO_TIMEOUT_MS = 5000;
 /** auto mode: no call before this time (the endpoint failed recently). */
@@ -24,6 +26,8 @@ let autoDownUntil = 0;
 
 export interface EmbeddingsConfig {
   enabled: boolean;
+  /** MONOMEM_EMBEDDINGS=local: run a small model in this process (embeddings-local.ts) instead of calling an endpoint. */
+  local?: boolean;
   /** MONOMEM_EMBEDDINGS=auto: a failure is silent and backs off. */
   auto?: boolean;
   url: string;
@@ -35,10 +39,12 @@ export interface EmbeddingsConfig {
 export function embeddingsConfig(): EmbeddingsConfig {
   const flag = (process.env.MONOMEM_EMBEDDINGS || "").trim().toLowerCase();
   const auto = flag === "auto";
-  const enabled = auto || flag === "1" || flag === "on" || flag === "true" || flag === "yes";
+  const local = flag === "local";
+  const enabled = auto || local || flag === "1" || flag === "on" || flag === "true" || flag === "yes";
   return {
     enabled,
     ...(auto ? { auto: true } : {}),
+    ...(local ? { local: true } : {}),
     // Ollama's OpenAI-compatible route by default; override for any other.
     url: process.env.MONOMEM_EMBED_URL || "http://localhost:11434/v1/embeddings",
     model: process.env.MONOMEM_EMBED_MODEL || "nomic-embed-text",
@@ -48,6 +54,9 @@ export function embeddingsConfig(): EmbeddingsConfig {
     timeoutMs: Number(process.env.MONOMEM_EMBED_TIMEOUT_MS || (auto ? AUTO_TIMEOUT_MS : 30000)),
   };
 }
+
+/** The model name stored with a vector: the local model's own name for MONOMEM_EMBEDDINGS=local (not the unused endpoint model). */
+export const vectorModelLabel = (cfg: EmbeddingsConfig): string => (cfg.local ? localModelName() : cfg.model);
 
 /** Test hook: forget an auto-mode "endpoint is down" mark. */
 export function resetEmbeddingsAuto(): void {
@@ -83,9 +92,11 @@ const loggedFailures = new Set<string>();
 
 export async function embed(
   text: string,
-  cfg: EmbeddingsConfig = embeddingsConfig()
+  cfg: EmbeddingsConfig = embeddingsConfig(),
+  role: "query" | "passage" = "passage"
 ): Promise<Float32Array | null> {
   if (!cfg.enabled || !text || !text.trim()) return null;
+  if (cfg.local) return localEmbed(text, role);
   if (cfg.auto && Date.now() < autoDownUntil) return null;
   // auto: a failure is expected (no backend on this machine), so it is quiet and backs off instead of logging.
   const fail = (msg: string): null => {
@@ -142,7 +153,7 @@ export async function embedQuery(text: string, cfg: EmbeddingsConfig = embedding
     queryVectors.set(key, hit); // most recent last
     return hit.slice();
   }
-  const vec = await embed(text, cfg);
+  const vec = await embed(text, cfg, "query");
   if (!vec) return null;
   queryVectors.set(key, vec.slice());
   if (queryVectors.size > QUERY_VECTOR_MAX) queryVectors.delete(queryVectors.keys().next().value!);

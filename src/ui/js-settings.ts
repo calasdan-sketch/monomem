@@ -209,6 +209,7 @@ function showWelcome(n){
   WSTEP = n; clearInterval(TRY_T);
   show("welcome");
   var w = $("welcome");
+  setTimeout(function(){ try { var h = w.querySelector("h1"); if(h){ h.setAttribute("tabindex", "-1"); h.focus(); } } catch(e){} }, 0);
   if(n === 0){
     w.innerHTML = wcard(0, "Welcome to Monomem", "<p>Monomem gives your AI apps one shared memory. Connect the apps you use:</p><div id='wl_apps'><p class='muted'>Looking for apps...</p></div>"+
       "<p class='help'>Monomem adds one entry to each app's settings and keeps a copy of every file it changes. Changed your mind? Settings, then Undo the last connect, puts it back.</p>"+
