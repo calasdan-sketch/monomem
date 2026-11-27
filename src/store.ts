@@ -3468,6 +3468,7 @@ export class Store {
     // Inside a caller's transaction (a rollback restores many notes in one) a SAVEPOINT keeps this write all-or-nothing.
     const nested = this.db.isTransaction;
     const undo = (): void => this.rollbackTx(nested ? "ROLLBACK TO monomem_update; RELEASE monomem_update" : "ROLLBACK");
+    let committed: ReturnType<Store["read"]> = null;
     if (nested) this.db.exec("SAVEPOINT monomem_update");
     else this.beginWrite();
     try {
@@ -3575,6 +3576,7 @@ export class Store {
         id,
         this.planEdges(namespace, title, body, this.getEdgeThreshold(), new Set([id])).pairs
       );
+      committed = this.read(id); // read under the write lock: the reply carries THIS write's rev, not a later writer's
       this.commitTx(nested ? "RELEASE monomem_update" : "COMMIT");
     } catch (e) {
       this.edgeIndexes.clear(); // may hold rolled-back state; resync lazily
@@ -3587,7 +3589,7 @@ export class Store {
     }
 
     if (!nested) this.announceChange();
-    const updated = this.read(id);
+    const updated = committed ?? this.read(id);
     this.audit({ op: "update", id, namespace, bytes: body.length }, updated ? receiptOps.receiptContent(updated) : { note_id: id });
     return updated;
   }
