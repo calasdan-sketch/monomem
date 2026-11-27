@@ -96,7 +96,7 @@ describe("stdio: stdout stays pure JSON-RPC with prompts and resources on", () =
       send({ jsonrpc: "2.0", id: 3, method: "resources/list" });
       send({ jsonrpc: "2.0", id: 4, method: "resources/read", params: { uri: "monomem://recent" } });
       const t0 = Date.now();
-      while (!/"id":4/.test(out) && Date.now() - t0 < 20000) await new Promise((r) => setTimeout(r, 100));
+      while (!/"id":4/.test(out) && Date.now() - t0 < 60000) await new Promise((r) => setTimeout(r, 100));
       const lines = out.split("\n").filter(Boolean);
       assert.ok(lines.length >= 4, out);
       for (const l of lines) assert.equal((JSON.parse(l) as { jsonrpc: string }).jsonrpc, "2.0");

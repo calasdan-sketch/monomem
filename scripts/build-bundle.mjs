@@ -135,6 +135,8 @@ async function bundleJs(app, version) {
     target: "node22",
     logLevel: "warning",
     legalComments: "none",
+    // Optional local-embeddings model: never bundled, never downloaded by Monomem; src/embeddings-local.ts imports it at run time if the user installed it.
+    external: ["@huggingface/transformers"],
     // CommonJS dependencies inside an ESM file still call require(); give them one.
     banner: { js: "import { createRequire as __mmCreateRequire } from 'node:module'; const require = __mmCreateRequire(import.meta.url);" },
     define: { __MONOMEM_VERSION__: JSON.stringify(version) },
