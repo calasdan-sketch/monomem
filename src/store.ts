@@ -1309,12 +1309,6 @@ function vecToBlob(vec: Float32Array): Uint8Array {
   return new Uint8Array(vec.buffer, vec.byteOffset, vec.byteLength);
 }
 
-/** Rebuild a Float32Array from BLOB bytes, copying to a fresh, aligned buffer. */
-function blobToVec(blob: Uint8Array): Float32Array {
-  const copy = new Uint8Array(blob.length);
-  copy.set(blob);
-  return new Float32Array(copy.buffer, 0, Math.floor(copy.length / 4));
-}
 
 /** Cosine similarity of two equal-length vectors; 0 if degenerate. */
 export function cosineSim(a: Float32Array, b: Float32Array): number {

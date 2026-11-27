@@ -4,7 +4,6 @@ import "./setup-env.js";
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { Store } from "../src/store.js";
-import { actorStore } from "../src/actor.js";
 import { runSearch } from "../src/search-service.js";
 import { dampenNearDuplicates } from "../src/search-diversity.js";
 

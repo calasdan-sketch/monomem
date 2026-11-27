@@ -57,9 +57,6 @@ const RULES: Rule[] = [
 // This is a floor, not a defence: a language not listed, or a reworded claim, still gets through (docs/memory-linter.md).
 const WI = String.raw`[^.!?。
 ]`;
-const SEND_I = String.raw`(?:envoy|transm|transf[eé]r|env[ií]a|reenv[ií]a|enviar|envie|encaminh|senden?|sende|schick|leite|отправ|перешл|пересл|пошл|发送|发到|发邮件|转发|寄到|送信|送って|転送|メール|أرسل|ارسل|إرسال|ارسال)`;
-const OBJ_I = String.raw`(?:notes|notas|notizen|заметк|заметок|笔记|密码|パスワード|メモ|ノート|ملاحظات|كلمات\s+المرور|contrase[nñ]as|mots?\s+de\s+passe|passw[oö]rter|senhas|пароли|паролей|пароль)`;
-const ADDR_I = String.raw`(?:https?://|[\w.+-]+@[\w-]+\.[\w.-]+|\.invalid)`;
 const PAY_I = String.raw`(?:paie|salaire|n[oó]mina|salario|pagos?|gehalt|geh[aä]lter|folha|зарплат|выплат|工资|薪水|給与|الرواتب|الراتب)`;
 const USER_I = String.raw`(?:utilisateur|usuario|nutzers?|benutzers?|usu[aá]rio|пользовател|用户|ユーザー|المستخدم)`;
 const IGNORE_I = String.raw`(?:ignor|игнорир|忽略|無視|تجاهل)`;

@@ -17,7 +17,7 @@ import { Store, ValidationError, NoteUnreadableError } from "./store.js";
 import { distrustedOptInRefusal } from "./trust.js";
 import { originAllowed, hostAllowed, hostRefusal, clientKey, tokenKey, authenticateEntry, scopeAllows } from "./security.js";
 import { type TokenEntry, resolveToken, tokenId, sha256Hex } from "./config.js";
-import { PayloadTooLargeError, readBody, readPreAuthBody, applyServerLimits, healthBody, serverProof } from "./http-common.js";
+import { PayloadTooLargeError, readPreAuthBody, applyServerLimits, healthBody, serverProof } from "./http-common.js";
 import { DASHBOARD_HTML, DASHBOARD_JS, FAVICON_PNG } from "./dashboard.js";
 import { type ServerNamespaceOpts, type NsCtx, NS_DISABLED, resolveRequestNamespace } from "./namespace.js";
 import { redeemLogin } from "./login-code.js";

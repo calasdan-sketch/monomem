@@ -372,7 +372,6 @@ describe("scope matrix: save replies (conflicts_with, similar_note) never name a
     B.store.close();
   });
   // Ids and times legitimately differ (A holds more notes); every other byte must match.
-  const shape = (s: string): string => norm(s).replace(/\d+/g, "#");
 
   // A writer that guesses a hidden note's title, repeats its sentence, or contradicts it must learn nothing from the reply.
   const SAVES = HIDDEN.flatMap((h) => [
@@ -383,9 +382,10 @@ describe("scope matrix: save replies (conflicts_with, similar_note) never name a
   test("REST POST /notes and MCP memory_save: same reply as when the hidden notes do not exist", async () => {
     const bad: string[] = [];
     for (const sv of SAVES) {
-      const [ra, rb] = [await restA.call(WORK_RW, { name: "save", method: "POST", path: "/notes", body: sv }), await restB.call(WORK_RW, { name: "save", method: "POST", path: "/notes", body: sv })];
+      const ra = await restA.call(WORK_RW, { name: "save", method: "POST", path: "/notes", body: sv });
+      await restB.call(WORK_RW, { name: "save", method: "POST", path: "/notes", body: sv });
       const ma = await mcpA.call("memory_save", { ...sv, title: `${sv.title} mcp` });
-      const mb = await mcpB.call("memory_save", { ...sv, title: `${sv.title} mcp` });
+      await mcpB.call("memory_save", { ...sv, title: `${sv.title} mcp` });
       for (const [what, x] of [["REST", ra], ["MCP", ma]] as const) {
         // Which visible notes get named can shift with ranking statistics; naming a HIDDEN note by id or title never may.
         const named = [...x.matchAll(/"(?:conflicts_with|similar_note)":(\[?\{[^]*?\})/g)].flatMap((m) => [...m[1].matchAll(/"id":(\d+)/g)].map((i) => Number(i[1])));
